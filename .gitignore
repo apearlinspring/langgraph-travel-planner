@@ -1,0 +1,44 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# IDE and local tooling
+.idea/
+.codex/
+.tools/
+
+# Local runtime state
+logs/
+.tmp/
+.fastmcp/
+.uv-cache/
+.uv-wheel-cache/
+.uv-python/
+.uv-tools/
+
+# Generated data
+data/vectorstore/
+**/data/vectorstore/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Local scratch files
+test1.py
+test2.py
