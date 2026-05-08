@@ -32,7 +32,7 @@ class MCPClientManager:
     OPTIONAL_STARTUP_SERVERS = {"aigohotel-mcp"}
     SERVER_RETRY_ATTEMPTS = {"aigohotel-mcp": 1}
     SERVER_TOOL_LOAD_TIMEOUTS = {"aigohotel-mcp": 25.0}
-    AIGOHOTEL_MCP_PACKAGE = "aigohotel-mcp==0.3.1"
+    AIGOHOTEL_MCP_MODULE = "aigohotel_mcp.server"
     ENV_VARS: dict[str, str] = {}
     SERVER_CONFIGS: dict[str, dict[str, Any]] = {}
 
@@ -128,8 +128,8 @@ class MCPClientManager:
             hotel_env = base_env.copy()
             hotel_env["AIGOHOTEL_API_KEY"] = hotel_api_key
             server_configs["aigohotel-mcp"] = {
-                "command": "uvx",
-                "args": ["--from", cls.AIGOHOTEL_MCP_PACKAGE, "aigohotel-mcp"],
+                "command": sys.executable,
+                "args": ["-m", cls.AIGOHOTEL_MCP_MODULE],
                 "transport": "stdio",
                 "env": hotel_env,
             }

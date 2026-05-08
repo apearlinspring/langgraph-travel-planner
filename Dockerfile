@@ -2,8 +2,8 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
-ARG PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn
+ARG PIP_INDEX_URL=https://pypi.org/simple
+ARG PIP_TRUSTED_HOST=pypi.org
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
@@ -34,6 +34,8 @@ RUN /opt/venv/bin/pip install \
     langchain-openai==1.1.7 \
     langgraph-prebuilt==1.0.5 \
     uv==0.10.11
+
+RUN /opt/venv/bin/python -c "import importlib, importlib.metadata as md; assert md.version('aigohotel-mcp') == '0.3.1'; importlib.import_module('aigohotel_mcp.server')"
 
 COPY app /app/app
 COPY scripts /app/scripts
