@@ -100,7 +100,19 @@ class ItineraryDay(TypedDict):
     transport_note: NotRequired[str]
     plan_b: NotRequired[str]
     route_note: NotRequired[str]
+    route_points: NotRequired[list[str]]
+    route_summary: NotRequired[str]
+    map_route: NotRequired[str]
     risk_notes: NotRequired[list[str]]
+
+
+class BudgetLineItem(TypedDict):
+    key: str
+    label: str
+    amount: float
+    per_person: float
+    basis: str
+    confidence: str
 
 
 class BudgetBreakdown(TypedDict):
@@ -111,11 +123,31 @@ class BudgetBreakdown(TypedDict):
     misc: float
     total: float
     per_person: NotRequired[float]
+    currency: NotRequired[str]
+    total_people: NotRequired[int]
+    travel_days: NotRequired[int]
+    nights: NotRequired[int]
+    line_items: NotRequired[list[BudgetLineItem]]
     assumptions: NotRequired[list[str]]
     confidence_level: NotRequired[str]
     confirmed_items: NotRequired[list[str]]
     estimated_items: NotRequired[list[str]]
     verification_items: NotRequired[list[str]]
+
+
+class ReportData(TypedDict, total=False):
+    version: str
+    title: str
+    subtitle: str
+    overview: dict
+    transport: dict
+    accommodation: dict
+    itinerary: list[dict]
+    map_routes: list[dict]
+    budget: dict
+    risks: list[str]
+    adjustment_options: list[str]
+    sections: list[dict]
 
 
 class TravelState(AgentState):
@@ -139,6 +171,7 @@ class TravelState(AgentState):
     itinerary: NotRequired[list[ItineraryDay]]
     budget: NotRequired[BudgetBreakdown]
     report: NotRequired[str]
+    report_data: NotRequired[ReportData]
     order_id: NotRequired[str]
 
     approval_pending: NotRequired[bool]

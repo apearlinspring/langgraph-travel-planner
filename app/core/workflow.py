@@ -67,5 +67,5 @@ STEP_STATE_FIELDS: dict[PlanningStep, list[str]] = {
     "food_planning": ["selected_food_types", "food_options"],
     "itinerary_generation": ["itinerary"],
     "budget_summarization": ["budget"],
-    "order_generation": ["order_id", "report"],
+    "order_generation": ["order_id", "report", "report_data"],
 }

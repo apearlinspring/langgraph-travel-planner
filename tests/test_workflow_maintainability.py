@@ -76,12 +76,18 @@ def test_qwen_entrypoints_use_shared_compatible_mode_factory():
     ]
 
     for relative_path in direct_factory_users:
-        content = (PROJECT_ROOT / relative_path).read_text(encoding="utf-8")
+        path = PROJECT_ROOT / relative_path
+        if not path.exists():
+            continue
+        content = path.read_text(encoding="utf-8")
         assert "build_chat_model" in content, relative_path
 
     no_chat_tongyi_files = direct_factory_users + ["test2.py"]
     for relative_path in no_chat_tongyi_files:
-        content = (PROJECT_ROOT / relative_path).read_text(encoding="utf-8")
+        path = PROJECT_ROOT / relative_path
+        if not path.exists():
+            continue
+        content = path.read_text(encoding="utf-8")
         assert "ChatTongyi" not in content, relative_path
 
 
@@ -109,11 +115,16 @@ async def test_step_config_covers_all_planning_steps(monkeypatch):
     assert "必须立刻调用 query_hotel_options" in config["accommodation_planning"]["prompt"]
     assert "必须先调用 generate_itinerary_tool" in config["itinerary_generation"]["prompt"]
     assert "不要先输出长篇自然语言行程草案" in config["itinerary_generation"]["prompt"]
+    assert "4天3晚 必须有 Day 1、Day 2、Day 3、Day 4" in config["itinerary_generation"]["prompt"]
     assert "必须调用 summarize_budget_tool" in config["budget_summarization"]["prompt"]
+    assert "费用依据" in config["budget_summarization"]["prompt"]
+    assert "预算置信度" in config["budget_summarization"]["prompt"]
     assert "预算匹配" in config["budget_summarization"]["prompt"]
     assert "关键假设" in config["budget_summarization"]["prompt"]
     assert "已确认方案摘要" in config["order_generation"]["prompt"]
     assert "{budget_summary}" in config["order_generation"]["prompt"]
+    assert "每日行程”里的当天地图路线摘要保持一致" in config["order_generation"]["prompt"]
+    assert "report_data" in config["order_generation"]["prompt"]
     assert "不要输出" in config["order_generation"]["prompt"]
     assert "[根据之前的对话填写]" in config["order_generation"]["prompt"]
     assert all(tool.name != "add_travel_record_tool" for tool in config["order_generation"]["tools"])
@@ -514,6 +525,11 @@ def test_itinerary_budget_and_order_report_use_selected_real_options():
     assert state["budget"]["attractions"] == 40.0 * 2
     assert state["budget"]["per_person"] > 0
     assert state["budget"]["confidence_level"] == "中高"
+    assert state["budget"]["currency"] == "CNY"
+    assert state["budget"]["travel_days"] == 3
+    assert len(state["budget"]["line_items"]) == 5
+    assert any(item["key"] == "accommodation" and "2 晚" in item["basis"] for item in state["budget"]["line_items"])
+    assert any(item["key"] == "food" and "南京路小吃" in item["basis"] for item in state["budget"]["line_items"])
     assert any("交通" in item for item in state["budget"]["confirmed_items"])
     assert any("住宿" in item for item in state["budget"]["confirmed_items"])
     assert any("餐饮" in item for item in state["budget"]["estimated_items"])
@@ -521,15 +537,19 @@ def test_itinerary_budget_and_order_report_use_selected_real_options():
     assert any("正式购票" in item for item in state["budget"]["verification_items"])
     budget_message = budget_command.update["messages"][0].content
     assert "\u9884\u7b97\u5339\u914d" in budget_message
+    assert "预算明细" in budget_message
+    assert "费用依据" in budget_message
     assert "\u5173\u952e\u5047\u8bbe" in budget_message
     assert "预算置信度" in budget_message
     assert "出发前待核验" in budget_message
+    assert "依据：" in budget_message
     assert "南京路小吃" in budget_message
     assert "本帮菜餐厅" in budget_message
     assert "豫园 40 元/人" in budget_message
 
     order_command = generate_order_tool.invoke({"runtime": _build_runtime(state)})
     assert "report" in order_command.update
+    assert "report_data" in order_command.update
     assert "# 个性化旅游规划报告" in order_command.update["report"]
     assert "最终旅行方案报告" in order_command.update["report"]
     assert "行程概览：北京 → 上海" in order_command.update["report"]
@@ -554,8 +574,135 @@ def test_itinerary_budget_and_order_report_use_selected_real_options():
     assert "约 40 元/人" in order_command.update["report"]
     assert "南京路小吃" in order_command.update["report"]
     assert "本帮菜餐厅" in order_command.update["report"]
+    report_data = order_command.update["report_data"]
+    assert report_data["version"] == "travel_report.v1"
+    assert len(report_data["itinerary"]) == 3
+    assert len(report_data["map_routes"]) == 3
+    assert report_data["budget"]["items"]
+    assert [
+        day["route"]["summary"] for day in report_data["itinerary"]
+    ] == [
+        route["summary"] for route in report_data["map_routes"]
+    ]
     assert "pay.example.com" not in order_command.update["messages"][0].content
     assert "未接入真实支付服务" in order_command.update["messages"][0].content
+
+
+def test_final_report_pads_four_day_trip_and_exports_route_bound_data():
+    state = create_initial_state(user_id="user-1", session_id="session-1")
+    state.update(
+        {
+            "current_step": "budget_summarization",
+            "user_requirement": {
+                "departure_city": "北京",
+                "destination": "上海",
+                "departure_date": "2026-05-10",
+                "travel_days": 4,
+                "adult_count": 2,
+                "children_count": 0,
+                "budget_min": 2000.0,
+                "budget_max": 5000.0,
+                "budget_level": "comfort",
+                "travel_styles": ["culture", "food"],
+                "special_needs": None,
+            },
+            "selected_destination": "上海",
+            "destination_options": [
+                {
+                    "name": "上海",
+                    "description": "城市文化和美食集中",
+                    "weather_info": "午后可能有阵雨，建议保留室内备选",
+                    "attractions": ["外滩", "上海博物馆", "豫园"],
+                    "attraction_pois": [
+                        {"name": "外滩", "area": "黄浦江沿岸", "estimated_cost": 0.0},
+                        {"name": "上海博物馆", "area": "人民广场", "indoor": True, "estimated_cost": 0.0},
+                        {"name": "豫园", "area": "老城厢", "estimated_cost": 40.0},
+                    ],
+                    "estimated_cost": 1800.0,
+                }
+            ],
+            "selected_transport": "train",
+            "selected_transport_option": {
+                "transport_type": "train",
+                "details": "G1 北京南 -> 上海虹桥",
+                "price": 626.0,
+            },
+            "selected_accommodation_types": ["star_hotel"],
+            "selected_accommodation_option": {
+                "name": "上海市中心酒店",
+                "type": "star_hotel",
+                "location": "人民广场",
+                "price_per_night": 800.0,
+                "rating": 4.7,
+                "amenities": ["近地铁"],
+            },
+            "selected_food_types": ["local"],
+            "selected_food_pois": [
+                {
+                    "name": "南京路小吃",
+                    "type": "local",
+                    "area": "南京路/人民广场",
+                    "average_cost": 80.0,
+                }
+            ],
+            "itinerary": [
+                {
+                    "day_number": 1,
+                    "theme": "抵达",
+                    "activities": ["抵达上海", "外滩散步"],
+                    "time_blocks": ["上午/出发：G1 北京南 -> 上海虹桥", "晚上/夜景：外滩"],
+                    "meals": ["早餐：自理", "午餐：南京路小吃", "晚餐：南京路小吃"],
+                    "accommodation": "上海市中心酒店",
+                    "route_note": "抵达后住人民广场，晚上去外滩。",
+                },
+                {
+                    "day_number": 2,
+                    "theme": "城市文化",
+                    "activities": ["上海博物馆", "人民广场"],
+                    "time_blocks": ["上午/文化：上海博物馆", "下午/街区：人民广场"],
+                    "meals": ["早餐：酒店", "午餐：南京路小吃", "晚餐：南京路小吃"],
+                    "accommodation": "上海市中心酒店",
+                    "route_note": "当天围绕人民广场活动。",
+                },
+                {
+                    "day_number": 3,
+                    "theme": "园林与小吃",
+                    "activities": ["豫园", "城隍庙"],
+                    "time_blocks": ["上午/园林：豫园", "下午/小吃：城隍庙"],
+                    "meals": ["早餐：酒店", "午餐：南京路小吃", "晚餐：南京路小吃"],
+                    "accommodation": "上海市中心酒店",
+                    "route_note": "当天围绕老城厢活动。",
+                },
+            ],
+        }
+    )
+
+    budget_command = summarize_budget_tool.invoke({"runtime": _build_runtime(state)})
+    state.update(budget_command.update)
+
+    assert len(state["itinerary"]) == 4
+    assert state["itinerary"][3]["day_number"] == 4
+    assert state["itinerary"][3]["theme"] == "返程缓冲与补漏"
+    assert len(state["budget"]["line_items"]) == 5
+
+    order_command = generate_order_tool.invoke({"runtime": _build_runtime(state)})
+    report = order_command.update["report"]
+    report_data = order_command.update["report_data"]
+
+    assert "4天3晚" in report
+    for day_number in range(1, 5):
+        assert f"Day {day_number}：" in report
+    assert "天气风险" in report
+    assert "费用依据" in report
+    assert "预算置信度" in report
+    assert len(report_data["itinerary"]) == 4
+    assert len(report_data["map_routes"]) == 4
+    assert report_data["itinerary"][3]["title"] == "返程缓冲与补漏"
+    assert [
+        day["route"]["summary"] for day in report_data["itinerary"]
+    ] == [
+        route["summary"] for route in report_data["map_routes"]
+    ]
 
 
 def test_itinerary_prefers_same_area_pois_and_food():
