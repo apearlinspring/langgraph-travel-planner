@@ -3,6 +3,7 @@
 """
 import json
 import asyncio
+import time
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -57,8 +58,17 @@ async def generate_sse_stream(
         user: User
 ):
     assistant_message = ""
+    request_started_at = time.perf_counter()
+    first_token_elapsed = None
+    tool_started_at = {}
+    tool_name_by_run = {}
 
     try:
+        app_logger.info(
+            "SSE chat started: "
+            f"conversation_id={conversation_id}, user_id={user.id}, "
+            f"message_length={len(user_message)}"
+        )
         # 1. 保存用户消息
         await save_message(db, conversation_id, "user", user_message)
 
@@ -90,6 +100,13 @@ async def generate_sse_stream(
                 if chunk and hasattr(chunk, "content") and chunk.content:
                     token = chunk.content
                     assistant_message += token
+                    if first_token_elapsed is None:
+                        first_token_elapsed = time.perf_counter() - request_started_at
+                        app_logger.info(
+                            "SSE first token emitted: "
+                            f"conversation_id={conversation_id}, user_id={user.id}, "
+                            f"elapsed_seconds={first_token_elapsed:.2f}"
+                        )
                     yield sse({
                         "type": "token",
                         "content": token,
@@ -98,10 +115,30 @@ async def generate_sse_stream(
             # 或者捕获工具调用信息
             elif kind == "on_tool_start":
                 tool_name = event.get("name", "")
+                run_id = event.get("run_id", "")
+                if run_id:
+                    tool_started_at[run_id] = time.perf_counter()
+                    tool_name_by_run[run_id] = tool_name
+                app_logger.info(
+                    "SSE tool started: "
+                    f"conversation_id={conversation_id}, user_id={user.id}, tool={tool_name}"
+                )
                 yield sse({
                     "type": "tool_call",
                     "tool": tool_name,
                 })
+            elif kind == "on_tool_end":
+                run_id = event.get("run_id", "")
+                tool_name = event.get("name", "") or tool_name_by_run.get(run_id, "")
+                started_at = tool_started_at.pop(run_id, None)
+                tool_name_by_run.pop(run_id, None)
+                if started_at is not None:
+                    elapsed = time.perf_counter() - started_at
+                    app_logger.info(
+                        "SSE tool finished: "
+                        f"conversation_id={conversation_id}, user_id={user.id}, "
+                        f"tool={tool_name}, elapsed_seconds={elapsed:.2f}"
+                    )
 
             await asyncio.sleep(0)
 
@@ -114,9 +151,23 @@ async def generate_sse_stream(
                 assistant_message,
             )
 
+        total_elapsed = time.perf_counter() - request_started_at
+        app_logger.info(
+            "SSE chat completed: "
+            f"conversation_id={conversation_id}, user_id={user.id}, "
+            f"elapsed_seconds={total_elapsed:.2f}, "
+            f"first_token_seconds={(first_token_elapsed if first_token_elapsed is not None else -1):.2f}, "
+            f"assistant_chars={len(assistant_message)}"
+        )
         yield sse({"type": "done"})
 
     except Exception as e:
+        total_elapsed = time.perf_counter() - request_started_at
+        app_logger.exception(
+            "SSE chat failed: "
+            f"conversation_id={conversation_id}, user_id={user.id}, "
+            f"elapsed_seconds={total_elapsed:.2f}"
+        )
         app_logger.exception("❌ SSE 流式对话错误")
         yield sse({
             "type": "error",

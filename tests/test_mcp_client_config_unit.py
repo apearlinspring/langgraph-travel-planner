@@ -15,6 +15,8 @@ def reset_mcp_manager():
 def test_hotel_server_uses_new_env_var_when_available(monkeypatch):
     monkeypatch.setenv("AIGOHOTEL_API_KEY", "new-key")
     monkeypatch.setenv("AIGOHOTEL_MCP_API", "legacy-key")
+    monkeypatch.setenv("PIP_INDEX_URL", "https://pypi.tuna.tsinghua.edu.cn/simple")
+    monkeypatch.setenv("PIP_TRUSTED_HOST", "pypi.tuna.tsinghua.edu.cn")
 
     MCPClientManager.refresh_server_configs()
 
@@ -22,6 +24,8 @@ def test_hotel_server_uses_new_env_var_when_available(monkeypatch):
     assert hotel_config["command"] == "uvx"
     assert hotel_config["args"] == ["--from", "aigohotel-mcp", "aigohotel-mcp"]
     assert hotel_config["env"]["AIGOHOTEL_API_KEY"] == "new-key"
+    assert hotel_config["env"]["UV_DEFAULT_INDEX"] == "https://pypi.tuna.tsinghua.edu.cn/simple"
+    assert hotel_config["env"]["UV_INSECURE_HOST"] == "pypi.tuna.tsinghua.edu.cn"
 
 
 def test_hotel_server_falls_back_to_legacy_env_var(monkeypatch):
@@ -33,6 +37,15 @@ def test_hotel_server_falls_back_to_legacy_env_var(monkeypatch):
 
     hotel_config = MCPClientManager.SERVER_CONFIGS["aigohotel-mcp"]
     assert hotel_config["env"]["AIGOHOTEL_API_KEY"] == "legacy-key"
+
+
+def test_hotel_server_is_optional_for_startup(monkeypatch):
+    monkeypatch.setenv("AIGOHOTEL_API_KEY", "new-key")
+
+    MCPClientManager.refresh_server_configs()
+
+    assert "aigohotel-mcp" in MCPClientManager.SERVER_CONFIGS
+    assert "aigohotel-mcp" not in MCPClientManager.get_startup_server_names()
 
 
 def test_hotel_server_is_omitted_when_no_credentials_exist(monkeypatch):
@@ -52,3 +65,18 @@ def test_local_stdio_servers_use_current_python(monkeypatch):
 
     assert MCPClientManager.SERVER_CONFIGS["weather"]["command"] == sys.executable
     assert MCPClientManager.SERVER_CONFIGS["search"]["command"] == sys.executable
+
+
+def test_local_stdio_servers_use_stable_runtime_dirs(monkeypatch):
+    monkeypatch.setenv("AIGOHOTEL_API_KEY", "new-key")
+
+    MCPClientManager.refresh_server_configs()
+
+    env = MCPClientManager.SERVER_CONFIGS["weather"]["env"]
+    assert env["FASTMCP_HOME"].endswith(".fastmcp")
+    assert env["LOCALAPPDATA"].endswith(".runtime\\localappdata")
+    assert env["APPDATA"].endswith(".runtime\\appdata")
+    assert env["USERPROFILE"].endswith(".runtime\\userprofile")
+    assert env["TEMP"].endswith(".runtime\\tmp")
+    assert env["TMP"].endswith(".runtime\\tmp")
+    assert env["PYTHONUTF8"] == "1"

@@ -150,3 +150,56 @@ def test_destination_query_builds_state_context_from_report():
     assert "\u9635\u96e8" in context["weather_info"]
     assert "\u5916\u6ee9" in context["attractions"]
     assert "\u4e0a\u6d77\u535a\u7269\u9986" in context["attractions"]
+
+
+def test_classifier_node_prefers_rule_based_explore(monkeypatch):
+    monkeypatch.setattr(
+        destination_router,
+        "_build_llm",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("LLM should not be used")),
+    )
+
+    result = destination_router.classifier_node(
+        {"original_query": "推荐眉县适合周末放松的景点和玩法", "destination": "眉县"}
+    )
+
+    assert result["classifications"] == [
+        {"agent": "explore", "query": "推荐眉县适合周末放松的景点和玩法"}
+    ]
+
+
+def test_classifier_node_prefers_rule_based_weather(monkeypatch):
+    monkeypatch.setattr(
+        destination_router,
+        "_build_llm",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("LLM should not be used")),
+    )
+
+    result = destination_router.classifier_node(
+        {"original_query": "眉县周末天气和气温怎么样", "destination": "眉县"}
+    )
+
+    assert result["classifications"] == [
+        {"agent": "weather", "query": "眉县周末天气和气温怎么样"}
+    ]
+
+
+def test_classifier_node_falls_back_to_boolean_model_output(monkeypatch):
+    class FakeStructuredLLM:
+        def invoke(self, messages):
+            return destination_router.ClassificationDecision(explore=True, weather=False)
+
+    class FakeLLM:
+        def with_structured_output(self, schema):
+            assert schema is destination_router.ClassificationDecision
+            return FakeStructuredLLM()
+
+    monkeypatch.setattr(destination_router, "_build_llm", lambda *args, **kwargs: FakeLLM())
+
+    result = destination_router.classifier_node(
+        {"original_query": "帮我分类这个模糊问题", "destination": "眉县"}
+    )
+
+    assert result["classifications"] == [
+        {"agent": "explore", "query": "帮我分类这个模糊问题"}
+    ]

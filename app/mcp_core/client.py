@@ -6,6 +6,7 @@ import os
 import sys
 from copy import deepcopy
 from typing import Any, Optional
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 from langchain_mcp_adapters.client import MultiServerMCPClient
@@ -22,17 +23,58 @@ class MCPClientManager:
     _lock = asyncio.Lock()
 
     PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../"))
+    RUNTIME_ROOT = os.path.join(PROJECT_ROOT, ".runtime")
+    MCP_HOME_DIR = os.path.join(PROJECT_ROOT, ".fastmcp")
+    MCP_RETRY_ATTEMPTS = 2
+    MCP_RETRY_DELAY_SECONDS = 1.0
+    OPTIONAL_STARTUP_SERVERS = {"aigohotel-mcp"}
+    SERVER_RETRY_ATTEMPTS = {"aigohotel-mcp": 1}
+    SERVER_TOOL_LOAD_TIMEOUTS = {"aigohotel-mcp": 10.0}
     ENV_VARS: dict[str, str] = {}
     SERVER_CONFIGS: dict[str, dict[str, Any]] = {}
 
     @classmethod
     def _build_python_env(cls) -> dict[str, str]:
         env_vars = os.environ.copy()
+        local_appdata = os.path.join(cls.RUNTIME_ROOT, "localappdata")
+        appdata = os.path.join(cls.RUNTIME_ROOT, "appdata")
+        userprofile = os.path.join(cls.RUNTIME_ROOT, "userprofile")
+        temp_dir = os.path.join(cls.RUNTIME_ROOT, "tmp")
+
+        for path in [
+            cls.RUNTIME_ROOT,
+            cls.MCP_HOME_DIR,
+            local_appdata,
+            appdata,
+            userprofile,
+            temp_dir,
+        ]:
+            os.makedirs(path, exist_ok=True)
+
         env_vars["PYTHONPATH"] = cls.PROJECT_ROOT + os.pathsep + env_vars.get("PYTHONPATH", "")
         env_vars.setdefault("UV_CACHE_DIR", os.path.join(cls.PROJECT_ROOT, ".uv-wheel-cache"))
         env_vars.setdefault("UV_PYTHON_INSTALL_DIR", os.path.join(cls.PROJECT_ROOT, ".uv-python"))
         env_vars.setdefault("UV_TOOL_DIR", os.path.join(cls.PROJECT_ROOT, ".uv-tools"))
-        env_vars.setdefault("FASTMCP_HOME", os.path.join(cls.PROJECT_ROOT, ".fastmcp"))
+        env_vars["FASTMCP_HOME"] = cls.MCP_HOME_DIR
+        env_vars["LOCALAPPDATA"] = local_appdata
+        env_vars["APPDATA"] = appdata
+        env_vars["USERPROFILE"] = userprofile
+        env_vars["HOME"] = userprofile
+        env_vars["TMP"] = temp_dir
+        env_vars["TEMP"] = temp_dir
+        env_vars["PYTHONUTF8"] = "1"
+        uv_default_index = (
+            os.getenv("UV_DEFAULT_INDEX")
+            or os.getenv("PIP_INDEX_URL")
+            or "https://pypi.tuna.tsinghua.edu.cn/simple"
+        )
+        env_vars.setdefault("UV_DEFAULT_INDEX", uv_default_index)
+        insecure_host = os.getenv("UV_INSECURE_HOST") or os.getenv("PIP_TRUSTED_HOST", "")
+        if not insecure_host:
+            parsed = urlparse(uv_default_index)
+            insecure_host = parsed.netloc
+        if insecure_host:
+            env_vars.setdefault("UV_INSECURE_HOST", insecure_host)
         return env_vars
 
     @staticmethod
@@ -154,6 +196,22 @@ class MCPClientManager:
             "transport": cls.SERVER_CONFIGS.get(server, {}).get("transport"),
         }
 
+    @classmethod
+    def get_startup_server_names(cls) -> list[str]:
+        """Return MCP servers that are safe to warm up during startup."""
+        return [
+            server
+            for server in cls.SERVER_CONFIGS
+            if server not in cls.OPTIONAL_STARTUP_SERVERS
+        ]
+
+    @classmethod
+    def get_default_tool_server_names(cls, *, include_optional: bool = False) -> list[str]:
+        """Return the default server list for generic tool collection."""
+        if include_optional:
+            return list(cls.SERVER_CONFIGS.keys())
+        return cls.get_startup_server_names()
+
     def _normalize_servers(self, servers: list[str] | None) -> list[str]:
         target_servers = servers or list(self.SERVER_CONFIGS.keys())
         valid_servers = []
@@ -171,36 +229,86 @@ class MCPClientManager:
             self._clients[server] = client
         return client
 
+    @staticmethod
+    def _format_error(exc: Exception | None) -> str:
+        if exc is None:
+            return "unknown error"
+        message = str(exc).strip()
+        return message or exc.__class__.__name__
+
     async def _load_server_tools(self, server: str, *, force_refresh: bool = False) -> list[Any]:
+        return await self._load_server_tools_with_overrides(
+            server,
+            force_refresh=force_refresh,
+            timeout_override=None,
+        )
+
+    async def _load_server_tools_with_overrides(
+        self,
+        server: str,
+        *,
+        force_refresh: bool = False,
+        timeout_override: float | None,
+    ) -> list[Any]:
         if not force_refresh and server in self._tool_cache:
             return self._tool_cache[server]
 
-        try:
-            client = self._get_or_create_client(server)
-            tools = await client.get_tools()
-            self._tool_cache[server] = tools
-            self._server_status[server] = self._build_status_entry(
-                server,
-                "healthy",
-                tool_count=len(tools),
-            )
-            app_logger.info(f"MCP server ready: {server} ({len(tools)} tools)")
-            return tools
-        except Exception as exc:
-            self._tool_cache.pop(server, None)
-            self._server_status[server] = self._build_status_entry(
-                server,
-                "unavailable",
-                error=str(exc),
-            )
-            app_logger.warning(f"MCP server unavailable: {server} - {exc}")
-            return []
+        last_error: Exception | None = None
+        timeout_seconds = (
+            timeout_override if timeout_override is not None else self.SERVER_TOOL_LOAD_TIMEOUTS.get(server)
+        )
+        retry_attempts = self.SERVER_RETRY_ATTEMPTS.get(server, self.MCP_RETRY_ATTEMPTS)
+        for attempt in range(1, retry_attempts + 1):
+            try:
+                if force_refresh or attempt > 1:
+                    self._clients.pop(server, None)
+                client = self._get_or_create_client(server)
+                tool_task = client.get_tools()
+                tools = (
+                    await asyncio.wait_for(tool_task, timeout=timeout_seconds)
+                    if timeout_seconds
+                    else await tool_task
+                )
+                self._tool_cache[server] = tools
+                self._server_status[server] = self._build_status_entry(
+                    server,
+                    "healthy",
+                    tool_count=len(tools),
+                )
+                if attempt > 1:
+                    app_logger.info(
+                        f"MCP server recovered after retry: {server} ({len(tools)} tools, attempt {attempt})"
+                    )
+                else:
+                    app_logger.info(f"MCP server ready: {server} ({len(tools)} tools)")
+                return tools
+            except Exception as exc:
+                last_error = exc
+                self._tool_cache.pop(server, None)
+                self._clients.pop(server, None)
+                if attempt < retry_attempts:
+                    app_logger.warning(
+                        f"MCP server start failed: {server} (attempt {attempt}/{retry_attempts}) - {self._format_error(exc)}"
+                    )
+                    await asyncio.sleep(self.MCP_RETRY_DELAY_SECONDS)
+                    continue
+
+        self._server_status[server] = self._build_status_entry(
+            server,
+            "unavailable",
+            error=self._format_error(last_error),
+        )
+        app_logger.warning(
+            f"MCP server unavailable: {server} - {self._format_error(last_error)}"
+        )
+        return []
 
     async def warmup(
         self,
         servers: list[str] | None = None,
         *,
         force_refresh: bool = False,
+        timeout_overrides: dict[str, float] | None = None,
     ) -> dict[str, Any]:
         """Probe requested servers and cache tools for the healthy ones."""
         target_servers = self._normalize_servers(servers)
@@ -209,7 +317,11 @@ class MCPClientManager:
 
         await asyncio.gather(
             *(
-                self._load_server_tools(server, force_refresh=force_refresh)
+                self._load_server_tools_with_overrides(
+                    server,
+                    force_refresh=force_refresh,
+                    timeout_override=(timeout_overrides or {}).get(server),
+                )
                 for server in target_servers
             )
         )
@@ -237,6 +349,7 @@ class MCPClientManager:
         servers: list[str] | None = None,
         *,
         force_refresh: bool = False,
+        timeout_overrides: dict[str, float] | None = None,
     ) -> list[Any]:
         """Get tools from all healthy requested servers."""
         target_servers = self._normalize_servers(servers)
@@ -245,7 +358,11 @@ class MCPClientManager:
 
         tool_groups = await asyncio.gather(
             *(
-                self._load_server_tools(server, force_refresh=force_refresh)
+                self._load_server_tools_with_overrides(
+                    server,
+                    force_refresh=force_refresh,
+                    timeout_override=(timeout_overrides or {}).get(server),
+                )
                 for server in target_servers
             )
         )

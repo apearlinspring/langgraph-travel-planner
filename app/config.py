@@ -22,6 +22,11 @@ class Settings(BaseSettings):
     # ============== LLM 配置 ==============
     dashscope_api_key: str = Field(alias="DASHSCOPE_API_KEY")
     qwen_model_name: str = Field(default="qwen3.6-plus", alias="QWEN_MODEL_NAME")
+    qwen_planner_model_name: str = Field(default="qwen3.6-plus", alias="QWEN_PLANNER_MODEL_NAME")
+    qwen_router_model_name: str = Field(default="qwen3.6-flash", alias="QWEN_ROUTER_MODEL_NAME")
+    qwen_rag_model_name: str = Field(default="qwen3.6-flash", alias="QWEN_RAG_MODEL_NAME")
+    qwen_vision_model_name: str = Field(default="qwen3.6-plus", alias="QWEN_VISION_MODEL_NAME")
+    qwen_report_model_name: str = Field(default="qwen3.6-plus", alias="QWEN_REPORT_MODEL_NAME")
     qwen_base_url: str = Field(
         default="https://dashscope.aliyuncs.com/compatible-mode/v1",
         alias="QWEN_BASE_URL"

@@ -963,6 +963,256 @@ def _format_adjustment_options(state: TravelState, budget: dict) -> list[str]:
     return options
 
 
+def _format_report_people(requirement: dict) -> str:
+    adult_count = requirement.get("adult_count") or 0
+    children_count = requirement.get("children_count") or 0
+    parts = []
+    if adult_count:
+        parts.append(f"{adult_count} 位成人")
+    if children_count:
+        parts.append(f"{children_count} 位儿童")
+    return "、".join(parts) if parts else "人数待确认"
+
+
+def _format_report_duration(requirement: dict) -> str:
+    travel_days = requirement.get("travel_days")
+    if isinstance(travel_days, int) and travel_days > 0:
+        nights = max(travel_days - 1, 0)
+        return f"{travel_days}天{nights}晚"
+    return "天数待确认"
+
+
+def _format_report_route_label(state: TravelState, requirement: dict) -> str:
+    departure_city = requirement.get("departure_city") or "出发地待确认"
+    destination = state.get("selected_destination") or requirement.get("destination") or "目的地待确认"
+    return f"{departure_city} → {destination}"
+
+
+def _dedupe_report_points(points: list[str], max_items: int = 6) -> list[str]:
+    picked = []
+    for point in points:
+        normalized = str(point or "").strip()
+        if not normalized or normalized in picked:
+            continue
+        picked.append(normalized)
+        if len(picked) >= max_items:
+            break
+    return picked
+
+
+def _collect_report_route_candidates(state: TravelState) -> list[str]:
+    candidates = []
+    destination = state.get("selected_destination")
+    if destination:
+        candidates.append(str(destination))
+
+    accommodation = state.get("selected_accommodation_option") or {}
+    for key in ["location", "name"]:
+        if accommodation.get(key):
+            candidates.append(str(accommodation[key]))
+
+    for option in state.get("destination_options") or []:
+        candidates.extend(str(name) for name in option.get("attractions", []) if name)
+        for poi in option.get("attraction_pois", []) or []:
+            if poi.get("area"):
+                candidates.append(str(poi["area"]))
+            if poi.get("name"):
+                candidates.append(str(poi["name"]))
+
+    for food_poi in state.get("selected_food_pois") or []:
+        if food_poi.get("area"):
+            candidates.append(str(food_poi["area"]))
+        if food_poi.get("name"):
+            candidates.append(str(food_poi["name"]))
+
+    return _dedupe_report_points(candidates, max_items=40)
+
+
+def _format_report_route_points(
+    day: dict,
+    state: TravelState,
+    requirement: dict,
+) -> list[str]:
+    day_number = day.get("day_number") or 0
+    destination = state.get("selected_destination") or requirement.get("destination") or ""
+    departure_city = requirement.get("departure_city") or ""
+    accommodation = day.get("accommodation") or (state.get("selected_accommodation_option") or {}).get("name")
+    text = "\n".join(
+        str(item)
+        for item in [
+            day.get("theme"),
+            *(day.get("activities") or []),
+            *(day.get("time_blocks") or []),
+            *(day.get("meals") or []),
+            day.get("route_note"),
+            day.get("transport_note"),
+        ]
+        if item
+    )
+
+    points = []
+    if day_number == 1 and departure_city:
+        points.append(str(departure_city))
+    if day_number == 1 and destination:
+        points.append(str(destination))
+
+    matches = []
+    for candidate in _collect_report_route_candidates(state):
+        if candidate and candidate in text:
+            matches.append((text.index(candidate), candidate))
+    points.extend(candidate for _, candidate in sorted(matches, key=lambda item: item[0]))
+
+    if accommodation and "待确认" not in str(accommodation):
+        points.append(str(accommodation))
+    if not points and destination:
+        points.append(str(destination))
+
+    return _dedupe_report_points(points)
+
+
+def _format_report_daily_itinerary(
+    itinerary: list[dict],
+    state: TravelState,
+    requirement: dict,
+    max_days: int = 8,
+) -> list[str]:
+    if not itinerary:
+        return ["- 行程明细待确认。"]
+
+    lines = []
+    for day in itinerary[:max_days]:
+        day_number = day.get("day_number", len(lines) + 1)
+        route_points = _format_report_route_points(day, state, requirement)
+        route_title = " → ".join(route_points) if len(route_points) >= 2 else day.get("theme") or "当天安排"
+        lines.append(f"Day {day_number}：{route_title}")
+
+        time_blocks = day.get("time_blocks") or []
+        if time_blocks:
+            lines.extend(f"- {block}" for block in time_blocks)
+        else:
+            activities = day.get("activities") or []
+            lines.extend(f"- {activity}" for activity in activities[:3])
+
+        route_note = day.get("route_note") or day.get("transport_note")
+        if route_note:
+            lines.append(f"- 动线/交通：{route_note}")
+        meals = day.get("meals") or []
+        if meals:
+            lines.append(f"- 餐饮：{'；'.join(str(item) for item in meals[:3])}")
+        accommodation = day.get("accommodation")
+        if accommodation:
+            lines.append(f"- 住宿/落脚：{accommodation}")
+        plan_b = day.get("plan_b")
+        if plan_b:
+            lines.append(f"- Plan B：{plan_b}")
+        risk_notes = day.get("risk_notes") or []
+        if risk_notes:
+            lines.append(f"- 当天风险：{'；'.join(str(item) for item in risk_notes[:2])}")
+
+    if len(itinerary) > max_days:
+        lines.append(f"- 其余 {len(itinerary) - max_days} 天按已生成行程继续执行。")
+    return lines
+
+
+def _format_report_map_lines(
+    itinerary: list[dict],
+    state: TravelState,
+    requirement: dict,
+) -> list[str]:
+    lines = []
+    for day in itinerary:
+        day_number = day.get("day_number", len(lines) + 1)
+        points = _format_report_route_points(day, state, requirement)
+        if points:
+            lines.append(f"Day {day_number}：{' → '.join(points)}")
+    if not lines:
+        route_label = _format_report_route_label(state, requirement)
+        lines.append(f"总览：{route_label}")
+    return lines
+
+
+def _format_report_risk_lines(itinerary: list[dict], budget: dict) -> list[str]:
+    risk_lines = [
+        "- 实时票价、酒店价格、余票和景点开放情况会变动，正式支付或出发前需要再次核实。",
+        "- 出发前 24-48 小时再次确认交通、酒店入住政策、天气和景点预约要求。",
+        "- 天气/体力：优先保留 Plan B 和每日机动时间，不建议把每天塞满。",
+    ]
+    for day in itinerary:
+        for note in day.get("risk_notes") or []:
+            line = f"- Day {day.get('day_number', '')}：{note}".replace("Day ：", "Day：")
+            if line not in risk_lines:
+                risk_lines.append(line)
+            if len(risk_lines) >= 6:
+                return risk_lines
+    for item in budget.get("verification_items") or []:
+        line = f"- 待核验：{item}"
+        if line not in risk_lines:
+            risk_lines.append(line)
+        if len(risk_lines) >= 6:
+            break
+    return risk_lines
+
+
+def _build_final_report(
+    state: TravelState,
+    requirement: dict,
+    budget: dict,
+    itinerary: list[dict],
+    selected_transport_option: dict,
+    selected_accommodation: dict,
+    selected_food_types: list[str],
+) -> str:
+    route_label = _format_report_route_label(state, requirement)
+    duration = _format_report_duration(requirement)
+    people = _format_report_people(requirement)
+    travel_styles = "、".join(requirement.get("travel_styles") or []) or "待确认"
+    special_needs = requirement.get("special_needs") or "无特别备注"
+    transport_label = TRANSPORT_LABELS.get(
+        state.get("selected_transport"),
+        state.get("selected_transport", "未确认"),
+    )
+
+    return "\n".join(
+        [
+            "# 个性化旅游规划报告",
+            "最终旅行方案报告",
+            "",
+            f"行程概览：{route_label}，{duration}，{people}，主题偏好：{travel_styles}。整体节奏以顺路、留白和可执行为主，特殊需求：{special_needs}。",
+            "",
+            "交通与住宿：",
+            f"- 交通：{transport_label}；{_format_transport_option(selected_transport_option)}",
+            f"- 住宿：{_format_accommodation_option(selected_accommodation)}",
+            f"- 餐饮偏好：{_format_food_preferences(selected_food_types)}",
+            "",
+            "行程亮点：",
+            *_format_itinerary_highlights(itinerary),
+            "",
+            "每日行程：",
+            *_format_report_daily_itinerary(itinerary, state, requirement),
+            "",
+            "景点地图：",
+            *_format_report_map_lines(itinerary, state, requirement),
+            "",
+            "预算明细：",
+            *_format_budget_breakdown(budget),
+            f"- {_format_budget_fit(requirement, budget)}",
+            "",
+            "费用依据：",
+            *_format_budget_assumptions(budget),
+            "",
+            "预算置信度与待核验项：",
+            *_format_budget_confidence(budget),
+            *_format_budget_verification_items(budget),
+            "",
+            "天气与风险提醒：",
+            *_format_report_risk_lines(itinerary, budget),
+            "",
+            "后续可调整：",
+            *_format_adjustment_options(state, budget),
+        ]
+    )
+
+
 @tool
 def record_requirement_tool(
     departure_city: str,
@@ -1526,48 +1776,14 @@ def generate_order_tool(
     budget = state.get("budget") or {}
     itinerary = state.get("itinerary") or []
     selected_food_types = state.get("selected_food_types") or []
-    special_needs = requirement.get("special_needs") or "无特别备注"
-    report = "\n".join(
-        [
-            "最终旅行方案报告",
-            "",
-            "1. 基本信息",
-            f"- 目的地：{state.get('selected_destination', '未确认')}",
-            f"- 日期：{requirement.get('departure_date', '未确认')} 起，{requirement.get('travel_days', '未确认')} 天",
-            f"- 人数：{requirement.get('adult_count', 0)} 成人 + {requirement.get('children_count', 0)} 儿童",
-            f"- 旅行风格：{'、'.join(requirement.get('travel_styles') or []) or '待确认'}",
-            f"- 特殊需求：{special_needs}",
-            "",
-            "2. 已确认资源",
-            f"- 交通：{TRANSPORT_LABELS.get(state.get('selected_transport'), state.get('selected_transport', '未确认'))}；{_format_transport_option(selected_transport_option)}",
-            f"- 住宿：{_format_accommodation_option(selected_accommodation)}",
-            f"- 餐饮偏好：{_format_food_preferences(selected_food_types)}",
-            "",
-            "3. 行程亮点",
-            *_format_itinerary_highlights(itinerary),
-            "",
-            "4. 每日详细行程",
-            *_format_itinerary_details(itinerary),
-            "",
-            "5. 预算明细",
-            *_format_budget_breakdown(budget),
-            f"- {_format_budget_fit(requirement, budget)}",
-            "",
-            "6. 费用依据",
-            *_format_budget_assumptions(budget),
-            "",
-            "7. 预算置信度与待核验项",
-            *_format_budget_confidence(budget),
-            *_format_budget_verification_items(budget),
-            "",
-            "8. 风险与出行前核验",
-            "- 提醒：实时票价、酒店价格、余票和景点开放情况会变动，正式支付或出发前需要再次核实。",
-            "- 建议：出发前 24-48 小时再次确认交通、酒店入住政策、天气和景点预约要求。",
-            "- 天气/体力：优先保留 Plan B 和每日机动时间，不建议把每天塞满。",
-            "",
-            "9. 可调整项",
-            *_format_adjustment_options(state, budget),
-        ]
+    report = _build_final_report(
+        state,
+        requirement,
+        budget,
+        itinerary,
+        selected_transport_option,
+        selected_accommodation,
+        selected_food_types,
     )
     message = "\n".join(
         [

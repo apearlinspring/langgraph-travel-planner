@@ -1,0 +1,4527 @@
+html {
+        scroll-behavior: smooth;
+      }
+
+      :root {
+        /* 配色方案：知行 - 大地与海洋 */
+        --primary: #1a4d54; /* 深黛绿 - 沉稳 */
+        --primary-light: #2c6e7a;
+        --accent: #c28e5c; /* 古铜金 - 高级感强调色 */
+        --accent-hover: #a67545;
+
+        --sand-bg: #f5f2eb; /* 米白纸张色 */
+        --map-line: rgba(26, 77, 84, 0.08); /* 地图纹理色 */
+
+        --glass-bg: rgba(255, 255, 255, 0.75);
+        --glass-border: rgba(255, 255, 255, 0.6);
+        --glass-shadow: 0 8px 32px 0 rgba(26, 77, 84, 0.08);
+
+        --text-main: #2c3e50;
+        --text-serif: #1a4d54;
+        --text-light: #7f8c8d;
+        --white: #ffffff;
+        --paper: #fffdf9;
+        --surface-soft: rgba(255, 252, 247, 0.88);
+        --surface-strong: rgba(255, 255, 255, 0.96);
+        --shadow-soft: 0 14px 35px rgba(19, 52, 57, 0.08);
+        --shadow-strong: 0 24px 50px rgba(19, 52, 57, 0.12);
+        --border-soft: rgba(26, 77, 84, 0.1);
+
+        --radius-lg: 24px;
+        --radius-md: 16px;
+        --radius-sm: 8px;
+      }
+
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      ::selection {
+        background: rgba(194, 142, 92, 0.24);
+        color: var(--text-main);
+      }
+
+      body {
+        font-family: "Noto Sans SC", "PingFang SC", "Hiragino Sans GB",
+          "Microsoft YaHei", sans-serif;
+        color: var(--text-main);
+        height: 100vh;
+        overflow: hidden;
+        background-color: var(--sand-bg);
+        /* 细微的纸张噪点纹理 */
+        background-image:
+          radial-gradient(circle at 12% 18%, rgba(194, 142, 92, 0.16), transparent 22%),
+          radial-gradient(circle at 88% 14%, rgba(26, 77, 84, 0.12), transparent 24%),
+          linear-gradient(180deg, rgba(255, 255, 255, 0.35), rgba(245, 242, 235, 0.86)),
+          url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)' opacity='0.05'/%3E%3C/svg%3E");
+      }
+      body.intro-active {
+        overflow: hidden;
+      }
+
+      button:focus-visible,
+      input:focus-visible,
+      textarea:focus-visible,
+      summary:focus-visible {
+        outline: 3px solid rgba(194, 142, 92, 0.38);
+        outline-offset: 2px;
+      }
+
+      .intro-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 140;
+        cursor: pointer;
+        overflow: hidden;
+        background: #09171b;
+        transition: opacity 0.6s ease, visibility 0.6s ease;
+      }
+      .intro-overlay.hidden {
+        opacity: 0;
+        visibility: hidden;
+        pointer-events: none;
+      }
+      .intro-slider,
+      .intro-overlay-shade {
+        position: absolute;
+        inset: 0;
+      }
+      .intro-slide {
+        position: absolute;
+        inset: 0;
+        background-position: center;
+        background-size: cover;
+        opacity: 0;
+        transform: scale(1.04);
+        animation: scenicHeroSwap 18s infinite;
+      }
+      .intro-slide-one {
+        background-image:
+          linear-gradient(180deg, rgba(5, 16, 20, 0.1), rgba(5, 16, 20, 0.16)),
+          url("https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?auto=format&fit=crop&w=2200&q=80");
+        animation-delay: 0s;
+      }
+      .intro-slide-two {
+        background-image:
+          linear-gradient(180deg, rgba(5, 16, 20, 0.12), rgba(5, 16, 20, 0.18)),
+          url("https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&w=2200&q=80");
+        animation-delay: 6s;
+      }
+      .intro-slide-three {
+        background-image:
+          linear-gradient(180deg, rgba(5, 16, 20, 0.12), rgba(5, 16, 20, 0.18)),
+          url("https://images.unsplash.com/photo-1499856871958-5b9627545d1a?auto=format&fit=crop&w=2200&q=80");
+        animation-delay: 12s;
+      }
+      .intro-overlay-shade {
+        background:
+          linear-gradient(180deg, rgba(7, 18, 22, 0.28), rgba(7, 18, 22, 0.72)),
+          radial-gradient(circle at 20% 24%, rgba(255, 214, 166, 0.24), transparent 26%),
+          radial-gradient(circle at 82% 18%, rgba(255, 255, 255, 0.08), transparent 18%);
+      }
+      .intro-copy {
+        position: relative;
+        z-index: 1;
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+        justify-content: flex-end;
+        padding: clamp(28px, 5vw, 72px);
+        color: rgba(255, 252, 245, 0.98);
+      }
+      .intro-kicker {
+        display: inline-flex;
+        width: fit-content;
+        padding: 10px 16px;
+        border-radius: 999px;
+        margin-bottom: 22px;
+        background: rgba(255, 255, 255, 0.12);
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        backdrop-filter: blur(14px);
+        font-size: 13px;
+        font-weight: 700;
+        letter-spacing: 1.4px;
+      }
+      .intro-copy h1 {
+        max-width: 980px;
+        font-family: "Noto Serif SC", "Songti SC", "STSong", serif;
+        font-size: clamp(40px, 6vw, 74px);
+        line-height: 1.12;
+        letter-spacing: 1px;
+        text-shadow: 0 12px 28px rgba(0, 0, 0, 0.24);
+      }
+      .intro-copy p {
+        max-width: 720px;
+        margin-top: 18px;
+        color: rgba(255, 247, 234, 0.9);
+        font-size: clamp(16px, 2vw, 22px);
+        line-height: 1.8;
+        text-shadow: 0 10px 24px rgba(0, 0, 0, 0.22);
+      }
+      .intro-enter-hint {
+        margin-top: 28px;
+      }
+      .intro-enter-hint span {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        padding: 12px 18px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.14);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        color: rgba(255, 247, 234, 0.98);
+        font-size: 14px;
+        font-weight: 700;
+        backdrop-filter: blur(14px);
+        box-shadow: 0 18px 36px rgba(5, 16, 20, 0.2);
+        animation: introPulse 2.6s ease-in-out infinite;
+      }
+
+      /* === 背景装饰元素 === */
+
+      /* 1. 等高线地图背景 */
+      .bg-map-lines {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background-image: url("data:image/svg+xml,%3Csvg width='100%25' height='100%25' viewBox='0 0 800 400' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' stroke='%231A4D54' stroke-width='1' stroke-opacity='0.08'%3E%3Cpath d='M0 300 C 200 400 400 200 800 350' /%3E%3Cpath d='M0 320 C 220 420 420 220 800 370' /%3E%3Cpath d='M0 340 C 240 440 440 240 800 390' /%3E%3Cpath d='M0 100 C 300 0 500 150 800 50' /%3E%3Cpath d='M0 120 C 320 20 520 170 800 70' /%3E%3Cpath d='M-100 200 C 200 100 600 300 900 200' stroke-dasharray='10,10' stroke-opacity='0.05' /%3E%3C/g%3E%3C/svg%3E");
+        background-size: cover;
+        pointer-events: none;
+        z-index: 0;
+      }
+
+      /* 2. 飞行动画 */
+      .plane-container {
+        position: fixed;
+        top: 20%;
+        left: -100px;
+        z-index: 0;
+        opacity: 0.8;
+        animation: flyAcross 60s linear infinite;
+      }
+
+      .plane-icon {
+        font-size: 24px;
+        color: var(--accent);
+        transform: rotate(15deg);
+      }
+
+      .plane-trail {
+        position: absolute;
+        top: 12px;
+        right: 20px;
+        width: 100px;
+        height: 2px;
+        background: linear-gradient(
+          90deg,
+          transparent,
+          rgba(194, 142, 92, 0.3)
+        );
+      }
+
+      @keyframes flyAcross {
+        0% {
+          transform: translate(-100px, 0);
+        }
+        100% {
+          transform: translate(calc(100vw + 200px), -100px);
+        }
+      }
+
+      /* 主布局 */
+      .app-container {
+        position: relative;
+        z-index: 1;
+        display: flex;
+        height: 100vh;
+        padding: 24px;
+        gap: 24px;
+        max-width: 1600px;
+        margin: 0 auto;
+      }
+
+      /* 玻璃拟态卡片通用样式 */
+      .glass-card {
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(255, 251, 246, 0.82));
+        backdrop-filter: blur(22px);
+        -webkit-backdrop-filter: blur(22px);
+        border: 1px solid rgba(255, 255, 255, 0.72);
+        box-shadow: var(--shadow-soft);
+      }
+
+      /* === 登录/注册 === */
+      .auth-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(26, 77, 84, 0.3);
+        backdrop-filter: blur(8px);
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        z-index: 100;
+        transition: opacity 0.3s ease;
+      }
+
+      .auth-overlay.hidden {
+        display: none;
+      }
+
+      .auth-card {
+        width: 430px;
+        padding: 40px;
+        border-radius: var(--radius-lg);
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(255, 251, 246, 0.94));
+        position: relative;
+        overflow: hidden;
+        border: 1px solid rgba(255, 255, 255, 0.78);
+        box-shadow: var(--shadow-strong);
+      }
+
+      /* 邮票装饰 */
+      .stamp-decoration {
+        position: absolute;
+        top: -20px;
+        right: -20px;
+        width: 100px;
+        height: 100px;
+        border: 2px dashed var(--accent);
+        border-radius: 50%;
+        opacity: 0.2;
+        transform: rotate(20deg);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-family: "Georgia", "Times New Roman", "Noto Serif SC", serif;
+        color: var(--accent);
+        font-weight: bold;
+        pointer-events: none;
+      }
+
+      .auth-header {
+        text-align: center;
+        margin-bottom: 30px;
+      }
+
+      .auth-logo {
+        font-family: "Noto Serif SC", "Songti SC", "STSong", serif;
+        font-size: 36px;
+        font-weight: 700;
+        color: var(--primary);
+        margin-bottom: 8px;
+        letter-spacing: 4px;
+      }
+
+      .auth-logo i {
+        font-size: 24px;
+        color: var(--accent);
+        margin-right: 8px;
+      }
+
+      .auth-subtitle {
+        font-family: "Georgia", "Times New Roman", "Noto Serif SC", serif;
+        color: var(--text-light);
+        font-style: normal;
+        line-height: 1.7;
+        max-width: 280px;
+        margin: 0 auto;
+      }
+      .auth-hero-scene {
+        position: relative;
+        margin: 22px 0 18px;
+        min-height: 240px;
+        border-radius: 20px;
+        overflow: hidden;
+        border: 1px solid rgba(26, 77, 84, 0.08);
+        box-shadow: 0 16px 34px rgba(26, 77, 84, 0.12);
+        background: #112227;
+      }
+      .auth-hero-slider,
+      .auth-hero-overlay {
+        position: absolute;
+        inset: 0;
+      }
+      .auth-hero-slide {
+        position: absolute;
+        inset: 0;
+        background-position: center;
+        background-size: cover;
+        opacity: 0;
+        transform: scale(1.08);
+        animation: scenicHeroSwap 18s infinite;
+      }
+      .auth-hero-slide-one {
+        background-image:
+          linear-gradient(180deg, rgba(13, 29, 34, 0.08), rgba(10, 21, 25, 0.2)),
+          url("https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?auto=format&fit=crop&w=1400&q=80");
+        animation-delay: 0s;
+      }
+      .auth-hero-slide-two {
+        background-image:
+          linear-gradient(180deg, rgba(13, 29, 34, 0.08), rgba(10, 21, 25, 0.2)),
+          url("https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&w=1400&q=80");
+        animation-delay: 6s;
+      }
+      .auth-hero-slide-three {
+        background-image:
+          linear-gradient(180deg, rgba(13, 29, 34, 0.08), rgba(10, 21, 25, 0.2)),
+          url("https://images.unsplash.com/photo-1499856871958-5b9627545d1a?auto=format&fit=crop&w=1400&q=80");
+        animation-delay: 12s;
+      }
+      .auth-hero-overlay {
+        background:
+          linear-gradient(180deg, rgba(12, 23, 27, 0.14), rgba(10, 21, 25, 0.74)),
+          linear-gradient(90deg, rgba(11, 26, 31, 0.82), rgba(11, 26, 31, 0.22) 58%, rgba(11, 26, 31, 0.62));
+      }
+      .auth-hero-caption {
+        position: absolute;
+        left: 22px;
+        right: 22px;
+        bottom: 22px;
+        z-index: 1;
+        display: grid;
+        gap: 8px;
+        max-width: 320px;
+        color: rgba(255, 255, 255, 0.96);
+        font-size: 13px;
+        line-height: 1.7;
+      }
+      .auth-hero-kicker {
+        display: inline-flex;
+        width: fit-content;
+        padding: 6px 10px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.12);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        color: rgba(255, 247, 234, 0.94);
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.8px;
+        text-transform: uppercase;
+      }
+      .auth-hero-caption strong {
+        display: block;
+        font-size: 24px;
+        line-height: 1.28;
+        color: #fffaf1;
+      }
+      .auth-hero-caption p {
+        margin: 0;
+        color: rgba(245, 244, 240, 0.88);
+      }
+      .auth-highlights {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+        margin: 22px 0 18px;
+      }
+      .auth-highlight-item {
+        padding: 12px 10px;
+        border-radius: 14px;
+        background: rgba(26, 77, 84, 0.06);
+        border: 1px solid rgba(26, 77, 84, 0.08);
+        text-align: center;
+      }
+      .auth-highlight-item i {
+        color: var(--accent);
+        margin-bottom: 8px;
+        font-size: 14px;
+      }
+      .auth-highlight-item strong {
+        display: block;
+        color: var(--text-main);
+        font-size: 13px;
+        margin-bottom: 4px;
+      }
+      .auth-highlight-item span {
+        display: block;
+        color: var(--text-light);
+        font-size: 11px;
+        line-height: 1.5;
+      }
+      @keyframes scenicHeroSwap {
+        0% {
+          opacity: 0;
+          transform: scale(1.08);
+        }
+        6%,
+        28% {
+          opacity: 1;
+          transform: scale(1.12);
+        }
+        33%,
+        100% {
+          opacity: 0;
+          transform: scale(1.16);
+        }
+      }
+      @keyframes introPulse {
+        0%,
+        100% {
+          transform: translateY(0);
+          box-shadow: 0 18px 36px rgba(5, 16, 20, 0.2);
+        }
+        50% {
+          transform: translateY(-3px);
+          box-shadow: 0 22px 42px rgba(5, 16, 20, 0.28);
+        }
+      }
+      .auth-service-hint {
+        margin-top: 14px;
+        padding: 12px 14px;
+        border-radius: 14px;
+        font-size: 12px;
+        line-height: 1.6;
+        background: rgba(26, 77, 84, 0.06);
+        color: var(--text-light);
+        border: 1px solid rgba(26, 77, 84, 0.08);
+      }
+      .auth-service-hint.loading {
+        color: #9a6a2b;
+        background: rgba(194, 142, 92, 0.1);
+        border-color: rgba(194, 142, 92, 0.18);
+      }
+      .auth-service-hint.error {
+        color: #b42318;
+        background: rgba(180, 35, 24, 0.08);
+        border-color: rgba(180, 35, 24, 0.18);
+      }
+      .auth-service-hint.online {
+        color: #17603a;
+        background: rgba(23, 96, 58, 0.08);
+        border-color: rgba(23, 96, 58, 0.18);
+      }
+
+      .auth-tabs {
+        display: flex;
+        border-bottom: 1px solid #ddd;
+        margin-bottom: 24px;
+      }
+
+      .auth-tab {
+        flex: 1;
+        padding: 12px;
+        background: none;
+        border: none;
+        font-size: 15px;
+        color: var(--text-light);
+        cursor: pointer;
+        position: relative;
+      }
+
+      .auth-tab.active {
+        color: var(--primary);
+        font-weight: 600;
+      }
+
+      .auth-tab.active::after {
+        content: "";
+        position: absolute;
+        bottom: -1px;
+        left: 0;
+        width: 100%;
+        height: 2px;
+        background: var(--primary);
+      }
+
+      .form-group {
+        margin-bottom: 16px;
+      }
+      .form-group label {
+        display: block;
+        font-size: 12px;
+        color: var(--text-light);
+        margin-bottom: 7px;
+      }
+
+      .form-group input {
+        width: 100%;
+        padding: 12px;
+        border: 1px solid #ddd;
+        border-radius: 4px; /* 略微方正，更像传统表单 */
+        background: #fff;
+        transition: all 0.3s;
+      }
+
+      .form-group input:focus {
+        outline: none;
+        border-color: var(--primary);
+        box-shadow: 0 0 0 2px rgba(26, 77, 84, 0.1);
+      }
+      .form-group.error input {
+        border-color: rgba(180, 35, 24, 0.5);
+        box-shadow: 0 0 0 2px rgba(180, 35, 24, 0.08);
+      }
+      .field-error {
+        min-height: 18px;
+        margin-top: 6px;
+        color: #b42318;
+        font-size: 12px;
+      }
+      .auth-feedback {
+        display: none;
+        margin-top: 14px;
+        padding: 12px 14px;
+        border-radius: 12px;
+        font-size: 12px;
+        line-height: 1.6;
+      }
+      .auth-feedback.show {
+        display: block;
+      }
+      .auth-feedback.info {
+        background: rgba(26, 77, 84, 0.06);
+        color: var(--text-light);
+        border: 1px solid rgba(26, 77, 84, 0.1);
+      }
+      .auth-feedback.error {
+        background: rgba(180, 35, 24, 0.08);
+        color: #b42318;
+        border: 1px solid rgba(180, 35, 24, 0.16);
+      }
+      .auth-feedback.success {
+        background: rgba(23, 96, 58, 0.08);
+        color: #17603a;
+        border: 1px solid rgba(23, 96, 58, 0.18);
+      }
+      .auth-form-meta {
+        margin-top: 8px;
+        font-size: 12px;
+        color: var(--text-light);
+        text-align: center;
+      }
+
+      .auth-btn {
+        width: 100%;
+        padding: 14px;
+        background: var(--primary);
+        color: var(--white);
+        border: none;
+        border-radius: 4px;
+        font-size: 15px;
+        cursor: pointer;
+        transition: background 0.3s;
+      }
+
+      .auth-btn:hover {
+        background: var(--primary-light);
+      }
+      .auth-btn:disabled {
+        background: #b8c4c6;
+        cursor: not-allowed;
+      }
+
+      .register-fields {
+        display: none;
+      }
+      .register-fields.show {
+        display: block;
+      }
+
+      .api-config {
+        margin-top: 20px;
+        text-align: center;
+        font-size: 12px;
+      }
+      .api-config summary {
+        cursor: pointer;
+        color: var(--text-light);
+      }
+      .api-config input {
+        margin-top: 5px;
+        padding: 5px;
+        width: 80%;
+        text-align: center;
+      }
+      .api-config.hidden {
+        display: none;
+      }
+
+      /* === 侧边栏 (类似护照/手账本) === */
+      .sidebar {
+        width: 280px;
+        border-radius: var(--radius-lg);
+        display: flex;
+        flex-direction: column;
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(255, 251, 247, 0.84));
+        backdrop-filter: blur(22px);
+        border: 1px solid rgba(255, 255, 255, 0.76);
+        box-shadow: var(--shadow-soft);
+      }
+
+      .sidebar-header {
+        padding: 32px 24px 20px;
+        border-bottom: 1px dashed rgba(0, 0, 0, 0.1); /* 虚线像票据 */
+      }
+
+      .sidebar-logo-text {
+        font-family: "Noto Serif SC", "Songti SC", "STSong", serif;
+        font-size: 24px;
+        font-weight: 700;
+        color: var(--primary);
+        letter-spacing: 2px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .user-passport {
+        margin-top: 20px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 12px;
+        background: #f0f4f5;
+        border-radius: 8px;
+        border: 1px solid #e0e6e8;
+      }
+
+      .user-avatar-frame {
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
+        background: var(--primary);
+        color: white;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border: 2px solid var(--accent); /* 金色边框 */
+      }
+
+      .user-details h4 {
+        font-size: 14px;
+        color: var(--primary);
+      }
+      .user-details span {
+        font-size: 11px;
+        color: var(--text-light);
+        text-transform: uppercase;
+      }
+
+      .new-chat-btn {
+        margin: 20px 24px;
+        padding: 12px;
+        border: 1px solid rgba(26, 77, 84, 0.16);
+        background: rgba(255, 255, 255, 0.75);
+        color: var(--primary);
+        border-radius: 999px;
+        cursor: pointer;
+        transition: all 0.3s;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+        font-weight: 600;
+        box-shadow: 0 8px 20px rgba(26, 77, 84, 0.04);
+      }
+
+      .new-chat-btn:hover {
+        background: var(--primary);
+        color: var(--white);
+        border-color: var(--primary);
+        transform: translateY(-1px);
+        box-shadow: 0 12px 24px rgba(26, 77, 84, 0.12);
+      }
+
+      .conversations-list {
+        flex: 1;
+        overflow-y: auto;
+        padding: 0 16px;
+      }
+      .conversations-summary {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        padding: 0 8px 12px;
+      }
+      .summary-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 10px;
+        border-radius: 999px;
+        background: rgba(26, 77, 84, 0.08);
+        color: var(--primary);
+        font-size: 11px;
+        font-weight: 600;
+      }
+
+      .section-label {
+        padding: 0 8px 8px;
+        font-size: 11px;
+        color: var(--text-light);
+        text-transform: uppercase;
+        letter-spacing: 1px;
+      }
+
+      .conversation-item {
+        padding: 14px;
+        margin-bottom: 8px;
+        border-radius: 12px;
+        cursor: pointer;
+        transition: all 0.2s;
+        border: 1px solid rgba(26, 77, 84, 0.08);
+        background: rgba(255, 255, 255, 0.65);
+      }
+
+      .conversation-item:hover {
+        background: var(--white);
+        border-color: rgba(26, 77, 84, 0.16);
+        transform: translateY(-1px);
+      }
+
+      .conversation-item.active {
+        background: var(--white);
+        border-color: rgba(194, 142, 92, 0.5);
+        box-shadow: 0 8px 20px rgba(26, 77, 84, 0.08);
+      }
+
+      .conversation-title {
+        min-width: 0;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .conversation-top {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 6px;
+      }
+      .conversation-actions {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        flex-shrink: 0;
+      }
+      .conversation-title-text {
+        font-size: 14px;
+        font-weight: 500;
+        color: var(--text-main);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .conversation-badge {
+        flex-shrink: 0;
+        padding: 4px 8px;
+        border-radius: 999px;
+        background: rgba(194, 142, 92, 0.12);
+        color: #9a6a2b;
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.4px;
+      }
+      .conversation-delete-btn {
+        width: 28px;
+        height: 28px;
+        border-radius: 999px;
+        border: 1px solid rgba(26, 77, 84, 0.08);
+        background: rgba(255, 255, 255, 0.88);
+        color: var(--text-light);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        transition: transform 0.2s ease, border-color 0.2s ease,
+          color 0.2s ease, background 0.2s ease;
+      }
+      .conversation-delete-btn:hover {
+        color: #b42318;
+        border-color: rgba(180, 35, 24, 0.24);
+        background: rgba(180, 35, 24, 0.08);
+        transform: translateY(-1px);
+      }
+
+      .conversation-time {
+        font-size: 11px;
+        color: var(--text-light);
+        display: flex;
+        align-items: center;
+        gap: 4px;
+      }
+      .conversation-subline {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        margin-top: 8px;
+      }
+      .conversation-detail {
+        min-width: 0;
+        font-size: 11px;
+        color: var(--text-light);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .conversation-status {
+        flex-shrink: 0;
+        padding: 4px 8px;
+        border-radius: 999px;
+        background: rgba(26, 77, 84, 0.08);
+        color: var(--primary);
+        font-size: 10px;
+        font-weight: 700;
+      }
+      .conversation-status.active {
+        background: rgba(23, 96, 58, 0.1);
+        color: #17603a;
+      }
+      .empty-conversations {
+        padding: 24px 16px;
+        text-align: center;
+        color: var(--text-light);
+        font-size: 12px;
+        background: rgba(255, 255, 255, 0.42);
+        border: 1px dashed rgba(26, 77, 84, 0.16);
+        border-radius: 14px;
+      }
+      .empty-conversations-title {
+        display: block;
+        margin-bottom: 8px;
+        font-size: 14px;
+        font-weight: 700;
+        color: var(--primary);
+      }
+      .empty-conversations-text {
+        margin: 0 0 14px;
+        line-height: 1.7;
+      }
+      .empty-conversations-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        padding: 10px 14px;
+        border-radius: 999px;
+        border: 1px solid rgba(26, 77, 84, 0.16);
+        background: rgba(255, 255, 255, 0.92);
+        color: var(--primary);
+        font-size: 12px;
+        font-weight: 700;
+        cursor: pointer;
+        transition: transform 0.2s ease, box-shadow 0.2s ease,
+          border-color 0.2s ease;
+      }
+      .empty-conversations-btn:hover {
+        transform: translateY(-1px);
+        border-color: rgba(194, 142, 92, 0.45);
+        box-shadow: 0 8px 18px rgba(26, 77, 84, 0.08);
+      }
+      .empty-conversations-btn:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+        transform: none;
+        box-shadow: none;
+      }
+
+      .logout-btn {
+        margin: 20px;
+        padding: 10px;
+        border: none;
+        background: none;
+        color: var(--text-light);
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 13px;
+      }
+      .logout-btn:hover {
+        color: #d63031;
+      }
+
+      /* === 聊天主窗口 === */
+      .chat-main {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        border-radius: var(--radius-lg);
+        overflow: hidden;
+        position: relative;
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(255, 252, 247, 0.82));
+      }
+
+      /* 聊天背景水印 - 地球仪 */
+      .chat-watermark {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        font-size: 300px;
+        color: var(--primary);
+        opacity: 0.03;
+        pointer-events: none;
+        z-index: -1;
+      }
+
+      .chat-header {
+        padding: 20px 32px;
+        background: rgba(255, 255, 255, 0.82);
+        border-bottom: 1px solid rgba(26, 77, 84, 0.06);
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 18px;
+      }
+
+      .chat-title-group {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+      }
+      .mobile-chat-back-btn {
+        display: none;
+        align-items: center;
+        gap: 8px;
+        border: 1px solid rgba(26, 77, 84, 0.12);
+        background: rgba(255, 255, 255, 0.9);
+        color: var(--primary);
+        border-radius: 999px;
+        padding: 9px 12px;
+        font-size: 12px;
+        font-weight: 700;
+        cursor: pointer;
+        flex-shrink: 0;
+      }
+      .mobile-chat-back-btn:hover {
+        border-color: rgba(194, 142, 92, 0.32);
+        color: #87581b;
+      }
+
+      .chat-icon-wrapper {
+        width: 48px;
+        height: 48px;
+        background: var(--primary);
+        color: var(--accent);
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 20px;
+        box-shadow: 0 4px 12px rgba(26, 77, 84, 0.2);
+      }
+
+      .chat-info h2 {
+        font-family: "Noto Serif SC", "Songti SC", "STSong", serif;
+        font-size: 20px;
+        color: var(--text-serif);
+      }
+
+      .chat-info h2.renameable {
+        cursor: pointer;
+      }
+
+      .chat-info h2.renameable:hover {
+        color: var(--primary);
+      }
+
+      .chat-info p {
+        font-size: 12px;
+        color: var(--text-light);
+        margin-top: 2px;
+      }
+      .trip-overview {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 10px;
+      }
+      .overview-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 7px 11px;
+        border-radius: 999px;
+        background: rgba(26, 77, 84, 0.08);
+        color: var(--primary);
+        font-size: 12px;
+        font-weight: 500;
+      }
+      .overview-chip.primary {
+        background: rgba(194, 142, 92, 0.14);
+        color: #87581b;
+      }
+
+      .location-badge {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        color: var(--accent);
+        font-weight: 600;
+        background: rgba(194, 142, 92, 0.1);
+        padding: 6px 12px;
+        border-radius: 20px;
+      }
+      .chat-status-panel {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+      }
+      .assistant-status {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 7px 12px;
+        border-radius: 999px;
+        background: rgba(26, 77, 84, 0.08);
+        color: var(--primary);
+        font-size: 12px;
+        font-weight: 600;
+      }
+      .assistant-status::before {
+        content: "";
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: currentColor;
+        opacity: 0.9;
+      }
+      .assistant-status.loading {
+        color: #b7791f;
+        background: rgba(194, 142, 92, 0.16);
+      }
+      .assistant-status.online {
+        color: #17603a;
+        background: rgba(23, 96, 58, 0.12);
+      }
+      .assistant-status.error {
+        color: #b42318;
+        background: rgba(180, 35, 24, 0.12);
+      }
+      .endpoint-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 7px 12px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.75);
+        color: var(--text-light);
+        font-size: 12px;
+        border: 1px solid rgba(26, 77, 84, 0.08);
+      }
+      .endpoint-pill.warning {
+        color: #b7791f;
+        border-color: rgba(194, 142, 92, 0.25);
+        background: rgba(194, 142, 92, 0.12);
+      }
+      .endpoint-pill.error {
+        color: #b42318;
+        border-color: rgba(180, 35, 24, 0.25);
+        background: rgba(180, 35, 24, 0.1);
+      }
+      .service-banner {
+        display: none;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 14px 32px;
+        background: rgba(255, 249, 240, 0.86);
+        border-bottom: 1px solid rgba(194, 142, 92, 0.16);
+      }
+      .service-banner.show {
+        display: flex;
+      }
+      .service-banner.loading {
+        background: rgba(194, 142, 92, 0.1);
+        border-bottom-color: rgba(194, 142, 92, 0.22);
+      }
+      .service-banner.error {
+        background: rgba(180, 35, 24, 0.08);
+        border-bottom-color: rgba(180, 35, 24, 0.18);
+      }
+      .service-banner.success {
+        background: rgba(23, 96, 58, 0.08);
+        border-bottom-color: rgba(23, 96, 58, 0.16);
+      }
+      .service-banner-main {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        min-width: 0;
+      }
+      .service-banner-icon {
+        width: 34px;
+        height: 34px;
+        border-radius: 50%;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(255, 255, 255, 0.75);
+        color: inherit;
+        flex-shrink: 0;
+      }
+      .service-banner-copy {
+        min-width: 0;
+      }
+      .service-banner-title {
+        font-size: 14px;
+        font-weight: 700;
+        color: var(--text-serif);
+      }
+      .service-banner-text {
+        font-size: 12px;
+        color: var(--text-light);
+        margin-top: 2px;
+      }
+      .service-banner-actions {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-shrink: 0;
+      }
+      .service-action-btn {
+        border: none;
+        border-radius: 999px;
+        padding: 9px 14px;
+        font-size: 12px;
+        font-weight: 600;
+        cursor: pointer;
+        color: #fff;
+        background: var(--primary);
+      }
+      .service-action-btn.secondary {
+        color: var(--primary);
+        background: rgba(26, 77, 84, 0.08);
+      }
+      .service-banner-meta {
+        font-size: 11px;
+        color: var(--text-light);
+      }
+
+      .chat-messages {
+        flex: 1;
+        padding: 32px;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+        gap: 28px;
+      }
+
+      /* 消息气泡 - 模拟信纸/卡片 */
+      .message {
+        display: flex;
+        gap: 16px;
+        max-width: 800px;
+        animation: slideIn 0.3s ease;
+      }
+
+      @keyframes slideIn {
+        from {
+          opacity: 0;
+          transform: translateY(10px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      .message.user {
+        flex-direction: row-reverse;
+        align-self: flex-end;
+      }
+
+      .message-avatar {
+        width: 36px;
+        height: 36px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+        font-size: 14px;
+      }
+
+      .message.user .message-avatar {
+        background: var(--accent);
+        color: white;
+      }
+      .message.assistant .message-avatar {
+        background: var(--primary);
+        color: white;
+      }
+
+      .message-content {
+        padding: 16px 24px;
+        border-radius: 16px;
+        font-size: 15px;
+        line-height: 1.8;
+        box-shadow: 0 10px 24px rgba(19, 52, 57, 0.06);
+        position: relative;
+      }
+
+      .message.assistant .message-content {
+        background: rgba(255, 255, 255, 0.98);
+        border: 1px solid rgba(26, 77, 84, 0.06);
+        color: var(--text-main);
+        border-top-left-radius: 2px;
+        box-shadow: 0 16px 34px rgba(26, 77, 84, 0.08);
+      }
+
+      /* 装饰助手消息：像一张票据 */
+      .message.assistant .message-content::before {
+        content: "";
+        position: absolute;
+        left: 0;
+        top: 15px;
+        bottom: 15px;
+        width: 3px;
+        background: var(--accent);
+        border-radius: 0 2px 2px 0;
+        opacity: 0.5;
+      }
+
+      .message.user .message-content {
+        background: linear-gradient(135deg, #1b4c55, #245d67);
+        color: white;
+        border-top-right-radius: 2px;
+      }
+      .message-text {
+        white-space: normal;
+        word-break: break-word;
+      }
+      .message.assistant .message-text {
+        color: #223538;
+      }
+      .message.assistant .message-text p {
+        margin: 0 0 12px;
+      }
+      .message.assistant .message-text p:last-child {
+        margin-bottom: 0;
+      }
+      .message.assistant .message-text ul,
+      .message.assistant .message-text ol {
+        margin: 0 0 14px;
+        padding-left: 20px;
+      }
+      .message.assistant .message-text li {
+        margin-bottom: 6px;
+      }
+      .message.assistant .message-text strong {
+        color: var(--text-serif);
+      }
+      .message.assistant .message-text h4 {
+        margin: 4px 0 10px;
+        font-size: 16px;
+        color: var(--text-serif);
+      }
+      .message.assistant .message-text .inline-code {
+        display: inline-block;
+        padding: 1px 7px;
+        border-radius: 999px;
+        background: rgba(26, 77, 84, 0.08);
+        color: var(--primary);
+        font-size: 13px;
+      }
+      .message.assistant .message-text .travel-plan {
+        display: grid;
+        gap: 14px;
+      }
+      .message.assistant .message-text .journey-preview-board {
+        display: grid;
+        gap: 14px;
+        padding: 18px;
+        border-radius: 18px;
+        background:
+          linear-gradient(145deg, rgba(11, 40, 45, 0.96), rgba(20, 73, 81, 0.96));
+        border: 1px solid rgba(194, 142, 92, 0.18);
+        box-shadow: 0 18px 34px rgba(10, 31, 36, 0.18);
+        color: rgba(255, 250, 240, 0.96);
+      }
+      .message.assistant .message-text .journey-preview-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      .message.assistant .message-text .journey-preview-title {
+        display: grid;
+        gap: 6px;
+      }
+      .message.assistant .message-text .journey-preview-title strong {
+        font-size: 18px;
+        color: #fffaf0;
+      }
+      .message.assistant .message-text .journey-preview-title span {
+        color: rgba(245, 239, 230, 0.76);
+        font-size: 13px;
+        line-height: 1.7;
+      }
+      .message.assistant .message-text .journey-preview-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 12px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.12);
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        color: rgba(255, 246, 231, 0.94);
+        font-size: 12px;
+        font-weight: 700;
+        white-space: nowrap;
+      }
+      .message.assistant .message-text .journey-atlas-panel {
+        display: grid;
+        grid-template-columns: minmax(0, 260px) minmax(0, 1fr);
+        gap: 16px;
+        align-items: stretch;
+      }
+      .message.assistant .message-text .journey-atlas-copy {
+        display: grid;
+        gap: 10px;
+        padding: 16px;
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.08);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+      }
+      .message.assistant .message-text .journey-atlas-kicker {
+        display: inline-flex;
+        width: fit-content;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 12px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.12);
+        color: rgba(255, 243, 225, 0.92);
+        font-size: 12px;
+        font-weight: 700;
+      }
+      .message.assistant .message-text .journey-atlas-copy strong {
+        color: #fffaf0;
+        font-size: 22px;
+        line-height: 1.3;
+      }
+      .message.assistant .message-text .journey-atlas-copy p {
+        margin: 0;
+        color: rgba(245, 239, 230, 0.82);
+        font-size: 13px;
+        line-height: 1.8;
+      }
+      .message.assistant .message-text .journey-atlas-canvas {
+        position: relative;
+        min-height: 280px;
+        overflow: hidden;
+        border-radius: 24px;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        background:
+          radial-gradient(circle at 18% 18%, rgba(255, 216, 161, 0.24), transparent 20%),
+          linear-gradient(180deg, rgba(174, 208, 216, 0.24), rgba(8, 34, 39, 0.08)),
+          linear-gradient(145deg, rgba(17, 56, 61, 0.95), rgba(8, 31, 37, 0.98));
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+      }
+      .message.assistant .message-text .journey-atlas-grid,
+      .message.assistant .message-text .journey-atlas-route {
+        position: absolute;
+        inset: 0;
+      }
+      .message.assistant .message-text .journey-atlas-grid {
+        background-image:
+          linear-gradient(rgba(255, 255, 255, 0.06) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(255, 255, 255, 0.06) 1px, transparent 1px);
+        background-size: 34px 34px;
+        mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.78), transparent);
+      }
+      .message.assistant .message-text .journey-atlas-terrain {
+        position: absolute;
+        inset: auto 0 0;
+        height: 46%;
+        opacity: 0.95;
+      }
+      .message.assistant .message-text .journey-atlas-terrain.terrain-one {
+        background:
+          linear-gradient(180deg, rgba(118, 171, 176, 0.18), rgba(22, 67, 73, 0.7)),
+          rgba(69, 119, 123, 0.75);
+        clip-path: polygon(0 78%, 16% 44%, 32% 66%, 52% 36%, 70% 58%, 100% 28%, 100% 100%, 0 100%);
+      }
+      .message.assistant .message-text .journey-atlas-terrain.terrain-two {
+        background:
+          linear-gradient(180deg, rgba(46, 109, 116, 0.2), rgba(10, 36, 41, 0.82)),
+          rgba(22, 67, 73, 0.9);
+        clip-path: polygon(0 88%, 22% 60%, 38% 76%, 58% 50%, 78% 72%, 100% 42%, 100% 100%, 0 100%);
+      }
+      .message.assistant .message-text .journey-atlas-route {
+        width: 100%;
+        height: 100%;
+        overflow: visible;
+      }
+      .message.assistant .message-text .journey-route-shadow {
+        fill: none;
+        stroke: rgba(0, 0, 0, 0.16);
+        stroke-width: 2.8;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+      .message.assistant .message-text .journey-route-line {
+        fill: none;
+        stroke: rgba(255, 232, 196, 0.92);
+        stroke-width: 1.8;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-dasharray: 1.6 2.4;
+      }
+      .message.assistant .message-text .journey-atlas-pin,
+      .message.assistant .message-text .journey-atlas-scenic {
+        position: absolute;
+        transform: translate(-50%, -50%);
+      }
+      .message.assistant .message-text .journey-atlas-pin {
+        display: grid;
+        gap: 8px;
+      }
+      .message.assistant .message-text .journey-atlas-pin-dot {
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+        background: #fffaf0;
+        border: 3px solid rgba(194, 142, 92, 0.95);
+        box-shadow: 0 0 0 10px rgba(255, 236, 210, 0.12);
+      }
+      .message.assistant .message-text .journey-atlas-label {
+        min-width: 124px;
+        padding: 10px 12px;
+        border-radius: 14px;
+        background: rgba(255, 255, 255, 0.12);
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        backdrop-filter: blur(10px);
+      }
+      .message.assistant .message-text .journey-atlas-label strong,
+      .message.assistant .message-text .journey-atlas-label span {
+        display: block;
+      }
+      .message.assistant .message-text .journey-atlas-label strong {
+        color: #fffaf0;
+        font-size: 12px;
+        margin-bottom: 4px;
+      }
+      .message.assistant .message-text .journey-atlas-label span {
+        color: rgba(245, 239, 230, 0.82);
+        font-size: 11px;
+        line-height: 1.55;
+      }
+      .message.assistant .message-text .journey-atlas-scenic {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        padding: 8px 10px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.12);
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        color: rgba(255, 248, 238, 0.92);
+        font-size: 11px;
+        line-height: 1.4;
+        backdrop-filter: blur(10px);
+      }
+      .message.assistant .message-text .journey-atlas-scenic i {
+        color: #ffd79e;
+      }
+      .message.assistant .message-text .journey-live-map-shell {
+        display: grid;
+        gap: 14px;
+        grid-column: 1 / -1;
+        padding: 18px;
+        border-radius: 24px;
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.04));
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+      }
+      .message.assistant .message-text .journey-live-map-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 16px;
+      }
+      .message.assistant .message-text .journey-live-map-head-copy {
+        display: grid;
+        gap: 6px;
+        max-width: 460px;
+      }
+      .message.assistant .message-text .journey-live-map-head strong {
+        color: rgba(255, 248, 236, 0.96);
+        font-size: 16px;
+      }
+      .message.assistant .message-text .journey-live-map-head span {
+        color: rgba(245, 239, 230, 0.76);
+        font-size: 12px;
+        line-height: 1.7;
+      }
+      .message.assistant .message-text .journey-live-map-toolbar {
+        display: grid;
+        gap: 12px;
+        justify-items: end;
+        min-width: min(100%, 520px);
+      }
+      .message.assistant .message-text .journey-live-map-days {
+        display: grid;
+        gap: 8px;
+        justify-items: end;
+        width: 100%;
+      }
+      .message.assistant .message-text .journey-live-map-day-tabs,
+      .message.assistant .message-text .journey-live-map-day-modes {
+        display: inline-flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        justify-content: flex-end;
+        width: 100%;
+      }
+      .message.assistant .message-text .journey-live-map-actions {
+        display: inline-flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        justify-content: flex-end;
+      }
+      .message.assistant .message-text .journey-live-map-styles {
+        display: inline-flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        justify-content: flex-end;
+      }
+      .message.assistant .message-text .journey-map-action-btn {
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        background: rgba(255, 255, 255, 0.08);
+        color: rgba(255, 247, 233, 0.92);
+        border-radius: 999px;
+        padding: 8px 12px;
+        font-size: 12px;
+        font-weight: 700;
+        cursor: pointer;
+        transition: background 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
+      }
+      .message.assistant .message-text .journey-map-action-btn:hover {
+        transform: translateY(-1px);
+        border-color: rgba(255, 255, 255, 0.24);
+      }
+      .message.assistant .message-text .journey-map-action-btn.active {
+        background: rgba(255, 236, 210, 0.18);
+        border-color: rgba(255, 218, 170, 0.32);
+      }
+      .message.assistant .message-text .journey-map-action-btn.secondary {
+        color: rgba(255, 230, 198, 0.94);
+      }
+      .message.assistant .message-text .journey-map-day-btn,
+      .message.assistant .message-text .journey-map-day-mode-btn {
+        min-width: 78px;
+        text-align: center;
+      }
+      .message.assistant .message-text .journey-map-style-btn,
+      .message.assistant .message-text .journey-map-focus-btn,
+      .message.assistant .message-text .journey-map-day-btn,
+      .message.assistant .message-text .journey-map-day-mode-btn {
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        background: rgba(255, 255, 255, 0.07);
+        color: rgba(255, 247, 233, 0.88);
+        border-radius: 999px;
+        padding: 7px 11px;
+        font-size: 11px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      .message.assistant .message-text .journey-map-day-btn {
+        display: inline-flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 2px;
+        min-width: 88px;
+      }
+      .message.assistant .message-text .journey-map-day-btn small {
+        font-size: 10px;
+        font-weight: 600;
+        color: rgba(255, 247, 233, 0.62);
+      }
+      .message.assistant .message-text .journey-map-style-btn.active,
+      .message.assistant .message-text .journey-map-focus-btn.active,
+      .message.assistant .message-text .journey-map-day-btn.active,
+      .message.assistant .message-text .journey-map-day-mode-btn.active {
+        background: rgba(255, 236, 210, 0.16);
+        border-color: rgba(255, 218, 170, 0.28);
+      }
+      .message.assistant .message-text .journey-map-day-btn.disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+      }
+      .message.assistant .message-text .journey-live-map-shell-body {
+        display: grid;
+        grid-template-columns: minmax(0, 1.65fr) 260px;
+        gap: 14px;
+        align-items: stretch;
+      }
+      .message.assistant .message-text .journey-live-map {
+        position: relative;
+        min-height: 280px;
+        border-radius: 20px;
+        overflow: hidden;
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        background: rgba(255, 255, 255, 0.08);
+      }
+      .message.assistant .message-text .journey-live-map-aside {
+        display: grid;
+        gap: 10px;
+      }
+      .message.assistant .message-text .journey-live-map-aside-card {
+        display: grid;
+        gap: 8px;
+        padding: 14px;
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.08);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+      }
+      .message.assistant .message-text .journey-live-map-aside-card.compact {
+        gap: 10px;
+      }
+      .message.assistant .message-text .journey-live-map-aside-kicker {
+        color: rgba(255, 240, 219, 0.82);
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.4px;
+      }
+      .message.assistant .message-text .journey-live-map-aside-card strong {
+        color: #fffaf0;
+        font-size: 14px;
+        line-height: 1.55;
+      }
+      .message.assistant .message-text .journey-live-map-aside-card p {
+        margin: 0;
+        color: rgba(244, 239, 231, 0.8);
+        font-size: 12px;
+        line-height: 1.75;
+      }
+      .message.assistant .message-text .journey-live-day-legend {
+        display: grid;
+        gap: 8px;
+      }
+      .message.assistant .message-text .journey-live-day-legend-item {
+        display: grid;
+        gap: 5px;
+        padding: 10px 12px;
+        border-radius: 14px;
+        background: rgba(255, 255, 255, 0.06);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+      }
+      .message.assistant .message-text .journey-live-day-legend-label {
+        color: rgba(255, 235, 206, 0.92);
+        font-size: 11px;
+        font-weight: 700;
+      }
+      .message.assistant .message-text .journey-live-day-legend-item strong {
+        color: rgba(255, 248, 236, 0.92);
+        font-size: 12px;
+        line-height: 1.6;
+      }
+      .message.assistant .message-text .journey-live-map-aside-tags {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      .message.assistant .message-text .journey-live-map-aside-tags span {
+        display: inline-flex;
+        align-items: center;
+        padding: 7px 10px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.08);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        color: rgba(255, 248, 236, 0.9);
+        font-size: 11px;
+      }
+      .message.assistant .message-text .journey-live-map-state {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 20px;
+        text-align: center;
+        color: rgba(255, 248, 236, 0.84);
+        font-size: 13px;
+        line-height: 1.8;
+      }
+      .message.assistant .message-text .journey-live-map-state.error {
+        color: rgba(255, 232, 215, 0.88);
+      }
+      .message.assistant .message-text .journey-live-map-meta {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        color: rgba(255, 247, 233, 0.82);
+        font-size: 12px;
+      }
+      .message.assistant .message-text .journey-live-map-meta-label {
+        color: rgba(245, 239, 230, 0.62);
+      }
+      .message.assistant .message-text .journey-live-map-meta-value {
+        color: rgba(255, 248, 236, 0.94);
+        font-weight: 700;
+      }
+      .message.assistant .message-text .journey-map-studio {
+        display: grid;
+        gap: 14px;
+      }
+      .message.assistant .message-text .journey-map-studio-brief {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 10px;
+      }
+      .message.assistant .message-text .journey-map-studio-brief-item {
+        display: grid;
+        gap: 6px;
+        padding: 12px 14px;
+        border-radius: 16px;
+        background: rgba(255, 255, 255, 0.08);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+      }
+      .message.assistant .message-text .journey-map-studio-brief-label {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        color: rgba(255, 240, 219, 0.82);
+        font-size: 11px;
+        font-weight: 700;
+      }
+      .message.assistant .message-text .journey-map-studio-brief-item strong {
+        color: #fffaf0;
+        font-size: 14px;
+        line-height: 1.55;
+      }
+      .message.assistant .message-text .journey-live-map-shell--studio {
+        gap: 16px;
+      }
+      .message.assistant .message-text .journey-live-map-shell--studio .journey-live-map-head {
+        gap: 14px;
+      }
+      .message.assistant .message-text .journey-live-map-shell--studio .journey-live-map-toolbar {
+        display: none;
+      }
+      .message.assistant .message-text .journey-map-shell-kicker {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        width: fit-content;
+        padding: 8px 12px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.08);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        color: rgba(255, 241, 222, 0.9);
+        font-size: 11px;
+        font-weight: 700;
+      }
+      .message.assistant .message-text .journey-live-map-shell--studio .journey-live-map-toolbar {
+        min-width: 0;
+        width: min(100%, 540px);
+      }
+      .message.assistant .message-text .journey-live-map-toolbar-row {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+        gap: 10px;
+      }
+      .message.assistant .message-text .journey-live-map-shell-body--studio {
+        grid-template-columns: minmax(280px, 320px) minmax(0, 1fr);
+        align-items: stretch;
+      }
+      .message.assistant .message-text .journey-map-sidebar {
+        display: grid;
+        gap: 12px;
+      }
+      .message.assistant .message-text .journey-map-sidebar > .journey-map-sidebar-card:nth-child(2) {
+        display: none;
+      }
+      .message.assistant .message-text .journey-map-sidebar-card {
+        display: grid;
+        gap: 10px;
+        padding: 14px;
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.07);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+      }
+      .message.assistant .message-text .journey-map-sidebar-card.intro {
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.06));
+      }
+      .message.assistant .message-text .journey-map-sidebar-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+      .message.assistant .message-text .journey-map-sidebar-head span {
+        color: rgba(255, 240, 219, 0.78);
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.3px;
+      }
+      .message.assistant .message-text .journey-map-sidebar-head strong {
+        color: rgba(255, 248, 236, 0.92);
+        font-size: 12px;
+      }
+      .message.assistant .message-text .journey-map-sidebar-copy {
+        display: grid;
+        gap: 8px;
+      }
+      .message.assistant .message-text .journey-map-sidebar-copy strong {
+        color: #fffaf0;
+        font-size: 18px;
+        line-height: 1.35;
+      }
+      .message.assistant .message-text .journey-map-sidebar-copy p,
+      .message.assistant .message-text .journey-map-sidebar-note {
+        margin: 0;
+        color: rgba(244, 239, 231, 0.8);
+        font-size: 12px;
+        line-height: 1.75;
+      }
+      .message.assistant .message-text .journey-map-day-insight-copy {
+        margin: 0;
+        color: rgba(244, 239, 231, 0.82);
+        font-size: 12px;
+        line-height: 1.75;
+      }
+      .message.assistant .message-text .journey-map-day-insight-points {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: grid;
+        gap: 8px;
+      }
+      .message.assistant .message-text .journey-map-day-insight-points li {
+        display: block;
+        padding: 0;
+        border-radius: 14px;
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+      }
+      .message.assistant .message-text .journey-map-day-insight-points li span {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 28px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.08);
+        color: rgba(255, 241, 222, 0.88);
+        font-size: 11px;
+        font-weight: 700;
+      }
+      .message.assistant .message-text .journey-map-day-insight-points li.highlight span {
+        background: rgba(255, 218, 170, 0.18);
+        color: rgba(255, 236, 208, 0.96);
+      }
+      .message.assistant .message-text .journey-map-day-insight-points li strong {
+        color: rgba(255, 248, 236, 0.94);
+        font-size: 12px;
+        line-height: 1.6;
+      }
+      .message.assistant .message-text .journey-map-day-stack {
+        display: grid;
+        gap: 10px;
+      }
+      .message.assistant .message-text .journey-map-day-card {
+        display: grid;
+        gap: 8px;
+        width: 100%;
+        text-align: left;
+        padding: 14px;
+        border-radius: 18px;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        background: rgba(255, 255, 255, 0.08);
+        color: rgba(255, 248, 238, 0.92);
+      }
+      .message.assistant .message-text .journey-map-day-card:hover {
+        transform: translateY(-1px);
+        border-color: rgba(255, 255, 255, 0.2);
+      }
+      .message.assistant .message-text .journey-map-day-card.active {
+        background: rgba(255, 236, 210, 0.14);
+        border-color: rgba(255, 218, 170, 0.26);
+      }
+      .message.assistant .message-text .journey-map-day-card.overview {
+        background: rgba(255, 255, 255, 0.11);
+      }
+      .message.assistant .message-text .journey-map-day-card-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+      .message.assistant .message-text .journey-map-day-card-meta {
+        color: rgba(244, 239, 231, 0.72);
+        font-size: 11px;
+        font-weight: 700;
+      }
+      .message.assistant .message-text .journey-map-day-card strong {
+        color: #fffaf0;
+        font-size: 14px;
+        line-height: 1.55;
+      }
+      .message.assistant .message-text .journey-map-day-card-route {
+        color: rgba(244, 239, 231, 0.82);
+        font-size: 12px;
+        line-height: 1.7;
+      }
+      .message.assistant .message-text .journey-live-map-day-modes--studio {
+        justify-content: flex-start;
+      }
+      .message.assistant .message-text .journey-map-route-list {
+        display: grid;
+        gap: 10px;
+      }
+      .message.assistant .message-text .journey-map-route-stop {
+        display: grid;
+        gap: 8px;
+        width: 100%;
+        text-align: left;
+        padding: 12px 13px;
+        border-radius: 16px;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        background: rgba(255, 255, 255, 0.05);
+        color: rgba(255, 248, 236, 0.92);
+      }
+      .message.assistant .message-text .journey-map-stage-stop--inline {
+        padding: 10px 12px;
+        border-radius: 13px;
+        border: 0;
+        background: transparent;
+        box-shadow: none;
+      }
+      .message.assistant .message-text .journey-map-stage-stop--inline:hover {
+        border-color: transparent;
+        background: rgba(255, 255, 255, 0.04);
+      }
+      .message.assistant .message-text .journey-map-route-stop:hover {
+        border-color: rgba(255, 255, 255, 0.18);
+      }
+      .message.assistant .message-text .journey-map-route-stop-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .message.assistant .message-text .journey-map-route-stop-value {
+        color: #fffaf0;
+        font-size: 15px;
+        line-height: 1.45;
+      }
+      .message.assistant .message-text .journey-map-route-stop-note {
+        color: rgba(244, 239, 231, 0.76);
+        font-size: 12px;
+        line-height: 1.65;
+      }
+      .message.assistant .message-text .journey-map-highlight-list {
+        display: grid;
+        gap: 10px;
+      }
+      .message.assistant .message-text .journey-map-highlight-list .journey-highlight-card {
+        width: 100%;
+        text-align: left;
+      }
+      .message.assistant .message-text .journey-map-inline-link {
+        color: rgba(255, 240, 219, 0.82);
+        font-size: 11px;
+        font-weight: 700;
+      }
+      .message.assistant .message-text .journey-map-stage {
+        display: grid;
+        gap: 12px;
+        min-width: 0;
+        position: relative;
+      }
+      .message.assistant .message-text .journey-map-floating-controls {
+        position: absolute;
+        top: 16px;
+        left: 16px;
+        right: 16px;
+        z-index: 25;
+        display: grid;
+        gap: 8px;
+        align-content: start;
+        pointer-events: none;
+      }
+      .message.assistant .message-text .journey-map-floating-group {
+        width: fit-content;
+        max-width: 100%;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 12px;
+        border-radius: 16px;
+        background: rgba(10, 34, 38, 0.74);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        box-shadow: 0 10px 24px rgba(6, 18, 20, 0.2);
+        backdrop-filter: blur(14px);
+        pointer-events: auto;
+      }
+      .message.assistant .message-text .journey-map-floating-group--days {
+        max-width: min(100%, 720px);
+      }
+      .message.assistant .message-text .journey-map-floating-label {
+        flex-shrink: 0;
+        color: rgba(255, 240, 219, 0.7);
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.42px;
+      }
+      .message.assistant .message-text .journey-map-floating-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      .message.assistant .message-text .journey-map-floating-controls .journey-map-day-btn {
+        min-width: auto;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        padding: 8px 12px;
+      }
+      .message.assistant .message-text .journey-map-floating-controls .journey-map-day-btn small {
+        color: rgba(255, 247, 233, 0.74);
+      }
+      .message.assistant .message-text .journey-live-map-shell--studio .journey-live-map {
+        min-height: 540px;
+      }
+      .message.assistant .message-text .journey-live-map-footer {
+        display: grid;
+        gap: 12px;
+      }
+      .message.assistant .message-text .journey-map-stage-rail {
+        display: grid;
+        gap: 10px;
+        padding: 14px;
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.06);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+      }
+      .message.assistant .message-text .journey-map-stage-rail-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      .message.assistant .message-text .journey-map-stage-rail-head span {
+        color: rgba(255, 240, 219, 0.78);
+        font-size: 11px;
+        font-weight: 700;
+      }
+      .message.assistant .message-text .journey-map-stage-rail-head strong {
+        color: rgba(255, 248, 236, 0.94);
+        font-size: 12px;
+      }
+      .message.assistant .message-text .journey-map-stage-rail-list {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        gap: 10px;
+      }
+      .message.assistant .message-text .journey-map-stage-stop {
+        display: grid;
+        gap: 6px;
+        width: 100%;
+        text-align: left;
+        padding: 12px;
+        border-radius: 16px;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        background: rgba(255, 255, 255, 0.08);
+        color: rgba(255, 248, 236, 0.92);
+      }
+      .message.assistant .message-text .journey-map-stage-stop:hover {
+        border-color: rgba(255, 255, 255, 0.2);
+        transform: translateY(-1px);
+      }
+      .message.assistant .message-text .journey-map-stage-stop span {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 34px;
+        min-height: 28px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.1);
+        color: rgba(255, 241, 222, 0.9);
+        font-size: 11px;
+        font-weight: 700;
+      }
+      .message.assistant .message-text .journey-map-stage-stop strong {
+        color: #fffaf0;
+        font-size: 13px;
+        line-height: 1.55;
+      }
+      .message.assistant .message-text .journey-map-stage-stop small {
+        color: rgba(244, 239, 231, 0.72);
+        font-size: 11px;
+        line-height: 1.5;
+      }
+      .message.assistant .message-text .journey-map-focus-rail {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      .message.assistant .message-text .journey-live-map-footer .journey-map-focus-rail {
+        display: none;
+      }
+      .journey-live-map .leaflet-control-zoom a {
+        color: var(--primary);
+      }
+      .journey-live-map .leaflet-popup-content-wrapper,
+      .journey-live-map .leaflet-popup-tip {
+        background: rgba(255, 252, 247, 0.96);
+        color: var(--text-main);
+      }
+      .journey-map-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 180;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        padding: 26px;
+        background: rgba(7, 18, 22, 0.62);
+        backdrop-filter: blur(14px);
+      }
+      .journey-map-modal.show {
+        display: flex;
+      }
+      body.journey-map-modal-open {
+        overflow: hidden;
+      }
+      .journey-map-modal-dialog {
+        width: min(1100px, 100%);
+        max-height: min(88vh, 880px);
+        display: grid;
+        gap: 16px;
+        padding: 20px;
+        border-radius: 28px;
+        background: rgba(250, 248, 243, 0.96);
+        border: 1px solid rgba(255, 255, 255, 0.74);
+        box-shadow: 0 26px 60px rgba(7, 18, 22, 0.24);
+      }
+      .journey-map-modal-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      .journey-map-modal-kicker {
+        color: var(--accent);
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.6px;
+        text-transform: uppercase;
+        margin-bottom: 4px;
+      }
+      .journey-map-modal-title {
+        color: var(--text-serif);
+        font-size: 24px;
+        line-height: 1.3;
+      }
+      .journey-map-modal-close {
+        width: 42px;
+        height: 42px;
+        border: 1px solid rgba(26, 77, 84, 0.1);
+        background: rgba(255, 255, 255, 0.88);
+        color: var(--primary);
+        border-radius: 50%;
+        cursor: pointer;
+      }
+      .journey-live-map-modal-canvas {
+        min-height: min(70vh, 680px);
+        border-radius: 22px;
+        border: 1px solid rgba(26, 77, 84, 0.08);
+      }
+      .journey-live-marker {
+        width: 22px;
+        height: 22px;
+        border-radius: 50%;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: #f7f3ea;
+        border: 2px solid #c28e5c;
+        color: #1a4d54;
+        box-shadow: 0 8px 18px rgba(0, 0, 0, 0.16);
+        font-size: 11px;
+        font-weight: 800;
+      }
+      .journey-live-marker.kind-highlight {
+        border-color: #f0be76;
+        background: #fff7ea;
+        color: #b07a40;
+      }
+      .message.assistant .message-text .journey-preview-route {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+        align-items: stretch;
+      }
+      .message.assistant .message-text .journey-preview-metrics {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+      }
+      .message.assistant .message-text .journey-preview-metric {
+        display: grid;
+        gap: 6px;
+        padding: 12px 14px;
+        border-radius: 16px;
+        background: rgba(255, 255, 255, 0.08);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+      }
+      .message.assistant .message-text .journey-metric-label {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        color: rgba(255, 240, 219, 0.8);
+        font-size: 11px;
+        font-weight: 700;
+      }
+      .message.assistant .message-text .journey-metric-value {
+        color: #fffaf0;
+        font-size: 14px;
+        line-height: 1.6;
+        font-weight: 600;
+      }
+      .message.assistant .message-text .journey-preview-stop {
+        display: grid;
+        gap: 8px;
+        padding: 14px;
+        border-radius: 16px;
+        background: rgba(255, 255, 255, 0.1);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        min-height: 132px;
+      }
+      .message.assistant .message-text .journey-stop-label {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        color: rgba(255, 240, 219, 0.82);
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.4px;
+      }
+      .message.assistant .message-text .journey-stop-value {
+        font-size: 18px;
+        font-weight: 700;
+        color: #fffaf0;
+        line-height: 1.35;
+      }
+      .message.assistant .message-text .journey-stop-note {
+        color: rgba(244, 239, 231, 0.8);
+        font-size: 12px;
+        line-height: 1.75;
+      }
+      .message.assistant .message-text .journey-preview-section {
+        display: grid;
+        gap: 12px;
+      }
+      .message.assistant .message-text .journey-day-list {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 12px;
+      }
+      .message.assistant .message-text .journey-day-card {
+        display: grid;
+        gap: 10px;
+        padding: 15px;
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.09);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+      }
+      .message.assistant .message-text .journey-day-card-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+      .message.assistant .message-text .journey-day-label {
+        display: inline-flex;
+        align-items: center;
+        padding: 6px 10px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.12);
+        color: rgba(255, 244, 228, 0.94);
+        font-size: 11px;
+        font-weight: 700;
+      }
+      .message.assistant .message-text .journey-day-card strong {
+        color: #fffaf0;
+        font-size: 15px;
+        line-height: 1.55;
+      }
+      .message.assistant .message-text .journey-day-card p {
+        margin: 0;
+        color: rgba(244, 239, 231, 0.82);
+        font-size: 12px;
+        line-height: 1.75;
+      }
+      .message.assistant .message-text .journey-day-map-btn {
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        background: rgba(255, 255, 255, 0.08);
+        color: rgba(255, 247, 233, 0.9);
+        border-radius: 999px;
+        padding: 7px 11px;
+        font-size: 11px;
+        font-weight: 700;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      .message.assistant .message-text .journey-day-waypoints {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      .message.assistant .message-text .journey-day-waypoint {
+        display: inline-flex;
+        align-items: center;
+        padding: 7px 10px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.08);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        color: rgba(255, 248, 238, 0.9);
+        font-size: 11px;
+      }
+      .message.assistant .message-text .journey-preview-section-title {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        color: rgba(255, 244, 228, 0.92);
+        font-size: 13px;
+        font-weight: 700;
+      }
+      .message.assistant .message-text .journey-highlight-list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+      .message.assistant .message-text .journey-highlight-list.cards {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+      }
+      .message.assistant .message-text .journey-highlight-chip {
+        display: inline-flex;
+        align-items: center;
+        padding: 9px 14px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.1);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        color: rgba(255, 248, 238, 0.94);
+        font-size: 12px;
+        line-height: 1.4;
+      }
+      .message.assistant .message-text .journey-highlight-card {
+        display: grid;
+        gap: 10px;
+        padding: 14px;
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.08);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        transition: transform 0.2s ease, border-color 0.2s ease, background 0.2s ease;
+      }
+      .message.assistant .message-text .journey-highlight-card.active {
+        border-color: rgba(255, 218, 170, 0.28);
+        background: rgba(255, 236, 210, 0.12);
+        transform: translateY(-2px);
+      }
+      .message.assistant .message-text .journey-highlight-card-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+      .message.assistant .message-text .journey-highlight-card-theme {
+        display: inline-flex;
+        width: fit-content;
+        padding: 6px 10px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.12);
+        color: rgba(255, 244, 228, 0.9);
+        font-size: 11px;
+        font-weight: 700;
+      }
+      .message.assistant .message-text .journey-highlight-card strong {
+        color: #fff9ef;
+        font-size: 15px;
+        line-height: 1.5;
+      }
+      .message.assistant .message-text .journey-highlight-card p {
+        margin: 0;
+        color: rgba(244, 239, 231, 0.82);
+        font-size: 12px;
+        line-height: 1.75;
+      }
+      .message.assistant .message-text .journey-highlight-card-btn {
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        background: rgba(255, 255, 255, 0.08);
+        color: rgba(255, 247, 233, 0.9);
+        border-radius: 999px;
+        padding: 7px 11px;
+        font-size: 11px;
+        font-weight: 700;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      .message.assistant .message-text .journey-rhythm-list {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
+      }
+      .message.assistant .message-text .journey-rhythm-list.timeline {
+        grid-template-columns: 1fr;
+      }
+      .message.assistant .message-text .journey-rhythm-item {
+        display: grid;
+        gap: 8px;
+        padding: 14px;
+        border-radius: 16px;
+        background: rgba(255, 255, 255, 0.08);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+      }
+      .message.assistant .message-text .journey-rhythm-item.timeline {
+        position: relative;
+        grid-template-columns: auto 1fr;
+        gap: 14px;
+        align-items: flex-start;
+        background: rgba(255, 255, 255, 0.06);
+      }
+      .message.assistant .message-text .journey-rhythm-rail {
+        position: absolute;
+        left: 30px;
+        top: 22px;
+        bottom: -16px;
+        width: 2px;
+        background: linear-gradient(180deg, rgba(255, 236, 210, 0.34), rgba(255, 236, 210, 0));
+      }
+      .message.assistant .message-text .journey-rhythm-item.timeline:last-child .journey-rhythm-rail {
+        display: none;
+      }
+      .message.assistant .message-text .journey-rhythm-step {
+        width: 34px;
+        height: 34px;
+        border-radius: 12px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(255, 246, 232, 0.18);
+        color: #fff8ee;
+        font-size: 12px;
+        font-weight: 800;
+        letter-spacing: 0.6px;
+      }
+      .message.assistant .message-text .journey-rhythm-copy {
+        color: rgba(244, 239, 231, 0.86);
+        font-size: 12px;
+        line-height: 1.75;
+      }
+      .message.assistant .message-text .journey-rhythm-content {
+        display: grid;
+        gap: 8px;
+      }
+      .message.assistant .message-text .journey-rhythm-stage {
+        color: rgba(255, 241, 219, 0.92);
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.6px;
+      }
+      .message.assistant .message-text .journey-rhythm-focus-btn {
+        justify-self: start;
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        background: rgba(255, 255, 255, 0.08);
+        color: rgba(255, 247, 233, 0.9);
+        border-radius: 999px;
+        padding: 7px 11px;
+        font-size: 11px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      .message.assistant .message-text .travel-summary {
+        padding: 16px 18px;
+        border-radius: 16px;
+        background: linear-gradient(
+          135deg,
+          rgba(26, 77, 84, 0.08),
+          rgba(194, 142, 92, 0.12)
+        );
+        border: 1px solid rgba(26, 77, 84, 0.08);
+      }
+      .message.assistant .message-text .travel-summary-label {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        color: var(--primary);
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.4px;
+        margin-bottom: 10px;
+      }
+      .message.assistant .message-text .travel-summary-copy {
+        color: #223538;
+        font-size: 14px;
+        line-height: 1.85;
+      }
+      .message.assistant .message-text .travel-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 12px;
+      }
+      .message.assistant .message-text .travel-card {
+        padding: 16px 16px 14px;
+        border-radius: 16px;
+        background: rgba(255, 255, 255, 0.98);
+        border: 1px solid rgba(26, 77, 84, 0.08);
+        box-shadow: 0 10px 20px rgba(26, 77, 84, 0.06);
+      }
+      .message.assistant .message-text .travel-card.overview {
+        background: rgba(194, 142, 92, 0.08);
+      }
+      .message.assistant .message-text .travel-card.transport {
+        background: rgba(34, 110, 122, 0.06);
+      }
+      .message.assistant .message-text .travel-card.stay {
+        background: rgba(23, 96, 58, 0.06);
+      }
+      .message.assistant .message-text .travel-card.budget {
+        background: rgba(146, 96, 36, 0.08);
+      }
+      .message.assistant .message-text .travel-card.warning {
+        background: rgba(180, 35, 24, 0.05);
+      }
+      .message.assistant .message-text .travel-card.next {
+        background: rgba(26, 77, 84, 0.07);
+      }
+      .message.assistant .message-text .travel-card-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        margin-bottom: 12px;
+      }
+      .message.assistant .message-text .travel-card-head-main {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        min-width: 0;
+      }
+      .message.assistant .message-text .travel-card-icon {
+        width: 32px;
+        height: 32px;
+        border-radius: 12px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(255, 255, 255, 0.82);
+        color: var(--primary);
+        flex-shrink: 0;
+      }
+      .message.assistant .message-text .travel-card-title {
+        color: var(--text-serif);
+        font-size: 15px;
+        font-weight: 700;
+      }
+      .message.assistant .message-text .travel-card-link-btn {
+        flex-shrink: 0;
+        border: 1px solid rgba(26, 77, 84, 0.1);
+        background: rgba(255, 255, 255, 0.84);
+        color: var(--primary);
+        border-radius: 999px;
+        padding: 8px 12px;
+        font-size: 11px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      .message.assistant .message-text .travel-card-body {
+        color: #31484c;
+        font-size: 13px;
+        line-height: 1.8;
+      }
+      .message.assistant .message-text .travel-card-body p {
+        margin: 0 0 10px;
+      }
+      .message.assistant .message-text .travel-card-body p:last-child {
+        margin-bottom: 0;
+      }
+      .message.assistant .message-text .travel-card-body ul,
+      .message.assistant .message-text .travel-card-body ol {
+        margin: 0;
+        padding-left: 18px;
+      }
+      .message.assistant .message-text .travel-card-body li {
+        margin-bottom: 6px;
+      }
+      .message.assistant .message-text .travel-report {
+        display: grid;
+        gap: 16px;
+      }
+      .message.assistant .message-text .travel-report-hero {
+        position: relative;
+        overflow: hidden;
+        padding: 24px;
+        border-radius: 26px;
+        background:
+          radial-gradient(circle at 82% 10%, rgba(219, 169, 104, 0.28), transparent 32%),
+          linear-gradient(135deg, #123f46, #1d5a62 58%, #f6efe2);
+        color: #fffaf0;
+        box-shadow: 0 22px 42px rgba(18, 63, 70, 0.18);
+      }
+      .message.assistant .message-text .travel-report-kicker {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 7px 11px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.14);
+        border: 1px solid rgba(255, 255, 255, 0.22);
+        font-size: 12px;
+        font-weight: 800;
+      }
+      .message.assistant .message-text .travel-report-hero h3 {
+        margin: 18px 0 10px;
+        font-size: clamp(24px, 4vw, 38px);
+        line-height: 1.12;
+        color: #fffaf0;
+      }
+      .message.assistant .message-text .travel-report-hero p {
+        max-width: 620px;
+        margin: 0;
+        color: rgba(255, 250, 240, 0.84);
+        line-height: 1.8;
+      }
+      .message.assistant .message-text .travel-report-metrics {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 18px;
+      }
+      .message.assistant .message-text .travel-report-metrics span {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 12px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.16);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        color: #fffaf0;
+        font-size: 12px;
+        font-weight: 800;
+      }
+      .message.assistant .message-text .travel-report-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 16px;
+      }
+      .message.assistant .message-text .travel-report-actions button {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        border: 1px solid rgba(255, 255, 255, 0.24);
+        border-radius: 999px;
+        padding: 9px 13px;
+        background: rgba(255, 255, 255, 0.14);
+        color: #fffaf0;
+        font-size: 12px;
+        font-weight: 900;
+        cursor: pointer;
+        transition: transform 0.2s ease, background 0.2s ease, border-color 0.2s ease;
+      }
+      .message.assistant .message-text .travel-report-actions button:hover {
+        transform: translateY(-1px);
+        background: rgba(255, 255, 255, 0.22);
+        border-color: rgba(255, 255, 255, 0.38);
+      }
+      .message.assistant .message-text .travel-report-summary {
+        padding: 16px 18px;
+        border-radius: 20px;
+        background:
+          linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(250, 245, 237, 0.9));
+        border: 1px solid rgba(26, 77, 84, 0.1);
+      }
+      .message.assistant .message-text .travel-report-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+      }
+      .message.assistant .message-text .travel-report-card {
+        padding: 18px;
+        border-radius: 22px;
+        background:
+          linear-gradient(145deg, rgba(255, 255, 255, 0.98), rgba(247, 250, 248, 0.88));
+        border: 1px solid rgba(26, 77, 84, 0.1);
+        box-shadow: 0 12px 28px rgba(19, 52, 57, 0.06);
+      }
+      .message.assistant .message-text .travel-report-card.daily {
+        grid-column: 1 / -1;
+      }
+      .message.assistant .message-text .travel-report-card.budget {
+        grid-column: 1 / -1;
+      }
+      .message.assistant .message-text .travel-report-card.warning {
+        background:
+          linear-gradient(145deg, rgba(255, 247, 247, 0.98), rgba(255, 250, 244, 0.9));
+        border-color: rgba(180, 35, 24, 0.12);
+      }
+      .message.assistant .message-text .travel-report-card-head {
+        display: flex;
+        gap: 12px;
+        align-items: flex-start;
+        margin-bottom: 12px;
+      }
+      .message.assistant .message-text .travel-report-card-icon {
+        width: 40px;
+        height: 40px;
+        border-radius: 14px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        flex: 0 0 auto;
+        background: rgba(26, 77, 84, 0.08);
+        color: var(--primary);
+      }
+      .message.assistant .message-text .travel-report-card-label {
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        color: var(--accent);
+        font-weight: 900;
+      }
+      .message.assistant .message-text .travel-report-card h4 {
+        margin: 4px 0 0;
+        color: var(--primary);
+        font-size: 18px;
+        line-height: 1.35;
+      }
+      .message.assistant .message-text .travel-report-card-body {
+        color: var(--text-main);
+        line-height: 1.85;
+      }
+      .message.assistant .message-text .travel-report-budget-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+        gap: 10px;
+      }
+      .message.assistant .message-text .travel-report-budget-item {
+        display: grid;
+        grid-template-columns: 38px minmax(0, 1fr);
+        gap: 10px;
+        padding: 12px;
+        border-radius: 16px;
+        background: rgba(26, 77, 84, 0.045);
+        border: 1px solid rgba(26, 77, 84, 0.08);
+      }
+      .message.assistant .message-text .travel-report-budget-item.featured {
+        background: linear-gradient(135deg, rgba(26, 77, 84, 0.1), rgba(219, 169, 104, 0.14));
+        border-color: rgba(194, 142, 92, 0.24);
+      }
+      .message.assistant .message-text .travel-report-budget-icon {
+        width: 36px;
+        height: 36px;
+        border-radius: 13px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: #fff;
+        color: var(--primary);
+        box-shadow: 0 8px 18px rgba(19, 52, 57, 0.08);
+      }
+      .message.assistant .message-text .travel-report-budget-item span {
+        display: block;
+        color: var(--text-muted);
+        font-size: 12px;
+        font-weight: 800;
+      }
+      .message.assistant .message-text .travel-report-budget-item strong {
+        display: block;
+        margin-top: 2px;
+        color: var(--primary);
+        font-size: 18px;
+        line-height: 1.25;
+      }
+      .message.assistant .message-text .travel-report-budget-item p {
+        margin: 5px 0 0;
+        color: var(--text-muted);
+        font-size: 12px;
+        line-height: 1.6;
+      }
+      .message.assistant .message-text .travel-report-days {
+        display: grid;
+        gap: 12px;
+      }
+      .message.assistant .message-text .travel-report-day {
+        display: grid;
+        grid-template-columns: 70px minmax(0, 1fr) minmax(230px, 0.9fr);
+        gap: 12px;
+        padding: 14px;
+        border-radius: 18px;
+        background: rgba(26, 77, 84, 0.045);
+        border: 1px solid rgba(26, 77, 84, 0.08);
+      }
+      .message.assistant .message-text .travel-report-day.missing {
+        border-style: dashed;
+        background: rgba(219, 169, 104, 0.08);
+      }
+      .message.assistant .message-text .travel-report-day-badge {
+        width: 54px;
+        height: 54px;
+        border-radius: 18px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: var(--primary);
+        color: #fff;
+        font-weight: 900;
+        font-size: 13px;
+      }
+      .message.assistant .message-text .travel-report-day-main h5 {
+        margin: 0 0 6px;
+        color: var(--primary);
+        font-size: 16px;
+      }
+      .message.assistant .message-text .travel-report-day-map {
+        min-height: 170px;
+        padding: 12px;
+        border-radius: 16px;
+        background:
+          radial-gradient(circle at 80% 20%, rgba(219, 169, 104, 0.2), transparent 26%),
+          linear-gradient(145deg, rgba(255, 255, 255, 0.92), rgba(237, 247, 245, 0.8));
+        border: 1px solid rgba(26, 77, 84, 0.08);
+      }
+      .message.assistant .message-text .travel-report-day-map-head {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 10px;
+        margin-bottom: 8px;
+        color: var(--text-muted);
+        font-size: 11px;
+        font-weight: 900;
+      }
+      .message.assistant .message-text .travel-report-day-map-head strong {
+        color: var(--primary);
+        font-size: 12px;
+        text-align: right;
+      }
+      .message.assistant .message-text .travel-report-route-sketch {
+        position: relative;
+        min-height: 136px;
+        overflow: hidden;
+        border-radius: 18px;
+        background:
+          linear-gradient(rgba(26, 77, 84, 0.07) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(26, 77, 84, 0.07) 1px, transparent 1px),
+          radial-gradient(circle at 18% 78%, rgba(26, 77, 84, 0.16), transparent 20%),
+          linear-gradient(135deg, rgba(240, 248, 246, 0.98), rgba(255, 250, 242, 0.88));
+        background-size: 28px 28px, 28px 28px, auto, auto;
+        border: 1px solid rgba(26, 77, 84, 0.1);
+      }
+      .message.assistant .message-text .travel-report-route-sketch.empty {
+        display: grid;
+        place-items: center;
+        padding: 14px;
+      }
+      .message.assistant .message-text .travel-report-route-empty {
+        color: var(--text-muted);
+        font-size: 12px;
+        line-height: 1.7;
+        text-align: center;
+      }
+      .message.assistant .message-text .travel-report-route-sketch svg {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+      }
+      .message.assistant .message-text .travel-report-route-sketch polyline {
+        fill: none;
+        stroke: #24a6a1;
+        stroke-width: 4;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        filter: drop-shadow(0 8px 10px rgba(36, 166, 161, 0.22));
+      }
+      .message.assistant .message-text .travel-report-route-node {
+        position: absolute;
+        left: var(--x);
+        top: var(--y);
+        transform: translate(-50%, -50%);
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        max-width: 150px;
+        padding: 6px 8px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.94);
+        border: 1px solid rgba(26, 77, 84, 0.13);
+        box-shadow: 0 10px 22px rgba(19, 52, 57, 0.12);
+        color: var(--primary);
+      }
+      .message.assistant .message-text .travel-report-route-node span {
+        width: 22px;
+        height: 22px;
+        border-radius: 50%;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        flex: 0 0 auto;
+        background: #24a6a1;
+        color: #fff;
+        font-size: 11px;
+        font-weight: 900;
+      }
+      .message.assistant .message-text .travel-report-route-node strong {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 12px;
+      }
+      .message.assistant .message-text .travel-report-day-copy p,
+      .message.assistant .message-text .travel-report-card-body p {
+        margin: 0;
+      }
+      .message.assistant .message-text .travel-report-route-digest {
+        padding: 18px;
+        border-radius: 24px;
+        background:
+          radial-gradient(circle at 90% 10%, rgba(219, 169, 104, 0.18), transparent 28%),
+          linear-gradient(145deg, rgba(255, 255, 255, 0.96), rgba(240, 248, 246, 0.88));
+        border: 1px solid rgba(26, 77, 84, 0.1);
+        box-shadow: 0 14px 34px rgba(19, 52, 57, 0.07);
+      }
+      .message.assistant .message-text .travel-report-route-digest-head {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(220px, 0.8fr);
+        gap: 16px;
+        align-items: end;
+        margin-bottom: 14px;
+      }
+      .message.assistant .message-text .travel-report-route-digest-head span {
+        color: var(--accent);
+        font-size: 12px;
+        font-weight: 900;
+      }
+      .message.assistant .message-text .travel-report-route-digest-head h4 {
+        margin: 4px 0 0;
+        color: var(--primary);
+        font-size: 22px;
+      }
+      .message.assistant .message-text .travel-report-route-digest-head p {
+        margin: 0;
+        color: var(--text-muted);
+        line-height: 1.7;
+        font-size: 13px;
+      }
+      .message.assistant .message-text .travel-report-route-digest-body {
+        display: grid;
+        grid-template-columns: minmax(0, 1.15fr) minmax(220px, 0.85fr);
+        gap: 14px;
+      }
+      .message.assistant .message-text .travel-report-route-digest-body .travel-report-route-sketch {
+        min-height: 240px;
+      }
+      .message.assistant .message-text .travel-report-route-day-list {
+        display: grid;
+        gap: 10px;
+        align-content: start;
+      }
+      .message.assistant .message-text .travel-report-route-day-pill {
+        padding: 11px 12px;
+        border-radius: 16px;
+        background: rgba(26, 77, 84, 0.055);
+        border: 1px solid rgba(26, 77, 84, 0.08);
+      }
+      .message.assistant .message-text .travel-report-route-day-pill strong {
+        display: block;
+        color: var(--primary);
+        font-size: 13px;
+      }
+      .message.assistant .message-text .travel-report-route-day-pill span {
+        display: block;
+        margin-top: 3px;
+        color: var(--text-muted);
+        font-size: 12px;
+        line-height: 1.6;
+      }
+      .message.assistant .message-text .travel-report-map .journey-live-map-shell {
+        margin-top: 0;
+      }
+      @media (max-width: 760px) {
+        .message.assistant .message-text .travel-report-hero {
+          padding: 20px;
+          border-radius: 22px;
+        }
+        .message.assistant .message-text .travel-report-grid {
+          grid-template-columns: 1fr;
+        }
+        .message.assistant .message-text .travel-report-budget-grid {
+          grid-template-columns: 1fr;
+        }
+        .message.assistant .message-text .travel-report-day {
+          grid-template-columns: 1fr;
+        }
+        .message.assistant .message-text .travel-report-day-badge {
+          width: auto;
+          height: auto;
+          padding: 8px 12px;
+          border-radius: 999px;
+          justify-content: flex-start;
+        }
+        .message.assistant .message-text .travel-report-route-digest-head,
+        .message.assistant .message-text .travel-report-route-digest-body {
+          grid-template-columns: 1fr;
+        }
+      }
+      .message.assistant .message-text .travel-fallback {
+        display: grid;
+        gap: 10px;
+      }
+      .message.assistant .message-text .message-table-wrap {
+        overflow-x: auto;
+        margin-bottom: 6px;
+      }
+      .message.assistant .message-text .message-table {
+        width: 100%;
+        min-width: 460px;
+        border-collapse: collapse;
+        border-spacing: 0;
+        overflow: hidden;
+        border-radius: 14px;
+        background: rgba(255, 255, 255, 0.98);
+        border: 1px solid rgba(26, 77, 84, 0.08);
+      }
+      .message.assistant .message-text .message-table th,
+      .message.assistant .message-text .message-table td {
+        padding: 12px 14px;
+        text-align: left;
+        vertical-align: top;
+        border-bottom: 1px solid rgba(26, 77, 84, 0.08);
+        font-size: 13px;
+        line-height: 1.7;
+      }
+      .message.assistant .message-text .message-table th {
+        background: rgba(26, 77, 84, 0.08);
+        color: var(--text-serif);
+        font-weight: 700;
+        white-space: nowrap;
+      }
+      .message.assistant .message-text .message-table tbody tr:nth-child(even) td {
+        background: rgba(248, 250, 250, 0.92);
+      }
+      .message.assistant .message-text .message-table tr:last-child td {
+        border-bottom: none;
+      }
+      .message.assistant .message-text .transport-options-board {
+        display: grid;
+        gap: 12px;
+      }
+      .message.assistant .message-text .transport-option-card {
+        padding: 16px;
+        border-radius: 18px;
+        background: linear-gradient(
+          180deg,
+          rgba(255, 255, 255, 0.99),
+          rgba(245, 250, 251, 0.96)
+        );
+        border: 1px solid rgba(26, 77, 84, 0.1);
+        box-shadow: 0 12px 24px rgba(26, 77, 84, 0.06);
+      }
+      .message.assistant .message-text .transport-option-card.recommended {
+        border-color: rgba(194, 142, 92, 0.36);
+        box-shadow: 0 14px 28px rgba(194, 142, 92, 0.12);
+      }
+      .message.assistant .message-text .transport-option-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 14px;
+      }
+      .message.assistant .message-text .transport-option-kind {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        color: var(--primary);
+        font-size: 12px;
+        font-weight: 700;
+      }
+      .message.assistant .message-text .transport-option-code {
+        font-size: 22px;
+        font-weight: 800;
+        color: var(--text-serif);
+        letter-spacing: 0.4px;
+      }
+      .message.assistant .message-text .transport-option-times {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+        align-items: center;
+        gap: 12px;
+        padding: 14px 0;
+        border-top: 1px dashed rgba(26, 77, 84, 0.12);
+        border-bottom: 1px dashed rgba(26, 77, 84, 0.12);
+      }
+      .message.assistant .message-text .transport-stop {
+        display: grid;
+        gap: 4px;
+      }
+      .message.assistant .message-text .transport-stop:last-child {
+        text-align: right;
+      }
+      .message.assistant .message-text .transport-stop-label {
+        font-size: 11px;
+        color: var(--text-light);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+      .message.assistant .message-text .transport-stop strong {
+        font-size: 18px;
+        color: var(--text-serif);
+      }
+      .message.assistant .message-text .transport-stop-arrow {
+        color: rgba(26, 77, 84, 0.38);
+        font-size: 15px;
+      }
+      .message.assistant .message-text .transport-option-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 14px;
+      }
+      .message.assistant .message-text .transport-meta-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 7px 10px;
+        border-radius: 999px;
+        background: rgba(26, 77, 84, 0.08);
+        color: var(--primary);
+        font-size: 12px;
+        font-weight: 700;
+      }
+      .message.assistant .message-text .transport-meta-pill.price {
+        background: rgba(194, 142, 92, 0.14);
+        color: #915f24;
+      }
+      .message.assistant .message-text .transport-option-reason {
+        margin-top: 12px;
+        padding: 12px 14px;
+        border-radius: 14px;
+        background: rgba(194, 142, 92, 0.08);
+        color: #355055;
+        line-height: 1.75;
+      }
+      .message.assistant .message-text .transport-extra-list {
+        margin-top: 12px;
+        display: grid;
+        gap: 8px;
+      }
+      .message.assistant .message-text .transport-extra-item {
+        display: grid;
+        grid-template-columns: 88px minmax(0, 1fr);
+        gap: 10px;
+        align-items: start;
+      }
+      .message.assistant .message-text .transport-extra-item dt {
+        color: var(--text-light);
+        font-size: 12px;
+      }
+      .message.assistant .message-text .transport-extra-item dd {
+        margin: 0;
+        color: #31484c;
+      }
+      .message-time {
+        margin-top: 10px;
+        font-size: 11px;
+        opacity: 0.72;
+      }
+      .message.user .message-time {
+        text-align: right;
+      }
+
+      /* 欢迎屏幕 */
+      .welcome-screen {
+        text-align: center;
+        margin: auto;
+        max-width: 500px;
+        padding: 40px;
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(255, 252, 247, 0.78));
+        border-radius: 28px;
+        border: 1px solid rgba(26, 77, 84, 0.08);
+        box-shadow: 0 20px 40px rgba(26, 77, 84, 0.06);
+      }
+
+      .welcome-logo {
+        font-size: 50px;
+        color: var(--primary);
+        margin-bottom: 20px;
+      }
+
+      .welcome-title {
+        font-family: "Noto Serif SC", "Songti SC", "STSong", serif;
+        font-size: 28px;
+        margin-bottom: 10px;
+        color: var(--text-serif);
+      }
+
+      .welcome-text {
+        color: var(--text-light);
+        line-height: 1.6;
+      }
+      .welcome-suggestions {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 10px;
+        margin-top: 22px;
+      }
+      .suggestion-btn {
+        border: 1px solid rgba(26, 77, 84, 0.16);
+        background: rgba(255, 255, 255, 0.85);
+        color: var(--primary);
+        border-radius: 999px;
+        padding: 10px 14px;
+        font-size: 13px;
+        cursor: pointer;
+        transition: all 0.2s ease;
+      }
+      .suggestion-btn:hover {
+        background: var(--primary);
+        color: #fff;
+        transform: translateY(-1px);
+      }
+
+      /* 输入区域 */
+      .chat-input-area {
+        padding: 24px 32px;
+        background: rgba(255, 255, 255, 0.9);
+        border-top: 1px solid rgba(0, 0, 0, 0.05);
+      }
+      .planner-panel {
+        margin-bottom: 16px;
+        padding: 16px 18px;
+        border-radius: 22px;
+        background:
+          linear-gradient(180deg, rgba(255, 250, 244, 0.98), rgba(246, 241, 232, 0.94));
+        border: 1px solid rgba(194, 142, 92, 0.14);
+        box-shadow: 0 12px 24px rgba(194, 142, 92, 0.08);
+      }
+      .planner-panel-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 14px;
+      }
+      .planner-panel-head-copy {
+        min-width: 0;
+      }
+      .planner-panel-title {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        color: var(--text-serif);
+        font-size: 14px;
+        font-weight: 700;
+      }
+      .planner-panel-tip {
+        margin-top: 6px;
+        font-size: 12px;
+        color: var(--text-light);
+        line-height: 1.7;
+      }
+      .planner-toggle-btn {
+        flex-shrink: 0;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        border: 1px solid rgba(26, 77, 84, 0.1);
+        background: rgba(255, 255, 255, 0.9);
+        color: var(--primary);
+        border-radius: 999px;
+        padding: 9px 12px;
+        font-size: 12px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      .planner-toggle-btn:hover {
+        border-color: rgba(194, 142, 92, 0.32);
+        color: #87581b;
+      }
+      .planner-panel-body[hidden] {
+        display: none !important;
+      }
+      .planner-panel.collapsed {
+        padding-bottom: 16px;
+      }
+      .planner-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
+      }
+      .planner-field {
+        display: grid;
+        gap: 6px;
+      }
+      .planner-field label {
+        font-size: 12px;
+        color: var(--text-light);
+      }
+      .planner-field input {
+        width: 100%;
+        border: 1px solid rgba(26, 77, 84, 0.1);
+        border-radius: 14px;
+        padding: 10px 12px;
+        background: rgba(255, 255, 255, 0.98);
+        font-size: 13px;
+        color: var(--text-main);
+      }
+      .planner-field input:focus {
+        outline: none;
+        border-color: var(--primary);
+        box-shadow: 0 0 0 2px rgba(26, 77, 84, 0.08);
+      }
+      .planner-chip-group {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 14px;
+      }
+      .planner-chip {
+        border: 1px solid rgba(26, 77, 84, 0.12);
+        background: rgba(255, 255, 255, 0.92);
+        color: var(--primary);
+        border-radius: 999px;
+        padding: 8px 12px;
+        font-size: 12px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.2s ease;
+      }
+      .planner-chip:hover {
+        background: rgba(26, 77, 84, 0.1);
+        color: var(--primary);
+        border-color: rgba(26, 77, 84, 0.22);
+        transform: translateY(-1px);
+      }
+      .planner-mode-note {
+        margin-top: 12px;
+        padding: 12px 14px;
+        border-radius: 16px;
+        background:
+          linear-gradient(135deg, rgba(255, 255, 255, 0.92), rgba(239, 246, 244, 0.82));
+        border: 1px solid rgba(26, 77, 84, 0.1);
+        color: var(--text-light);
+        font-size: 12px;
+        line-height: 1.7;
+      }
+      .planner-mode-note strong {
+        display: block;
+        color: var(--primary);
+        font-size: 13px;
+        margin-bottom: 2px;
+      }
+      .planner-actions {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        margin-top: 14px;
+      }
+      .planner-actions-left,
+      .planner-actions-right {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      .planner-btn {
+        border: none;
+        border-radius: 999px;
+        padding: 10px 14px;
+        font-size: 12px;
+        font-weight: 700;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .planner-btn.primary {
+        background: linear-gradient(135deg, #1b4c55, #285f69);
+        color: #fff;
+        box-shadow: 0 10px 20px rgba(26, 77, 84, 0.16);
+      }
+      .planner-btn.primary.outline {
+        background: rgba(255, 255, 255, 0.92);
+        color: var(--primary);
+        border: 1px solid rgba(26, 77, 84, 0.18);
+        box-shadow: none;
+      }
+      .planner-btn.secondary {
+        background: rgba(26, 77, 84, 0.08);
+        color: var(--primary);
+      }
+      .planner-btn.ghost {
+        background: rgba(255, 255, 255, 0.8);
+        color: var(--text-light);
+        border: 1px solid rgba(26, 77, 84, 0.08);
+      }
+      .planner-summary {
+        margin-top: 12px;
+        font-size: 12px;
+        color: var(--text-light);
+        line-height: 1.7;
+      }
+
+      .chat-input-wrapper {
+        display: flex;
+        align-items: flex-end;
+        background: rgba(255, 255, 255, 0.98);
+        border: 1px solid rgba(26, 77, 84, 0.1);
+        border-radius: 16px;
+        padding: 8px 8px 8px 16px;
+        box-shadow: 0 12px 24px rgba(19, 52, 57, 0.06);
+        transition: border 0.3s, box-shadow 0.3s, transform 0.3s;
+      }
+
+      .chat-input-wrapper:focus-within {
+        border-color: var(--primary);
+        box-shadow: 0 16px 28px rgba(26, 77, 84, 0.1);
+        transform: translateY(-1px);
+      }
+
+      .chat-input {
+        flex: 1;
+        border: none;
+        padding: 10px 0;
+        font-family: inherit;
+        font-size: 15px;
+        resize: none;
+        max-height: 120px;
+        background: transparent;
+      }
+
+      .chat-input:focus {
+        outline: none;
+      }
+
+      .send-btn {
+        width: 40px;
+        height: 40px;
+        border: none;
+        border-radius: 12px;
+        background: linear-gradient(135deg, #1b4c55, #275b65);
+        color: var(--accent);
+        font-size: 16px;
+        cursor: pointer;
+        transition: all 0.2s;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0 10px 20px rgba(26, 77, 84, 0.16);
+      }
+      .send-btn.loading i {
+        animation: sendSpin 0.9s linear infinite;
+      }
+
+      .send-btn:hover {
+        background: var(--primary-light);
+        color: #fff;
+      }
+      .send-btn:disabled {
+        background: #ccc;
+        cursor: not-allowed;
+      }
+      .chat-input:disabled {
+        cursor: not-allowed;
+        color: #98a2b3;
+      }
+      .chat-input-wrapper.disabled {
+        background: rgba(244, 244, 245, 0.94);
+        border-color: rgba(152, 162, 179, 0.22);
+      }
+      .chat-meta {
+        margin-top: 12px;
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        flex-wrap: wrap;
+        color: var(--text-light);
+        font-size: 12px;
+      }
+      .chat-meta strong {
+        color: var(--primary);
+        font-weight: 600;
+      }
+      @keyframes sendSpin {
+        from {
+          transform: rotate(0deg);
+        }
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      /* 加载动画 */
+      .typing-dots {
+        display: flex;
+        gap: 4px;
+        padding: 0;
+      }
+      .dot {
+        width: 6px;
+        height: 6px;
+        background: var(--primary);
+        border-radius: 50%;
+        opacity: 0.5;
+        animation: bounce 1.4s infinite ease-in-out;
+      }
+      .dot:nth-child(1) {
+        animation-delay: -0.32s;
+      }
+      .dot:nth-child(2) {
+        animation-delay: -0.16s;
+      }
+      @keyframes bounce {
+        0%,
+        80%,
+        100% {
+          transform: scale(0);
+        }
+        40% {
+          transform: scale(1);
+        }
+      }
+      .thinking-card {
+        min-width: min(420px, 72vw);
+      }
+      .thinking-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 10px;
+      }
+      .thinking-title {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        color: var(--text-serif);
+        font-weight: 600;
+        font-size: 14px;
+      }
+      .thinking-badge {
+        padding: 4px 8px;
+        border-radius: 999px;
+        background: rgba(194, 142, 92, 0.14);
+        color: #926024;
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.5px;
+      }
+      .thinking-copy {
+        color: var(--text-light);
+        font-size: 13px;
+        line-height: 1.7;
+      }
+      .thinking-progress {
+        margin-top: 12px;
+        height: 7px;
+        border-radius: 999px;
+        overflow: hidden;
+        background: rgba(26, 77, 84, 0.08);
+        position: relative;
+      }
+      .thinking-progress::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(
+          90deg,
+          rgba(194, 142, 92, 0.05) 0%,
+          rgba(194, 142, 92, 0.75) 50%,
+          rgba(194, 142, 92, 0.05) 100%
+        );
+        transform: translateX(-100%);
+        animation: loadingSweep 1.8s infinite ease-in-out;
+      }
+      @keyframes loadingSweep {
+        from {
+          transform: translateX(-100%);
+        }
+        to {
+          transform: translateX(100%);
+        }
+      }
+
+      /* Toast */
+      .toast {
+        position: fixed;
+        top: 24px;
+        right: 24px;
+        transform: translateY(-120px);
+        background: var(--text-main);
+        color: white;
+        padding: 12px 24px;
+        border-radius: 50px;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+        transition: transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        z-index: 1000;
+        font-size: 14px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        max-width: min(420px, calc(100vw - 32px));
+      }
+      .toast.show {
+        transform: translateY(0);
+      }
+      .toast.error {
+        background: #c0392b;
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        html {
+          scroll-behavior: auto;
+        }
+        *,
+        *::before,
+        *::after {
+          animation-duration: 0.01ms !important;
+          animation-iteration-count: 1 !important;
+          transition-duration: 0.01ms !important;
+          scroll-behavior: auto !important;
+        }
+      }
+
+      /* 响应式 */
+      @media (max-width: 1100px) {
+        .app-container {
+          padding: 12px;
+          gap: 12px;
+        }
+        .sidebar {
+          width: 250px;
+        }
+        .chat-header,
+        .chat-input-area,
+        .service-banner {
+          padding-left: 22px;
+          padding-right: 22px;
+        }
+        .chat-messages {
+          padding: 24px;
+        }
+        .planner-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+        .message.assistant .message-text .journey-map-studio-brief {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+        .message.assistant .message-text .journey-live-map-shell-body {
+          grid-template-columns: 1fr;
+        }
+        .message.assistant .message-text .journey-live-map-shell--studio .journey-live-map {
+          min-height: 420px;
+        }
+        .message.assistant .message-text .journey-map-floating-controls {
+          position: static;
+          margin-bottom: 4px;
+        }
+      }
+
+      @media (max-width: 900px) {
+        .intro-copy {
+          justify-content: flex-end;
+          padding: 24px 22px 34px;
+        }
+        .intro-copy h1 {
+          max-width: 720px;
+          font-size: clamp(34px, 8vw, 56px);
+        }
+        .intro-copy p {
+          max-width: 620px;
+          font-size: 16px;
+        }
+        .auth-card {
+          width: min(92vw, 430px);
+          padding: 28px 22px;
+        }
+        .auth-highlights {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+        .app-container {
+          flex-direction: column;
+          padding: 10px;
+          gap: 10px;
+        }
+        .sidebar {
+          width: 100%;
+          height: auto;
+          padding: 14px;
+          border-radius: 22px;
+        }
+        .sidebar-header {
+          padding: 0 0 14px;
+          border-bottom: none;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+        }
+        .user-passport {
+          margin-top: 0;
+          flex: 1;
+          min-width: 0;
+          padding: 10px;
+        }
+        .user-details h4 {
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          max-width: 140px;
+        }
+        .new-chat-btn,
+        .logout-btn {
+          margin: 0;
+          min-height: 42px;
+          border-radius: 999px;
+        }
+        .new-chat-btn {
+          width: 100%;
+          margin-bottom: 12px;
+        }
+        .logout-btn {
+          padding: 10px 14px;
+          justify-content: center;
+          background: rgba(255, 255, 255, 0.72);
+          border: 1px solid rgba(26, 77, 84, 0.08);
+          border-radius: 999px;
+        }
+        .conversations-list {
+          display: block;
+          overflow-x: auto;
+          overflow-y: hidden;
+          padding: 0;
+          margin: 0 -2px 12px;
+        }
+        .conversations-list::-webkit-scrollbar {
+          height: 6px;
+        }
+        .conversations-list::-webkit-scrollbar-thumb {
+          background: rgba(26, 77, 84, 0.15);
+          border-radius: 999px;
+        }
+        .section-label {
+          display: block;
+          padding: 0 2px 8px;
+        }
+        .conversations-summary {
+          padding: 0 2px 10px;
+        }
+        #conversationsList {
+          display: flex;
+          gap: 10px;
+          padding: 0 2px 8px;
+        }
+        .conversation-item {
+          min-width: 220px;
+          margin-bottom: 0;
+          flex-shrink: 0;
+        }
+        .mobile-chat-back-btn {
+          display: none;
+        }
+        .chat-header {
+          padding: 16px 18px 14px;
+          flex-direction: column;
+          align-items: flex-start;
+          gap: 14px;
+        }
+        .chat-title-group {
+          width: 100%;
+          gap: 12px;
+        }
+        .chat-icon-wrapper {
+          width: 42px;
+          height: 42px;
+          font-size: 18px;
+        }
+        .chat-info h2 {
+          font-size: 18px;
+        }
+        .chat-status-panel {
+          width: 100%;
+          justify-content: flex-start;
+        }
+        .service-banner {
+          padding: 14px 18px;
+          flex-direction: column;
+          align-items: flex-start;
+        }
+        .service-banner-actions {
+          width: 100%;
+          justify-content: space-between;
+        }
+        .trip-overview {
+          width: 100%;
+        }
+        .chat-messages {
+          padding: 18px;
+          gap: 18px;
+        }
+        .message {
+          max-width: 100%;
+        }
+        .message-content {
+          padding: 14px 18px;
+        }
+        .message.assistant .message-text .travel-grid {
+          grid-template-columns: 1fr;
+        }
+        .message.assistant .message-text .journey-atlas-panel {
+          grid-template-columns: 1fr;
+        }
+        .message.assistant .message-text .journey-live-map-head {
+          flex-direction: column;
+        }
+        .message.assistant .message-text .journey-live-map-toolbar {
+          width: 100%;
+          justify-items: start;
+        }
+        .message.assistant .message-text .journey-live-map-toolbar-row {
+          width: 100%;
+          justify-content: flex-start;
+        }
+        .message.assistant .message-text .journey-live-map-day-tabs,
+        .message.assistant .message-text .journey-live-map-day-modes {
+          justify-content: flex-start;
+        }
+        .message.assistant .message-text .journey-live-map-actions {
+          justify-content: flex-start;
+        }
+        .message.assistant .message-text .journey-live-map-styles {
+          justify-content: flex-start;
+        }
+        .message.assistant .message-text .journey-map-studio-brief {
+          grid-template-columns: 1fr 1fr;
+        }
+        .message.assistant .message-text .journey-live-map-shell-body--studio {
+          grid-template-columns: 1fr;
+        }
+        .message.assistant .message-text .journey-map-stage {
+          order: 1;
+        }
+        .message.assistant .message-text .journey-map-sidebar {
+          order: 2;
+        }
+        .message.assistant .message-text .journey-live-map-aside {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+        .message.assistant .message-text .journey-live-map {
+          min-height: 320px;
+        }
+        .message.assistant .message-text .journey-preview-metrics,
+        .message.assistant .message-text .journey-preview-route {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+        .message.assistant .message-text .journey-rhythm-list {
+          grid-template-columns: 1fr;
+        }
+        .thinking-card {
+          min-width: 0;
+        }
+        .chat-input-area {
+          padding: 16px;
+        }
+        .planner-panel {
+          padding: 14px;
+        }
+        .planner-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+        .planner-panel-head,
+        .planner-actions {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+        .planner-toggle-btn {
+          width: 100%;
+          justify-content: center;
+        }
+        .planner-actions-left,
+        .planner-actions-right {
+          width: 100%;
+        }
+        .planner-actions-left .planner-btn,
+        .planner-actions-right .planner-btn {
+          flex: 1 1 auto;
+        }
+        .welcome-screen {
+          padding: 28px 20px;
+        }
+        .welcome-suggestions {
+          justify-content: stretch;
+        }
+        .suggestion-btn {
+          width: 100%;
+        }
+        body.mobile-chat-focus .app-container {
+          display: block;
+          padding: 10px;
+        }
+        body.mobile-chat-focus .sidebar {
+          display: none;
+        }
+        body.mobile-chat-focus .chat-main {
+          min-height: calc(100vh - 20px);
+        }
+        body.mobile-chat-focus .mobile-chat-back-btn {
+          display: inline-flex;
+        }
+        body.mobile-chat-focus .chat-title-group {
+          align-items: flex-start;
+        }
+      }
+
+      @media (max-width: 640px) {
+        body {
+          height: auto;
+          min-height: 100vh;
+          overflow: auto;
+        }
+        body.intro-active {
+          overflow: hidden;
+        }
+        .intro-copy {
+          padding: 20px 18px 26px;
+        }
+        .intro-kicker {
+          font-size: 12px;
+          letter-spacing: 1px;
+        }
+        .intro-copy h1 {
+          font-size: clamp(30px, 11vw, 42px);
+        }
+        .intro-copy p {
+          font-size: 14px;
+          line-height: 1.75;
+        }
+        .intro-enter-hint span {
+          width: 100%;
+          justify-content: center;
+          font-size: 13px;
+        }
+        .auth-overlay {
+          align-items: flex-start;
+          overflow-y: auto;
+          padding: 18px 12px 24px;
+        }
+        .auth-card {
+          width: min(100%, 430px);
+          margin: 0 auto;
+          padding: 24px 18px;
+          max-height: none;
+          overflow: visible;
+        }
+        .auth-hero-scene {
+          min-height: 214px;
+        }
+        .auth-hero-caption {
+          left: 16px;
+          right: 16px;
+          bottom: 16px;
+          max-width: none;
+        }
+        .auth-hero-caption strong {
+          font-size: 20px;
+        }
+        .auth-hero-caption p {
+          font-size: 12px;
+        }
+        .auth-highlights {
+          grid-template-columns: 1fr;
+        }
+        .sidebar {
+          padding: 12px;
+        }
+        .sidebar-header {
+          flex-direction: column;
+          align-items: stretch;
+        }
+        .user-passport {
+          width: 100%;
+        }
+        .new-chat-btn,
+        .logout-btn {
+          width: 100%;
+        }
+        .conversations-summary {
+          flex-direction: column;
+        }
+        .summary-chip {
+          width: 100%;
+          justify-content: center;
+        }
+        #conversationsList {
+          gap: 8px;
+        }
+        .conversation-item {
+          min-width: 82vw;
+        }
+        .chat-header {
+          padding: 15px 14px 12px;
+        }
+        .mobile-chat-back-btn {
+          width: 100%;
+          justify-content: center;
+        }
+        .service-banner {
+          padding: 12px 14px;
+        }
+        .service-banner-main {
+          align-items: flex-start;
+        }
+        .service-banner-actions {
+          flex-direction: column;
+          align-items: stretch;
+        }
+        .service-action-btn {
+          width: 100%;
+        }
+        .endpoint-pill,
+        .assistant-status {
+          width: 100%;
+          justify-content: center;
+        }
+        .chat-messages {
+          padding: 14px;
+          gap: 14px;
+        }
+        .message {
+          gap: 10px;
+        }
+        .message-avatar {
+          width: 32px;
+          height: 32px;
+          font-size: 13px;
+        }
+        .message-content {
+          padding: 13px 15px;
+          font-size: 14px;
+        }
+        .message.assistant .message-text .message-table {
+          min-width: 0;
+        }
+        .message.assistant .message-text .transport-option-head,
+        .message.assistant .message-text .transport-option-times {
+          grid-template-columns: 1fr;
+        }
+        .message.assistant .message-text .journey-preview-head,
+        .message.assistant .message-text .journey-atlas-panel,
+        .message.assistant .message-text .journey-preview-metrics,
+        .message.assistant .message-text .journey-preview-route {
+          grid-template-columns: 1fr;
+          display: grid;
+        }
+        .message.assistant .message-text .journey-atlas-canvas {
+          min-height: 360px;
+        }
+        .message.assistant .message-text .journey-live-map-meta {
+          flex-direction: column;
+          align-items: flex-start;
+        }
+        .message.assistant .message-text .journey-live-map-aside {
+          grid-template-columns: 1fr;
+        }
+        .message.assistant .message-text .journey-live-map-day-tabs,
+        .message.assistant .message-text .journey-live-map-day-modes,
+        .message.assistant .message-text .journey-live-map-actions,
+        .message.assistant .message-text .journey-live-map-styles {
+          width: 100%;
+        }
+        .message.assistant .message-text .journey-map-floating-group {
+          width: 100%;
+          flex-direction: column;
+          align-items: flex-start;
+        }
+        .message.assistant .message-text .journey-map-floating-row {
+          width: 100%;
+        }
+        .message.assistant .message-text .travel-card-head {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+        .journey-map-modal {
+          padding: 12px;
+        }
+        .journey-map-modal-dialog {
+          padding: 16px;
+          border-radius: 22px;
+        }
+        .journey-live-map-modal-canvas {
+          min-height: 62vh;
+        }
+        .message.assistant .message-text .journey-live-map {
+          min-height: 280px;
+        }
+        .message.assistant .message-text .journey-map-studio-brief {
+          grid-template-columns: 1fr;
+        }
+        .message.assistant .message-text .journey-map-day-card-head,
+        .message.assistant .message-text .journey-map-sidebar-head {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+        .message.assistant .message-text .journey-atlas-label {
+          min-width: 104px;
+        }
+        .message.assistant .message-text .journey-atlas-scenic {
+          max-width: 120px;
+          white-space: normal;
+        }
+        .message.assistant .message-text .journey-preview-route {
+          gap: 10px;
+        }
+        .message.assistant .message-text .journey-preview-metric,
+        .message.assistant .message-text .journey-preview-stop {
+          min-height: 0;
+        }
+        .message.assistant .message-text .transport-option-head {
+          align-items: flex-start;
+        }
+        .message.assistant .message-text .transport-stop:last-child {
+          text-align: left;
+        }
+        .message.assistant .message-text .transport-stop-arrow {
+          display: none;
+        }
+        .message.assistant .message-text .transport-option-code {
+          font-size: 20px;
+        }
+        .message.assistant .message-text .transport-extra-item {
+          grid-template-columns: 1fr;
+          gap: 4px;
+        }
+        .planner-grid {
+          grid-template-columns: 1fr;
+        }
+        .planner-chip-group {
+          gap: 6px;
+        }
+        .planner-chip,
+        .planner-btn {
+          width: 100%;
+          justify-content: center;
+        }
+        .chat-input-area {
+          padding: 14px;
+        }
+        .toast {
+          top: 14px;
+          right: 14px;
+          left: 14px;
+          max-width: none;
+          border-radius: 18px;
+        }
+        .chat-input-wrapper {
+          padding: 8px 8px 8px 12px;
+        }
+        .chat-meta {
+          flex-direction: column;
+          gap: 8px;
+        }
+        .welcome-screen {
+          padding: 22px 16px;
+        }
+        .welcome-title {
+          font-size: 24px;
+        }
+        body.mobile-chat-focus .app-container {
+          padding: 0;
+        }
+        body.mobile-chat-focus .chat-main {
+          min-height: 100vh;
+          border-radius: 0;
+        }
+        body.mobile-chat-focus .chat-header,
+        body.mobile-chat-focus .chat-messages,
+        body.mobile-chat-focus .chat-input-area,
+        body.mobile-chat-focus .service-banner {
+          padding-left: 14px;
+          padding-right: 14px;
+        }
+      }
+
+      @media (max-width: 420px) {
+        .app-container {
+          padding: 8px;
+        }
+        .auth-logo {
+          font-size: 30px;
+          letter-spacing: 2px;
+        }
+        .sidebar-logo-text {
+          font-size: 20px;
+        }
+        .chat-info h2 {
+          font-size: 17px;
+        }
+        .overview-chip {
+          width: 100%;
+          justify-content: center;
+        }
+        .conversation-item {
+          min-width: 88vw;
+        }
+        .message.user,
+        .message.assistant {
+          align-self: stretch;
+        }
+        .message.user {
+          flex-direction: row-reverse;
+        }
+      }
+
+      .conversation-edit-btn {
+        width: 28px;
+        height: 28px;
+        border-radius: 999px;
+        border: 1px solid rgba(26, 77, 84, 0.08);
+        background: rgba(255, 255, 255, 0.88);
+        color: var(--text-light);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        transition: transform 0.2s ease, border-color 0.2s ease,
+          color 0.2s ease, background 0.2s ease;
+      }
+
+      .conversation-edit-btn:hover {
+        color: var(--primary);
+        border-color: rgba(26, 77, 84, 0.18);
+        background: rgba(26, 77, 84, 0.08);
+        transform: translateY(-1px);
+      }
+
+      .message.assistant .message-text .journey-preview-board {
+        padding: 16px;
+        border-radius: 20px;
+        background: linear-gradient(180deg, rgba(15, 70, 78, 0.08), rgba(255, 255, 255, 0.96));
+        border: 1px solid rgba(26, 77, 84, 0.1);
+        box-shadow: 0 14px 28px rgba(18, 53, 58, 0.08);
+        color: var(--text-main);
+      }
+
+      .message.assistant .message-text .journey-preview-title strong,
+      .message.assistant .message-text .journey-map-studio-brief-item strong,
+      .message.assistant .message-text .journey-live-map-head strong,
+      .message.assistant .message-text .journey-map-sidebar-copy strong,
+      .message.assistant .message-text .journey-map-route-stop-value,
+      .message.assistant .message-text .journey-map-day-card strong {
+        color: var(--text-serif);
+      }
+
+      .message.assistant .message-text .journey-preview-title span,
+      .message.assistant .message-text .journey-live-map-head span,
+      .message.assistant .message-text .journey-map-day-insight-copy,
+      .message.assistant .message-text .journey-map-sidebar-copy p,
+      .message.assistant .message-text .journey-map-route-stop-note {
+        color: rgba(72, 97, 102, 0.86);
+      }
+
+      .message.assistant .message-text .journey-preview-badge,
+      .message.assistant .message-text .journey-map-shell-kicker {
+        background: rgba(26, 77, 84, 0.08);
+        border-color: rgba(26, 77, 84, 0.12);
+        color: var(--primary);
+      }
+
+      .message.assistant .message-text .journey-map-studio-brief-item,
+      .message.assistant .message-text .journey-live-map-shell,
+      .message.assistant .message-text .journey-map-sidebar-card,
+      .message.assistant .message-text .journey-map-stage-rail,
+      .message.assistant .message-text .journey-map-day-card,
+      .message.assistant .message-text .journey-map-route-stop {
+        background: rgba(255, 255, 255, 0.9);
+        border-color: rgba(26, 77, 84, 0.1);
+        box-shadow: 0 10px 18px rgba(19, 59, 65, 0.05);
+        color: var(--text-main);
+      }
+
+      .message.assistant .message-text .journey-live-map-shell--studio .journey-live-map-head {
+        align-items: center;
+      }
+
+      .message.assistant .message-text .journey-live-map-shell-body--studio {
+        grid-template-columns: minmax(0, 1fr) 300px;
+        gap: 16px;
+      }
+
+      .message.assistant .message-text .journey-live-map-shell--studio .journey-live-map {
+        min-height: 420px;
+        border-radius: 22px;
+        background: rgba(228, 238, 240, 0.75);
+        border-color: rgba(26, 77, 84, 0.14);
+      }
+
+      .message.assistant .message-text .journey-map-stage {
+        position: relative;
+        gap: 10px;
+      }
+
+      .message.assistant .message-text .journey-map-floating-panel {
+        position: absolute;
+        z-index: 500;
+        top: 14px;
+        left: 14px;
+        display: grid;
+        gap: 7px;
+        max-width: min(calc(100% - 28px), 560px);
+        width: fit-content;
+        pointer-events: none;
+      }
+
+      .message.assistant .message-text .journey-map-floating-days,
+      .message.assistant .message-text .journey-map-floating-modes,
+      .message.assistant .message-text .journey-map-floating-actions {
+        display: inline-flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        pointer-events: auto;
+        align-items: center;
+        padding: 8px 10px;
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.88);
+        border: 1px solid rgba(26, 77, 84, 0.12);
+        backdrop-filter: blur(12px);
+        box-shadow: 0 10px 22px rgba(19, 59, 65, 0.14);
+      }
+
+      .message.assistant .message-text .journey-map-passive-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 8px 11px;
+        border-radius: 999px;
+        background: rgba(26, 77, 84, 0.08);
+        border: 1px dashed rgba(26, 77, 84, 0.18);
+        color: rgba(46, 78, 83, 0.88);
+        font-size: 0.82rem;
+        font-weight: 600;
+        white-space: nowrap;
+      }
+
+      .message.assistant .message-text .journey-map-floating-modes[hidden] {
+        display: none;
+      }
+
+      .message.assistant .message-text .journey-map-floating-modes {
+        justify-content: flex-start;
+      }
+
+      .message.assistant .message-text .journey-map-floating-days {
+        padding-right: 12px;
+      }
+
+      .message.assistant .message-text .journey-map-floating-panel .journey-map-day-btn {
+        min-width: auto;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        padding: 8px 11px;
+      }
+
+      .message.assistant .message-text .journey-map-floating-panel .journey-map-day-btn small {
+        color: rgba(86, 110, 116, 0.78);
+      }
+
+      .message.assistant .message-text .journey-map-action-btn,
+      .message.assistant .message-text .journey-map-style-btn,
+      .message.assistant .message-text .journey-map-focus-btn,
+      .message.assistant .message-text .journey-map-day-btn,
+      .message.assistant .message-text .journey-map-day-mode-btn {
+        background: rgba(255, 255, 255, 0.92);
+        border-color: rgba(26, 77, 84, 0.12);
+        color: var(--primary);
+        box-shadow: none;
+      }
+
+      .message.assistant .message-text .journey-map-action-btn.active,
+      .message.assistant .message-text .journey-map-style-btn.active,
+      .message.assistant .message-text .journey-map-focus-btn.active,
+      .message.assistant .message-text .journey-map-day-btn.active,
+      .message.assistant .message-text .journey-map-day-mode-btn.active {
+        background: rgba(26, 77, 84, 0.15);
+        border-color: rgba(26, 77, 84, 0.22);
+      }
+
+      .message.assistant .message-text .journey-map-action-btn.secondary {
+        color: rgba(46, 78, 83, 0.92);
+        background: rgba(247, 250, 250, 0.94);
+      }
+
+      .message.assistant .message-text .journey-live-map-shell--overview-only
+        .journey-map-sidebar {
+        gap: 12px;
+      }
+
+      .message.assistant .message-text .journey-live-map-shell--overview-only
+        .journey-map-sidebar-card.compact {
+        padding: 16px 18px;
+      }
+
+      .message.assistant .message-text .journey-live-map-meta {
+        color: var(--text-main);
+      }
+
+      .message.assistant .message-text .journey-live-map-meta-label {
+        color: rgba(72, 97, 102, 0.72);
+      }
+
+      .message.assistant .message-text .journey-map-day-insight-points li,
+      .message.assistant .message-text .journey-map-route-stop,
+      .message.assistant .message-text .journey-highlight-card {
+        background: rgba(245, 248, 248, 0.96);
+        border-color: rgba(26, 77, 84, 0.1);
+      }
+
+      .message.assistant .message-text .journey-map-inline-link,
+      .message.assistant .message-text .journey-map-studio-brief-label,
+      .message.assistant .message-text .journey-map-sidebar-head span,
+      .message.assistant .message-text .journey-map-day-card-meta {
+        color: rgba(86, 110, 116, 0.8);
+      }
+
+      @media (max-width: 900px) {
+        .message.assistant .message-text .journey-live-map-shell-body--studio {
+          grid-template-columns: 1fr;
+        }
+
+        .message.assistant .message-text .journey-map-sidebar {
+          order: 2;
+        }
+
+        .message.assistant .message-text .journey-map-stage {
+          order: 1;
+        }
+
+        .message.assistant .message-text .journey-map-floating-panel {
+          position: static;
+          pointer-events: auto;
+        }
+
+        .message.assistant .message-text .journey-map-floating-days,
+        .message.assistant .message-text .journey-map-floating-modes,
+        .message.assistant .message-text .journey-map-floating-actions {
+          width: 100%;
+        }
+      }

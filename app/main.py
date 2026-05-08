@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api.v1 import chat, conversations, users
+from app.api.v1 import chat, conversations, maps, users
 from app.core.checkpointer import CheckpointerManager
 from app.core.store import StoreManager
 from app.mcp_core.client import MCPClientManager
@@ -77,7 +77,17 @@ async def lifespan(app: FastAPI):
             app_logger.info("Store ready")
 
             mcp = await MCPClientManager.get_instance()
-            mcp_snapshot = await mcp.warmup()
+            startup_servers = MCPClientManager.get_startup_server_names()
+            if len(startup_servers) != len(MCPClientManager.SERVER_CONFIGS):
+                app_logger.info(
+                    "Skipping optional MCP startup warmup for: "
+                    + ", ".join(
+                        server
+                        for server in MCPClientManager.SERVER_CONFIGS
+                        if server not in startup_servers
+                    )
+                )
+            mcp_snapshot = await mcp.warmup(servers=startup_servers)
             if mcp_snapshot["status"] == "healthy":
                 app_logger.info("MCP warmup completed with all servers healthy")
             else:
@@ -89,9 +99,29 @@ async def lifespan(app: FastAPI):
 
             app.state.startup_complete = True
 
+            optional_servers = [
+                server
+                for server in MCPClientManager.OPTIONAL_STARTUP_SERVERS
+                if server in MCPClientManager.SERVER_CONFIGS
+            ]
+            optional_warmup_task = None
+            if optional_servers:
+                app_logger.info(
+                    "Starting optional MCP background warmup for: "
+                    + ", ".join(optional_servers)
+                )
+                optional_warmup_task = asyncio.create_task(
+                    mcp.warmup(
+                        servers=optional_servers,
+                        timeout_overrides={server: 180.0 for server in optional_servers},
+                    )
+                )
+
             yield
 
             app.state.startup_complete = False
+            if optional_warmup_task is not None and not optional_warmup_task.done():
+                optional_warmup_task.cancel()
             await mcp.close()
             app_logger.info("MCP manager closed")
 
@@ -115,6 +145,7 @@ app.add_middleware(
 
 app.include_router(users.router, prefix="/api/v1")
 app.include_router(conversations.router, prefix="/api/v1")
+app.include_router(maps.router, prefix="/api/v1")
 app.include_router(chat.router, prefix="/api/v1")
 
 

@@ -19,7 +19,9 @@ from app.utils.logger import app_logger
 
 async def _get_auxiliary_tools():
     manager = await get_mcp_client()
-    all_tools = await manager.get_tools()
+    all_tools = await manager.get_tools(
+        servers=manager.get_default_tool_server_names(include_optional=False)
+    )
     keywords = ("getfutureweather", "get-current-date", "maps_around_search")
     aux_tools = [
         tool_item
@@ -31,7 +33,7 @@ async def _get_auxiliary_tools():
 
 
 async def _has_live_flight_capability() -> bool:
-    manager = await get_mcp_client(servers=["VariFlight-Aviation"])
+    manager = await get_mcp_client()
     tools = await manager.get_tools(servers=["VariFlight-Aviation"])
     keywords = ("flight", "aviation", "searchflights")
     return any(any(keyword in tool_item.name.lower() for keyword in keywords) for tool_item in tools)
@@ -109,19 +111,20 @@ async def create_transport_coordinator():
             "- plan_driving_route：查询真实高德自驾路线摘要，代码会解析距离、秒级时长和费用估算，避免误读原始 JSON\n"
             "- 其余辅助工具只在确有必要时使用，例如日期、周边信息、天气补充\n\n"
             "工作原则：\n"
-            "1. 如果用户明确指定交通方式，就直接调用对应工具。\n"
-            "2. 如果用户没有指定，就根据距离、时间和预算做推荐。\n"
-            "3. query_flights/query_trains 可以直接接收今天、明天、后天等相对日期；不要自己猜测或编造绝对日期。\n"
-            "4. 同一轮内，同一出发地/目的地/日期/方式只调用一次对应工具；除非工具明确失败或用户要求刷新，不要重复查询。\n"
-            "5. 工具返回结果后，直接基于已有结果做比较和总结；不要为了确认最低价、余票、耗时或写最终结论再次调用同一个工具。\n"
-            "6. 当用户明确要坐飞机或城市间距离较远时，优先调用 query_flights 获取真实航班数据。\n"
-            "7. 当用户明确要坐高铁/火车，或中短途城市间高铁体验更好时，调用 query_trains 获取真实 12306 数据。\n"
-            "8. 如果用户提到带孩子、老人、行李多、门到门、省心或不想折腾，且属于短中途或同日可轻松自驾的路线，要同时查询自驾路线作为便利性对照。\n"
-            "9. 对于北京-上海这类明显超长距离、跨多省、常识上自驾就会非常疲劳的路线，除非用户明确要求自驾，或明确强调大量行李/老人幼儿的门到门搬运诉求，否则不要把自驾作为默认对照。\n"
-            "10. 当前无票、仅无座、只有高价商务座的火车方案不要作为首选；只能作为候补/刷新/改签日期的备选。\n"
-            "11. 自驾路线里的 duration 是秒，已经由工具换算成小时分钟；不要再把原始秒数字段误读为小时。\n"
-            "12. 不要编造实时交通信息；查不到时明确说明，并给替代方案。\n"
-            "13. 最终推荐必须说明余票、票价、路况等实时信息会变化，正式购票或出发前需要再次核实。"
+            "1. 如果用户明确说“只要/必须/只坐某种方式”，再把它当成唯一候选并直接调用对应工具。\n"
+            "2. 如果用户只是说“可以考虑/偏向/优先看看某种方式”，把它当成偏好而不是排他条件：优先查询这种方式，但如有必要也顺带补 1-2 个更合适的替代方式做对比。\n"
+            "3. 如果用户没有指定，就根据距离、时间和预算做推荐。\n"
+            "4. query_flights/query_trains 可以直接接收今天、明天、后天等相对日期；不要自己猜测或编造绝对日期。\n"
+            "5. 同一轮内，同一出发地/目的地/日期/方式只调用一次对应工具；除非工具明确失败或用户要求刷新，不要重复查询。\n"
+            "6. 工具返回结果后，直接基于已有结果做比较和总结；不要为了确认最低价、余票、耗时或写最终结论再次调用同一个工具。\n"
+            "7. 当用户明确要坐飞机或城市间距离较远时，优先调用 query_flights 获取真实航班数据。\n"
+            "8. 当用户明确要坐高铁/火车，或中短途城市间高铁体验更好时，调用 query_trains 获取真实 12306 数据。\n"
+            "9. 如果用户提到带孩子、老人、行李多、门到门、省心或不想折腾，且属于短中途或同日可轻松自驾的路线，要同时查询自驾路线作为便利性对照。\n"
+            "10. 对于北京-上海这类明显超长距离、跨多省、常识上自驾就会非常疲劳的路线，除非用户明确要求自驾，或明确强调大量行李/老人幼儿的门到门搬运诉求，否则不要把自驾作为默认对照。\n"
+            "11. 当前无票、仅无座、只有高价商务座的火车方案不要作为首选；只能作为候补/刷新/改签日期的备选。\n"
+            "12. 自驾路线里的 duration 是秒，已经由工具换算成小时分钟；不要再把原始秒数字段误读为小时。\n"
+            "13. 不要编造实时交通信息；查不到时明确说明，并给替代方案。\n"
+            "14. 最终推荐必须说明余票、票价、路况等实时信息会变化，正式购票或出发前需要再次核实。"
         ),
     )
 

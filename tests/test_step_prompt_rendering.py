@@ -4,6 +4,7 @@ import pytest
 from langchain_core.messages import HumanMessage, ToolMessage
 
 from app.core.middleware import StepConfigMiddleware
+from app.utils.llm_factory import get_model_compatibility
 
 
 class DummyRequest:
@@ -127,6 +128,7 @@ async def test_step_middleware_injects_order_stage_summaries():
 @pytest.mark.asyncio
 async def test_step_middleware_forces_direct_hotel_query_only_on_user_turn():
     captured = []
+    compatibility = get_model_compatibility()
     middleware = StepConfigMiddleware(
         {
             "accommodation_planning": {
@@ -144,7 +146,12 @@ async def test_step_middleware_forces_direct_hotel_query_only_on_user_turn():
     }
 
     async def handler(request):
-        captured.append(getattr(request, "tool_choice", None))
+        captured.append(
+            {
+                "tool_choice": getattr(request, "tool_choice", None),
+                "system_prompt": getattr(request, "system_prompt", ""),
+            }
+        )
         return "ok"
 
     await middleware.awrap_model_call(
@@ -155,10 +162,7 @@ async def test_step_middleware_forces_direct_hotel_query_only_on_user_turn():
         handler,
     )
     state["messages"] = [HumanMessage(content="信息已经齐了，请直接查真实酒店。")]
-    await middleware.awrap_model_call(
-        DummyRequest(state),
-        handler,
-    )
+    await middleware.awrap_model_call(DummyRequest(state), handler)
     await middleware.awrap_model_call(
         DummyRequest(
             state,
@@ -167,12 +171,23 @@ async def test_step_middleware_forces_direct_hotel_query_only_on_user_turn():
         handler,
     )
 
-    assert captured == ["query_hotel_options", "query_hotel_options", None]
+    if compatibility.supports_forced_tool_choice:
+        assert [item["tool_choice"] for item in captured] == [
+            "query_hotel_options",
+            "query_hotel_options",
+            None,
+        ]
+    else:
+        assert [item["tool_choice"] for item in captured] == [None, None, None]
+        assert "query_hotel_options" in captured[0]["system_prompt"]
+        assert "query_hotel_options" in captured[1]["system_prompt"]
+        assert "query_hotel_options" not in captured[2]["system_prompt"]
 
 
 @pytest.mark.asyncio
 async def test_step_middleware_forces_direct_transport_query():
     captured = {}
+    compatibility = get_model_compatibility()
     middleware = StepConfigMiddleware(
         {
             "transport_planning": {
@@ -190,6 +205,7 @@ async def test_step_middleware_forces_direct_transport_query():
 
     async def handler(request):
         captured["tool_choice"] = getattr(request, "tool_choice", None)
+        captured["system_prompt"] = getattr(request, "system_prompt", "")
         return "ok"
 
     await middleware.awrap_model_call(
@@ -200,7 +216,11 @@ async def test_step_middleware_forces_direct_transport_query():
         handler,
     )
 
-    assert captured["tool_choice"] == "query_transport_options"
+    if compatibility.supports_forced_tool_choice:
+        assert captured["tool_choice"] == "query_transport_options"
+    else:
+        assert captured["tool_choice"] is None
+        assert "query_transport_options" in captured["system_prompt"]
 
 
 @pytest.mark.asyncio
@@ -223,6 +243,7 @@ async def test_step_middleware_does_not_force_transport_query_on_selection_turn(
 
     async def handler(request):
         captured["tool_choice"] = getattr(request, "tool_choice", None)
+        captured["system_prompt"] = getattr(request, "system_prompt", "")
         return "ok"
 
     await middleware.awrap_model_call(
@@ -234,3 +255,114 @@ async def test_step_middleware_does_not_force_transport_query_on_selection_turn(
     )
 
     assert captured["tool_choice"] is None
+    assert "query_transport_options" not in captured["system_prompt"]
+
+
+@pytest.mark.asyncio
+async def test_requirement_collection_prioritizes_record_when_user_already_provided_core_info():
+    captured = {}
+    compatibility = get_model_compatibility()
+    middleware = StepConfigMiddleware(
+        {
+            "requirement_collection": {
+                "prompt": "需求收集阶段",
+                "tools": ["record_requirement_tool"],
+                "requires": [],
+            }
+        }
+    )
+    state = {"current_step": "requirement_collection"}
+    message = (
+        "我们一家三口想从上海去北京玩3天，2个大人1个8岁孩子，"
+        "总预算1.5万，2026年5月10日出发，偏向亲子游+环球影城，"
+        "请先帮我把需求记录完整并开始推荐。"
+    )
+
+    async def handler(request):
+        captured["tool_choice"] = getattr(request, "tool_choice", None)
+        captured["system_prompt"] = getattr(request, "system_prompt", "")
+        return "ok"
+
+    await middleware.awrap_model_call(
+        DummyRequest(state, [HumanMessage(content=message)]),
+        handler,
+    )
+
+    if compatibility.supports_forced_tool_choice:
+        assert captured["tool_choice"] == "record_requirement_tool"
+    else:
+        assert captured["tool_choice"] is None
+        assert "record_requirement_tool" in captured["system_prompt"]
+        assert "不要为了补充非关键偏好而继续追问" in captured["system_prompt"]
+
+
+@pytest.mark.asyncio
+async def test_requirement_collection_can_answer_destination_info_before_full_intake():
+    captured = {}
+    compatibility = get_model_compatibility()
+    middleware = StepConfigMiddleware(
+        {
+            "requirement_collection": {
+                "prompt": "需求收集阶段",
+                "tools": ["record_requirement_tool", "query_destination_info"],
+                "requires": [],
+            }
+        }
+    )
+    state = {"current_step": "requirement_collection"}
+    message = "推荐眉县适合周末放松的景点和玩法，顺便说下天气。"
+
+    async def handler(request):
+        captured["tool_choice"] = getattr(request, "tool_choice", None)
+        captured["system_prompt"] = getattr(request, "system_prompt", "")
+        return "ok"
+
+    await middleware.awrap_model_call(
+        DummyRequest(state, [HumanMessage(content=message)]),
+        handler,
+    )
+
+    if compatibility.supports_forced_tool_choice:
+        assert captured["tool_choice"] == "query_destination_info"
+    else:
+        assert captured["tool_choice"] is None
+        assert "query_destination_info" in captured["system_prompt"]
+        assert "完整旅游报告" in captured["system_prompt"]
+
+
+@pytest.mark.asyncio
+async def test_destination_recommendation_prioritizes_selection_when_user_confirms():
+    captured = {}
+    compatibility = get_model_compatibility()
+    middleware = StepConfigMiddleware(
+        {
+            "destination_recommendation": {
+                "prompt": "目的地推荐阶段",
+                "tools": ["select_destination_tool", "query_destination_info"],
+                "requires": ["user_requirement"],
+            }
+        }
+    )
+    state = {
+        "current_step": "destination_recommendation",
+        "user_requirement": {"destination": "北京"},
+        "destination_options": [{"name": "北京"}],
+    }
+    message = "确认就去北京，按故宫+环球影城的方向走，请直接开始查交通方案。"
+
+    async def handler(request):
+        captured["tool_choice"] = getattr(request, "tool_choice", None)
+        captured["system_prompt"] = getattr(request, "system_prompt", "")
+        return "ok"
+
+    await middleware.awrap_model_call(
+        DummyRequest(state, [HumanMessage(content=message)]),
+        handler,
+    )
+
+    if compatibility.supports_forced_tool_choice:
+        assert captured["tool_choice"] == "select_destination_tool"
+    else:
+        assert captured["tool_choice"] is None
+        assert "select_destination_tool" in captured["system_prompt"]
+        assert "不要继续停留在目的地比较阶段" in captured["system_prompt"]

@@ -1,0 +1,16 @@
+travel.403edr.cn {
+    encode gzip zstd
+
+    @backend path /api/* /docs* /redoc* /openapi.json /health/*
+    handle @backend {
+        reverse_proxy backend:8000 {
+            flush_interval -1
+        }
+    }
+
+    handle {
+        root * /srv/frontend
+        try_files {path} /zhixing.html
+        file_server
+    }
+}

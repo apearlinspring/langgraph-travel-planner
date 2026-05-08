@@ -13,7 +13,7 @@ from app.utils.llm_factory import build_chat_model
 load_dotenv()
 
 model = build_chat_model(
-    model="qwen-turbo",
+    profile="rag",
     temperature=0,
 )
 

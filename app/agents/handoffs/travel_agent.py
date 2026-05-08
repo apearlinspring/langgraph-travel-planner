@@ -10,7 +10,7 @@ from app.config import settings
 from app.core.checkpointer import get_checkpointer
 from app.core.middleware import create_step_config_middleware
 from app.core.state import TravelState
-from app.tools.mcp_tools import get_all_mcp_tools
+from app.tools.mcp_tools import get_all_mcp_tools, get_hotel_followup_tools
 from app.tools.memory_tools import (
     add_travel_record_tool,
     update_accommodation_preference_tool,
@@ -40,9 +40,20 @@ _travel_agent_mcp_signature: tuple[str, ...] | None = None
 _travel_agent_lock = asyncio.Lock()
 
 
+def _build_tool_signature(*tool_groups) -> tuple[str, ...]:
+    return tuple(
+        sorted(
+            tool.name
+            for group in tool_groups
+            for tool in group
+            if getattr(tool, "name", None)
+        )
+    )
+
+
 def get_llm():
     """Return the configured chat model."""
-    return build_chat_model(streaming=True)
+    return build_chat_model(profile="planner", streaming=True)
 
 
 async def create_travel_agent():
@@ -50,14 +61,16 @@ async def create_travel_agent():
     global _travel_agent, _travel_agent_mcp_signature
 
     all_mcp_tools = await get_all_mcp_tools()
-    current_signature = tuple(sorted(tool.name for tool in all_mcp_tools))
+    hotel_followup_tools = await get_hotel_followup_tools()
+    current_signature = _build_tool_signature(all_mcp_tools, hotel_followup_tools)
 
     if _travel_agent is not None and _travel_agent_mcp_signature == current_signature:
         return _travel_agent
 
     async with _travel_agent_lock:
         all_mcp_tools = await get_all_mcp_tools()
-        current_signature = tuple(sorted(tool.name for tool in all_mcp_tools))
+        hotel_followup_tools = await get_hotel_followup_tools()
+        current_signature = _build_tool_signature(all_mcp_tools, hotel_followup_tools)
 
         if _travel_agent is not None and _travel_agent_mcp_signature == current_signature:
             return _travel_agent
@@ -89,6 +102,7 @@ async def create_travel_agent():
             update_food_preference_tool,
             update_accommodation_preference_tool,
             add_travel_record_tool,
+            *hotel_followup_tools,
             *all_mcp_tools,
         ]
 

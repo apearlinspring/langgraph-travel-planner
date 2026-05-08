@@ -13,7 +13,7 @@ load_dotenv()
 
 # 初始化模型
 model = build_chat_model(
-    model="qwen-turbo",
+    profile="rag",
     temperature=0,
 )
 

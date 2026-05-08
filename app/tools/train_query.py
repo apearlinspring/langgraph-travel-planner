@@ -156,7 +156,7 @@ def _is_railway_empty_result_error(error: Exception) -> bool:
 
 
 async def _get_railway_tool(tool_name: str) -> Any | None:
-    manager = await get_mcp_client(servers=["12306-mcp"])
+    manager = await get_mcp_client()
     tools = await manager.get_tools(servers=["12306-mcp"])
     for tool_instance in tools:
         if tool_instance.name == tool_name:

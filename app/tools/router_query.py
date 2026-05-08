@@ -1,6 +1,7 @@
 """
 Router 查询工具
 """
+import time
 import re
 from typing import Optional
 
@@ -124,7 +125,11 @@ async def query_destination_info(
     - 综合的目的地信息（景点 + 天气）
     """
 
-    app_logger.info(f"调用目的地 Router: {destination}")
+    started_at = time.perf_counter()
+    app_logger.info(
+        "Destination router query started: "
+        f"destination={destination}, query={query or '(default)'}"
+    )
 
     # 创建 Router
     router = create_destination_router()
@@ -138,6 +143,11 @@ async def query_destination_info(
         "original_query": query,
         "destination": destination
     })
+    elapsed = time.perf_counter() - started_at
+    app_logger.info(
+        "Destination router query completed: "
+        f"destination={destination}, elapsed_seconds={elapsed:.2f}"
+    )
 
     # 返回综合报告，并把可跨阶段复用的目的地上下文写入状态。
     final_report = result["final_report"]

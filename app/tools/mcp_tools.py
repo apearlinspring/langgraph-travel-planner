@@ -11,7 +11,9 @@ from app.utils.logger import app_logger
 async def get_all_mcp_tools() -> List[BaseTool]:
     """获取所有 MCP 工具"""
     manager = await get_mcp_client()
-    tools = await manager.get_tools()
+    tools = await manager.get_tools(
+        servers=manager.get_default_tool_server_names(include_optional=False)
+    )
     app_logger.info(f"📦 获取了 {len(tools)} 个 MCP 工具")
     return tools
 
@@ -24,7 +26,7 @@ async def get_hotel_tools() -> List[BaseTool]:
         酒店搜索、周边查询等工具
     """
     manager = await get_mcp_client()
-    all_tools = await manager.get_tools()
+    all_tools = await manager.get_tools(servers=["aigohotel-mcp"])
 
     hotel_tools = [
         tool for tool in all_tools
@@ -48,7 +50,7 @@ async def get_hotel_followup_tools() -> List[BaseTool]:
         酒店详情、标签等二次查询工具
     """
     manager = await get_mcp_client()
-    all_tools = await manager.get_tools()
+    all_tools = await manager.get_tools(servers=["aigohotel-mcp"])
 
     hotel_tools = [
         tool for tool in all_tools
@@ -70,7 +72,7 @@ async def get_weather_tools() -> List[BaseTool]:
         天气查询工具
     """
     manager = await get_mcp_client()
-    all_tools = await manager.get_tools()
+    all_tools = await manager.get_tools(servers=["weather"])
 
     weather_tools = [
         tool for tool in all_tools
@@ -91,7 +93,7 @@ async def get_search_tools() -> List[BaseTool]:
         旅游信息搜索工具
     """
     manager = await get_mcp_client()
-    all_tools = await manager.get_tools()
+    all_tools = await manager.get_tools(servers=["search"])
 
     search_tools = [
         tool for tool in all_tools
@@ -112,7 +114,9 @@ async def get_date_tools() -> List[BaseTool]:
         获取当前日期的工具
     """
     manager = await get_mcp_client()
-    all_tools = await manager.get_tools()
+    all_tools = await manager.get_tools(
+        servers=manager.get_default_tool_server_names(include_optional=False)
+    )
 
     date_tools = [
         tool for tool in all_tools

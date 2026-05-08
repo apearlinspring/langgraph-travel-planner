@@ -1,6 +1,7 @@
 """
 Destination router that blends RAG, live search, and weather MCP data.
 """
+
 import json
 from operator import add
 from typing import Annotated, Literal, TypedDict
@@ -12,7 +13,7 @@ from pydantic import BaseModel, Field
 
 from app.tools.mcp_tools import get_search_tools, get_weather_tools
 from app.tools.rag_tools import get_rag_tools
-from app.utils.llm_factory import build_chat_model
+from app.utils.llm_factory import build_chat_model, get_model_compatibility
 from app.utils.logger import app_logger
 
 
@@ -36,29 +37,126 @@ class DestinationRouterState(TypedDict):
 
 class ClassificationResult(BaseModel):
     classifications: list[Classification] = Field(
-        description="需要调用的 Agent 列表以及每个 Agent 的子查询。"
+        description="需要调用的 Agent 列表，以及每个 Agent 的子查询。"
     )
 
 
+class ClassificationDecision(BaseModel):
+    explore: bool = Field(default=False, description="是否需要调用 explore agent")
+    weather: bool = Field(default=False, description="是否需要调用 weather agent")
+
+
+WEATHER_KEYWORDS = (
+    "天气",
+    "气温",
+    "温度",
+    "下雨",
+    "降雨",
+    "下雪",
+    "预报",
+    "穿衣",
+    "风力",
+    "紫外线",
+)
+
+EXPLORE_KEYWORDS = (
+    "景点",
+    "玩法",
+    "攻略",
+    "推荐",
+    "旅游",
+    "旅行",
+    "美食",
+    "住宿",
+    "酒店",
+    "民宿",
+    "打卡",
+    "周边",
+    "门票",
+    "行程",
+    "路线",
+    "适合",
+    "怎么玩",
+    "度假",
+    "放松",
+    "休闲",
+)
+
+
 def _build_llm(temperature: float = 0.7):
-    return build_chat_model(temperature=temperature)
+    return build_chat_model(profile="router", temperature=temperature)
+
+
+def _classifier_system_prompt() -> str:
+    prompt = (
+        "你是旅行查询分类专家。"
+        "请只返回一个 JSON object，包含 explore 和 weather 两个 boolean 字段。"
+        "如果用户在问景点、玩法、美食、住宿、攻略，就让 explore=true。"
+        "如果用户在问天气、气温、降雨、穿衣建议，就让 weather=true。"
+        "如果是综合性目的地推荐，可以两个都为 true。"
+        "不要返回 classifications 数组，也不要返回其他字段。"
+    )
+    if get_model_compatibility().structured_output_requires_json_keyword:
+        prompt = (
+            f"{prompt}"
+            " 你必须返回一个 JSON object，并且严格匹配给定 schema。"
+            " The response must be valid JSON."
+        )
+    return prompt
+
+
+def _contains_any_keyword(text: str, keywords: tuple[str, ...]) -> bool:
+    return any(keyword in text for keyword in keywords)
+
+
+def _build_classifications_from_flags(
+    original_query: str,
+    *,
+    explore: bool,
+    weather: bool,
+) -> list[Classification]:
+    classifications: list[Classification] = []
+    if explore:
+        classifications.append({"agent": "explore", "query": original_query})
+    if weather:
+        classifications.append({"agent": "weather", "query": original_query})
+    if classifications:
+        return classifications
+    return [{"agent": "explore", "query": original_query}]
+
+
+def _classify_by_rules(original_query: str) -> list[Classification] | None:
+    normalized_query = (original_query or "").strip().lower()
+    if not normalized_query:
+        return [{"agent": "explore", "query": original_query}]
+
+    has_weather = _contains_any_keyword(normalized_query, WEATHER_KEYWORDS)
+    has_explore = _contains_any_keyword(normalized_query, EXPLORE_KEYWORDS)
+
+    if has_weather or has_explore:
+        return _build_classifications_from_flags(
+            original_query,
+            explore=has_explore,
+            weather=has_weather,
+        )
+    return None
 
 
 def classifier_node(state: DestinationRouterState) -> dict:
     """Classify which specialists should answer the destination query."""
     app_logger.info(f"Destination router classifier query: {state['original_query']}")
 
-    structured_llm = _build_llm().with_structured_output(ClassificationResult)
+    rule_based = _classify_by_rules(state["original_query"])
+    if rule_based is not None:
+        app_logger.info(f"Destination router rule-based classifier picked {len(rule_based)} agents")
+        return {"classifications": rule_based}
+
+    structured_llm = _build_llm().with_structured_output(ClassificationDecision)
     result = structured_llm.invoke(
         [
             {
                 "role": "system",
-                "content": (
-                    "你是旅行查询分类专家。"
-                    "如果用户在问景点、玩法、美食、住宿、攻略，就调用 explore。"
-                    "如果用户在问天气、气温、降雨、穿衣建议，就调用 weather。"
-                    "如果是综合性目的地推荐，两个都调用。"
-                ),
+                "content": _classifier_system_prompt(),
             },
             {
                 "role": "user",
@@ -66,9 +164,14 @@ def classifier_node(state: DestinationRouterState) -> dict:
             },
         ]
     )
+    classifications = _build_classifications_from_flags(
+        state["original_query"],
+        explore=bool(result.explore),
+        weather=bool(result.weather),
+    )
 
-    app_logger.info(f"Destination router classifier picked {len(result.classifications)} agents")
-    return {"classifications": result.classifications}
+    app_logger.info(f"Destination router model classifier picked {len(classifications)} agents")
+    return {"classifications": classifications}
 
 
 def route_to_agents(state: DestinationRouterState) -> list[Send]:
@@ -105,8 +208,8 @@ def _create_explore_agent(tools):
         tools=tools,
         system_prompt=(
             "你是一位旅行顾问，需要把知识库信息和必要的外部补充信息整合成可靠答案。"
-            "优先用知识库工具回答相对稳定的内容，例如景点、美食、住宿、常规攻略。"
-            "当用户的问题明显带有时效性，比如“最近”“当季”“最新”“现在”等，再调用 "
+            "优先使用知识库工具回答相对稳定的内容，比如景点、美食、住宿、常规攻略。"
+            "当用户问题明显带有时效性，比如“最近”“当季”“最新”“现在”等，再调用 "
             "search_travel_info 补充实时信息。"
             "不要为了显得完整而编造最新情况；如果外部搜索不可用，要明确说明。"
         ),

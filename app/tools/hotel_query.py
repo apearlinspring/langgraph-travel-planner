@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from typing import Any, Optional
 
 from langchain.tools import ToolRuntime, tool
@@ -40,6 +41,37 @@ COMMON_CITY_ALIASES = {
     "拉萨": "Lhasa",
 }
 
+PLACE_CANDIDATE_OVERRIDES = {
+    "四姑娘山镇": ["四姑娘山", "日隆镇", "四姑娘山景区"],
+    "日隆镇": ["四姑娘山", "四姑娘山镇", "四姑娘山景区"],
+    "新都桥": ["新都桥镇", "康定新都桥", "康定"],
+    "丹巴": ["丹巴县", "甘孜丹巴", "甲居藏寨"],
+}
+
+CHINESE_CITY_PREFIXES = (
+    "北京",
+    "上海",
+    "广州",
+    "深圳",
+    "杭州",
+    "南京",
+    "苏州",
+    "成都",
+    "重庆",
+    "西安",
+    "武汉",
+    "长沙",
+    "厦门",
+    "青岛",
+    "天津",
+    "三亚",
+    "昆明",
+    "大理",
+    "丽江",
+    "哈尔滨",
+    "拉萨",
+)
+
 STAR_RATING_BY_BUDGET = {
     "economy": [0.0, 3.5],
     "comfort": [3.5, 4.5],
@@ -71,25 +103,96 @@ def _dedupe_preserve_order(items: list[str]) -> list[str]:
 
 
 def _strip_place_suffix(place: str) -> str:
-    return re.sub(r"(特别行政区|自治区|自治州|省|市|区|县)$", "", place.strip())
+    return re.sub(
+        r"(特别行政区|自治区|自治州|新区|风景区|景区|街道|省|市|区|县|镇)$",
+        "",
+        place.strip(),
+    )
+
+
+def _extract_city_prefix(place: str) -> str:
+    compact_place = re.sub(r"[()（）·•/\\-\\s]", "", place or "")
+    for city in CHINESE_CITY_PREFIXES:
+        if compact_place.startswith(city) and compact_place != city:
+            return city
+    return ""
 
 
 def _expand_place_candidates(place: str) -> list[str]:
     raw_place = place.strip()
     stripped_place = _strip_place_suffix(raw_place)
+    city_prefix = _extract_city_prefix(raw_place) or _extract_city_prefix(stripped_place)
     alias = COMMON_CITY_ALIASES.get(raw_place) or COMMON_CITY_ALIASES.get(stripped_place)
-    return _dedupe_preserve_order([raw_place, stripped_place, alias or ""])
+    overrides = (
+        PLACE_CANDIDATE_OVERRIDES.get(raw_place)
+        or PLACE_CANDIDATE_OVERRIDES.get(stripped_place)
+        or []
+    )
+    city_alias = COMMON_CITY_ALIASES.get(city_prefix, "")
+    return _dedupe_preserve_order(
+        [raw_place, stripped_place, *overrides, city_prefix, alias or city_alias or ""]
+    )
+
+
+def _build_relevance_tokens(place: str) -> list[str]:
+    tokens: list[str] = []
+    for candidate in _expand_place_candidates(place):
+        cleaned = re.sub(r"[()（）·•/\\-\\s]", "", candidate or "").strip()
+        if len(cleaned) >= 2:
+            tokens.append(cleaned)
+        stripped = re.sub(r"(风景区|景区|街道|省|市|区|县|镇)$", "", cleaned)
+        if len(stripped) >= 2:
+            tokens.append(stripped)
+    return _dedupe_preserve_order(tokens)
+
+
+def _hotel_matches_destination(hotel: dict[str, Any], place: str) -> bool:
+    tokens = _build_relevance_tokens(place)
+    if not tokens:
+        return True
+
+    haystack = " ".join(
+        str(hotel.get(field) or "") for field in ("name", "address", "description")
+    )
+    normalized_haystack = re.sub(r"[()（）·•/\\-\\s]", "", haystack)
+    if not normalized_haystack:
+        return False
+
+    return any(token in normalized_haystack for token in tokens)
+
+
+def _relax_search_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    relaxed_payload = dict(payload)
+    relaxed_payload.pop("filterOptions", None)
+    hotel_tags = dict(relaxed_payload.get("hotelTags") or {})
+    if "preferredTags" in hotel_tags:
+        hotel_tags.pop("preferredTags", None)
+    if hotel_tags:
+        relaxed_payload["hotelTags"] = hotel_tags
+    else:
+        relaxed_payload.pop("hotelTags", None)
+    return relaxed_payload
 
 
 def _infer_preferred_tags(preferences: str, children_count: int) -> list[str]:
     inferred_tags: list[str] = []
     preference_text = preferences or ""
+    compact_preference_text = re.sub(r"[的得地\s,，。；;、/\\-]", "", preference_text)
     if children_count > 0:
         inferred_tags.extend(["亲子酒店", "提供家庭房", "儿童玩乐设施"])
 
     for keywords, tags in PREFERENCE_TAG_RULES:
         if any(keyword in preference_text for keyword in keywords):
             inferred_tags.extend(tags)
+
+    has_water_view_preference = (
+        any(keyword in compact_preference_text for keyword in ("江景", "河景", "湖景", "水景", "景观房", "观景"))
+        or ("江" in compact_preference_text and "景" in compact_preference_text)
+        or ("河" in compact_preference_text and "景" in compact_preference_text)
+        or ("湖" in compact_preference_text and "景" in compact_preference_text)
+    )
+    if has_water_view_preference:
+        inferred_tags.extend(["江景房", "河景房", "湖景房", "景观房"])
 
     return _dedupe_preserve_order(inferred_tags)
 
@@ -252,7 +355,7 @@ def _format_hotels(
 
 
 async def _get_hotel_tool(tool_name: str) -> Any | None:
-    manager = await get_mcp_client(servers=["aigohotel-mcp"])
+    manager = await get_mcp_client()
     tools = await manager.get_tools(servers=["aigohotel-mcp"])
     for tool_instance in tools:
         if tool_instance.name == tool_name:
@@ -357,6 +460,7 @@ async def query_hotel_options(
     用更稳定的高层参数搜索真实酒店候选，自动处理预算、偏好和地点别名兜底。
     """
 
+    started_at = time.perf_counter()
     normalized_args = _normalize_query_args_from_state(
         destination=destination,
         check_in_date=check_in_date,
@@ -379,6 +483,11 @@ async def query_hotel_options(
 
     search_tool = await _get_hotel_tool("searchHotels")
     if search_tool is None:
+        elapsed = time.perf_counter() - started_at
+        app_logger.warning(
+            "Hotel query unavailable: "
+            f"destination={destination}, elapsed_seconds={elapsed:.2f}"
+        )
         return Command(
             update={
                 "messages": [_tool_message("酒店搜索服务当前不可用，请稍后再试。", runtime)]
@@ -426,22 +535,68 @@ async def query_hotel_options(
         payload = dict(search_payload_base)
         payload["place"] = candidate
 
+        candidate_started_at = time.perf_counter()
         app_logger.info(
-            f"调用 query_hotel_options: destination={destination}, place={candidate}, "
+            "Hotel query candidate started: "
+            f"destination={destination}, place={candidate}, "
             f"budget={budget_key}, size={normalized_size}"
         )
         result = await search_tool.ainvoke(payload)
+        candidate_elapsed = time.perf_counter() - candidate_started_at
         parsed_payload = _parse_search_payload(result)
         hotels = parsed_payload.get("hotelInformationList") or []
         last_message = str(parsed_payload.get("message") or "").strip()
+        relevant_hotels = [
+            hotel for hotel in hotels if _hotel_matches_destination(hotel, destination)
+        ]
+        app_logger.info(
+            "Hotel query candidate completed: "
+            f"destination={destination}, place={candidate}, "
+            f"elapsed_seconds={candidate_elapsed:.2f}, hotel_count={len(hotels)}, "
+            f"relevant_hotel_count={len(relevant_hotels)}"
+        )
 
-        if hotels:
-            limited_hotels = hotels[:normalized_size]
+        if not relevant_hotels:
+            relaxed_payload = _relax_search_payload(payload)
+            relaxed_started_at = time.perf_counter()
+            app_logger.info(
+                "Hotel query candidate relaxing filters: "
+                f"destination={destination}, place={candidate}"
+            )
+            relaxed_result = await search_tool.ainvoke(relaxed_payload)
+            relaxed_elapsed = time.perf_counter() - relaxed_started_at
+            relaxed_parsed_payload = _parse_search_payload(relaxed_result)
+            relaxed_hotels = relaxed_parsed_payload.get("hotelInformationList") or []
+            relaxed_message = str(relaxed_parsed_payload.get("message") or "").strip()
+            relaxed_relevant_hotels = [
+                hotel
+                for hotel in relaxed_hotels
+                if _hotel_matches_destination(hotel, destination)
+            ]
+            app_logger.info(
+                "Hotel query relaxed candidate completed: "
+                f"destination={destination}, place={candidate}, "
+                f"elapsed_seconds={relaxed_elapsed:.2f}, hotel_count={len(relaxed_hotels)}, "
+                f"relevant_hotel_count={len(relaxed_relevant_hotels)}"
+            )
+            if relaxed_message:
+                last_message = relaxed_message
+            if relaxed_relevant_hotels:
+                relevant_hotels = relaxed_relevant_hotels
+
+        if relevant_hotels:
+            limited_hotels = relevant_hotels[:normalized_size]
             formatted_hotels = _format_hotels(
                 destination,
                 candidate,
                 limited_hotels,
                 preferences,
+            )
+            total_elapsed = time.perf_counter() - started_at
+            app_logger.info(
+                "Hotel query completed: "
+                f"destination={destination}, place={candidate}, "
+                f"elapsed_seconds={total_elapsed:.2f}, hotel_count={len(limited_hotels)}"
             )
             return Command(
                 update={
@@ -454,6 +609,12 @@ async def query_hotel_options(
 
     tried_text = " / ".join(tried_places)
     if last_message:
+        total_elapsed = time.perf_counter() - started_at
+        app_logger.warning(
+            "Hotel query returned no results: "
+            f"destination={destination}, elapsed_seconds={total_elapsed:.2f}, "
+            f"tried_places={tried_text}"
+        )
         message = (
             f"这次暂时没有查到符合条件的酒店。已尝试检索地：{tried_text}。\n"
             f"上游返回：{last_message}\n"
@@ -461,6 +622,12 @@ async def query_hotel_options(
         )
         return Command(update={"messages": [_tool_message(message, runtime)]})
 
+    total_elapsed = time.perf_counter() - started_at
+    app_logger.warning(
+        "Hotel query exhausted all candidates: "
+        f"destination={destination}, elapsed_seconds={total_elapsed:.2f}, "
+        f"tried_places={tried_text}"
+    )
     message = (
         f"这次暂时没有查到符合条件的酒店。已尝试检索地：{tried_text}。\n"
         "建议下一步放宽预算、缩短偏好条件，或者告诉我更具体的区域再查一次。"
