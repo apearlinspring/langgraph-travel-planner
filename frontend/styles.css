@@ -1562,32 +1562,6 @@ html {
         font-size: 12px;
         line-height: 1.7;
       }
-      .message.assistant .message-text .journey-live-map-toolbar {
-        display: grid;
-        gap: 12px;
-        justify-items: end;
-        min-width: min(100%, 520px);
-      }
-      .message.assistant .message-text .journey-live-map-days {
-        display: grid;
-        gap: 8px;
-        justify-items: end;
-        width: 100%;
-      }
-      .message.assistant .message-text .journey-live-map-day-tabs,
-      .message.assistant .message-text .journey-live-map-day-modes {
-        display: inline-flex;
-        flex-wrap: wrap;
-        gap: 8px;
-        justify-content: flex-end;
-        width: 100%;
-      }
-      .message.assistant .message-text .journey-live-map-actions {
-        display: inline-flex;
-        flex-wrap: wrap;
-        gap: 8px;
-        justify-content: flex-end;
-      }
       .message.assistant .message-text .journey-live-map-styles {
         display: inline-flex;
         flex-wrap: wrap;
@@ -1806,9 +1780,6 @@ html {
       .message.assistant .message-text .journey-live-map-shell--studio .journey-live-map-head {
         gap: 14px;
       }
-      .message.assistant .message-text .journey-live-map-shell--studio .journey-live-map-toolbar {
-        display: none;
-      }
       .message.assistant .message-text .journey-map-shell-kicker {
         display: inline-flex;
         align-items: center;
@@ -1821,16 +1792,6 @@ html {
         color: rgba(255, 241, 222, 0.9);
         font-size: 11px;
         font-weight: 700;
-      }
-      .message.assistant .message-text .journey-live-map-shell--studio .journey-live-map-toolbar {
-        min-width: 0;
-        width: min(100%, 540px);
-      }
-      .message.assistant .message-text .journey-live-map-toolbar-row {
-        display: flex;
-        flex-wrap: wrap;
-        justify-content: flex-end;
-        gap: 10px;
       }
       .message.assistant .message-text .journey-live-map-shell-body--studio {
         grid-template-columns: minmax(280px, 320px) minmax(0, 1fr);
@@ -1881,8 +1842,7 @@ html {
         font-size: 18px;
         line-height: 1.35;
       }
-      .message.assistant .message-text .journey-map-sidebar-copy p,
-      .message.assistant .message-text .journey-map-sidebar-note {
+      .message.assistant .message-text .journey-map-sidebar-copy p {
         margin: 0;
         color: rgba(244, 239, 231, 0.8);
         font-size: 12px;
@@ -1927,56 +1887,6 @@ html {
         color: rgba(255, 248, 236, 0.94);
         font-size: 12px;
         line-height: 1.6;
-      }
-      .message.assistant .message-text .journey-map-day-stack {
-        display: grid;
-        gap: 10px;
-      }
-      .message.assistant .message-text .journey-map-day-card {
-        display: grid;
-        gap: 8px;
-        width: 100%;
-        text-align: left;
-        padding: 14px;
-        border-radius: 18px;
-        border: 1px solid rgba(255, 255, 255, 0.12);
-        background: rgba(255, 255, 255, 0.08);
-        color: rgba(255, 248, 238, 0.92);
-      }
-      .message.assistant .message-text .journey-map-day-card:hover {
-        transform: translateY(-1px);
-        border-color: rgba(255, 255, 255, 0.2);
-      }
-      .message.assistant .message-text .journey-map-day-card.active {
-        background: rgba(255, 236, 210, 0.14);
-        border-color: rgba(255, 218, 170, 0.26);
-      }
-      .message.assistant .message-text .journey-map-day-card.overview {
-        background: rgba(255, 255, 255, 0.11);
-      }
-      .message.assistant .message-text .journey-map-day-card-head {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 10px;
-      }
-      .message.assistant .message-text .journey-map-day-card-meta {
-        color: rgba(244, 239, 231, 0.72);
-        font-size: 11px;
-        font-weight: 700;
-      }
-      .message.assistant .message-text .journey-map-day-card strong {
-        color: #fffaf0;
-        font-size: 14px;
-        line-height: 1.55;
-      }
-      .message.assistant .message-text .journey-map-day-card-route {
-        color: rgba(244, 239, 231, 0.82);
-        font-size: 12px;
-        line-height: 1.7;
-      }
-      .message.assistant .message-text .journey-live-map-day-modes--studio {
-        justify-content: flex-start;
       }
       .message.assistant .message-text .journey-map-route-list {
         display: grid;
@@ -2041,17 +1951,6 @@ html {
         min-width: 0;
         position: relative;
       }
-      .message.assistant .message-text .journey-map-floating-controls {
-        position: absolute;
-        top: 16px;
-        left: 16px;
-        right: 16px;
-        z-index: 25;
-        display: grid;
-        gap: 8px;
-        align-content: start;
-        pointer-events: none;
-      }
       .message.assistant .message-text .journey-map-floating-group {
         width: fit-content;
         max-width: 100%;
@@ -2081,50 +1980,12 @@ html {
         flex-wrap: wrap;
         gap: 8px;
       }
-      .message.assistant .message-text .journey-map-floating-controls .journey-map-day-btn {
-        min-width: auto;
-        align-items: center;
-        justify-content: center;
-        text-align: center;
-        padding: 8px 12px;
-      }
-      .message.assistant .message-text .journey-map-floating-controls .journey-map-day-btn small {
-        color: rgba(255, 247, 233, 0.74);
-      }
       .message.assistant .message-text .journey-live-map-shell--studio .journey-live-map {
         min-height: 540px;
       }
       .message.assistant .message-text .journey-live-map-footer {
         display: grid;
         gap: 12px;
-      }
-      .message.assistant .message-text .journey-map-stage-rail {
-        display: grid;
-        gap: 10px;
-        padding: 14px;
-        border-radius: 18px;
-        background: rgba(255, 255, 255, 0.06);
-        border: 1px solid rgba(255, 255, 255, 0.1);
-      }
-      .message.assistant .message-text .journey-map-stage-rail-head {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 12px;
-      }
-      .message.assistant .message-text .journey-map-stage-rail-head span {
-        color: rgba(255, 240, 219, 0.78);
-        font-size: 11px;
-        font-weight: 700;
-      }
-      .message.assistant .message-text .journey-map-stage-rail-head strong {
-        color: rgba(255, 248, 236, 0.94);
-        font-size: 12px;
-      }
-      .message.assistant .message-text .journey-map-stage-rail-list {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-        gap: 10px;
       }
       .message.assistant .message-text .journey-map-stage-stop {
         display: grid;
@@ -3775,10 +3636,6 @@ html {
         .message.assistant .message-text .journey-live-map-shell--studio .journey-live-map {
           min-height: 420px;
         }
-        .message.assistant .message-text .journey-map-floating-controls {
-          position: static;
-          margin-bottom: 4px;
-        }
       }
 
       @media (max-width: 900px) {
@@ -3935,21 +3792,6 @@ html {
         }
         .message.assistant .message-text .journey-live-map-head {
           flex-direction: column;
-        }
-        .message.assistant .message-text .journey-live-map-toolbar {
-          width: 100%;
-          justify-items: start;
-        }
-        .message.assistant .message-text .journey-live-map-toolbar-row {
-          width: 100%;
-          justify-content: flex-start;
-        }
-        .message.assistant .message-text .journey-live-map-day-tabs,
-        .message.assistant .message-text .journey-live-map-day-modes {
-          justify-content: flex-start;
-        }
-        .message.assistant .message-text .journey-live-map-actions {
-          justify-content: flex-start;
         }
         .message.assistant .message-text .journey-live-map-styles {
           justify-content: flex-start;
@@ -4187,9 +4029,6 @@ html {
         .message.assistant .message-text .journey-live-map-aside {
           grid-template-columns: 1fr;
         }
-        .message.assistant .message-text .journey-live-map-day-tabs,
-        .message.assistant .message-text .journey-live-map-day-modes,
-        .message.assistant .message-text .journey-live-map-actions,
         .message.assistant .message-text .journey-live-map-styles {
           width: 100%;
         }
@@ -4221,7 +4060,6 @@ html {
         .message.assistant .message-text .journey-map-studio-brief {
           grid-template-columns: 1fr;
         }
-        .message.assistant .message-text .journey-map-day-card-head,
         .message.assistant .message-text .journey-map-sidebar-head {
           align-items: flex-start;
           flex-direction: column;
@@ -4442,8 +4280,7 @@ html {
       .message.assistant .message-text .journey-map-studio-brief-item strong,
       .message.assistant .message-text .journey-live-map-head strong,
       .message.assistant .message-text .journey-map-sidebar-copy strong,
-      .message.assistant .message-text .journey-map-route-stop-value,
-      .message.assistant .message-text .journey-map-day-card strong {
+      .message.assistant .message-text .journey-map-route-stop-value {
         color: var(--text-serif);
       }
 
@@ -4465,8 +4302,6 @@ html {
       .message.assistant .message-text .journey-map-studio-brief-item,
       .message.assistant .message-text .journey-live-map-shell,
       .message.assistant .message-text .journey-map-sidebar-card,
-      .message.assistant .message-text .journey-map-stage-rail,
-      .message.assistant .message-text .journey-map-day-card,
       .message.assistant .message-text .journey-map-route-stop {
         background: rgba(255, 255, 255, 0.9);
         border-color: rgba(26, 77, 84, 0.1);
@@ -4647,8 +4482,7 @@ html {
 
       .message.assistant .message-text .journey-map-inline-link,
       .message.assistant .message-text .journey-map-studio-brief-label,
-      .message.assistant .message-text .journey-map-sidebar-head span,
-      .message.assistant .message-text .journey-map-day-card-meta {
+      .message.assistant .message-text .journey-map-sidebar-head span {
         color: rgba(86, 110, 116, 0.8);
       }
 
