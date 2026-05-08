@@ -21,8 +21,10 @@ def test_hotel_server_uses_new_env_var_when_available(monkeypatch):
     MCPClientManager.refresh_server_configs()
 
     hotel_config = MCPClientManager.SERVER_CONFIGS["aigohotel-mcp"]
-    assert hotel_config["command"] == "uvx"
-    assert hotel_config["args"] == ["--from", "aigohotel-mcp==0.3.1", "aigohotel-mcp"]
+    assert hotel_config["command"] == sys.executable
+    assert hotel_config["args"] == ["-m", "aigohotel_mcp.server"]
+    assert hotel_config["command"] != "uvx"
+    assert "--from" not in hotel_config["args"]
     assert hotel_config["env"]["AIGOHOTEL_API_KEY"] == "new-key"
     assert hotel_config["env"]["UV_DEFAULT_INDEX"] == "https://pypi.tuna.tsinghua.edu.cn/simple"
     assert hotel_config["env"]["UV_INSECURE_HOST"] == "pypi.tuna.tsinghua.edu.cn"
