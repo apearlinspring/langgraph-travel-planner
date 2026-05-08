@@ -11,8 +11,11 @@
         lastHealthCheckAt: 0,
         plannerCollapsed: localStorage.getItem("zhixing-planner-collapsed") === "1",
         mobileChatFocus: false,
+        editingConversationId: null,
+        renamingConversationId: null,
       };
       let toastTimer = null;
+      let streamingScrollFrame = null;
       const composerDraftKey = "zhixing-composer-draft";
       const plannerDraftKey = "zhixing-planner-draft";
       const plannerCollapseKey = "zhixing-planner-collapsed";
@@ -169,20 +172,31 @@
         return L.latLngBounds(points.map((point) => [point.lat, point.lng]));
       }
 
+      function moveJourneyMapToBounds(map, bounds, options = {}) {
+        if (!map || !bounds?.isValid?.()) return false;
+        const { padding = [26, 26], animate = false } = options;
+        if (animate && typeof map.flyToBounds === "function") {
+          map.flyToBounds(bounds, { padding, duration: 0.65, easeLinearity: 0.25 });
+        } else {
+          map.fitBounds(bounds, { padding });
+        }
+        return true;
+      }
+
       function fitJourneyMapState(entry, mode = "all") {
         if (!entry?.map) return;
         const { map, allBounds, routeBounds, highlightBounds } = entry;
         const padding = [26, 26];
         if (mode === "route" && routeBounds?.isValid()) {
-          map.fitBounds(routeBounds, { padding });
+          moveJourneyMapToBounds(map, routeBounds, { padding });
           return;
         }
         if (mode === "highlights" && highlightBounds?.isValid()) {
-          map.fitBounds(highlightBounds, { padding });
+          moveJourneyMapToBounds(map, highlightBounds, { padding });
           return;
         }
         if (allBounds?.isValid()) {
-          map.fitBounds(allBounds, { padding });
+          moveJourneyMapToBounds(map, allBounds, { padding });
         }
       }
 
@@ -210,7 +224,10 @@
           if (entry.activeDayKey && entry.activeDayKey !== "all") {
             const selectedLayer = entry.dayLayers?.find((layer) => layer.key === entry.activeDayKey);
             if (selectedLayer?.bounds?.isValid()) {
-              entry.map.fitBounds(selectedLayer.bounds, { padding: [26, 26] });
+              moveJourneyMapToBounds(entry.map, selectedLayer.bounds, {
+                padding: [30, 30],
+                animate: true,
+              });
               return;
             }
           }
@@ -368,7 +385,7 @@
                 >
                   <span>${index + 1 < 10 ? `0${index + 1}` : index + 1}</span>
                   <strong>${escapeHtml(point)}</strong>
-                  <small>${escapeHtml(selectedLayer?.label || "褰撴棩璺嚎")}</small>
+                  <small>${escapeHtml(selectedLayer?.label || "当日路线")}</small>
                 </button>
               </li>
             `
@@ -471,10 +488,14 @@
 
       function updateJourneyDayButtons(shell, activeDay = "all", activeMode = "solo") {
         shell?.querySelectorAll(".journey-map-day-btn").forEach((btn) => {
-          btn.classList.toggle("active", (btn.dataset.mapDay || "all") === activeDay);
+          const isActive = (btn.dataset.mapDay || "all") === activeDay;
+          btn.classList.toggle("active", isActive);
+          btn.setAttribute("aria-pressed", String(isActive));
         });
         shell?.querySelectorAll(".journey-map-day-mode-btn").forEach((btn) => {
-          btn.classList.toggle("active", (btn.dataset.mapDayMode || "solo") === activeMode);
+          const isActive = (btn.dataset.mapDayMode || "solo") === activeMode;
+          btn.classList.toggle("active", isActive);
+          btn.setAttribute("aria-pressed", String(isActive));
         });
       }
 
@@ -528,6 +549,10 @@
         });
 
         const selectedLayer = entry.dayLayers.find((layer) => layer.key === activeDayKey);
+        if (entry.shell) {
+          entry.shell.dataset.activeDay = activeDayKey;
+          entry.shell.dataset.dayMode = activeMode;
+        }
         const metaValue = entry.shell?.querySelector(".journey-live-map-meta-value");
         if (metaValue) {
           metaValue.textContent = isOverview
@@ -553,7 +578,11 @@
         }
         const selectedLayer = entry.dayLayers?.find((layer) => layer.key === dayKey);
         if (selectedLayer?.bounds?.isValid()) {
-          entry.map.fitBounds(selectedLayer.bounds, { padding: [26, 26] });
+          moveJourneyMapToBounds(entry.map, selectedLayer.bounds, {
+            padding: [30, 30],
+            animate: true,
+          });
+          selectedLayer.markers?.[0]?.openPopup?.();
         }
       }
 
@@ -822,6 +851,7 @@
       }
 
       function handleJourneyMapAction(button) {
+        if (button.disabled) return;
         const action = button.dataset.mapAction || "";
         if (action === "expand") {
           openJourneyMapModalFromButton(button);
@@ -839,10 +869,14 @@
             btn.dataset.mapAction === action &&
             (action === "route" || action === "highlights");
           btn.classList.toggle("active", shouldActivate);
+          if (btn.dataset.mapAction !== "expand") {
+            btn.setAttribute("aria-pressed", String(shouldActivate));
+          }
         });
       }
 
       function handleJourneyMapStyle(button) {
+        if (button.disabled) return;
         const style = button.dataset.mapStyle || "standard";
         const shell = button.closest(".journey-live-map-shell");
         const node = shell?.querySelector(".journey-live-map[data-map-payload]");
@@ -851,11 +885,14 @@
         setJourneyMapStyle(entry, style);
 
         shell.querySelectorAll(".journey-map-style-btn").forEach((btn) => {
-          btn.classList.toggle("active", btn === button);
+          const isActive = btn === button;
+          btn.classList.toggle("active", isActive);
+          btn.setAttribute("aria-pressed", String(isActive));
         });
       }
 
       function handleJourneyMapFocus(button) {
+        if (button.disabled) return;
         const focus = button.dataset.mapFocus || "destination";
         const shell = button.closest(".journey-live-map-shell");
         const node = shell?.querySelector(".journey-live-map[data-map-payload]");
@@ -869,6 +906,7 @@
       }
 
       function handleJourneyMapDay(button) {
+        if (button.disabled) return;
         const dayKey = button.dataset.mapDay || "all";
         const shell = button.closest(".journey-live-map-shell");
         const node = shell?.querySelector(".journey-live-map[data-map-payload]");
@@ -878,6 +916,7 @@
       }
 
       function handleJourneyMapDayMode(button) {
+        if (button.disabled) return;
         const mode = button.dataset.mapDayMode || "solo";
         const shell = button.closest(".journey-live-map-shell");
         const node = shell?.querySelector(".journey-live-map[data-map-payload]");
@@ -888,14 +927,26 @@
 
       function handleJourneyMapStageStop(button) {
         const stopMeta = button.dataset.mapDayStop || "";
-        if (!stopMeta.includes(":")) return;
-        const [dayKey, stopIndexText] = stopMeta.split(":");
-        const stopIndex = Number(stopIndexText);
         const shell = button.closest(".journey-live-map-shell");
         const node = shell?.querySelector(".journey-live-map[data-map-payload]");
         if (!node) return;
         const entry = journeyMapInstances.get(node);
-        focusJourneyDayStop(entry, dayKey, Number.isNaN(stopIndex) ? 0 : stopIndex);
+        shell
+          ?.querySelectorAll(".journey-map-stage-stop.active")
+          .forEach((item) => item.classList.remove("active"));
+        button.classList.add("active");
+
+        if (stopMeta.includes(":")) {
+          const [dayKey, stopIndexText] = stopMeta.split(":");
+          const stopIndex = Number(stopIndexText);
+          focusJourneyDayStop(entry, dayKey, Number.isNaN(stopIndex) ? 0 : stopIndex);
+          return;
+        }
+
+        const focusTarget = button.dataset.mapFocus || "";
+        if (focusTarget) {
+          focusJourneyMapTarget(entry, focusTarget);
+        }
       }
 
       function focusJourneyMapFromPlan(button, target = "destination") {
@@ -964,6 +1015,7 @@
           style: document.getElementById("plannerStyle")?.value || "",
         };
         writeDraftStorage(plannerDraftKey, JSON.stringify(payload));
+        updatePlannerAssistStrip();
       }
 
       function restoreDrafts() {
@@ -1425,6 +1477,55 @@
         }
       }
 
+      function updatePlannerAssistStrip() {
+        const strip = document.getElementById("plannerAssistStrip");
+        const panel = document.querySelector(".planner-panel");
+        if (!strip) return;
+        const fields = readPlannerFields();
+        const checks = [
+          { key: "origin", label: "出发地", required: true },
+          { key: "destination", label: "目的地", required: true },
+          { key: "days", label: "天数", required: true },
+          { key: "budget", label: "预算", required: false },
+          { key: "travelers", label: "人数", required: false },
+          { key: "style", label: "偏好", required: false },
+        ];
+        const requiredFilled = checks.filter(
+          (item) => item.required && fields[item.key]
+        ).length;
+        const ready = requiredFilled >= checks.filter((item) => item.required).length;
+        panel?.classList.toggle("planner-panel-ready", ready);
+        strip.innerHTML = checks
+          .map((item) => {
+            const filled = Boolean(fields[item.key]);
+            const tone = filled ? "filled" : item.required ? "missing" : "optional";
+            const icon = filled ? "fa-circle-check" : "fa-circle";
+            return `
+              <span class="planner-assist-chip ${tone}">
+                <i class="fa-regular ${icon}"></i>
+                ${escapeHtml(item.label)}${!item.required && !filled ? "可选" : ""}
+              </span>
+            `;
+          })
+          .join("");
+        [
+          ["plannerOrigin", fields.origin],
+          ["plannerDestination", fields.destination],
+          ["plannerDate", fields.date],
+          ["plannerDays", fields.days],
+          ["plannerTravelers", fields.travelers],
+          ["plannerBudget", fields.budget],
+          ["plannerTransport", fields.transport],
+          ["plannerStay", fields.stay],
+          ["plannerStyle", fields.style],
+        ].forEach(([id, value]) => {
+          document
+            .getElementById(id)
+            ?.closest(".planner-field")
+            ?.classList.toggle("filled", Boolean(value));
+        });
+      }
+
       function appendToComposer(text, mode = "replace") {
         const input = document.getElementById("chatInput");
         const current = input.value.trim();
@@ -1584,6 +1685,7 @@
           if (el) el.value = "";
         });
         clearDraftStorage(plannerDraftKey);
+        updatePlannerAssistStrip();
         updatePlannerSummary(
           silent
             ? "这是加速整理需求的辅助区，不填也可以直接聊天；补几项信息通常会更快进入推荐。"
@@ -1676,8 +1778,15 @@
         const data = await response.json();
         const current = state.conversations.find((conv) => conv.id === id);
         if (current) current.title = data.title || nextTitle;
+        if (state.editingConversationId === id) {
+          state.editingConversationId = null;
+        }
         if (state.currentConversationId === id) {
-          document.getElementById("chatTitle").textContent = data.title || nextTitle;
+          const chatTitle = document.getElementById("chatTitle");
+          if (chatTitle) {
+            chatTitle.classList.remove("editing");
+            chatTitle.textContent = data.title || nextTitle;
+          }
         }
         renderConversationsList();
         updateSessionOverview();
@@ -1784,8 +1893,15 @@
         const data = await response.json();
         const current = state.conversations.find((conv) => conv.id === id);
         if (current) current.title = data.title || nextTitle;
+        if (state.editingConversationId === id) {
+          state.editingConversationId = null;
+        }
         if (state.currentConversationId === id) {
-          document.getElementById("chatTitle").textContent = data.title || nextTitle;
+          const chatTitle = document.getElementById("chatTitle");
+          if (chatTitle) {
+            chatTitle.classList.remove("editing");
+            chatTitle.textContent = data.title || nextTitle;
+          }
         }
         renderConversationsList();
         updateSessionOverview();
@@ -3033,7 +3149,9 @@
           stay: previewStops[3]?.value || "",
           highlights,
           days: dayPlans.map((day) => ({
+            key: day.key,
             label: day.label,
+            dayNumber: day.dayNumber,
             waypoints: day.waypoints,
           })),
         });
@@ -3645,23 +3763,27 @@
                         class="journey-map-day-btn active"
                         type="button"
                         data-map-day="all"
+                        aria-pressed="true"
                         title="查看整段路线总览"
                       >
-                        总览
+                        <span>总览</span>
+                        <small>全程</small>
                       </button>
                       ${dayPlans
                         .map(
                           (day, index) => `
                             <button class="journey-map-day-btn" type="button" data-map-day="${escapeHtml(
                               day.key
-                            )}" title="${escapeHtml(
+                            )}" data-map-day-label="${escapeHtml(
+                              day.label || `Day ${index + 1}`
+                            )}" aria-pressed="false" title="${escapeHtml(
                               `${day.label || `Day ${index + 1}`} · ${Math.max(
                                 day.waypoints?.length || 0,
                                 day.highlights?.length || 0,
                                 1
                               )} 站`
                             )}">
-                              <span>D${day.dayNumber || index + 1}</span>
+                              <span>${escapeHtml(day.label || `Day ${index + 1}`)}</span>
                               <small>${Math.max(day.waypoints?.length || 0, day.highlights?.length || 0, 1)}站</small>
                             </button>
                           `
@@ -3677,21 +3799,21 @@
                       hasDayView
                         ? `
                             <div class="journey-map-floating-modes">
-                              <button class="journey-map-day-mode-btn active" type="button" data-map-day-mode="solo" title="只看当前这一天的路线和景点">单日</button>
-                              <button class="journey-map-day-mode-btn" type="button" data-map-day-mode="fade" title="突出当前这一天，其他天自动变淡">对比</button>
+                              <button class="journey-map-day-mode-btn active" type="button" data-map-day-mode="solo" aria-pressed="true" title="只看当前这一天的路线和景点">单日</button>
+                              <button class="journey-map-day-mode-btn" type="button" data-map-day-mode="fade" aria-pressed="false" title="突出当前这一天，其他天自动变淡">对比</button>
                             </div>
                           `
                         : ""
                     }
                     <div class="journey-map-floating-actions">
-                      <button class="journey-map-action-btn active" type="button" data-map-action="route" title="聚焦路线主线">路线</button>
-                      <button class="journey-map-action-btn" type="button" data-map-action="highlights" title="聚焦沿途景点">景点</button>
+                      <button class="journey-map-action-btn active" type="button" data-map-action="route" aria-pressed="true" title="聚焦路线主线">路线</button>
+                      <button class="journey-map-action-btn" type="button" data-map-action="highlights" aria-pressed="false" title="聚焦沿途景点">景点</button>
                       <button class="journey-map-action-btn secondary" type="button" data-map-action="expand" title="放大查看地图">放大</button>
                     </div>
                     <div class="journey-map-floating-actions journey-live-map-styles">
-                      <button class="journey-map-style-btn active" type="button" data-map-style="standard" title="标准底图">标准</button>
-                      <button class="journey-map-style-btn" type="button" data-map-style="terrain" title="更强调地形层次">地形</button>
-                      <button class="journey-map-style-btn" type="button" data-map-style="calm" title="更轻的清爽底图">清爽</button>
+                      <button class="journey-map-style-btn active" type="button" data-map-style="standard" aria-pressed="true" title="标准底图">标准</button>
+                      <button class="journey-map-style-btn" type="button" data-map-style="terrain" aria-pressed="false" title="更强调地形层次">地形</button>
+                      <button class="journey-map-style-btn" type="button" data-map-style="calm" aria-pressed="false" title="更轻的清爽底图">清爽</button>
                     </div>
                   </div>
                   <div class="journey-live-map" data-map-payload="${mapPayload}">
@@ -4116,9 +4238,6 @@
             combinedText
           );
 
-        if (hasDayPlanSignal) return true;
-        if (hasStrongClarification && !hasReportSignal) return false;
-
         const hasCoreRouteCards =
           tones.has("overview") &&
           tones.has("transport") &&
@@ -4130,6 +4249,12 @@
           /(?:\u4f4f\u5bbf|\u9152\u5e97|\u6c11\u5bbf|\u666f\u70b9|\u884c\u7a0b|\u7f8e\u98df)/u.test(
             combinedText
           );
+
+        if (hasStrongClarification && !hasReportSignal) return false;
+        if (!hasReportSignal && !hasDayPlanSignal) return false;
+        if (hasDayPlanSignal) {
+          return dayCount >= 2 || hasReportSignal || hasConcreteRouteCopy;
+        }
 
         return hasReportSignal
           ? hasCoreRouteCards || hasConcreteRouteCopy
@@ -4612,7 +4737,7 @@
         `;
       }
 
-      function renderTravelReport(blocks) {
+      function renderTravelReport(blocks, options = {}) {
         const expandedBlocks = expandStructuredTravelBlocks(blocks);
         const combinedText = expandedBlocks.join("\n\n");
         if (!hasTravelReportSignal(combinedText)) return null;
@@ -4663,8 +4788,9 @@
           routeLabel,
         };
         const shouldRenderMap =
-          Boolean(renderTravelReportMapDigest(previewState, routeLabel)) ||
-          shouldRenderJourneyPreviewBlock(previewState, sections);
+          !options?.suppressJourneyPreview &&
+          (Boolean(renderTravelReportMapDigest(previewState, routeLabel)) ||
+            shouldRenderJourneyPreviewBlock(previewState, sections));
 
         return `
           <div class="travel-report">
@@ -4912,7 +5038,7 @@
         }
       }
 
-      function renderStructuredTravelPlan(blocks) {
+      function renderStructuredTravelPlan(blocks, options = {}) {
         const expandedBlocks = expandStructuredTravelBlocks(blocks);
         const summaryBlocks = [];
         const sections = [];
@@ -4967,10 +5093,9 @@
 
         const journeyPreviewState = buildJourneyPreviewState(summaryBlocks, sections);
         const shouldRenderTravelCards = sections.length >= 2;
-        const shouldRenderJourneyPreview = shouldRenderJourneyPreviewBlock(
-          journeyPreviewState,
-          sections
-        );
+        const shouldRenderJourneyPreview =
+          !options?.suppressJourneyPreview &&
+          shouldRenderJourneyPreviewBlock(journeyPreviewState, sections);
         if (!shouldRenderTravelCards && !shouldRenderJourneyPreview) {
           return null;
         }
@@ -5042,24 +5167,24 @@
         `;
       }
 
-      function renderAssistantText(text) {
+      function renderAssistantText(text, options = {}) {
         if (!text) return "";
         const blocks = splitAssistantBlocks(text);
         return (
-          renderTravelReport(blocks) ||
-          renderStructuredTravelPlan(blocks) ||
+          renderTravelReport(blocks, options) ||
+          renderStructuredTravelPlan(blocks, options) ||
           renderAssistantFallback(blocks)
         );
       }
 
-      function renderMessageText(role, text) {
+      function renderMessageText(role, text, options = {}) {
         if (role === "assistant") {
-          return renderAssistantText(text);
+          return renderAssistantText(text, options);
         }
         return escapeHtml(text);
       }
 
-      function buildMessageMarkup(role, text, timestamp = new Date()) {
+      function buildMessageMarkup(role, text, timestamp = new Date(), options = {}) {
         return `
                 <div class="message-avatar"><i class="fa-solid ${
                   role === "user" ? "fa-user" : "fa-robot"
@@ -5067,7 +5192,8 @@
                 <div class="message-content">
                     <div class="message-text">${renderMessageText(
                       role,
-                      text
+                      text,
+                      options
                     )}</div>
                     <div class="message-time">${formatClock(timestamp)}</div>
                 </div>
@@ -5200,6 +5326,7 @@
         }
         autoResizeTextarea();
         restoreDrafts();
+        updatePlannerAssistStrip();
         ["username", "email", "password"].forEach((field) => {
           const input = document.getElementById(field);
           input?.addEventListener("input", () => {
@@ -5382,6 +5509,9 @@
 
       async function loadConversations(options = {}) {
         if (!(await ensureServiceReady("加载会话"))) return;
+        const preserveCurrentConversationId = Boolean(
+          options?.preserveCurrentConversationId
+        );
         try {
           const response = await fetch(`${getApiBase()}/api/v1/conversations`, {
             headers: { Authorization: `Bearer ${state.token}` },
@@ -5398,11 +5528,11 @@
               )
             ) {
               if (!preserveCurrentConversationId) {
-              state.currentConversationId = null;
-              document.getElementById("chatTitle").textContent = "行程助手";
-              clearChatMessages();
-              setMobileChatFocus(false);
-            }
+                state.currentConversationId = null;
+                restoreChatTitleLabel();
+                clearChatMessages();
+                setMobileChatFocus(false);
+              }
             }
             renderConversationsList();
             setRuntimeStatus("已连接", "online");
@@ -5435,37 +5565,83 @@
             (conv) => `
                 <div class="conversation-item ${
                   conv.id === state.currentConversationId ? "active" : ""
-                }" 
+                } ${conv.id === state.editingConversationId ? "editing" : ""}"
                      onclick="switchConversation('${conv.id}')">
                     <div class="conversation-top">
-                      <div class="conversation-title">
-                        <i class="fa-solid fa-map-pin" style="font-size:10px; color:var(--accent)"></i>
-                        <span class="conversation-title-text">${escapeHtml(
-                          conv.title || "未知行程"
-                        )}</span>
-                      </div>
+                      ${
+                        conv.id === state.editingConversationId
+                          ? `
+                              <form
+                                class="conversation-title conversation-title-edit-form"
+                                onsubmit="submitConversationRename(event, '${conv.id}')"
+                                onclick="event.stopPropagation()"
+                              >
+                                <i class="fa-solid fa-map-pin" style="font-size:10px; color:var(--accent)"></i>
+                                <input
+                                  id="conversationRenameInput-${conv.id}"
+                                  class="conversation-title-input"
+                                  type="text"
+                                  value="${escapeHtml(conv.title || DEFAULT_CONVERSATION_TITLE)}"
+                                  maxlength="40"
+                                  aria-label="编辑行程名称"
+                                  onkeydown="handleConversationRenameKeydown(event, '${conv.id}')"
+                                />
+                              </form>
+                            `
+                          : `
+                              <div class="conversation-title" ondblclick="beginConversationRename(event, '${conv.id}')">
+                                <i class="fa-solid fa-map-pin" style="font-size:10px; color:var(--accent)"></i>
+                                <span class="conversation-title-text">${escapeHtml(
+                                  conv.title || "未知行程"
+                                )}</span>
+                              </div>
+                            `
+                      }
                       <div class="conversation-actions">
                         ${
                           conv.id === state.currentConversationId
                             ? '<span class="conversation-badge">当前</span>'
                             : ""
                         }
-                        <button
-                          class="conversation-edit-btn"
-                          type="button"
-                          aria-label="编辑这段行程名称"
-                          onclick="renameConversation(event, '${conv.id}')"
-                        >
-                          <i class="fa-regular fa-pen-to-square"></i>
-                        </button>
-                        <button
-                          class="conversation-delete-btn"
-                          type="button"
-                          aria-label="删除这段行程"
-                          onclick="deleteConversation(event, '${conv.id}')"
-                        >
-                          <i class="fa-regular fa-trash-can"></i>
-                        </button>
+                        ${
+                          conv.id === state.editingConversationId
+                            ? `
+                                <button
+                                  class="conversation-save-btn"
+                                  type="button"
+                                  aria-label="保存行程名称"
+                                  onclick="submitConversationRename(event, '${conv.id}')"
+                                >
+                                  <i class="fa-solid fa-check"></i>
+                                </button>
+                                <button
+                                  class="conversation-cancel-btn"
+                                  type="button"
+                                  aria-label="取消编辑"
+                                  onclick="cancelConversationRename(event)"
+                                >
+                                  <i class="fa-solid fa-xmark"></i>
+                                </button>
+                              `
+                            : `
+                                <button
+                                  class="conversation-edit-btn"
+                                  type="button"
+                                  aria-label="编辑这段行程名称"
+                                  onclick="renameConversation(event, '${conv.id}')"
+                                >
+                                  <i class="fa-regular fa-pen-to-square"></i>
+                                </button>
+                                <button
+                                  class="conversation-delete-btn"
+                                  type="button"
+                                  aria-label="删除这段行程"
+                                  onclick="deleteConversation(event, '${conv.id}')"
+                                >
+                                  <i class="fa-regular fa-trash-can"></i>
+                                </button>
+                              `
+                        }
                       </div>
                     </div>
                     <div class="conversation-time">
@@ -5522,8 +5698,6 @@
             document.getElementById("chatTitle").textContent = "行程助手";
             clearChatMessages();
             resetConversationDrafts({ silent: true });
-            document.getElementById("chatTitle").textContent =
-              data.title || DEFAULT_CONVERSATION_TITLE;
             renderConversationsList();
             setMobileChatFocus(false);
           }
@@ -5543,26 +5717,129 @@
         }
       }
 
-      async function renameConversation(event, id) {
+      function focusConversationRenameInput(id, preferHeader = false) {
+        requestAnimationFrame(() => {
+          const input =
+            (preferHeader && document.getElementById("chatTitleRenameInput")) ||
+            document.getElementById(`conversationRenameInput-${id}`) ||
+            document.getElementById("chatTitleRenameInput");
+          if (!input) return;
+          input.focus();
+          input.select();
+        });
+      }
+
+      function renderChatTitleRenameInput(id) {
+        const chatTitle = document.getElementById("chatTitle");
+        const conv = state.conversations.find((item) => item.id === id);
+        if (!chatTitle || !conv) return;
+        chatTitle.classList.add("editing");
+        chatTitle.innerHTML = `
+          <input
+            id="chatTitleRenameInput"
+            class="chat-title-input"
+            type="text"
+            value="${escapeHtml(conv.title || DEFAULT_CONVERSATION_TITLE)}"
+            maxlength="40"
+            aria-label="编辑当前行程名称"
+            onkeydown="handleConversationRenameKeydown(event, '${id}')"
+          />
+        `;
+      }
+
+      function restoreChatTitleLabel() {
+        const chatTitle = document.getElementById("chatTitle");
+        if (!chatTitle) return;
+        chatTitle.classList.remove("editing");
+        chatTitle.textContent =
+          getCurrentConversation()?.title || "行程助手";
+      }
+
+      function beginConversationRename(event, id, options = {}) {
         event?.stopPropagation();
         const conv = state.conversations.find((item) => item.id === id);
+        if (!conv) return;
+        state.editingConversationId = id;
+        renderConversationsList();
+        if (options.focusHeader || state.currentConversationId === id) {
+          renderChatTitleRenameInput(id);
+        }
+        focusConversationRenameInput(id, Boolean(options.focusHeader));
+      }
+
+      function cancelConversationRename(event) {
+        event?.preventDefault();
+        event?.stopPropagation();
+        state.editingConversationId = null;
+        renderConversationsList();
+        restoreChatTitleLabel();
+        updateSessionOverview();
+      }
+
+      function handleConversationRenameKeydown(event, id) {
+        event.stopPropagation();
+        if (event.key === "Enter") {
+          event.preventDefault();
+          submitConversationRename(event, id);
+        } else if (event.key === "Escape") {
+          event.preventDefault();
+          cancelConversationRename(event);
+        }
+      }
+
+      async function submitConversationRename(event, id) {
+        event?.preventDefault();
+        event?.stopPropagation();
+        if (state.renamingConversationId) return;
+        const conv = state.conversations.find((item) => item.id === id);
         const currentTitle = conv?.title || DEFAULT_CONVERSATION_TITLE;
-        const nextTitle = window.prompt("给这段行程换个名字：", currentTitle);
-        if (nextTitle == null) return;
-        const trimmed = nextTitle.trim();
-        if (!trimmed || trimmed === currentTitle) return;
+        const input =
+          (event?.target?.matches?.(".conversation-title-input, .chat-title-input")
+            ? event.target
+            : null) ||
+          event?.target?.closest?.(".conversation-title-edit-form")?.querySelector?.(
+            ".conversation-title-input"
+          ) ||
+          document.getElementById(`conversationRenameInput-${id}`) ||
+          document.getElementById("chatTitleRenameInput");
+        const trimmed = input?.value?.trim() || "";
+        if (!trimmed || trimmed === currentTitle) {
+          cancelConversationRename(event);
+          return;
+        }
         if (!(await ensureServiceReady("修改行程名称"))) return;
+        state.renamingConversationId = id;
+        document
+          .querySelectorAll(".conversation-save-btn, .conversation-cancel-btn, .conversation-title-input, .chat-title-input")
+          .forEach((el) => {
+            el.disabled = true;
+          });
         try {
           await updateConversationTitle(id, trimmed);
+          state.editingConversationId = null;
         } catch (error) {
           console.error(error);
           showToast("修改名称失败，请稍后重试。", true);
+          focusConversationRenameInput(id);
+        } finally {
+          document
+            .querySelectorAll(".conversation-save-btn, .conversation-cancel-btn, .conversation-title-input, .chat-title-input")
+            .forEach((el) => {
+              el.disabled = false;
+            });
+          state.renamingConversationId = null;
         }
+      }
+
+      async function renameConversation(event, id) {
+        beginConversationRename(event, id);
       }
 
       async function renameCurrentConversation() {
         if (!state.currentConversationId) return;
-        await renameConversation(null, state.currentConversationId);
+        beginConversationRename(null, state.currentConversationId, {
+          focusHeader: true,
+        });
       }
 
       async function createNewConversation() {
@@ -5648,16 +5925,24 @@
           clearChatMessages();
           return;
         }
+        const lastAssistantIndex = messages
+          .map((msg, index) => (msg.role === "assistant" ? index : -1))
+          .filter((index) => index >= 0)
+          .pop();
         container.innerHTML = messages
           .map(
-            (msg) => `
+            (msg, index) => `
                 <div class="message ${
                   msg.role
                 }" id="msg-${Date.now()}-${Math.random()}">
                     ${buildMessageMarkup(
                       msg.role,
                       msg.content,
-                      msg.created_at || msg.updated_at || new Date()
+                      msg.created_at || msg.updated_at || new Date(),
+                      {
+                        suppressJourneyPreview:
+                          msg.role === "assistant" && index !== lastAssistantIndex,
+                      }
                     )}
                 </div>
             `
@@ -5793,12 +6078,16 @@
                 streamingFullText = chunk;
                 streamingMessageId = convertLoadingToAssistant(
                   loadingId,
-                  streamingFullText
+                  streamingFullText,
+                  { suppressJourneyPreview: true, pinToTop: true }
                 );
                 return;
               }
               streamingFullText += chunk;
-              updateMessage(streamingMessageId, streamingFullText);
+              updateMessage(streamingMessageId, streamingFullText, {
+                suppressJourneyPreview: true,
+                pinToTop: true,
+              });
             };
 
             while (true) {
@@ -5817,10 +6106,15 @@
             }
 
             if (!streamingMessageId) {
-              convertLoadingToAssistant(
+              streamingMessageId = convertLoadingToAssistant(
                 loadingId,
                 "这次没有拿到可展示的内容，你可以再试一次，或者换个问法继续。"
               );
+            } else {
+              updateMessage(streamingMessageId, streamingFullText, {
+                suppressJourneyPreview: false,
+                pinToTop: true,
+              });
             }
             setRuntimeStatus("行程建议已生成", "online");
           } else {
@@ -5848,7 +6142,8 @@
                 elapsedMs,
                 hasPartialContent: true,
                 reachedVerySlowStage,
-              })}`
+              })}`,
+              { suppressJourneyPreview: true, pinToTop: true }
             );
           } else {
             removeMessage(loadingId);
@@ -5871,13 +6166,13 @@
         setSendButtonLoading(false);
       }
 
-      function addMessage(role, text) {
+      function addMessage(role, text, options = {}) {
         const container = document.getElementById("chatMessages");
         const id = "msg-" + Date.now();
         const div = document.createElement("div");
         div.className = `message ${role}`;
         div.id = id;
-        div.innerHTML = buildMessageMarkup(role, text);
+        div.innerHTML = buildMessageMarkup(role, text, new Date(), options);
         container.appendChild(div);
         scheduleJourneyMapHydration(div);
         container.scrollTop = container.scrollHeight;
@@ -5896,28 +6191,46 @@
         container.scrollTo({ top: targetTop, behavior });
       }
 
-      function updateMessage(id, text) {
+      function pinChatMessageToTop(id) {
+        if (streamingScrollFrame) {
+          cancelAnimationFrame(streamingScrollFrame);
+        }
+        streamingScrollFrame = requestAnimationFrame(() => {
+          scrollChatMessageToTop(id, "auto");
+          streamingScrollFrame = null;
+        });
+      }
+
+      function updateMessage(id, text, options = {}) {
         const el = document.getElementById(id);
         if (el) {
           el.querySelector(".message-text").innerHTML = renderMessageText(
             "assistant",
-            text
+            text,
+            options
           );
-          scheduleJourneyMapHydration(el);
+          if (!options?.suppressJourneyPreview) {
+            scheduleJourneyMapHydration(el);
+          }
+          if (options?.pinToTop) {
+            pinChatMessageToTop(id);
+          }
         }
       }
 
-      function convertLoadingToAssistant(id, text) {
+      function convertLoadingToAssistant(id, text, options = {}) {
         const el = document.getElementById(id);
         if (!el) {
-          return addMessage("assistant", text);
+          return addMessage("assistant", text, options);
         }
         const messageId = "msg-" + Date.now();
         el.id = messageId;
         el.className = "message assistant";
-        el.innerHTML = buildMessageMarkup("assistant", text);
-        scheduleJourneyMapHydration(el);
-        scrollChatMessageToTop(messageId);
+        el.innerHTML = buildMessageMarkup("assistant", text, new Date(), options);
+        if (!options?.suppressJourneyPreview) {
+          scheduleJourneyMapHydration(el);
+        }
+        scrollChatMessageToTop(messageId, options?.pinToTop ? "auto" : "smooth");
         return messageId;
       }
 
