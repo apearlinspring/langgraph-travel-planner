@@ -459,3 +459,33 @@
 - 报告页是整个旅行规划链路的“终点体验”，不能只靠模型写得好不好。
 - 更稳的方式是让模型产出稳定章节，让前端把这些章节变成可视化结构。
 - 这也为后续功能留了接口：比如导出 PDF、编辑每日行程、地图按天高亮、预算卡片可展开等。
+
+## 问题 53：服务器 Docker 全量依赖重建过慢，且 Windows PowerShell 容易提前解析远程命令引号
+
+**状态**：已新增运行时叠加构建路径；后续部署优先使用文件传输和简单远程命令
+
+**现象**
+
+- 酒店 MCP 修复后，本地 Docker Desktop 可以正常构建新镜像，但服务器执行 `docker compose up -d --build backend caddy` 长时间无输出并超时。
+- 服务器旧容器仍然健康，说明问题不是 Docker 未启动，也不是应用进程崩溃。
+- 后续排查发现，服务器完整重建会重新安装 5GB+ 级别的 Python 依赖层；单独安装 `aigohotel-mcp==0.3.1` 虽然可成功，但下载也需要数分钟。
+- 期间还出现过一次远程 here-doc/Python `-c` 命令失败：不是服务器执行失败，而是 Windows PowerShell 在本地先解析了引号和括号，导致传到服务器的命令已经被破坏。
+
+**根因**
+
+- `requirements.txt` / `uv.lock` 一旦变化，Dockerfile 中安装完整依赖的层就会失效，服务器需要重新安装大体积依赖。
+- 服务器配置较小，且跨境/公网 PyPI 下载速度不稳定，完整依赖重建非常容易超过交互式命令超时时间。
+- Windows PowerShell、SSH、bash、Dockerfile、Python `-c` 多层嵌套时，任何一层引号被提前消费，都会让实际远程命令变形。
+
+**怎么解决**
+
+- 给 backend 在 [docker-compose.yml](D:/Users/Administrator/PycharmProjects/ZhiXing/langgraph-travel-planner/docker-compose.yml) 中显式固定镜像名 `langgraph-travel-planner-backend:latest`，避免依赖 compose 默认命名。
+- 新增 [deploy/Dockerfile.runtime](D:/Users/Administrator/PycharmProjects/ZhiXing/langgraph-travel-planner/deploy/Dockerfile.runtime)：基于服务器已有的健康 backend 镜像，只叠加必要的小依赖和最新代码。
+- 新增 [deploy/update-runtime-image.sh](D:/Users/Administrator/PycharmProjects/ZhiXing/langgraph-travel-planner/deploy/update-runtime-image.sh)：服务器上优先运行这个脚本完成快速镜像覆盖和 `docker compose up -d --no-build`。
+- 涉及复杂脚本、Dockerfile、中文或多层引号时，不再直接在 PowerShell 中拼长 SSH 命令；优先本地生成临时文件，用 `scp` 传到服务器，再执行简单命令。
+
+**我的思考**
+
+- 生产部署不能只考虑“能不能构建成功”，还要考虑小服务器上的构建成本和失败可恢复性。
+- 对这个项目来说，大部分日常改动是应用代码、前端和提示词，不应该每次都触发完整 Python 依赖重装。
+- Windows 本地到 Linux 服务器的远程命令链路很容易“看起来像服务器问题”，但很多时候真正的问题发生在本地 shell 解析阶段。把复杂内容文件化，是最稳的协作方式。

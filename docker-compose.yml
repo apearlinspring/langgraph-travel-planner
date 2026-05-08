@@ -1,5 +1,6 @@
 services:
   backend:
+    image: langgraph-travel-planner-backend:latest
     build:
       context: .
       dockerfile: Dockerfile

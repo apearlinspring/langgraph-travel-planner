@@ -1,0 +1,42 @@
+ARG BASE_IMAGE=langgraph-travel-planner-backend:latest
+FROM ${BASE_IMAGE}
+
+WORKDIR /app
+
+ARG PIP_INDEX_URL=https://pypi.org/simple
+ARG PIP_TRUSTED_HOST=pypi.org
+ARG AIGOHOTEL_MCP_VERSION=0.3.1
+
+# Runtime rebuilds are for code overlays on top of a known-good backend image.
+# Keep dependency changes tiny here; use Dockerfile for full dependency rebuilds.
+RUN if /opt/venv/bin/python -c "import importlib.metadata as md; assert md.version('aigohotel-mcp') == '${AIGOHOTEL_MCP_VERSION}'" 2>/dev/null; then \
+        echo "aigohotel-mcp ${AIGOHOTEL_MCP_VERSION} already installed"; \
+    else \
+        /opt/venv/bin/pip install \
+            --no-cache-dir \
+            --disable-pip-version-check \
+            --retries 5 \
+            --timeout 120 \
+            --index-url ${PIP_INDEX_URL} \
+            --trusted-host ${PIP_TRUSTED_HOST} \
+            --no-deps \
+            "aigohotel-mcp==${AIGOHOTEL_MCP_VERSION}"; \
+    fi && \
+    /opt/venv/bin/python -c "import importlib, importlib.metadata as md; assert md.version('aigohotel-mcp') == '${AIGOHOTEL_MCP_VERSION}'; importlib.import_module('aigohotel_mcp.server')"
+
+COPY app /app/app
+COPY scripts /app/scripts
+COPY data /app/data
+COPY frontend /app/frontend
+
+ENV PATH="/opt/venv/bin:$PATH"
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app
+ENV APP_PORT=8000
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:${APP_PORT}/health/live || exit 1
+
+CMD ["python", "-m", "app.run"]
