@@ -4289,6 +4289,9 @@
         if (contains("概览", "总览", "旅行计划", "方案", "行程摘要")) {
           return { tone: "overview", icon: "fa-passport", label: "行程概览" };
         }
+        if (contains("置信度", "待核验", "可追溯", "兜底估算")) {
+          return { tone: "budget-confidence", icon: "fa-clipboard-check", label: "预算核验" };
+        }
         if (contains("预算", "费用", "花费", "明细", "人均", "总计")) {
           return { tone: "budget", icon: "fa-wallet", label: "预算明细" };
         }

@@ -133,6 +133,14 @@ class BudgetBreakdown(TypedDict):
     confirmed_items: NotRequired[list[str]]
     estimated_items: NotRequired[list[str]]
     verification_items: NotRequired[list[str]]
+    budget_confidence: NotRequired["BudgetConfidenceData"]
+
+
+class BudgetConfidenceData(TypedDict):
+    level: str
+    confirmed_items: list[str]
+    estimated_items: list[str]
+    verification_items: list[str]
 
 
 class ReportData(TypedDict, total=False):
@@ -145,6 +153,7 @@ class ReportData(TypedDict, total=False):
     itinerary: list[dict]
     map_routes: list[dict]
     budget: dict
+    budget_confidence: BudgetConfidenceData
     risks: list[str]
     adjustment_options: list[str]
     sections: list[dict]

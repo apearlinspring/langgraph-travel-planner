@@ -126,6 +126,10 @@ async def test_step_config_covers_all_planning_steps(monkeypatch):
     assert "{budget_summary}" in config["order_generation"]["prompt"]
     assert "每日行程”里的当天地图路线摘要保持一致" in config["order_generation"]["prompt"]
     assert "report_data" in config["order_generation"]["prompt"]
+    assert "预算置信度与待核验项" in config["order_generation"]["prompt"]
+    assert "已确认/可追溯价格" in config["order_generation"]["prompt"]
+    assert "酒店 MCP 或交通 API 失败" in config["order_generation"]["prompt"]
+    assert "以工具返回的 report 作为最终报告正文" in config["order_generation"]["prompt"]
     assert "不要输出" in config["order_generation"]["prompt"]
     assert "[根据之前的对话填写]" in config["order_generation"]["prompt"]
     assert all(tool.name != "add_travel_record_tool" for tool in config["order_generation"]["tools"])
@@ -704,6 +708,105 @@ def test_final_report_pads_four_day_trip_and_exports_route_bound_data():
     ] == [
         route["summary"] for route in report_data["map_routes"]
     ]
+
+
+def test_final_report_keeps_budget_confidence_contract_when_prices_are_missing():
+    state = create_initial_state(user_id="user-1", session_id="session-1")
+    state.update(
+        {
+            "current_step": "budget_summarization",
+            "user_requirement": {
+                "departure_city": "北京",
+                "destination": "上海",
+                "departure_date": "2026-05-10",
+                "travel_days": 4,
+                "adult_count": 2,
+                "children_count": 0,
+                "budget_min": 2000.0,
+                "budget_max": 5000.0,
+                "budget_level": "comfort",
+                "travel_styles": ["culture", "food"],
+                "special_needs": None,
+            },
+            "selected_destination": "上海",
+            "selected_transport": "train",
+            "selected_transport_option": {
+                "transport_type": "train",
+                "details": "高铁车次待二次核实",
+            },
+            "selected_accommodation_types": ["economy_hotel"],
+            "selected_accommodation_option": {
+                "name": "人民广场附近酒店待确认",
+                "type": "economy_hotel",
+                "location": "人民广场",
+                "rating": None,
+                "amenities": ["近地铁"],
+            },
+            "selected_food_types": ["local"],
+            "itinerary": [
+                {
+                    "day_number": 1,
+                    "theme": "抵达",
+                    "activities": ["抵达上海", "人民广场周边散步"],
+                    "time_blocks": ["上午/出发：高铁车次待二次核实", "晚上/轻松：人民广场周边"],
+                    "meals": ["早餐：自理", "午餐：就近简餐", "晚餐：本地小吃"],
+                    "accommodation": "人民广场附近酒店待确认",
+                    "route_note": "抵达后围绕人民广场轻量活动。",
+                },
+                {
+                    "day_number": 2,
+                    "theme": "城市文化",
+                    "activities": ["上海博物馆", "南京路步行街"],
+                    "time_blocks": ["上午/文化：上海博物馆", "下午/街区：南京路步行街"],
+                    "meals": ["早餐：酒店周边", "午餐：就近简餐", "晚餐：本地小吃"],
+                    "accommodation": "人民广场附近酒店待确认",
+                    "route_note": "当天围绕人民广场和南京路活动。",
+                },
+                {
+                    "day_number": 3,
+                    "theme": "园林与老城",
+                    "activities": ["豫园", "城隍庙"],
+                    "time_blocks": ["上午/园林：豫园", "下午/小吃：城隍庙"],
+                    "meals": ["早餐：酒店周边", "午餐：就近简餐", "晚餐：本地小吃"],
+                    "accommodation": "人民广场附近酒店待确认",
+                    "route_note": "当天围绕老城厢活动。",
+                },
+            ],
+        }
+    )
+
+    budget_command = summarize_budget_tool.invoke({"runtime": _build_runtime(state)})
+    state.update(budget_command.update)
+
+    order_command = generate_order_tool.invoke({"runtime": _build_runtime(state)})
+    report = order_command.update["report"]
+    report_data = order_command.update["report_data"]
+
+    assert "预算置信度与待核验项" in report
+    assert "已确认/可追溯价格" in report
+    assert "估算项" in report
+    assert "待核验项" in report
+    assert "兜底估算" in report
+    assert "交通 API 未提供具体票价" in report
+    assert "酒店 MCP 未提供可追溯价格" in report
+    for day_number in range(1, 5):
+        assert f"Day {day_number}" in report
+
+    assert report_data["budget_confidence"]["level"] == "偏低"
+    assert not report_data["budget_confidence"]["confirmed_items"]
+    assert any(
+        "交通 API 未提供具体票价" in item
+        for item in report_data["budget_confidence"]["estimated_items"]
+    )
+    assert any(
+        "酒店 MCP 未提供可追溯价格" in item
+        for item in report_data["budget_confidence"]["estimated_items"]
+    )
+    assert report_data["budget"]["confidence"] == report_data["budget_confidence"]
+    assert any(
+        section["title"] == "预算置信度与待核验项"
+        for section in report_data["sections"]
+    )
 
 
 def test_itinerary_prefers_same_area_pois_and_food():

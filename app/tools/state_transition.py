@@ -570,7 +570,9 @@ def _build_budget_quality_notes(
             f"交通：已记录具体交通方案参考价 {transport_price:.0f} 元/人。"
         )
     else:
-        estimated_items.append("交通：缺少具体票价，按交通方式基准价估算。")
+        estimated_items.append(
+            "交通：缺少具体票价，交通 API 未提供具体票价或查询失败，当前按交通方式基准价做兜底估算。"
+        )
     verification_items.append("交通：正式购票前复核实时票价、余票、退改签规则和行李限制。")
 
     hotel_price = selected_accommodation.get("price_per_night")
@@ -580,7 +582,9 @@ def _build_budget_quality_notes(
             f"住宿：{hotel_name} 已记录每间夜参考价 {hotel_price:.0f} 元。"
         )
     else:
-        estimated_items.append("住宿：缺少已选酒店价格，按兜底每间夜价格估算。")
+        estimated_items.append(
+            "住宿：缺少已选酒店价格，酒店 MCP 未提供可追溯价格或查询失败，当前按兜底每间夜价格估算。"
+        )
     verification_items.append("住宿：入住前复核房型、税费、取消政策、押金和儿童/加床规则。")
 
     matched_food_names = []
@@ -629,6 +633,59 @@ def _build_budget_quality_notes(
         "estimated_items": estimated_items,
         "verification_items": verification_items,
     }
+
+
+def _budget_confidence_payload(budget: dict) -> dict:
+    return {
+        "level": budget.get("confidence_level") or "待评估",
+        "confirmed_items": list(budget.get("confirmed_items") or []),
+        "estimated_items": list(budget.get("estimated_items") or []),
+        "verification_items": list(budget.get("verification_items") or []),
+    }
+
+
+def _ensure_budget_quality_contract(
+    state: TravelState,
+    requirement: dict,
+    budget: dict,
+    itinerary: list[dict],
+) -> dict:
+    normalized = dict(budget or {})
+    destination = state.get("selected_destination") or requirement.get("destination") or ""
+    destination_context = _get_destination_context(state, destination)
+    quality_notes = _build_budget_quality_notes(
+        state,
+        destination_context,
+        itinerary,
+    )
+
+    if not normalized.get("confidence_level"):
+        normalized["confidence_level"] = quality_notes["confidence_level"]
+    for key in ["confirmed_items", "estimated_items", "verification_items"]:
+        if not normalized.get(key):
+            normalized[key] = list(quality_notes[key])
+
+    if not normalized.get("line_items"):
+        travel_days = requirement.get("travel_days") or normalized.get("travel_days") or 1
+        total_people = (
+            normalized.get("total_people")
+            or (requirement.get("adult_count") or 0) + (requirement.get("children_count") or 0)
+            or 1
+        )
+        normalized["line_items"] = _build_budget_line_items(
+            state,
+            itinerary,
+            travel_days,
+            total_people,
+            normalized.get("transport") or 0.0,
+            normalized.get("accommodation") or 0.0,
+            normalized.get("food") or 0.0,
+            normalized.get("attractions") or 0.0,
+            normalized.get("misc") or 0.0,
+        )
+
+    normalized["budget_confidence"] = _budget_confidence_payload(normalized)
+    return normalized
 
 
 def _get_destination_context(state: TravelState, destination: str) -> dict:
@@ -1025,20 +1082,27 @@ def _format_budget_confidence(budget: dict) -> list[str]:
     confirmed_items = budget.get("confirmed_items") or []
     estimated_items = budget.get("estimated_items") or []
     lines = [f"- 预算置信度：{confidence_level}"]
+    lines.append("- 已确认/可追溯价格：")
     if confirmed_items:
-        lines.append("- 已确认/可追溯价格：")
         lines.extend(f"  - {item}" for item in confirmed_items)
+    else:
+        lines.append("  - 暂无已确认锁价；当前价格均需以正式预订页为准。")
+    lines.append("- 估算项：")
     if estimated_items:
-        lines.append("- 估算项：")
         lines.extend(f"  - {item}" for item in estimated_items)
+    else:
+        lines.append("  - 暂无估算项。")
     return lines
 
 
 def _format_budget_verification_items(budget: dict) -> list[str]:
     verification_items = budget.get("verification_items") or []
+    lines = ["- 待核验项："]
     if not verification_items:
-        return ["- 待核验项：正式预订或出发前复核票价、酒店、景点开放和天气。"]
-    return [f"- {item}" for item in verification_items]
+        lines.append("  - 正式预订或出发前复核票价、酒店、景点开放和天气。")
+        return lines
+    lines.extend(f"  - {item}" for item in verification_items)
+    return lines
 
 
 def _format_budget_fit(requirement: dict, budget: dict) -> str:
@@ -1461,6 +1525,7 @@ def _build_report_data(
         )
 
     budget_items = budget.get("line_items") or []
+    budget_confidence = _budget_confidence_payload(budget)
     risks = [
         _clean_report_line(line)
         for line in _format_report_risk_lines(itinerary, budget, state, requirement)
@@ -1510,8 +1575,10 @@ def _build_report_data(
             "confirmed_items": list(budget.get("confirmed_items") or []),
             "estimated_items": list(budget.get("estimated_items") or []),
             "verification_items": list(budget.get("verification_items") or []),
+            "confidence": budget_confidence,
             "fit": _format_budget_fit(requirement, budget),
         },
+        "budget_confidence": budget_confidence,
         "risks": risks,
         "adjustment_options": adjustment_options,
         "sections": [
@@ -1520,6 +1587,7 @@ def _build_report_data(
             {"id": "itinerary", "title": "每日行程"},
             {"id": "map_routes", "title": "景点地图"},
             {"id": "budget", "title": "预算明细"},
+            {"id": "budget_confidence", "title": "预算置信度与待核验项"},
             {"id": "risk", "title": "天气与风险提醒"},
             {"id": "adjustments", "title": "后续可调整"},
         ],
@@ -2163,8 +2231,13 @@ def generate_order_tool(
     requirement = state.get("user_requirement") or {}
     selected_transport_option = state.get("selected_transport_option") or {}
     selected_accommodation = state.get("selected_accommodation_option") or {}
-    budget = state.get("budget") or {}
     itinerary = _ensure_itinerary_day_count(state.get("itinerary") or [], state, requirement)
+    budget = _ensure_budget_quality_contract(
+        state,
+        requirement,
+        state.get("budget") or {},
+        itinerary,
+    )
     selected_food_types = state.get("selected_food_types") or []
     report = _build_final_report(
         state,
@@ -2199,6 +2272,7 @@ def generate_order_tool(
         runtime,
         order_id=order_id,
         itinerary=itinerary,
+        budget=budget,
         report=report,
         report_data=report_data,
     )
