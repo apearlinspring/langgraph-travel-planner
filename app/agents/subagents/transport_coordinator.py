@@ -41,7 +41,7 @@ async def _has_live_flight_capability() -> bool:
 
 async def create_transport_coordinator():
     """Create the transport planning coordinator."""
-    llm = build_chat_model(temperature=0.2)
+    llm = build_chat_model(profile="transport", temperature=0.2)
 
     @tool("query_flights", description="查询航班信息，需要提供出发城市、目的地城市、出发日期。")
     async def query_flights_tool(origin: str, destination: str, departure_date: str) -> str:

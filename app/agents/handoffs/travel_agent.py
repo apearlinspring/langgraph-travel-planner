@@ -56,23 +56,33 @@ def get_llm():
     return build_chat_model(profile="planner", streaming=True)
 
 
-async def create_travel_agent():
-    """Build the main travel planning agent and rebuild it when MCP availability changes."""
+def _with_recursion_limit(agent):
+    """Attach a safer default recursion limit when the runnable supports config binding."""
+    if hasattr(agent, "with_config"):
+        return agent.with_config({"recursion_limit": settings.langgraph_recursion_limit})
+    return agent
+
+
+async def create_travel_agent(*, force_refresh: bool = False):
+    """Build the main travel planning agent."""
     global _travel_agent, _travel_agent_mcp_signature
 
-    all_mcp_tools = await get_all_mcp_tools()
-    hotel_followup_tools = await get_hotel_followup_tools()
-    current_signature = _build_tool_signature(all_mcp_tools, hotel_followup_tools)
-
-    if _travel_agent is not None and _travel_agent_mcp_signature == current_signature:
+    if _travel_agent is not None and not force_refresh:
         return _travel_agent
 
     async with _travel_agent_lock:
+        if _travel_agent is not None and not force_refresh:
+            return _travel_agent
+
         all_mcp_tools = await get_all_mcp_tools()
         hotel_followup_tools = await get_hotel_followup_tools()
         current_signature = _build_tool_signature(all_mcp_tools, hotel_followup_tools)
 
-        if _travel_agent is not None and _travel_agent_mcp_signature == current_signature:
+        if (
+            _travel_agent is not None
+            and not force_refresh
+            and _travel_agent_mcp_signature == current_signature
+        ):
             return _travel_agent
 
         app_logger.info(
@@ -106,13 +116,14 @@ async def create_travel_agent():
             *all_mcp_tools,
         ]
 
-        _travel_agent = create_agent(
+        agent = create_agent(
             model=llm,
             tools=all_tools,
             state_schema=TravelState,
             middleware=[step_config_middleware],
             checkpointer=checkpointer,
         )
+        _travel_agent = _with_recursion_limit(agent)
         _travel_agent_mcp_signature = current_signature
 
         app_logger.info("Travel agent is ready")

@@ -30,6 +30,7 @@ class MCPClientManager:
     OPTIONAL_STARTUP_SERVERS = {"aigohotel-mcp"}
     SERVER_RETRY_ATTEMPTS = {"aigohotel-mcp": 1}
     SERVER_TOOL_LOAD_TIMEOUTS = {"aigohotel-mcp": 10.0}
+    AIGOHOTEL_MCP_PACKAGE = "aigohotel-mcp==0.3.1"
     ENV_VARS: dict[str, str] = {}
     SERVER_CONFIGS: dict[str, dict[str, Any]] = {}
 
@@ -55,6 +56,7 @@ class MCPClientManager:
         env_vars.setdefault("UV_CACHE_DIR", os.path.join(cls.PROJECT_ROOT, ".uv-wheel-cache"))
         env_vars.setdefault("UV_PYTHON_INSTALL_DIR", os.path.join(cls.PROJECT_ROOT, ".uv-python"))
         env_vars.setdefault("UV_TOOL_DIR", os.path.join(cls.PROJECT_ROOT, ".uv-tools"))
+        env_vars.setdefault("UV_HTTP_TIMEOUT", "15")
         env_vars["FASTMCP_HOME"] = cls.MCP_HOME_DIR
         env_vars["LOCALAPPDATA"] = local_appdata
         env_vars["APPDATA"] = appdata
@@ -66,7 +68,7 @@ class MCPClientManager:
         uv_default_index = (
             os.getenv("UV_DEFAULT_INDEX")
             or os.getenv("PIP_INDEX_URL")
-            or "https://pypi.tuna.tsinghua.edu.cn/simple"
+            or "https://pypi.org/simple"
         )
         env_vars.setdefault("UV_DEFAULT_INDEX", uv_default_index)
         insecure_host = os.getenv("UV_INSECURE_HOST") or os.getenv("PIP_TRUSTED_HOST", "")
@@ -125,7 +127,7 @@ class MCPClientManager:
             hotel_env["AIGOHOTEL_API_KEY"] = hotel_api_key
             server_configs["aigohotel-mcp"] = {
                 "command": "uvx",
-                "args": ["--from", "aigohotel-mcp", "aigohotel-mcp"],
+                "args": ["--from", cls.AIGOHOTEL_MCP_PACKAGE, "aigohotel-mcp"],
                 "transport": "stdio",
                 "env": hotel_env,
             }

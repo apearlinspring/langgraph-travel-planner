@@ -35,7 +35,7 @@ async def _get_aviation_followup_tools():
 async def create_flight_subagent():
     """创建航班查询 Subagent"""
     
-    llm = build_chat_model(temperature=0.1)
+    llm = build_chat_model(profile="transport", temperature=0.1)
     
     # 异步获取工具
     aviation_tools = [query_flight_options, *await _get_aviation_followup_tools()]

@@ -22,7 +22,7 @@ def test_hotel_server_uses_new_env_var_when_available(monkeypatch):
 
     hotel_config = MCPClientManager.SERVER_CONFIGS["aigohotel-mcp"]
     assert hotel_config["command"] == "uvx"
-    assert hotel_config["args"] == ["--from", "aigohotel-mcp", "aigohotel-mcp"]
+    assert hotel_config["args"] == ["--from", "aigohotel-mcp==0.3.1", "aigohotel-mcp"]
     assert hotel_config["env"]["AIGOHOTEL_API_KEY"] == "new-key"
     assert hotel_config["env"]["UV_DEFAULT_INDEX"] == "https://pypi.tuna.tsinghua.edu.cn/simple"
     assert hotel_config["env"]["UV_INSECURE_HOST"] == "pypi.tuna.tsinghua.edu.cn"
@@ -80,3 +80,18 @@ def test_local_stdio_servers_use_stable_runtime_dirs(monkeypatch):
     assert env["TEMP"].endswith(".runtime\\tmp")
     assert env["TMP"].endswith(".runtime\\tmp")
     assert env["PYTHONUTF8"] == "1"
+    assert env["UV_HTTP_TIMEOUT"] == "15"
+
+
+def test_uv_defaults_to_public_pypi_when_no_index_is_configured(monkeypatch):
+    monkeypatch.setenv("AIGOHOTEL_API_KEY", "new-key")
+    monkeypatch.delenv("UV_DEFAULT_INDEX", raising=False)
+    monkeypatch.delenv("PIP_INDEX_URL", raising=False)
+    monkeypatch.delenv("UV_INSECURE_HOST", raising=False)
+    monkeypatch.delenv("PIP_TRUSTED_HOST", raising=False)
+
+    MCPClientManager.refresh_server_configs()
+
+    env = MCPClientManager.SERVER_CONFIGS["aigohotel-mcp"]["env"]
+    assert env["UV_DEFAULT_INDEX"] == "https://pypi.org/simple"
+    assert env["UV_INSECURE_HOST"] == "pypi.org"

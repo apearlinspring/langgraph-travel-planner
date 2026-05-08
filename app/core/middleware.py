@@ -219,6 +219,76 @@ def _recent_human_text(request: ModelRequest, limit: int = 4) -> str:
     return "\n".join(item.strip() for item in messages if item and item.strip())
 
 
+def _message_has_human_role(message: Any) -> bool:
+    if isinstance(message, HumanMessage):
+        return True
+    if isinstance(message, dict):
+        role = message.get("role") or message.get("type")
+        return role in {"user", "human"}
+    return getattr(message, "type", None) == "human" or getattr(message, "role", None) == "user"
+
+
+def _tool_names_from_message(message: Any) -> set[str]:
+    names: set[str] = set()
+    if isinstance(message, ToolMessage):
+        name = getattr(message, "name", None)
+        if name:
+            names.add(str(name))
+
+    if isinstance(message, dict):
+        if message.get("type") == "tool" and message.get("name"):
+            names.add(str(message["name"]))
+        tool_calls = message.get("tool_calls") or []
+    else:
+        tool_calls = getattr(message, "tool_calls", None) or []
+
+    for tool_call in tool_calls:
+        if isinstance(tool_call, dict):
+            name = tool_call.get("name") or tool_call.get("function", {}).get("name")
+        else:
+            name = getattr(tool_call, "name", None)
+        if name:
+            names.add(str(name))
+    return names
+
+
+def _recent_tool_names_since_latest_human(request: ModelRequest) -> set[str]:
+    messages = list(request.messages or [])
+    if not messages:
+        state = request.state
+        if hasattr(state, "get"):
+            messages = list(state.get("messages") or [])
+    if not messages:
+        return set()
+
+    latest_human_index = None
+    for index in range(len(messages) - 1, -1, -1):
+        if _message_has_human_role(messages[index]):
+            latest_human_index = index
+            break
+    if latest_human_index is None:
+        return set()
+
+    names: set[str] = set()
+    for message in messages[latest_human_index + 1:]:
+        names.update(_tool_names_from_message(message))
+    return names
+
+
+def _tool_repeat_instruction(current_step: str, recent_tool_names: set[str]) -> str:
+    if current_step == "accommodation_planning" and "query_hotel_options" in recent_tool_names:
+        return (
+            "本轮已经执行过 `query_hotel_options`。不要在同一轮再次调用酒店查询；"
+            "请直接基于已有工具结果总结候选，或说明本次没有查到并给出下一轮可放宽的方向。"
+        )
+    if current_step == "transport_planning" and "query_transport_options" in recent_tool_names:
+        return (
+            "本轮已经执行过 `query_transport_options`。不要在同一轮再次调用交通查询；"
+            "请直接基于已有工具结果做比较和推荐。"
+        )
+    return ""
+
+
 def _forced_tool_choice(
     current_step: str,
     latest_human_text: str,
@@ -550,9 +620,19 @@ class StepConfigMiddleware(AgentMiddleware):
             "tools": step_config["tools"],
         }
 
-        compatibility = get_model_compatibility()
+        compatibility = get_model_compatibility(profile="planner")
         latest_human_text = _latest_human_text(request)
         available_tool_names = _tool_names(step_config["tools"])
+        recent_tool_names = _recent_tool_names_since_latest_human(request)
+        repeat_instruction = _tool_repeat_instruction(current_step, recent_tool_names)
+        if repeat_instruction:
+            override_kwargs["system_prompt"] = (
+                f"{override_kwargs['system_prompt']}\n\n{repeat_instruction}"
+            )
+            app_logger.info(
+                "本轮工具已调用，注入防重复提示: "
+                f"step={current_step}, tools={sorted(recent_tool_names)}"
+            )
         confirmed_destination = (
             _confirmed_destination_name(state_dict, latest_human_text)
             if current_step == "destination_recommendation"
@@ -564,6 +644,11 @@ class StepConfigMiddleware(AgentMiddleware):
             else _forced_tool_choice(current_step, latest_human_text, request)
         )
         if forced_tool and forced_tool not in available_tool_names:
+            forced_tool = None
+        if forced_tool and forced_tool in recent_tool_names:
+            app_logger.info(
+                f"跳过重复强制工具调用: {forced_tool} 已在本轮执行"
+            )
             forced_tool = None
         if forced_tool:
             if compatibility.supports_forced_tool_choice:
@@ -582,7 +667,7 @@ class StepConfigMiddleware(AgentMiddleware):
                     else _tool_choice_instruction(forced_tool)
                 )
                 override_kwargs["system_prompt"] = (
-                    f"{system_prompt}\n\n{tool_instruction}"
+                    f"{override_kwargs['system_prompt']}\n\n{tool_instruction}"
                 )
                 app_logger.info(f"模型不支持强制 tool_choice，改为提示词引导: {forced_tool}")
 

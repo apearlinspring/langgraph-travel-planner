@@ -42,6 +42,32 @@ class FakeHotelSearchTool:
         )
 
 
+class PreferenceAwareFakeHotelSearchTool:
+    def __init__(self):
+        self.calls: list[str] = []
+        self.payloads: list[dict] = []
+
+    async def ainvoke(self, payload: dict):
+        self.calls.append(payload["place"])
+        self.payloads.append(payload)
+        return _mcp_result(
+            {
+                "message": "酒店搜索成功",
+                "hotelInformationList": [
+                    {
+                        "hotelId": 1001,
+                        "name": "长沙湘江景观酒店",
+                        "address": "长沙市湘江中路",
+                        "starRating": 4.8,
+                        "distanceInMeters": 800,
+                        "price": {"lowestPrice": 680.0, "currency": "CNY"},
+                        "tags": ["江景房", "景观房"],
+                    }
+                ],
+            }
+        )
+
+
 def test_expand_place_candidates_adds_english_alias_for_common_city():
     assert hotel_query._expand_place_candidates("北京市") == ["北京市", "北京", "Beijing"]
 
@@ -79,6 +105,14 @@ def test_hotel_matches_destination_filters_out_wrong_city_result():
     assert not hotel_query._hotel_matches_destination(hotel, "\u4e39\u5df4")
 
 
+def test_hotel_matches_destination_supports_case_insensitive_english_alias():
+    hotel = {
+        "name": "beijing wangfujing hotel",
+        "address": "wangfujing street",
+    }
+    assert hotel_query._hotel_matches_destination(hotel, "北京")
+
+
 @pytest.mark.asyncio
 async def test_query_hotel_options_falls_back_to_english_alias(monkeypatch):
     fake_tool = FakeHotelSearchTool()
@@ -102,7 +136,7 @@ async def test_query_hotel_options_falls_back_to_english_alias(monkeypatch):
     )
 
     result = command.update["messages"][0].content
-    assert fake_tool.calls == ["北京", "北京", "Beijing"]
+    assert fake_tool.calls == ["北京", "Beijing"]
     assert "北京王府井天伦王朝酒店" in result
     assert "实际检索地：Beijing" in result
     assert "酒店ID：43615" in result
@@ -151,10 +185,56 @@ async def test_query_hotel_options_uses_state_when_llm_passes_placeholders(monke
         }
     )
 
-    assert fake_tool.calls == ["北京", "北京", "Beijing"]
+    assert fake_tool.calls == ["北京", "Beijing"]
     payload = fake_tool.payloads[0]
     assert payload["checkInParam"]["checkInDate"] == "2026-06-01"
     assert payload["checkInParam"]["stayNights"] == 2
     assert payload["checkInParam"]["adultCount"] == 2
     assert "亲子友好" in payload["originQuery"]
     assert "北京王府井天伦王朝酒店" in command.update["messages"][0].content
+
+
+@pytest.mark.asyncio
+async def test_query_hotel_options_treats_room_view_as_preference_not_destination(monkeypatch):
+    fake_tool = PreferenceAwareFakeHotelSearchTool()
+
+    async def fake_get_hotel_tool(tool_name: str):
+        assert tool_name == "searchHotels"
+        return fake_tool
+
+    monkeypatch.setattr(hotel_query, "_get_hotel_tool", fake_get_hotel_tool)
+    runtime = ToolRuntime(
+        state={
+            "selected_destination": "长沙",
+            "user_requirement": {
+                "departure_date": "2026-06-01",
+                "travel_days": 3,
+                "adult_count": 2,
+                "children_count": 0,
+                "budget_level": "comfort",
+            },
+        },
+        context=None,
+        config={},
+        stream_writer=lambda _: None,
+        tool_call_id="tool-call-1",
+        store=None,
+    )
+
+    command = await hotel_query.query_hotel_options.ainvoke(
+        {
+            "destination": "江景房",
+            "check_in_date": "入住日期",
+            "stay_nights": 3,
+            "adult_count": 2,
+            "children_count": 0,
+            "budget_level": "comfort",
+            "preferences": "",
+            "runtime": runtime,
+        }
+    )
+
+    assert fake_tool.calls[0] == "长沙"
+    assert "江景房" in fake_tool.payloads[0]["originQuery"]
+    assert "江景房" in fake_tool.payloads[0]["hotelTags"]["preferredTags"]
+    assert "长沙湘江景观酒店" in command.update["messages"][0].content

@@ -8,8 +8,9 @@ class FakeCoordinator:
     def __init__(self):
         self.calls = []
 
-    async def ainvoke(self, payload):
+    async def ainvoke(self, payload, config=None):
         self.calls.append(payload)
+        self.config = config
         return {"messages": [SimpleNamespace(content="ok")]}
 
 
@@ -36,6 +37,7 @@ async def test_query_transport_options_treats_transport_type_as_preference(monke
     )
 
     assert result == "ok"
+    assert coordinator.config["recursion_limit"] > 25
     content = coordinator.calls[0]["messages"][0]["content"]
     assert "更偏向 高铁" in content
     assert "不要因为我提到了 高铁 就默认排除其他交通方式" in content

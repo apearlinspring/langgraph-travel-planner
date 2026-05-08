@@ -96,7 +96,7 @@ def _classifier_system_prompt() -> str:
         "如果是综合性目的地推荐，可以两个都为 true。"
         "不要返回 classifications 数组，也不要返回其他字段。"
     )
-    if get_model_compatibility().structured_output_requires_json_keyword:
+    if get_model_compatibility(profile="router").structured_output_requires_json_keyword:
         prompt = (
             f"{prompt}"
             " 你必须返回一个 JSON object，并且严格匹配给定 schema。"

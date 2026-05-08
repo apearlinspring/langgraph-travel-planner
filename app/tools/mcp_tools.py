@@ -4,8 +4,13 @@ MCP 工具筛选器
 """
 from typing import List
 from langchain_core.tools import BaseTool
-from app.mcp_core.client import get_mcp_client
+from app.mcp_core.client import MCPClientManager, get_mcp_client
 from app.utils.logger import app_logger
+
+
+def _server_is_healthy(server: str) -> bool:
+    snapshot = MCPClientManager.get_status_snapshot()
+    return snapshot.get("servers", {}).get(server, {}).get("status") == "healthy"
 
 
 async def get_all_mcp_tools() -> List[BaseTool]:
@@ -49,6 +54,10 @@ async def get_hotel_followup_tools() -> List[BaseTool]:
     Returns:
         酒店详情、标签等二次查询工具
     """
+    if not _server_is_healthy("aigohotel-mcp"):
+        app_logger.info("🏨 酒店后续工具暂不预加载，等待酒店查询链路按需唤起")
+        return []
+
     manager = await get_mcp_client()
     all_tools = await manager.get_tools(servers=["aigohotel-mcp"])
 

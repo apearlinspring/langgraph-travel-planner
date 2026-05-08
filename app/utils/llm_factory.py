@@ -10,7 +10,15 @@ from langchain_openai import ChatOpenAI
 
 from app.config import settings
 
-ModelProfile = Literal["default", "planner", "router", "rag", "vision", "report"]
+ModelProfile = Literal[
+    "default",
+    "planner",
+    "router",
+    "rag",
+    "vision",
+    "report",
+    "transport",
+]
 
 
 @dataclass(frozen=True)
@@ -21,10 +29,14 @@ class ModelCompatibility:
     structured_output_requires_json_keyword: bool = False
 
 
-def get_model_compatibility(model: Optional[str] = None) -> ModelCompatibility:
+def get_model_compatibility(
+    model: Optional[str] = None,
+    *,
+    profile: ModelProfile = "default",
+) -> ModelCompatibility:
     """Return compatibility flags for the configured compatible-mode model."""
 
-    model_name = (model or settings.qwen_model_name).strip().lower()
+    model_name = resolve_model_name(profile=profile, model=model).strip().lower()
     is_qwen3_family = model_name.startswith("qwen3")
 
     return ModelCompatibility(
@@ -50,6 +62,7 @@ def resolve_model_name(
         "rag": settings.qwen_rag_model_name,
         "vision": settings.qwen_vision_model_name,
         "report": settings.qwen_report_model_name,
+        "transport": settings.qwen_router_model_name,
     }
     return profile_mapping.get(profile, settings.qwen_model_name)
 

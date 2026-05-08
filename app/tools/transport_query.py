@@ -5,6 +5,7 @@
 import time
 
 from langchain.tools import tool
+from app.config import settings
 from app.agents.subagents.transport_coordinator import create_transport_coordinator
 from app.utils.logger import app_logger
 
@@ -66,7 +67,7 @@ async def query_transport_options(
         "messages": [
             {"role": "user", "content": user_query}
         ]
-    })
+    }, config={"recursion_limit": settings.langgraph_recursion_limit})
     elapsed = time.perf_counter() - started_at
     app_logger.info(
         "Transport query completed: "

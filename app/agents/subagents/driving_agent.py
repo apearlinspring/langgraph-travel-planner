@@ -30,7 +30,7 @@ async def _get_amap_tools():
 async def create_driving_subagent():
     """创建自驾路线规划 Subagent"""
 
-    llm = build_chat_model(temperature=0.1)
+    llm = build_chat_model(profile="transport", temperature=0.1)
 
     # 异步获取工具
     amap_tools = await _get_amap_tools()

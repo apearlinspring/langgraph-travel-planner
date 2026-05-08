@@ -34,7 +34,7 @@ async def _get_railway_followup_tools():
 async def create_train_subagent():
     """创建高铁查询 Subagent"""
 
-    llm = build_chat_model(temperature=0.1)
+    llm = build_chat_model(profile="transport", temperature=0.1)
 
     railway_tools = [query_train_options]
     railway_tools += await _get_railway_followup_tools()

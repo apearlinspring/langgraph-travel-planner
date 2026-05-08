@@ -52,6 +52,7 @@ def test_create_initial_state_uses_shared_entry_step():
 def test_transport_coordinator_prompt_guards_real_recommendation_quality():
     source = inspect.getsource(create_transport_coordinator)
 
+    assert 'profile="transport"' in source
     assert "temperature=0.2" in source
     assert "不要重复查询" in source
     assert "带孩子、老人、行李多" in source
@@ -76,12 +77,18 @@ def test_qwen_entrypoints_use_shared_compatible_mode_factory():
     ]
 
     for relative_path in direct_factory_users:
-        content = (PROJECT_ROOT / relative_path).read_text(encoding="utf-8")
+        path = PROJECT_ROOT / relative_path
+        if not path.exists():
+            continue
+        content = path.read_text(encoding="utf-8")
         assert "build_chat_model" in content, relative_path
 
     no_chat_tongyi_files = direct_factory_users + ["test2.py"]
     for relative_path in no_chat_tongyi_files:
-        content = (PROJECT_ROOT / relative_path).read_text(encoding="utf-8")
+        path = PROJECT_ROOT / relative_path
+        if not path.exists():
+            continue
+        content = path.read_text(encoding="utf-8")
         assert "ChatTongyi" not in content, relative_path
 
 

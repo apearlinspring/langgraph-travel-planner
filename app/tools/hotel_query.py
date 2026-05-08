@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import re
 import time
+from difflib import SequenceMatcher
 from typing import Any, Optional
 
 from langchain.tools import ToolRuntime, tool
@@ -93,6 +94,39 @@ PREFERENCE_TAG_RULES = (
     (("联通房",), ["提供联通房"]),
 )
 
+ACCOMMODATION_PREFERENCE_KEYWORDS = (
+    "江景",
+    "河景",
+    "湖景",
+    "水景",
+    "景观",
+    "海景",
+    "山景",
+    "亲子",
+    "带娃",
+    "家庭房",
+    "连通房",
+    "浴缸",
+    "儿童",
+    "安静",
+    "隔音",
+    "交通方便",
+    "近地铁",
+    "含早餐",
+    "含早",
+    "早餐",
+    "泳池",
+    "健身",
+    "停车",
+    "高档",
+    "中高档",
+    "便宜",
+    "性价比",
+)
+
+MAX_FILTERED_PLACE_CANDIDATES = 4
+MAX_RELAXED_PLACE_CANDIDATES = 2
+
 
 def _dedupe_preserve_order(items: list[str]) -> list[str]:
     unique_items: list[str] = []
@@ -100,6 +134,10 @@ def _dedupe_preserve_order(items: list[str]) -> list[str]:
         if item and item not in unique_items:
             unique_items.append(item)
     return unique_items
+
+
+def _normalize_match_text(value: str) -> str:
+    return re.sub(r"[()（）·•、,/\\\-\s，。；;:：]", "", value or "").strip().lower()
 
 
 def _strip_place_suffix(place: str) -> str:
@@ -137,13 +175,26 @@ def _expand_place_candidates(place: str) -> list[str]:
 def _build_relevance_tokens(place: str) -> list[str]:
     tokens: list[str] = []
     for candidate in _expand_place_candidates(place):
-        cleaned = re.sub(r"[()（）·•/\\-\\s]", "", candidate or "").strip()
+        cleaned = _normalize_match_text(candidate or "")
         if len(cleaned) >= 2:
             tokens.append(cleaned)
         stripped = re.sub(r"(风景区|景区|街道|省|市|区|县|镇)$", "", cleaned)
         if len(stripped) >= 2:
             tokens.append(stripped)
     return _dedupe_preserve_order(tokens)
+
+
+def _fuzzy_token_in_text(token: str, normalized_haystack: str) -> bool:
+    if len(token) < 4 or len(normalized_haystack) < 4:
+        return False
+
+    window_size = min(max(len(token) + 2, 4), len(normalized_haystack))
+    threshold = 0.88 if re.search(r"[\u4e00-\u9fff]", token) else 0.9
+    for start in range(0, len(normalized_haystack) - window_size + 1):
+        window = normalized_haystack[start:start + window_size]
+        if SequenceMatcher(None, token, window).ratio() >= threshold:
+            return True
+    return False
 
 
 def _hotel_matches_destination(hotel: dict[str, Any], place: str) -> bool:
@@ -154,11 +205,14 @@ def _hotel_matches_destination(hotel: dict[str, Any], place: str) -> bool:
     haystack = " ".join(
         str(hotel.get(field) or "") for field in ("name", "address", "description")
     )
-    normalized_haystack = re.sub(r"[()（）·•/\\-\\s]", "", haystack)
+    normalized_haystack = _normalize_match_text(haystack)
     if not normalized_haystack:
         return False
 
-    return any(token in normalized_haystack for token in tokens)
+    return any(
+        token in normalized_haystack or _fuzzy_token_in_text(token, normalized_haystack)
+        for token in tokens
+    )
 
 
 def _relax_search_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -375,6 +429,17 @@ def _is_placeholder(value: object, placeholders: set[str]) -> bool:
     return not text or text in placeholders
 
 
+def _looks_like_accommodation_preference(value: object, selected_destination: str = "") -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    if selected_destination and selected_destination in text:
+        return False
+    if any(keyword in text for keyword in ACCOMMODATION_PREFERENCE_KEYWORDS):
+        return True
+    return bool(re.search(r"(房型|房间|酒店|住宿|附近|周边|商圈|市中心|景点|地铁|机场|高铁站)$", text))
+
+
 def _normalize_query_args_from_state(
     *,
     destination: str,
@@ -390,9 +455,15 @@ def _normalize_query_args_from_state(
     state = runtime.state if runtime and runtime.state else {}
     requirement = state.get("user_requirement") or {}
 
+    state_destination = state.get("selected_destination") or requirement.get("destination")
     normalized_destination = destination
-    if _is_placeholder(destination, {"目的地", "城市", "未确认", "destination"}):
-        normalized_destination = state.get("selected_destination") or requirement.get("destination") or destination
+    destination_is_placeholder = _is_placeholder(destination, {"目的地", "城市", "未确认", "destination"})
+    destination_is_preference = (
+        bool(state_destination)
+        and _looks_like_accommodation_preference(destination, str(state_destination))
+    )
+    if destination_is_placeholder or destination_is_preference:
+        normalized_destination = state_destination or destination
 
     normalized_check_in = check_in_date
     if _is_placeholder(check_in_date, {"日期", "入住日期", "未确认", "check_in_date"}):
@@ -421,6 +492,10 @@ def _normalize_query_args_from_state(
 
     special_needs = requirement.get("special_needs")
     normalized_preferences = preferences
+    if destination_is_preference and str(destination).strip() not in normalized_preferences:
+        normalized_preferences = "；".join(
+            item for item in [normalized_preferences, str(destination).strip()] if item
+        )
     if special_needs and str(special_needs) not in normalized_preferences:
         normalized_preferences = "；".join(
             item for item in [normalized_preferences, str(special_needs)] if item
@@ -440,6 +515,36 @@ def _normalize_query_args_from_state(
         "preferences": normalized_preferences,
         "place_type": normalized_place_type,
     }
+
+
+async def _search_relevant_hotels(
+    *,
+    search_tool: Any,
+    payload: dict[str, Any],
+    destination: str,
+    relaxed: bool = False,
+) -> tuple[list[dict[str, Any]], str]:
+    place = str(payload.get("place") or "")
+    started_at = time.perf_counter()
+    log_prefix = "Hotel query relaxed candidate" if relaxed else "Hotel query candidate"
+    app_logger.info(
+        f"{log_prefix} started: "
+        f"destination={destination}, place={place}, size={payload.get('size')}"
+    )
+    result = await search_tool.ainvoke(payload)
+    elapsed = time.perf_counter() - started_at
+    parsed_payload = _parse_search_payload(result)
+    hotels = parsed_payload.get("hotelInformationList") or []
+    relevant_hotels = [
+        hotel for hotel in hotels if _hotel_matches_destination(hotel, destination)
+    ]
+    app_logger.info(
+        f"{log_prefix} completed: "
+        f"destination={destination}, place={place}, "
+        f"elapsed_seconds={elapsed:.2f}, hotel_count={len(hotels)}, "
+        f"relevant_hotel_count={len(relevant_hotels)}"
+    )
+    return relevant_hotels, str(parsed_payload.get("message") or "").strip()
 
 
 @tool
@@ -496,7 +601,7 @@ async def query_hotel_options(
 
     budget_key = budget_level if budget_level in STAR_RATING_BY_BUDGET else "comfort"
     preferred_tags = _infer_preferred_tags(preferences, children_count)
-    place_candidates = _expand_place_candidates(destination)
+    place_candidates = _expand_place_candidates(destination)[:MAX_FILTERED_PLACE_CANDIDATES]
     normalized_size = min(max(size, 3), 10)
 
     search_payload_base = {
@@ -530,82 +635,66 @@ async def query_hotel_options(
     tried_places: list[str] = []
     last_message = ""
 
+    matched_hotels: list[dict[str, Any]] = []
+    matched_place = ""
+
     for candidate in place_candidates:
         tried_places.append(candidate)
         payload = dict(search_payload_base)
         payload["place"] = candidate
 
-        candidate_started_at = time.perf_counter()
-        app_logger.info(
-            "Hotel query candidate started: "
-            f"destination={destination}, place={candidate}, "
-            f"budget={budget_key}, size={normalized_size}"
+        relevant_hotels, message = await _search_relevant_hotels(
+            search_tool=search_tool,
+            payload=payload,
+            destination=destination,
         )
-        result = await search_tool.ainvoke(payload)
-        candidate_elapsed = time.perf_counter() - candidate_started_at
-        parsed_payload = _parse_search_payload(result)
-        hotels = parsed_payload.get("hotelInformationList") or []
-        last_message = str(parsed_payload.get("message") or "").strip()
-        relevant_hotels = [
-            hotel for hotel in hotels if _hotel_matches_destination(hotel, destination)
-        ]
-        app_logger.info(
-            "Hotel query candidate completed: "
-            f"destination={destination}, place={candidate}, "
-            f"elapsed_seconds={candidate_elapsed:.2f}, hotel_count={len(hotels)}, "
-            f"relevant_hotel_count={len(relevant_hotels)}"
-        )
-
-        if not relevant_hotels:
-            relaxed_payload = _relax_search_payload(payload)
-            relaxed_started_at = time.perf_counter()
-            app_logger.info(
-                "Hotel query candidate relaxing filters: "
-                f"destination={destination}, place={candidate}"
-            )
-            relaxed_result = await search_tool.ainvoke(relaxed_payload)
-            relaxed_elapsed = time.perf_counter() - relaxed_started_at
-            relaxed_parsed_payload = _parse_search_payload(relaxed_result)
-            relaxed_hotels = relaxed_parsed_payload.get("hotelInformationList") or []
-            relaxed_message = str(relaxed_parsed_payload.get("message") or "").strip()
-            relaxed_relevant_hotels = [
-                hotel
-                for hotel in relaxed_hotels
-                if _hotel_matches_destination(hotel, destination)
-            ]
-            app_logger.info(
-                "Hotel query relaxed candidate completed: "
-                f"destination={destination}, place={candidate}, "
-                f"elapsed_seconds={relaxed_elapsed:.2f}, hotel_count={len(relaxed_hotels)}, "
-                f"relevant_hotel_count={len(relaxed_relevant_hotels)}"
-            )
-            if relaxed_message:
-                last_message = relaxed_message
-            if relaxed_relevant_hotels:
-                relevant_hotels = relaxed_relevant_hotels
-
+        if message:
+            last_message = message
         if relevant_hotels:
-            limited_hotels = relevant_hotels[:normalized_size]
-            formatted_hotels = _format_hotels(
-                destination,
-                candidate,
-                limited_hotels,
-                preferences,
+            matched_hotels = relevant_hotels
+            matched_place = candidate
+            break
+
+    if not matched_hotels:
+        for candidate in place_candidates[:MAX_RELAXED_PLACE_CANDIDATES]:
+            payload = dict(search_payload_base)
+            payload["place"] = candidate
+            relaxed_payload = _relax_search_payload(payload)
+            relevant_hotels, message = await _search_relevant_hotels(
+                search_tool=search_tool,
+                payload=relaxed_payload,
+                destination=destination,
+                relaxed=True,
             )
-            total_elapsed = time.perf_counter() - started_at
-            app_logger.info(
-                "Hotel query completed: "
-                f"destination={destination}, place={candidate}, "
-                f"elapsed_seconds={total_elapsed:.2f}, hotel_count={len(limited_hotels)}"
-            )
-            return Command(
-                update={
-                    "messages": [_tool_message(formatted_hotels, runtime)],
-                    "accommodation_options": [
-                        _normalize_hotel_option(hotel) for hotel in limited_hotels
-                    ],
-                }
-            )
+            if message:
+                last_message = message
+            if relevant_hotels:
+                matched_hotels = relevant_hotels
+                matched_place = candidate
+                break
+
+    if matched_hotels:
+        limited_hotels = matched_hotels[:normalized_size]
+        formatted_hotels = _format_hotels(
+            destination,
+            matched_place,
+            limited_hotels,
+            preferences,
+        )
+        total_elapsed = time.perf_counter() - started_at
+        app_logger.info(
+            "Hotel query completed: "
+            f"destination={destination}, place={matched_place}, "
+            f"elapsed_seconds={total_elapsed:.2f}, hotel_count={len(limited_hotels)}"
+        )
+        return Command(
+            update={
+                "messages": [_tool_message(formatted_hotels, runtime)],
+                "accommodation_options": [
+                    _normalize_hotel_option(hotel) for hotel in limited_hotels
+                ],
+            }
+        )
 
     tried_text = " / ".join(tried_places)
     if last_message:

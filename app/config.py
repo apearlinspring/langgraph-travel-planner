@@ -55,6 +55,9 @@ class Settings(BaseSettings):
     redis_db: int = Field(default=0, alias="REDIS_DB")
     redis_password: str = Field(default="", alias="REDIS_PASSWORD")
 
+    # ============== LangGraph 运行配置 ==============
+    langgraph_recursion_limit: int = Field(default=60, alias="LANGGRAPH_RECURSION_LIMIT")
+
     # ============== MCP 服务配置 ==============
     amap_api_key: str = Field(default="", alias="AMAP_API_KEY")
     tavily_api_key: str = Field(default="", alias="TAVILY_API_KEY")

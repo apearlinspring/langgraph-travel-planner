@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 
 import pytest
-from langchain_core.messages import HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from app.core.middleware import StepConfigMiddleware
 from app.utils.llm_factory import get_model_compatibility
@@ -182,6 +182,54 @@ async def test_step_middleware_forces_direct_hotel_query_only_on_user_turn():
         assert "query_hotel_options" in captured[0]["system_prompt"]
         assert "query_hotel_options" in captured[1]["system_prompt"]
         assert "query_hotel_options" not in captured[2]["system_prompt"]
+
+
+@pytest.mark.asyncio
+async def test_step_middleware_blocks_duplicate_hotel_query_after_tool_call():
+    captured = {}
+    middleware = StepConfigMiddleware(
+        {
+            "accommodation_planning": {
+                "prompt": "住宿阶段",
+                "tools": ["query_hotel_options"],
+                "requires": ["user_requirement", "selected_destination", "selected_transport"],
+            }
+        }
+    )
+    state = {
+        "current_step": "accommodation_planning",
+        "user_requirement": {},
+        "selected_destination": "长沙",
+        "selected_transport": "train",
+    }
+    messages = [
+        HumanMessage(content="信息已经齐了，请直接查真实酒店，要江景房。"),
+        AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "name": "query_hotel_options",
+                    "args": {},
+                    "id": "tool-call-1",
+                }
+            ],
+        ),
+        ToolMessage(
+            content="工具结果",
+            name="query_hotel_options",
+            tool_call_id="tool-call-1",
+        ),
+    ]
+
+    async def handler(request):
+        captured["tool_choice"] = getattr(request, "tool_choice", None)
+        captured["system_prompt"] = getattr(request, "system_prompt", "")
+        return "ok"
+
+    await middleware.awrap_model_call(DummyRequest(state, messages), handler)
+
+    assert captured["tool_choice"] is None
+    assert "本轮已经执行过 `query_hotel_options`" in captured["system_prompt"]
 
 
 @pytest.mark.asyncio
