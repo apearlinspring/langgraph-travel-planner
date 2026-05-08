@@ -463,6 +463,92 @@ def _estimate_attractions_cost(
     return 0.0, "景点 POI 未识别到需付费项目，景点/体验费用暂按 0 元估算；出发前仍需核验预约和临时展览收费。"
 
 
+def _safe_per_person(amount: float, total_people: int) -> float:
+    return amount / max(total_people, 1)
+
+
+def _budget_line_item(
+    key: str,
+    label: str,
+    amount: float,
+    total_people: int,
+    basis: str,
+    confidence: str,
+) -> dict:
+    return {
+        "key": key,
+        "label": label,
+        "amount": amount,
+        "per_person": _safe_per_person(amount, total_people),
+        "basis": basis,
+        "confidence": confidence,
+    }
+
+
+def _build_budget_line_items(
+    state: TravelState,
+    itinerary: list[dict],
+    travel_days: int,
+    total_people: int,
+    transport_cost: float,
+    accommodation_cost: float,
+    food_cost: float,
+    attractions_cost: float,
+    misc_cost: float,
+) -> list[dict]:
+    selected_transport = state.get("selected_transport")
+    selected_transport_option = state.get("selected_transport_option") or {}
+    selected_accommodation = state.get("selected_accommodation_option") or {}
+    nights = max(travel_days - 1, 1)
+    room_count = max(ceil(total_people / 2), 1)
+
+    transport_price = selected_transport_option.get("price")
+    if isinstance(transport_price, (int, float)) and transport_price > 0:
+        transport_basis = f"已选交通方案 {transport_price:.0f} 元/人 × {total_people} 人"
+        transport_confidence = "已确认价格"
+    else:
+        base_price = TRANSPORT_BASE_COST_PER_PERSON.get(selected_transport, 500)
+        transport_basis = f"{TRANSPORT_LABELS.get(selected_transport, selected_transport or '交通')} 基准 {base_price:.0f} 元/人 × {total_people} 人"
+        transport_confidence = "兜底估算"
+
+    hotel_price = selected_accommodation.get("price_per_night")
+    if isinstance(hotel_price, (int, float)) and hotel_price > 0:
+        accommodation_basis = f"每间夜 {hotel_price:.0f} 元 × {nights} 晚 × {room_count} 间"
+        accommodation_confidence = "已确认价格"
+    else:
+        accommodation_basis = f"兜底每间夜 300 元 × {nights} 晚 × {room_count} 间"
+        accommodation_confidence = "兜底估算"
+
+    food_pois = _get_food_pois(state)
+    matched_food_names = []
+    itinerary_text = _itinerary_text(itinerary)
+    for food_poi in food_pois:
+        name = str(food_poi.get("name") or "").strip()
+        average_cost = food_poi.get("average_cost")
+        if name and name in itinerary_text and isinstance(average_cost, (int, float)) and average_cost > 0:
+            matched_food_names.append(f"{name} {average_cost:g} 元/人")
+    if matched_food_names:
+        food_basis = (
+            f"早餐 30 元/人/天；午晚餐按 {'、'.join(matched_food_names)} 与缺口餐次兜底估算"
+        )
+        food_confidence = "行程 POI 估算"
+    else:
+        food_basis = "早餐 30 元/人/天；午晚餐按餐饮偏好或 70 元/人/餐兜底估算"
+        food_confidence = "偏好兜底估算"
+
+    attractions_basis = "按行程可识别付费 POI 门票估算；未识别付费项则暂按 0 元"
+    attractions_confidence = "POI 估算" if attractions_cost > 0 else "待核验"
+    misc_basis = f"市内交通、寄存、临时休息和小额杂费 100 元/人/天 × {travel_days} 天 × {total_people} 人"
+
+    return [
+        _budget_line_item("transport", "交通", transport_cost, total_people, transport_basis, transport_confidence),
+        _budget_line_item("accommodation", "住宿", accommodation_cost, total_people, accommodation_basis, accommodation_confidence),
+        _budget_line_item("food", "餐饮", food_cost, total_people, food_basis, food_confidence),
+        _budget_line_item("attractions", "景点/体验", attractions_cost, total_people, attractions_basis, attractions_confidence),
+        _budget_line_item("misc", "其他机动", misc_cost, total_people, misc_basis, "固定规则估算"),
+    ]
+
+
 def _build_budget_quality_notes(
     state: TravelState,
     destination_context: dict,
@@ -899,6 +985,24 @@ def _format_itinerary_details(itinerary: list[dict], max_days: int = 8) -> list[
 
 
 def _format_budget_breakdown(budget: dict) -> list[str]:
+    line_items = budget.get("line_items") or []
+    if line_items:
+        lines = []
+        for item in line_items:
+            lines.append(
+                "- {label}：{amount}（人均 {per_person}）｜{confidence}｜依据：{basis}".format(
+                    label=item.get("label", "费用"),
+                    amount=_format_money(item.get("amount")),
+                    per_person=_format_money(item.get("per_person")),
+                    confidence=item.get("confidence", "估算"),
+                    basis=item.get("basis", "依据待补充"),
+                )
+            )
+        lines.append(
+            f"- 合计：{_format_money(budget.get('total'))}，人均：{_format_money(budget.get('per_person'))}"
+        )
+        return lines
+
     return [
         f"- 交通：{_format_money(budget.get('transport'))}",
         f"- 住宿：{_format_money(budget.get('accommodation'))}",
@@ -922,9 +1026,11 @@ def _format_budget_confidence(budget: dict) -> list[str]:
     estimated_items = budget.get("estimated_items") or []
     lines = [f"- 预算置信度：{confidence_level}"]
     if confirmed_items:
-        lines.append("- 已确认/可追溯价格：" + "；".join(str(item) for item in confirmed_items))
+        lines.append("- 已确认/可追溯价格：")
+        lines.extend(f"  - {item}" for item in confirmed_items)
     if estimated_items:
-        lines.append("- 估算项：" + "；".join(str(item) for item in estimated_items))
+        lines.append("- 估算项：")
+        lines.extend(f"  - {item}" for item in estimated_items)
     return lines
 
 
@@ -1033,6 +1139,10 @@ def _format_report_route_points(
     state: TravelState,
     requirement: dict,
 ) -> list[str]:
+    explicit_points = day.get("route_points")
+    if isinstance(explicit_points, list) and explicit_points:
+        return _dedupe_report_points([str(point) for point in explicit_points])
+
     day_number = day.get("day_number") or 0
     destination = state.get("selected_destination") or requirement.get("destination") or ""
     departure_city = requirement.get("departure_city") or ""
@@ -1070,6 +1180,154 @@ def _format_report_route_points(
     return _dedupe_report_points(points)
 
 
+def _get_expected_travel_days(requirement: dict, fallback: int = 0) -> int:
+    travel_days = requirement.get("travel_days")
+    if isinstance(travel_days, int) and travel_days > 0:
+        return travel_days
+    if isinstance(travel_days, str):
+        try:
+            parsed_days = int(travel_days)
+        except ValueError:
+            parsed_days = 0
+        if parsed_days > 0:
+            return parsed_days
+    return max(fallback, 0)
+
+
+def _build_placeholder_itinerary_day(
+    day_number: int,
+    expected_days: int,
+    state: TravelState,
+    requirement: dict,
+) -> dict:
+    destination = state.get("selected_destination") or requirement.get("destination") or "目的地"
+    selected_accommodation = state.get("selected_accommodation_option") or {}
+    accommodation = selected_accommodation.get("name") or "住宿/落脚点待二次核实"
+    destination_context = _get_destination_context(state, destination)
+    plan_b = _format_weather_plan_b(destination_context.get("weather_info"))
+
+    if day_number == 1:
+        theme = "抵达与轻松适应"
+        time_blocks = [
+            "上午/出发：按已确认交通方案执行，预留到站/到机场缓冲。",
+            f"下午/抵达：前往 {destination} 住宿区域，办理入住或寄存行李。",
+            "晚上/适应：安排酒店周边低强度散步和省心用餐。",
+        ]
+        activities = [f"抵达 {destination}", "办理入住或寄存行李", "酒店周边轻松活动"]
+        route_note = "该日为最终报告兜底补齐：以抵达点、住宿区域和酒店周边短动线为主。"
+    elif day_number == expected_days:
+        theme = "返程缓冲与补漏"
+        time_blocks = [
+            "上午/补漏：安排一个低强度同区域体验，避免跨区奔波。",
+            "下午/收尾：退房、寄存或取行李，预留前往车站/机场的缓冲时间。",
+            "晚上/返程：按实时交通情况出发，再次核对票务、证件和行李。",
+        ]
+        activities = ["低强度补漏体验", "退房/寄存/取行李", "返程交通缓冲"]
+        route_note = "该日为最终报告兜底补齐：优先保证返程稳定，不再塞入高强度跨区活动。"
+    else:
+        theme = f"{destination} 顺路体验待细化"
+        time_blocks = [
+            "上午/核心体验：选择一个与旅行偏好匹配的同区域核心景点或街区。",
+            "下午/顺路延展：安排同区域景点、商圈或室内场馆，减少折返。",
+            "晚上/餐饮放松：结合已确认餐饮偏好就近用餐，保留休息时间。",
+        ]
+        activities = ["同区域核心体验", "顺路延展活动", "就近餐饮与休息"]
+        route_note = "该日为最终报告兜底补齐：具体 POI 待二次细化，但动线按同区域、少折返原则安排。"
+
+    return {
+        "day_number": day_number,
+        "theme": theme,
+        "activities": activities,
+        "time_blocks": time_blocks,
+        "meals": [
+            "早餐：以酒店/周边省心用餐为主",
+            "午餐：结合当日动线就近安排",
+            "晚餐：优先匹配已确认餐饮偏好",
+        ],
+        "accommodation": accommodation,
+        "transport_note": "当天交通以同区域步行、地铁或短途打车为主；跨区安排需二次核实。",
+        "plan_b": plan_b,
+        "route_note": route_note,
+        "risk_notes": [
+            "该日为按出行天数自动补齐的安排，具体开放时间、预约和票价需二次核实。",
+            "如遇天气、排队或体力变化，优先执行 Plan B 并保留休息时间。",
+        ],
+    }
+
+
+def _build_day_route_summary(day: dict, state: TravelState, requirement: dict) -> dict:
+    day_number = day.get("day_number", 0)
+    route_points = _format_report_route_points(day, state, requirement)
+    theme = day.get("theme") or "当天安排"
+    if route_points:
+        summary = " → ".join(route_points)
+        if len(route_points) == 1 and theme not in summary:
+            summary = f"{summary}｜{theme}"
+    else:
+        summary = theme
+    return {
+        "day_number": day_number,
+        "route_points": route_points,
+        "summary": summary,
+        "map_label": f"Day {day_number}：{summary}",
+        "route_note": day.get("route_note") or day.get("transport_note") or "",
+    }
+
+
+def _enrich_itinerary_day_for_report(
+    day: dict,
+    state: TravelState,
+    requirement: dict,
+) -> dict:
+    enriched = dict(day)
+    route_summary = _build_day_route_summary(enriched, state, requirement)
+    enriched["route_points"] = route_summary["route_points"]
+    enriched["route_summary"] = route_summary["summary"]
+    enriched["map_route"] = route_summary["map_label"]
+    return enriched
+
+
+def _ensure_itinerary_day_count(
+    itinerary: list[dict],
+    state: TravelState,
+    requirement: dict,
+) -> list[dict]:
+    source_days = [dict(day) for day in itinerary or [] if isinstance(day, dict)]
+    expected_days = _get_expected_travel_days(requirement, len(source_days))
+    if expected_days <= 0:
+        return [
+            _enrich_itinerary_day_for_report(day, state, requirement)
+            for day in source_days
+        ]
+
+    by_day: dict[int, dict] = {}
+    next_fallback_day = 1
+    for index, day in enumerate(source_days, start=1):
+        raw_day_number = day.get("day_number")
+        if isinstance(raw_day_number, int) and raw_day_number > 0:
+            day_number = raw_day_number
+        else:
+            while next_fallback_day in by_day:
+                next_fallback_day += 1
+            day_number = next_fallback_day or index
+        if day_number > expected_days or day_number in by_day:
+            continue
+        day["day_number"] = day_number
+        by_day[day_number] = day
+
+    normalized = []
+    for day_number in range(1, expected_days + 1):
+        day = by_day.get(day_number) or _build_placeholder_itinerary_day(
+            day_number,
+            expected_days,
+            state,
+            requirement,
+        )
+        day["day_number"] = day_number
+        normalized.append(_enrich_itinerary_day_for_report(day, state, requirement))
+    return normalized
+
+
 def _format_report_daily_itinerary(
     itinerary: list[dict],
     state: TravelState,
@@ -1081,10 +1339,9 @@ def _format_report_daily_itinerary(
 
     lines = []
     for day in itinerary[:max_days]:
-        day_number = day.get("day_number", len(lines) + 1)
-        route_points = _format_report_route_points(day, state, requirement)
-        route_title = " → ".join(route_points) if len(route_points) >= 2 else day.get("theme") or "当天安排"
-        lines.append(f"Day {day_number}：{route_title}")
+        route_summary = _build_day_route_summary(day, state, requirement)
+        lines.append(route_summary["map_label"])
+        lines.append(f"- 地图路线：{route_summary['summary']}")
 
         time_blocks = day.get("time_blocks") or []
         if time_blocks:
@@ -1121,21 +1378,36 @@ def _format_report_map_lines(
 ) -> list[str]:
     lines = []
     for day in itinerary:
-        day_number = day.get("day_number", len(lines) + 1)
-        points = _format_report_route_points(day, state, requirement)
-        if points:
-            lines.append(f"Day {day_number}：{' → '.join(points)}")
+        route_summary = _build_day_route_summary(day, state, requirement)
+        if route_summary["summary"]:
+            lines.append(route_summary["map_label"])
     if not lines:
         route_label = _format_report_route_label(state, requirement)
         lines.append(f"总览：{route_label}")
     return lines
 
 
-def _format_report_risk_lines(itinerary: list[dict], budget: dict) -> list[str]:
+def _format_report_risk_lines(
+    itinerary: list[dict],
+    budget: dict,
+    state: Optional[TravelState] = None,
+    requirement: Optional[dict] = None,
+) -> list[str]:
+    weather_info = None
+    if state is not None:
+        current_requirement = requirement or {}
+        destination = state.get("selected_destination") or current_requirement.get("destination") or ""
+        weather_info = _get_destination_context(state, destination).get("weather_info")
+
     risk_lines = [
         "- 实时票价、酒店价格、余票和景点开放情况会变动，正式支付或出发前需要再次核实。",
         "- 出发前 24-48 小时再次确认交通、酒店入住政策、天气和景点预约要求。",
-        "- 天气/体力：优先保留 Plan B 和每日机动时间，不建议把每天塞满。",
+        (
+            f"- 天气风险：{weather_info}。优先保留 Plan B 和每日机动时间。"
+            if weather_info
+            else "- 天气风险：当前缺少可引用的实时天气，出发前 24-48 小时需再次复核并保留 Plan B。"
+        ),
+        "- 体力风险：每天保留机动时间，不建议把行程塞满；带娃或带老人时优先减少跨区。",
     ]
     for day in itinerary:
         for note in day.get("risk_notes") or []:
@@ -1153,6 +1425,107 @@ def _format_report_risk_lines(itinerary: list[dict], budget: dict) -> list[str]:
     return risk_lines
 
 
+def _clean_report_line(line: str) -> str:
+    return str(line).strip().lstrip("-").strip()
+
+
+def _build_report_data(
+    state: TravelState,
+    requirement: dict,
+    budget: dict,
+    itinerary: list[dict],
+    selected_transport_option: dict,
+    selected_accommodation: dict,
+    selected_food_types: list[str],
+) -> dict:
+    route_summaries = [
+        _build_day_route_summary(day, state, requirement)
+        for day in itinerary
+    ]
+    itinerary_data = []
+    for day, route_summary in zip(itinerary, route_summaries):
+        itinerary_data.append(
+            {
+                "day_number": day.get("day_number"),
+                "title": day.get("theme") or "当天安排",
+                "route": route_summary,
+                "time_blocks": list(day.get("time_blocks") or []),
+                "activities": list(day.get("activities") or []),
+                "meals": list(day.get("meals") or []),
+                "accommodation": day.get("accommodation"),
+                "transport_note": day.get("transport_note"),
+                "route_note": day.get("route_note"),
+                "plan_b": day.get("plan_b"),
+                "risk_notes": list(day.get("risk_notes") or []),
+            }
+        )
+
+    budget_items = budget.get("line_items") or []
+    risks = [
+        _clean_report_line(line)
+        for line in _format_report_risk_lines(itinerary, budget, state, requirement)
+    ]
+    adjustment_options = [
+        _clean_report_line(line)
+        for line in _format_adjustment_options(state, budget)
+    ]
+
+    return {
+        "version": "travel_report.v1",
+        "title": "个性化旅游规划报告",
+        "subtitle": "最终旅行方案报告",
+        "overview": {
+            "route_label": _format_report_route_label(state, requirement),
+            "duration": _format_report_duration(requirement),
+            "people": _format_report_people(requirement),
+            "travel_styles": list(requirement.get("travel_styles") or []),
+            "special_needs": requirement.get("special_needs") or "无特别备注",
+        },
+        "transport": {
+            "type": state.get("selected_transport"),
+            "label": TRANSPORT_LABELS.get(
+                state.get("selected_transport"),
+                state.get("selected_transport", "未确认"),
+            ),
+            "summary": _format_transport_option(selected_transport_option),
+            "option": dict(selected_transport_option),
+        },
+        "accommodation": {
+            "summary": _format_accommodation_option(selected_accommodation),
+            "option": dict(selected_accommodation),
+        },
+        "food_preferences": {
+            "types": list(selected_food_types),
+            "summary": _format_food_preferences(selected_food_types),
+        },
+        "itinerary": itinerary_data,
+        "map_routes": route_summaries,
+        "budget": {
+            "currency": budget.get("currency", "CNY"),
+            "total": budget.get("total"),
+            "per_person": budget.get("per_person"),
+            "items": budget_items,
+            "assumptions": list(budget.get("assumptions") or []),
+            "confidence_level": budget.get("confidence_level") or "待评估",
+            "confirmed_items": list(budget.get("confirmed_items") or []),
+            "estimated_items": list(budget.get("estimated_items") or []),
+            "verification_items": list(budget.get("verification_items") or []),
+            "fit": _format_budget_fit(requirement, budget),
+        },
+        "risks": risks,
+        "adjustment_options": adjustment_options,
+        "sections": [
+            {"id": "overview", "title": "行程概览"},
+            {"id": "transport_accommodation", "title": "交通与住宿"},
+            {"id": "itinerary", "title": "每日行程"},
+            {"id": "map_routes", "title": "景点地图"},
+            {"id": "budget", "title": "预算明细"},
+            {"id": "risk", "title": "天气与风险提醒"},
+            {"id": "adjustments", "title": "后续可调整"},
+        ],
+    }
+
+
 def _build_final_report(
     state: TravelState,
     requirement: dict,
@@ -1162,6 +1535,7 @@ def _build_final_report(
     selected_accommodation: dict,
     selected_food_types: list[str],
 ) -> str:
+    itinerary = _ensure_itinerary_day_count(itinerary, state, requirement)
     route_label = _format_report_route_label(state, requirement)
     duration = _format_report_duration(requirement)
     people = _format_report_people(requirement)
@@ -1205,7 +1579,7 @@ def _build_final_report(
             *_format_budget_verification_items(budget),
             "",
             "天气与风险提醒：",
-            *_format_report_risk_lines(itinerary, budget),
+            *_format_report_risk_lines(itinerary, budget, state, requirement),
             "",
             "后续可调整：",
             *_format_adjustment_options(state, budget),
@@ -1618,27 +1992,26 @@ def generate_itinerary_tool(
         if food_booking_note:
             time_blocks.append(f"餐饮提醒：{food_booking_note}")
 
-        itinerary.append(
-            {
-                "day_number": day,
-                "theme": theme,
-                "activities": activities,
-                "time_blocks": time_blocks,
-                "meals": [
-                    "早餐：以酒店/周边省心用餐为主",
-                    f"午餐：{_format_food_poi_summary(lunch_food, '结合当日动线就近安排')}",
-                    f"晚餐：{_format_food_poi_summary(dinner_food, '优先匹配已确认餐饮偏好')}",
-                ],
-                "accommodation": selected_accommodation.get("name", "待结合酒店方案确认"),
-                "transport_note": transport_summary if day == 1 else "当天以同区域动线为主，减少无效通勤",
-                "plan_b": weather_plan_b,
-                "route_note": route_note,
-                "risk_notes": [
-                    "热门景点、餐厅和酒店价格可能随日期变化，出发前需要再次核验。",
-                    "如遇天气、排队或体力变化，优先执行 Plan B 并保留休息时间。",
-                ],
-            }
-        )
+        day_plan = {
+            "day_number": day,
+            "theme": theme,
+            "activities": activities,
+            "time_blocks": time_blocks,
+            "meals": [
+                "早餐：以酒店/周边省心用餐为主",
+                f"午餐：{_format_food_poi_summary(lunch_food, '结合当日动线就近安排')}",
+                f"晚餐：{_format_food_poi_summary(dinner_food, '优先匹配已确认餐饮偏好')}",
+            ],
+            "accommodation": selected_accommodation.get("name", "待结合酒店方案确认"),
+            "transport_note": transport_summary if day == 1 else "当天以同区域动线为主，减少无效通勤",
+            "plan_b": weather_plan_b,
+            "route_note": route_note,
+            "risk_notes": [
+                "热门景点、餐厅和酒店价格可能随日期变化，出发前需要再次核验。",
+                "如遇天气、排队或体力变化，优先执行 Plan B 并保留休息时间。",
+            ],
+        }
+        itinerary.append(_enrich_itinerary_day_for_report(day_plan, state, requirement))
 
     return _command_with_message(
         f"已生成 {travel_days} 天的行程草案。",
@@ -1669,6 +2042,7 @@ def summarize_budget_tool(
     destination = state.get("selected_destination") or requirement.get("destination") or ""
     destination_context = _get_destination_context(state, destination)
     selected_accommodation = state.get("selected_accommodation_option") or {}
+    itinerary = _ensure_itinerary_day_count(itinerary, state, requirement)
 
     transport_cost = _estimate_transport_cost(state, total_people)
     accommodation_cost, accommodation_assumption = _estimate_accommodation_cost(
@@ -1709,8 +2083,23 @@ def summarize_budget_tool(
         destination_context,
         itinerary,
     )
+    budget_line_items = _build_budget_line_items(
+        state,
+        itinerary,
+        travel_days,
+        total_people,
+        transport_cost,
+        accommodation_cost,
+        food_cost,
+        attractions_cost,
+        misc_cost,
+    )
 
     budget_breakdown = {
+        "currency": "CNY",
+        "travel_days": travel_days,
+        "nights": max(travel_days - 1, 1),
+        "total_people": total_people,
         "transport": transport_cost,
         "accommodation": accommodation_cost,
         "food": food_cost,
@@ -1718,6 +2107,7 @@ def summarize_budget_tool(
         "misc": misc_cost,
         "total": total_cost,
         "per_person": total_cost / max(total_people, 1),
+        "line_items": budget_line_items,
         "assumptions": assumptions,
         **budget_quality,
     }
@@ -1726,15 +2116,14 @@ def summarize_budget_tool(
     budget_summary = "\n".join(
         [
             "预算汇总完成：",
-            f"- 总计：{total_cost:.2f} 元",
-            f"- 人均：{budget_breakdown['per_person']:.2f} 元",
-            f"- 交通：{transport_cost:.2f} 元",
-            f"- 住宿：{accommodation_cost:.2f} 元",
-            f"- 餐饮：{food_cost:.2f} 元",
-            f"- 景点：{attractions_cost:.2f} 元",
-            f"- 其他：{misc_cost:.2f} 元",
+            "",
+            "预算明细：",
+            *_format_budget_breakdown(budget_breakdown),
             "",
             budget_fit,
+            "",
+            "费用依据：",
+            *_format_budget_assumptions(budget_breakdown),
             "",
             "关键假设：",
             *[f"- {assumption}" for assumption in assumptions],
@@ -1750,6 +2139,7 @@ def summarize_budget_tool(
     return _command_with_message(
         budget_summary,
         runtime,
+        itinerary=itinerary,
         budget=budget_breakdown,
         current_step="order_generation",
     )
@@ -1774,9 +2164,18 @@ def generate_order_tool(
     selected_transport_option = state.get("selected_transport_option") or {}
     selected_accommodation = state.get("selected_accommodation_option") or {}
     budget = state.get("budget") or {}
-    itinerary = state.get("itinerary") or []
+    itinerary = _ensure_itinerary_day_count(state.get("itinerary") or [], state, requirement)
     selected_food_types = state.get("selected_food_types") or []
     report = _build_final_report(
+        state,
+        requirement,
+        budget,
+        itinerary,
+        selected_transport_option,
+        selected_accommodation,
+        selected_food_types,
+    )
+    report_data = _build_report_data(
         state,
         requirement,
         budget,
@@ -1799,7 +2198,9 @@ def generate_order_tool(
         message,
         runtime,
         order_id=order_id,
+        itinerary=itinerary,
         report=report,
+        report_data=report_data,
     )
 
 
