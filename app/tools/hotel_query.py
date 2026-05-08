@@ -3,6 +3,7 @@ Hotel query tools that wrap the raw hotel MCP APIs with planner-friendly inputs.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import time
@@ -124,8 +125,34 @@ ACCOMMODATION_PREFERENCE_KEYWORDS = (
     "性价比",
 )
 
-MAX_FILTERED_PLACE_CANDIDATES = 4
-MAX_RELAXED_PLACE_CANDIDATES = 2
+MAX_FILTERED_PLACE_CANDIDATES = 3
+MAX_RELAXED_PLACE_CANDIDATES = 1
+HOTEL_SESSION_START_TIMEOUT_SECONDS = 18.0
+HOTEL_SEARCH_CALL_TIMEOUT_SECONDS = 12.0
+SPECIFIC_PLACE_DISTANCE_LIMIT_METERS = 8000
+
+VALID_PLACE_TYPES = {
+    "城市",
+    "机场",
+    "景点",
+    "火车站",
+    "地铁站",
+    "酒店",
+    "区/县",
+    "详细地址",
+}
+
+PREFERENCE_SPLIT_MARKERS = (
+    "想住",
+    "想要",
+    "希望",
+    "最好",
+    "偏好",
+    "要求",
+    "要住",
+    "住在",
+    "入住",
+)
 
 
 def _dedupe_preserve_order(items: list[str]) -> list[str]:
@@ -156,6 +183,14 @@ def _extract_city_prefix(place: str) -> str:
     return ""
 
 
+def _find_city_prefix(place: str) -> str:
+    compact_place = re.sub(r"^[\s，,。；;、]+", "", place or "")
+    for city in sorted(CHINESE_CITY_PREFIXES, key=len, reverse=True):
+        if compact_place.startswith(city):
+            return city
+    return ""
+
+
 def _expand_place_candidates(place: str) -> list[str]:
     raw_place = place.strip()
     stripped_place = _strip_place_suffix(raw_place)
@@ -170,6 +205,139 @@ def _expand_place_candidates(place: str) -> list[str]:
     return _dedupe_preserve_order(
         [raw_place, stripped_place, *overrides, city_prefix, alias or city_alias or ""]
     )
+
+
+def _contains_accommodation_preference(text: str) -> bool:
+    return _looks_like_accommodation_preference(text, "")
+
+
+def _find_preference_start(text: str) -> int:
+    indices = [
+        index
+        for marker in PREFERENCE_SPLIT_MARKERS
+        if (index := text.find(marker)) > 0
+    ]
+    indices.extend(
+        index
+        for keyword in ACCOMMODATION_PREFERENCE_KEYWORDS
+        if (index := text.find(keyword)) > 0
+    )
+    return min(indices) if indices else -1
+
+
+def _clean_destination_phrase(text: str) -> str:
+    cleaned = re.sub(r"^[\s，,。；;、]+|[\s，,。；;、]+$", "", text or "")
+    cleaned = re.sub(r"(附近|周边|周围|一带|旁边|附近的酒店|酒店|住宿)$", "", cleaned)
+    city_prefix = _find_city_prefix(cleaned)
+    if city_prefix:
+        suffix = cleaned[len(city_prefix):].strip()
+        if suffix in {"亲子游", "亲子", "家庭游", "旅游", "旅行", "出游", "游"}:
+            return city_prefix
+    return cleaned
+
+
+def _looks_like_specific_location(text: str) -> bool:
+    return bool(
+        _find_city_prefix(text)
+        and re.search(r"(路|街|大道|巷|弄|号|广场|商圈|中心|公园|景区|风景区|机场|车站|地铁站|寺|庙|湖|山|桥|滩)", text)
+    )
+
+
+def _split_destination_and_preferences(
+    destination: str,
+    preferences: str,
+    selected_destination: str = "",
+) -> tuple[str, str]:
+    text = str(destination or "").strip()
+    if not text or not _contains_accommodation_preference(text):
+        return destination, preferences
+
+    extracted_destination = ""
+    extracted_preferences = ""
+    preference_start = _find_preference_start(text)
+    if preference_start <= 0 and _looks_like_specific_location(text):
+        return _clean_destination_phrase(text), preferences
+
+    if preference_start > 0:
+        extracted_destination = _clean_destination_phrase(text[:preference_start])
+        extracted_preferences = text[preference_start:].strip(" ，,。；;、")
+    else:
+        city_prefix = _find_city_prefix(text)
+        if city_prefix and text != city_prefix:
+            extracted_destination = city_prefix
+            extracted_preferences = text[len(city_prefix):].strip(" ，,。；;、")
+        elif selected_destination:
+            extracted_destination = selected_destination
+            extracted_preferences = text
+
+    if selected_destination and (
+        not extracted_destination
+        or _contains_accommodation_preference(extracted_destination)
+        or extracted_destination in {"亲子游", "家庭游", "旅游", "旅行", "出游"}
+    ):
+        extracted_destination = selected_destination
+
+    if not extracted_destination:
+        return destination, preferences
+
+    normalized_preferences = preferences
+    if extracted_preferences and extracted_preferences not in normalized_preferences:
+        normalized_preferences = "；".join(
+            item for item in [normalized_preferences, extracted_preferences] if item
+        )
+    return extracted_destination, normalized_preferences
+
+
+def _infer_place_type(place: str, requested_place_type: str) -> str:
+    place_text = str(place or "").strip()
+    requested = requested_place_type if requested_place_type in VALID_PLACE_TYPES else "城市"
+    if not place_text:
+        return requested
+
+    stripped_place = _strip_place_suffix(place_text)
+    if (
+        place_text in COMMON_CITY_ALIASES
+        or stripped_place in COMMON_CITY_ALIASES
+        or place_text in set(COMMON_CITY_ALIASES.values())
+    ):
+        return "城市"
+    if place_text.endswith("机场"):
+        return "机场"
+    if "地铁" in place_text:
+        return "地铁站"
+    if place_text.endswith(("火车站", "高铁站")):
+        return "火车站"
+    if place_text.endswith(("区", "县")):
+        return "区/县"
+    if place_text.endswith(("景区", "风景区")):
+        return "景点"
+    if _extract_city_prefix(place_text) and re.search(r"(路|街|大道|道|巷|弄|号|广场|商圈|中心|附近|周边|一带|\d)", place_text):
+        return "详细地址"
+    return requested
+
+
+def _build_place_candidates(destination: str, requested_place_type: str) -> list[dict[str, str]]:
+    candidates: list[dict[str, str]] = []
+    for candidate in _expand_place_candidates(destination):
+        if candidate in COMMON_CITY_ALIASES.values():
+            candidate_place_type = "城市"
+        elif candidate == destination:
+            candidate_place_type = _infer_place_type(candidate, requested_place_type)
+        elif candidate in COMMON_CITY_ALIASES:
+            candidate_place_type = "城市"
+        else:
+            candidate_place_type = _infer_place_type(candidate, "城市")
+        candidates.append({"place": candidate, "place_type": candidate_place_type})
+
+    unique_candidates: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for candidate in candidates:
+        key = (candidate["place"], candidate["place_type"])
+        if key in seen:
+            continue
+        seen.add(key)
+        unique_candidates.append(candidate)
+    return unique_candidates
 
 
 def _build_relevance_tokens(place: str) -> list[str]:
@@ -217,7 +385,11 @@ def _hotel_matches_destination(hotel: dict[str, Any], place: str) -> bool:
 
 def _relax_search_payload(payload: dict[str, Any]) -> dict[str, Any]:
     relaxed_payload = dict(payload)
+    filter_options = dict(relaxed_payload.get("filterOptions") or {})
+    distance_limit = filter_options.get("distanceInMeter")
     relaxed_payload.pop("filterOptions", None)
+    if distance_limit:
+        relaxed_payload["filterOptions"] = {"distanceInMeter": distance_limit}
     hotel_tags = dict(relaxed_payload.get("hotelTags") or {})
     if "preferredTags" in hotel_tags:
         hotel_tags.pop("preferredTags", None)
@@ -252,11 +424,15 @@ def _infer_preferred_tags(preferences: str, children_count: int) -> list[str]:
 
 
 def _extract_text_blocks(result: Any) -> str:
+    if hasattr(result, "content"):
+        return _extract_text_blocks(getattr(result, "content"))
     if isinstance(result, list):
         text_blocks = []
         for item in result:
             if isinstance(item, dict) and item.get("type") == "text":
                 text_blocks.append(item.get("text", ""))
+            elif hasattr(item, "text"):
+                text_blocks.append(str(getattr(item, "text") or ""))
             else:
                 text_blocks.append(str(item))
         return "\n".join(text_blocks)
@@ -408,7 +584,42 @@ def _format_hotels(
     return "\n".join(lines)
 
 
+class _HotelSearchSessionTool:
+    """Invoke hotel MCP calls through one stdio session for a full query."""
+
+    def __init__(self, tool_name: str) -> None:
+        self.name = tool_name
+        self._session_context: Any | None = None
+        self._session: Any | None = None
+
+    async def __aenter__(self) -> "_HotelSearchSessionTool":
+        manager = await get_mcp_client()
+        self._session_context = manager.session("aigohotel-mcp")
+        self._session = await asyncio.wait_for(
+            self._session_context.__aenter__(),
+            timeout=HOTEL_SESSION_START_TIMEOUT_SECONDS,
+        )
+        return self
+
+    async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
+        if self._session_context is not None:
+            await self._session_context.__aexit__(exc_type, exc, tb)
+        self._session_context = None
+        self._session = None
+
+    async def ainvoke(self, payload: dict[str, Any]) -> Any:
+        if self._session is None:
+            raise RuntimeError("Hotel MCP session is not initialized")
+        return await self._session.call_tool(self.name, payload)
+
+
 async def _get_hotel_tool(tool_name: str) -> Any | None:
+    if tool_name == "searchHotels":
+        manager = await get_mcp_client()
+        if "aigohotel-mcp" not in manager.SERVER_CONFIGS:
+            return None
+        return _HotelSearchSessionTool(tool_name)
+
     manager = await get_mcp_client()
     tools = await manager.get_tools(servers=["aigohotel-mcp"])
     for tool_instance in tools:
@@ -457,6 +668,14 @@ def _normalize_query_args_from_state(
 
     state_destination = state.get("selected_destination") or requirement.get("destination")
     normalized_destination = destination
+    normalized_preferences = preferences
+    split_destination, split_preferences = _split_destination_and_preferences(
+        str(destination or ""),
+        normalized_preferences,
+        str(state_destination or ""),
+    )
+    normalized_destination = split_destination
+    normalized_preferences = split_preferences
     destination_is_placeholder = _is_placeholder(destination, {"目的地", "城市", "未确认", "destination"})
     destination_is_preference = (
         bool(state_destination)
@@ -491,7 +710,6 @@ def _normalize_query_args_from_state(
         normalized_budget = requirement.get("budget_level") or "comfort"
 
     special_needs = requirement.get("special_needs")
-    normalized_preferences = preferences
     if destination_is_preference and str(destination).strip() not in normalized_preferences:
         normalized_preferences = "；".join(
             item for item in [normalized_preferences, str(destination).strip()] if item
@@ -517,6 +735,20 @@ def _normalize_query_args_from_state(
     }
 
 
+def _build_search_payload_for_candidate(
+    search_payload_base: dict[str, Any],
+    candidate: dict[str, str],
+) -> dict[str, Any]:
+    payload = dict(search_payload_base)
+    payload["place"] = candidate["place"]
+    payload["placeType"] = candidate["place_type"]
+    if candidate["place_type"] == "详细地址":
+        filter_options = dict(payload.get("filterOptions") or {})
+        filter_options.setdefault("distanceInMeter", SPECIFIC_PLACE_DISTANCE_LIMIT_METERS)
+        payload["filterOptions"] = filter_options
+    return payload
+
+
 async def _search_relevant_hotels(
     *,
     search_tool: Any,
@@ -525,13 +757,37 @@ async def _search_relevant_hotels(
     relaxed: bool = False,
 ) -> tuple[list[dict[str, Any]], str]:
     place = str(payload.get("place") or "")
+    place_type = str(payload.get("placeType") or "")
     started_at = time.perf_counter()
     log_prefix = "Hotel query relaxed candidate" if relaxed else "Hotel query candidate"
     app_logger.info(
         f"{log_prefix} started: "
-        f"destination={destination}, place={place}, size={payload.get('size')}"
+        f"destination={destination}, place={place}, place_type={place_type}, "
+        f"size={payload.get('size')}"
     )
-    result = await search_tool.ainvoke(payload)
+    try:
+        result = await asyncio.wait_for(
+            search_tool.ainvoke(payload),
+            timeout=HOTEL_SEARCH_CALL_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        elapsed = time.perf_counter() - started_at
+        app_logger.warning(
+            f"{log_prefix} timed out: "
+            f"destination={destination}, place={place}, "
+            f"elapsed_seconds={elapsed:.2f}"
+        )
+        return [], "酒店搜索上游响应超时，已停止等待这次请求"
+    except Exception as exc:
+        elapsed = time.perf_counter() - started_at
+        message = str(exc).strip() or exc.__class__.__name__
+        app_logger.warning(
+            f"{log_prefix} failed: "
+            f"destination={destination}, place={place}, "
+            f"elapsed_seconds={elapsed:.2f}, error={message}"
+        )
+        return [], f"酒店搜索上游异常：{message}"
+
     elapsed = time.perf_counter() - started_at
     parsed_payload = _parse_search_payload(result)
     hotels = parsed_payload.get("hotelInformationList") or []
@@ -586,7 +842,28 @@ async def query_hotel_options(
     preferences = normalized_args["preferences"]
     place_type = normalized_args["place_type"]
 
-    search_tool = await _get_hotel_tool("searchHotels")
+    try:
+        search_tool = await asyncio.wait_for(
+            _get_hotel_tool("searchHotels"),
+            timeout=HOTEL_SESSION_START_TIMEOUT_SECONDS,
+        )
+    except Exception as exc:
+        elapsed = time.perf_counter() - started_at
+        app_logger.warning(
+            "Hotel query unavailable while preparing MCP tool: "
+            f"destination={destination}, elapsed_seconds={elapsed:.2f}, "
+            f"error={exc.__class__.__name__}"
+        )
+        return Command(
+            update={
+                "messages": [
+                    _tool_message(
+                        "酒店搜索服务这次没有及时准备好，我不会编造酒店候选；可以稍后重试真实酒店查询。",
+                        runtime,
+                    )
+                ]
+            }
+        )
     if search_tool is None:
         elapsed = time.perf_counter() - started_at
         app_logger.warning(
@@ -595,13 +872,13 @@ async def query_hotel_options(
         )
         return Command(
             update={
-                "messages": [_tool_message("酒店搜索服务当前不可用，请稍后再试。", runtime)]
+                "messages": [_tool_message("酒店搜索服务当前不可用，我不会编造酒店候选；请稍后再试。", runtime)]
             }
         )
 
     budget_key = budget_level if budget_level in STAR_RATING_BY_BUDGET else "comfort"
     preferred_tags = _infer_preferred_tags(preferences, children_count)
-    place_candidates = _expand_place_candidates(destination)[:MAX_FILTERED_PLACE_CANDIDATES]
+    place_candidates = _build_place_candidates(destination, place_type)[:MAX_FILTERED_PLACE_CANDIDATES]
     normalized_size = min(max(size, 3), 10)
 
     search_payload_base = {
@@ -610,7 +887,6 @@ async def query_hotel_options(
             f"{'和' + str(children_count) + '位儿童' if children_count else ''}"
             f"入住{stay_nights}晚的酒店。用户偏好：{preferences or '交通方便、住得舒适'}。"
         ),
-        "placeType": place_type,
         "checkInParam": {
             "checkInDate": check_in_date,
             "stayNights": stay_nights,
@@ -638,30 +914,27 @@ async def query_hotel_options(
     matched_hotels: list[dict[str, Any]] = []
     matched_place = ""
 
-    for candidate in place_candidates:
-        tried_places.append(candidate)
-        payload = dict(search_payload_base)
-        payload["place"] = candidate
+    async def run_searches(active_search_tool: Any) -> tuple[list[dict[str, Any]], str, str]:
+        nonlocal last_message
+        for candidate in place_candidates:
+            tried_places.append(f"{candidate['place']}({candidate['place_type']})")
+            payload = _build_search_payload_for_candidate(search_payload_base, candidate)
 
-        relevant_hotels, message = await _search_relevant_hotels(
-            search_tool=search_tool,
-            payload=payload,
-            destination=destination,
-        )
-        if message:
-            last_message = message
-        if relevant_hotels:
-            matched_hotels = relevant_hotels
-            matched_place = candidate
-            break
+            relevant_hotels, message = await _search_relevant_hotels(
+                search_tool=active_search_tool,
+                payload=payload,
+                destination=destination,
+            )
+            if message:
+                last_message = message
+            if relevant_hotels:
+                return relevant_hotels, candidate["place"], last_message
 
-    if not matched_hotels:
         for candidate in place_candidates[:MAX_RELAXED_PLACE_CANDIDATES]:
-            payload = dict(search_payload_base)
-            payload["place"] = candidate
+            payload = _build_search_payload_for_candidate(search_payload_base, candidate)
             relaxed_payload = _relax_search_payload(payload)
             relevant_hotels, message = await _search_relevant_hotels(
-                search_tool=search_tool,
+                search_tool=active_search_tool,
                 payload=relaxed_payload,
                 destination=destination,
                 relaxed=True,
@@ -669,9 +942,33 @@ async def query_hotel_options(
             if message:
                 last_message = message
             if relevant_hotels:
-                matched_hotels = relevant_hotels
-                matched_place = candidate
-                break
+                return relevant_hotels, candidate["place"], last_message
+        return [], "", last_message
+
+    try:
+        if hasattr(search_tool, "__aenter__"):
+            async with search_tool as active_search_tool:
+                matched_hotels, matched_place, last_message = await run_searches(active_search_tool)
+        else:
+            matched_hotels, matched_place, last_message = await run_searches(search_tool)
+    except Exception as exc:
+        total_elapsed = time.perf_counter() - started_at
+        message = str(exc).strip() or exc.__class__.__name__
+        app_logger.warning(
+            "Hotel query failed without crashing workflow: "
+            f"destination={destination}, elapsed_seconds={total_elapsed:.2f}, "
+            f"error={message}"
+        )
+        return Command(
+            update={
+                "messages": [
+                    _tool_message(
+                        f"酒店搜索服务这次调用失败：{message}。我不会编造酒店候选；可以稍后重试真实酒店查询。",
+                        runtime,
+                    )
+                ]
+            }
+        )
 
     if matched_hotels:
         limited_hotels = matched_hotels[:normalized_size]

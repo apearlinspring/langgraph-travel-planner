@@ -81,6 +81,7 @@ def test_local_stdio_servers_use_stable_runtime_dirs(monkeypatch):
     assert env["TMP"].endswith(".runtime\\tmp")
     assert env["PYTHONUTF8"] == "1"
     assert env["UV_HTTP_TIMEOUT"] == "15"
+    assert MCPClientManager.SERVER_TOOL_LOAD_TIMEOUTS["aigohotel-mcp"] == 25.0
 
 
 def test_uv_defaults_to_public_pypi_when_no_index_is_configured(monkeypatch):

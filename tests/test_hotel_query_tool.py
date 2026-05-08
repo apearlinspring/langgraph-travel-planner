@@ -68,6 +68,15 @@ class PreferenceAwareFakeHotelSearchTool:
         )
 
 
+class HangingHotelSearchTool:
+    def __init__(self):
+        self.calls: list[str] = []
+
+    async def ainvoke(self, payload: dict):
+        self.calls.append(payload["place"])
+        raise TimeoutError("upstream hung")
+
+
 def test_expand_place_candidates_adds_english_alias_for_common_city():
     assert hotel_query._expand_place_candidates("北京市") == ["北京市", "北京", "Beijing"]
 
@@ -94,6 +103,47 @@ def test_infer_preferred_tags_matches_water_view_fuzzy_words():
 
     assert "\u6c5f\u666f\u623f" in tags
     assert "\u666f\u89c2\u623f" in tags
+
+
+def test_split_destination_keeps_room_view_in_preferences():
+    destination, preferences = hotel_query._split_destination_and_preferences(
+        "长沙湘江中路附近，想住江景房/江景的房",
+        "",
+        "长沙",
+    )
+
+    assert destination == "长沙湘江中路"
+    assert "江景房/江景的房" in preferences
+
+
+def test_split_destination_handles_family_and_subway_preferences():
+    destination, preferences = hotel_query._split_destination_and_preferences(
+        "北京亲子游，想住安静、交通方便、靠地铁的酒店",
+        "",
+        "北京",
+    )
+
+    assert destination == "北京"
+    assert "亲子游" in preferences
+    assert "靠地铁" in preferences
+
+
+def test_build_place_candidates_infers_detailed_address():
+    candidates = hotel_query._build_place_candidates("长沙湘江中路", "城市")
+
+    assert candidates[0] == {"place": "长沙湘江中路", "place_type": "详细地址"}
+    assert {"place": "长沙", "place_type": "城市"} in candidates
+
+
+def test_split_destination_keeps_nearby_specific_location_as_destination():
+    destination, preferences = hotel_query._split_destination_and_preferences(
+        "长沙湘江中路附近",
+        "想住江景房/江景的房",
+        "长沙",
+    )
+
+    assert destination == "长沙湘江中路"
+    assert preferences == "想住江景房/江景的房"
 
 
 def test_hotel_matches_destination_filters_out_wrong_city_result():
@@ -137,6 +187,7 @@ async def test_query_hotel_options_falls_back_to_english_alias(monkeypatch):
 
     result = command.update["messages"][0].content
     assert fake_tool.calls == ["北京", "Beijing"]
+    assert fake_tool.payloads[0]["placeType"] == "城市"
     assert "北京王府井天伦王朝酒店" in result
     assert "实际检索地：Beijing" in result
     assert "酒店ID：43615" in result
@@ -238,3 +289,63 @@ async def test_query_hotel_options_treats_room_view_as_preference_not_destinatio
     assert "江景房" in fake_tool.payloads[0]["originQuery"]
     assert "江景房" in fake_tool.payloads[0]["hotelTags"]["preferredTags"]
     assert "长沙湘江景观酒店" in command.update["messages"][0].content
+
+
+@pytest.mark.asyncio
+async def test_query_hotel_options_splits_specific_area_and_preferences(monkeypatch):
+    fake_tool = PreferenceAwareFakeHotelSearchTool()
+
+    async def fake_get_hotel_tool(tool_name: str):
+        assert tool_name == "searchHotels"
+        return fake_tool
+
+    monkeypatch.setattr(hotel_query, "_get_hotel_tool", fake_get_hotel_tool)
+
+    command = await hotel_query.query_hotel_options.ainvoke(
+        {
+            "destination": "长沙湘江中路附近，想住江景房/江景的房",
+            "check_in_date": "2026-06-01",
+            "stay_nights": 2,
+            "adult_count": 2,
+            "children_count": 0,
+            "budget_level": "comfort",
+            "preferences": "",
+        }
+    )
+
+    payload = fake_tool.payloads[0]
+    assert payload["place"] == "长沙湘江中路"
+    assert payload["placeType"] == "详细地址"
+    assert payload["filterOptions"]["distanceInMeter"] == 8000
+    assert "江景房/江景的房" in payload["originQuery"]
+    assert "长沙湘江景观酒店" in command.update["messages"][0].content
+
+
+@pytest.mark.asyncio
+async def test_query_hotel_options_times_out_with_honest_fallback(monkeypatch):
+    fake_tool = HangingHotelSearchTool()
+
+    async def fake_get_hotel_tool(tool_name: str):
+        assert tool_name == "searchHotels"
+        return fake_tool
+
+    monkeypatch.setattr(hotel_query, "_get_hotel_tool", fake_get_hotel_tool)
+    monkeypatch.setattr(hotel_query, "HOTEL_SEARCH_CALL_TIMEOUT_SECONDS", 0.01)
+
+    command = await hotel_query.query_hotel_options.ainvoke(
+        {
+            "destination": "南京",
+            "check_in_date": "2026-06-01",
+            "stay_nights": 2,
+            "adult_count": 2,
+            "children_count": 0,
+            "budget_level": "comfort",
+            "preferences": "安静、靠地铁",
+        }
+    )
+
+    result = command.update["messages"][0].content
+    assert fake_tool.calls == ["南京", "Nanjing", "南京"]
+    assert "暂时没有查到符合条件的酒店" in result
+    assert "酒店搜索上游响应超时" in result
+    assert "accommodation_options" not in command.update

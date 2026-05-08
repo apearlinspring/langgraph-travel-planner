@@ -4,6 +4,8 @@ Resilient MCP client manager.
 import asyncio
 import os
 import sys
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from copy import deepcopy
 from typing import Any, Optional
 from urllib.parse import urlparse
@@ -29,7 +31,7 @@ class MCPClientManager:
     MCP_RETRY_DELAY_SECONDS = 1.0
     OPTIONAL_STARTUP_SERVERS = {"aigohotel-mcp"}
     SERVER_RETRY_ATTEMPTS = {"aigohotel-mcp": 1}
-    SERVER_TOOL_LOAD_TIMEOUTS = {"aigohotel-mcp": 10.0}
+    SERVER_TOOL_LOAD_TIMEOUTS = {"aigohotel-mcp": 25.0}
     AIGOHOTEL_MCP_PACKAGE = "aigohotel-mcp==0.3.1"
     ENV_VARS: dict[str, str] = {}
     SERVER_CONFIGS: dict[str, dict[str, Any]] = {}
@@ -230,6 +232,35 @@ class MCPClientManager:
             client = MultiServerMCPClient({server: self.SERVER_CONFIGS[server]})
             self._clients[server] = client
         return client
+
+    @asynccontextmanager
+    async def session(self, server: str) -> AsyncIterator[Any]:
+        """Open a single MCP session for callers that need multiple tool calls."""
+        if server not in self.SERVER_CONFIGS:
+            raise ValueError(f"Unknown MCP server: {server}")
+
+        client = self._get_or_create_client(server)
+        try:
+            async with client.session(server) as session:
+                cached_tool_count = len(self._tool_cache.get(server, []))
+                self._server_status[server] = self._build_status_entry(
+                    server,
+                    "healthy",
+                    tool_count=cached_tool_count,
+                )
+                yield session
+        except Exception as exc:
+            self._tool_cache.pop(server, None)
+            self._clients.pop(server, None)
+            self._server_status[server] = self._build_status_entry(
+                server,
+                "unavailable",
+                error=self._format_error(exc),
+            )
+            app_logger.warning(
+                f"MCP server session failed: {server} - {self._format_error(exc)}"
+            )
+            raise
 
     @staticmethod
     def _format_error(exc: Exception | None) -> str:
