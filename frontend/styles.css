@@ -3361,6 +3361,42 @@ html {
       .planner-panel.collapsed {
         padding-bottom: 16px;
       }
+      .planner-assist-strip {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-bottom: 12px;
+      }
+      .planner-assist-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        min-height: 30px;
+        padding: 7px 10px;
+        border-radius: 999px;
+        border: 1px solid rgba(26, 77, 84, 0.1);
+        background: rgba(255, 255, 255, 0.72);
+        color: rgba(72, 97, 102, 0.84);
+        font-size: 12px;
+        font-weight: 700;
+      }
+      .planner-assist-chip.filled {
+        border-color: rgba(23, 96, 58, 0.2);
+        background: rgba(23, 96, 58, 0.1);
+        color: #17603a;
+      }
+      .planner-assist-chip.missing {
+        border-style: dashed;
+        color: #9a6a2b;
+        background: rgba(194, 142, 92, 0.1);
+      }
+      .planner-assist-chip.optional {
+        color: rgba(72, 97, 102, 0.72);
+      }
+      .planner-panel-ready {
+        border-color: rgba(23, 96, 58, 0.22);
+        box-shadow: 0 12px 24px rgba(23, 96, 58, 0.08);
+      }
       .planner-grid {
         display: grid;
         grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -3373,6 +3409,10 @@ html {
       .planner-field label {
         font-size: 12px;
         color: var(--text-light);
+      }
+      .planner-field.filled label {
+        color: var(--primary);
+        font-weight: 700;
       }
       .planner-field input {
         width: 100%;
@@ -3387,6 +3427,10 @@ html {
         outline: none;
         border-color: var(--primary);
         box-shadow: 0 0 0 2px rgba(26, 77, 84, 0.08);
+      }
+      .planner-field.filled input {
+        border-color: rgba(26, 77, 84, 0.18);
+        background: rgba(255, 255, 255, 1);
       }
       .planner-chip-group {
         display: flex;
@@ -3921,6 +3965,8 @@ html {
         }
         .message.assistant .message-text .journey-map-sidebar {
           order: 2;
+          max-height: none;
+          overflow: visible;
         }
         .message.assistant .message-text .journey-live-map-aside {
           grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -4312,9 +4358,80 @@ html {
         transform: translateY(-1px);
       }
 
+      .conversation-item.editing {
+        border-color: rgba(26, 77, 84, 0.24);
+        background: rgba(255, 255, 255, 0.96);
+      }
+
+      .conversation-title-edit-form {
+        flex: 1;
+        min-width: 0;
+      }
+
+      .conversation-title-input,
+      .chat-title-input {
+        width: 100%;
+        min-width: 0;
+        border: 1px solid rgba(26, 77, 84, 0.16);
+        border-radius: 10px;
+        background: rgba(255, 255, 255, 0.96);
+        color: var(--text-main);
+        font: inherit;
+        font-weight: 700;
+      }
+
+      .conversation-title-input {
+        padding: 7px 9px;
+        font-size: 13px;
+      }
+
+      .chat-info h2.editing {
+        width: min(360px, 100%);
+      }
+
+      .chat-title-input {
+        padding: 8px 10px;
+        font-size: 18px;
+        color: var(--text-serif);
+      }
+
+      .conversation-save-btn,
+      .conversation-cancel-btn {
+        width: 28px;
+        height: 28px;
+        border-radius: 999px;
+        border: 1px solid rgba(26, 77, 84, 0.1);
+        background: rgba(255, 255, 255, 0.9);
+        color: var(--primary);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+      }
+
+      .conversation-save-btn:hover {
+        border-color: rgba(23, 96, 58, 0.22);
+        background: rgba(23, 96, 58, 0.1);
+        color: #17603a;
+      }
+
+      .conversation-cancel-btn:hover {
+        border-color: rgba(180, 35, 24, 0.24);
+        background: rgba(180, 35, 24, 0.08);
+        color: #b42318;
+      }
+
+      .conversation-save-btn:disabled,
+      .conversation-cancel-btn:disabled,
+      .conversation-title-input:disabled,
+      .chat-title-input:disabled {
+        opacity: 0.62;
+        cursor: wait;
+      }
+
       .message.assistant .message-text .journey-preview-board {
-        padding: 16px;
-        border-radius: 20px;
+        padding: 14px;
+        border-radius: 18px;
         background: linear-gradient(180deg, rgba(15, 70, 78, 0.08), rgba(255, 255, 255, 0.96));
         border: 1px solid rgba(26, 77, 84, 0.1);
         box-shadow: 0 14px 28px rgba(18, 53, 58, 0.08);
@@ -4362,13 +4479,13 @@ html {
       }
 
       .message.assistant .message-text .journey-live-map-shell-body--studio {
-        grid-template-columns: minmax(0, 1fr) 300px;
-        gap: 16px;
+        grid-template-columns: minmax(0, 1fr) 260px;
+        gap: 14px;
       }
 
       .message.assistant .message-text .journey-live-map-shell--studio .journey-live-map {
-        min-height: 420px;
-        border-radius: 22px;
+        min-height: 360px;
+        border-radius: 18px;
         background: rgba(228, 238, 240, 0.75);
         border-color: rgba(26, 77, 84, 0.14);
       }
@@ -4385,7 +4502,7 @@ html {
         left: 14px;
         display: grid;
         gap: 7px;
-        max-width: min(calc(100% - 28px), 560px);
+        max-width: min(calc(100% - 28px), 500px);
         width: fit-content;
         pointer-events: none;
       }
@@ -4437,7 +4554,11 @@ html {
         align-items: center;
         justify-content: center;
         text-align: center;
-        padding: 8px 11px;
+        padding: 7px 10px;
+      }
+
+      .message.assistant .message-text .journey-map-floating-panel .journey-map-day-btn span {
+        white-space: nowrap;
       }
 
       .message.assistant .message-text .journey-map-floating-panel .journey-map-day-btn small {
@@ -4467,6 +4588,36 @@ html {
       .message.assistant .message-text .journey-map-action-btn.secondary {
         color: rgba(46, 78, 83, 0.92);
         background: rgba(247, 250, 250, 0.94);
+      }
+
+      .message.assistant .message-text .journey-map-action-btn:hover,
+      .message.assistant .message-text .journey-map-style-btn:hover,
+      .message.assistant .message-text .journey-map-focus-btn:hover,
+      .message.assistant .message-text .journey-map-day-btn:hover,
+      .message.assistant .message-text .journey-map-day-mode-btn:hover {
+        border-color: rgba(26, 77, 84, 0.24);
+        transform: translateY(-1px);
+      }
+
+      .message.assistant .message-text .journey-map-action-btn:disabled,
+      .message.assistant .message-text .journey-map-style-btn:disabled,
+      .message.assistant .message-text .journey-map-focus-btn:disabled,
+      .message.assistant .message-text .journey-map-day-btn:disabled,
+      .message.assistant .message-text .journey-map-day-mode-btn:disabled {
+        opacity: 0.48;
+        cursor: not-allowed;
+        transform: none;
+      }
+
+      .message.assistant .message-text .journey-map-sidebar {
+        max-height: 410px;
+        overflow: auto;
+        padding-right: 2px;
+      }
+
+      .message.assistant .message-text .journey-map-stage-stop.active {
+        border-color: rgba(26, 77, 84, 0.24);
+        background: rgba(26, 77, 84, 0.1);
       }
 
       .message.assistant .message-text .journey-live-map-shell--overview-only
