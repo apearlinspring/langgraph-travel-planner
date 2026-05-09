@@ -563,6 +563,7 @@ def test_itinerary_budget_and_order_report_use_selected_real_options():
     assert "行程亮点" in order_command.update["report"]
     assert "每日行程" in order_command.update["report"]
     assert "景点地图" in order_command.update["report"]
+    assert "方案依据" in order_command.update["report"]
     assert "预算明细" in order_command.update["report"]
     assert "预算匹配" in order_command.update["report"]
     assert "费用依据" in order_command.update["report"]
@@ -583,6 +584,8 @@ def test_itinerary_budget_and_order_report_use_selected_real_options():
     assert report_data["version"] == "travel_report.v1"
     assert len(report_data["itinerary"]) == 3
     assert len(report_data["map_routes"]) == 3
+    assert report_data["agency_context"]["source_type"] == "agency_internal"
+    assert report_data["agency_context"]["highlights"]
     assert report_data["budget"]["items"]
     assert [
         day["route"]["summary"] for day in report_data["itinerary"]
@@ -698,10 +701,12 @@ def test_final_report_pads_four_day_trip_and_exports_route_bound_data():
     for day_number in range(1, 5):
         assert f"Day {day_number}：" in report
     assert "天气风险" in report
+    assert "方案依据" in report
     assert "费用依据" in report
     assert "预算置信度" in report
     assert len(report_data["itinerary"]) == 4
     assert len(report_data["map_routes"]) == 4
+    assert report_data["agency_context"]["mode"] == "free_planning"
     assert report_data["itinerary"][3]["title"] == "返程缓冲与补漏"
     assert [
         day["route"]["summary"] for day in report_data["itinerary"]

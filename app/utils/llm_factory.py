@@ -84,4 +84,6 @@ def build_chat_model(
         temperature=settings.qwen_temperature if temperature is None else temperature,
         max_tokens=settings.qwen_max_tokens if max_tokens is None else max_tokens,
         streaming=streaming,
+        timeout=settings.qwen_request_timeout_seconds,
+        max_retries=settings.qwen_max_retries,
     )

@@ -5,6 +5,7 @@ from typing import Any, Callable
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
 from langchain_core.messages import HumanMessage, ToolMessage
 
+from app.core.intent import TravelIntent, detect_travel_intent
 from app.core.state import TravelState
 from app.core.store import get_user_memory_service
 from app.core.workflow import INITIAL_PLANNING_STEP
@@ -32,6 +33,20 @@ DIRECT_QUERY_KEYWORDS = (
     "信息已经齐",
     "不用继续问",
 )
+
+CROSS_STEP_VERIFY_KEYWORDS = (
+    "查",
+    "查询",
+    "查证",
+    "核实",
+    "验证",
+    "真实",
+    "具体",
+    "安排",
+)
+
+CROSS_STEP_TRANSPORT_KEYWORDS = ("交通", "高铁", "火车", "航班", "飞机", "自驾")
+CROSS_STEP_HOTEL_KEYWORDS = ("住宿", "酒店", "住哪里", "住哪", "民宿")
 
 REQUIREMENT_RECORD_KEYWORDS = (
     "记录",
@@ -65,6 +80,16 @@ DESTINATION_HINT_KEYWORDS = (
     "这个地方",
     "目的地",
     "城市",
+)
+
+AGENCY_INTERNAL_TOOL_NAMES = frozenset(
+    {
+        "search_agency_product_templates",
+        "search_agency_service_sop",
+        "search_agency_pricing_rules",
+        "search_agency_risk_playbook",
+        "search_agency_report_standards",
+    }
 )
 
 
@@ -340,6 +365,39 @@ def _tool_choice_instruction(tool_name: str) -> str:
     )
 
 
+def _cross_step_verification_tools(text: str) -> list[str]:
+    """识别用户一口气要求核验交通和住宿的复合场景。"""
+    if not text.strip():
+        return []
+
+    if not any(keyword in text for keyword in CROSS_STEP_VERIFY_KEYWORDS):
+        return []
+
+    requested_tools: list[str] = []
+    if any(keyword in text for keyword in CROSS_STEP_TRANSPORT_KEYWORDS):
+        requested_tools.append("query_transport_options")
+    if any(keyword in text for keyword in CROSS_STEP_HOTEL_KEYWORDS):
+        requested_tools.append("query_hotel_options")
+    return requested_tools
+
+
+def _cross_step_verification_instruction(tool_names: list[str]) -> str:
+    if len(tool_names) >= 2:
+        return (
+            "本轮用户同时要求核验交通和住宿。"
+            " 如果出发地、目的地、日期、人数和预算上下文已经存在，"
+            " 请优先调用 `query_transport_options` 和 `query_hotel_options` 获取真实候选；"
+            " 不要只用公开攻略、搜索结果或经验估算替代真实交通/酒店候选。"
+            " 如果两个工具都可用，建议先查交通，再查住宿。"
+        )
+
+    if "query_transport_options" in tool_names:
+        return _tool_choice_instruction("query_transport_options")
+    if "query_hotel_options" in tool_names:
+        return _tool_choice_instruction("query_hotel_options")
+    return ""
+
+
 def _tool_names(tools: list[Any]) -> set[str]:
     names: set[str] = set()
     for tool in tools:
@@ -349,6 +407,139 @@ def _tool_names(tools: list[Any]) -> set[str]:
         elif isinstance(tool, str) and tool:
             names.add(tool)
     return names
+
+
+def _exclude_tools_by_name(tools: list[Any], excluded_names: set[str] | frozenset[str]) -> list[Any]:
+    return [
+        tool
+        for tool in tools
+        if (
+            getattr(tool, "name", tool if isinstance(tool, str) else None)
+            not in excluded_names
+        )
+    ]
+
+
+def _find_tool_by_name(step_config: dict[str, Any], tool_name: str) -> Any | None:
+    for config in step_config.values():
+        for tool in config.get("tools", []):
+            name = getattr(tool, "name", None)
+            if name == tool_name or tool == tool_name:
+                return tool
+    return None
+
+
+def _state_value_ready(value: Any) -> bool:
+    return value not in (None, "", [], {})
+
+
+def _can_generate_final_report(state_dict: dict[str, Any]) -> bool:
+    required_fields = ("user_requirement", "selected_destination", "itinerary", "budget")
+    return all(_state_value_ready(state_dict.get(field)) for field in required_fields)
+
+
+def _preferred_tool_for_intent(intent: TravelIntent, state_dict: dict[str, Any]) -> str | None:
+    if intent.name in {"final_report", "export_report"}:
+        return "generate_order_tool" if _can_generate_final_report(state_dict) else None
+    return intent.preferred_tool
+
+
+def _intent_instruction(
+    intent: TravelIntent,
+    state_dict: dict[str, Any],
+    current_step: str,
+) -> str:
+    if intent.name == "unknown":
+        return ""
+
+    if intent.name == "hotel_query":
+        return (
+            "本轮用户的主要意图是查询住宿/酒店候选。"
+            " 如果目的地、日期、人数等上下文已经存在，请优先调用 `query_hotel_options`，"
+            " 不要退回泛泛区域建议，也不要只用公开攻略替代真实酒店候选。"
+        )
+
+    if intent.name == "transport_query":
+        return (
+            "本轮用户的主要意图是查询或对比交通方案。"
+            " 如果出发地、目的地和日期上下文已经存在，请优先调用 `query_transport_options`，"
+            " 并把不同交通方式的耗时、费用、稳定性和适配理由讲清楚。"
+        )
+
+    if intent.name == "final_report":
+        if _can_generate_final_report(state_dict):
+            return (
+                "本轮用户明确要求生成最终旅游规划报告。"
+                " 当前已有生成报告所需的核心状态，必须优先调用 `generate_order_tool`，"
+                " 并以工具返回的 report 作为正文，不要手写、压缩或删减正式报告章节。"
+            )
+        return (
+            "本轮用户明确要求生成最终旅游规划报告，但当前状态还未具备正式生成条件。"
+            " 不要手写伪最终报告，也不要假装已经完成结构化报告。"
+            " 请先用简短方式说明还缺哪些关键确认，或继续推进当前阶段补齐缺口。"
+        )
+
+    if intent.name == "export_report":
+        if _can_generate_final_report(state_dict):
+            return (
+                "本轮用户想导出或保存报告。"
+                " 如果尚未生成正式报告，请先调用 `generate_order_tool` 生成结构化报告；"
+                " 如果已经有正式报告，则说明前端导出入口会基于报告内容导出。"
+            )
+        return (
+            "本轮用户想导出或保存报告，但正式报告尚未具备生成条件。"
+            " 不要编造 PDF/图片下载结果，请先补齐最终报告所需信息。"
+        )
+
+    if intent.name == "map_route_query":
+        return (
+            "本轮用户关注地图、路线或分日路线可视化。"
+            " 回复时必须保留可解析的路线节点，例如 Day 1：酒店 -> 景点A -> 餐厅；"
+            " 如果还没有完整日程，请先说明当前只能生成轻量路线草图，后续完整日程会补齐地图路线。"
+        )
+
+    if intent.name == "agency_plan_query":
+        return (
+            "本轮用户倾向旅行社省心方案或成熟产品路线。"
+            " 请优先参考内部产品模板、服务标准和风险避坑经验，把它自然转化为方案依据；"
+            " 不要暴露内部知识库、RAG 或工具名，也不要承诺真实库存、锁价或支付能力。"
+        )
+
+    if intent.name == "free_planning_query":
+        return (
+            "本轮用户倾向自由行/自助规划。"
+            " 回复应保持中立实用，重点给路线、预算、住宿区域和避坑建议；"
+            " 不要把旅行社方案硬推给用户。"
+        )
+
+    if intent.name == "pricing_query":
+        return (
+            "本轮用户关注报价、费用包含或预算依据。"
+            " 请优先参考内部报价规则，清楚区分已确认价格、估算项和待核验项；"
+            " 不要把估算价格说成真实锁价。"
+        )
+
+    if intent.name == "risk_query":
+        return (
+            "本轮用户关注风险、避坑、预约或 Plan B。"
+            " 请优先参考内部风险手册，给出具体、温和、可执行的提醒；"
+            " 不要制造焦虑，也不要编造实时开放和库存情况。"
+        )
+
+    if intent.name == "progress_check":
+        return (
+            "本轮用户在询问当前规划进度。"
+            " 请优先调用 `check_current_progress` 或用当前状态简短说明已完成和待补齐内容，"
+            " 不要顺势生成新的长篇规划。"
+        )
+
+    if intent.name == "destination_query":
+        return (
+            "本轮用户关注目的地、景点或玩法。"
+            " 请优先回答目的地问题；只有用户明确要求完整规划时，才继续推进完整流程。"
+        )
+
+    return ""
 
 
 def _record_requirement_instruction() -> str:
@@ -622,7 +813,69 @@ class StepConfigMiddleware(AgentMiddleware):
 
         compatibility = get_model_compatibility(profile="planner")
         latest_human_text = _latest_human_text(request)
-        available_tool_names = _tool_names(step_config["tools"])
+        travel_intent = detect_travel_intent(
+            latest_human_text,
+            current_step=current_step,
+            state=state_dict,
+        )
+        intent_instruction = _intent_instruction(travel_intent, state_dict, current_step)
+        if intent_instruction:
+            override_kwargs["system_prompt"] = (
+                f"{override_kwargs['system_prompt']}\n\n{intent_instruction}"
+            )
+            app_logger.info(
+                "识别用户意图并注入提示: "
+                f"intent={travel_intent.name}, confidence={travel_intent.confidence:.2f}, "
+                f"reason={travel_intent.reason}"
+            )
+
+        if current_step == "requirement_collection" and travel_intent.name == "free_planning_query":
+            filtered_tools = _exclude_tools_by_name(
+                override_kwargs["tools"],
+                AGENCY_INTERNAL_TOOL_NAMES,
+            )
+            if len(filtered_tools) != len(override_kwargs["tools"]):
+                override_kwargs["tools"] = filtered_tools
+                app_logger.info(
+                    "Free-planning intent: removed agency internal RAG tools from this turn"
+                )
+
+        cross_step_tool_names = _cross_step_verification_tools(latest_human_text)
+        if cross_step_tool_names:
+            current_tool_names = _tool_names(override_kwargs["tools"])
+            added_tools: list[str] = []
+            for tool_name in cross_step_tool_names:
+                if tool_name in current_tool_names:
+                    continue
+                extra_tool = _find_tool_by_name(self._step_config, tool_name)
+                if extra_tool is not None:
+                    override_kwargs["tools"] = [*override_kwargs["tools"], extra_tool]
+                    current_tool_names.add(tool_name)
+                    added_tools.append(tool_name)
+
+            instruction = _cross_step_verification_instruction(cross_step_tool_names)
+            if instruction:
+                override_kwargs["system_prompt"] = (
+                    f"{override_kwargs['system_prompt']}\n\n{instruction}"
+                )
+            if added_tools:
+                app_logger.info(
+                    "跨阶段核验请求：临时开放真实查询工具: "
+                    f"{added_tools}"
+                )
+
+        available_tool_names = _tool_names(override_kwargs["tools"])
+        intent_preferred_tool = _preferred_tool_for_intent(travel_intent, state_dict)
+        if intent_preferred_tool and intent_preferred_tool not in available_tool_names:
+            extra_tool = _find_tool_by_name(self._step_config, intent_preferred_tool)
+            if extra_tool is not None:
+                override_kwargs["tools"] = [*override_kwargs["tools"], extra_tool]
+                available_tool_names = _tool_names(override_kwargs["tools"])
+                app_logger.info(
+                    "按用户意图临时开放跨阶段工具: "
+                    f"intent={travel_intent.name}, tool={intent_preferred_tool}"
+                )
+
         recent_tool_names = _recent_tool_names_since_latest_human(request)
         repeat_instruction = _tool_repeat_instruction(current_step, recent_tool_names)
         if repeat_instruction:
@@ -643,6 +896,8 @@ class StepConfigMiddleware(AgentMiddleware):
             if confirmed_destination
             else _forced_tool_choice(current_step, latest_human_text, request)
         )
+        if forced_tool is None:
+            forced_tool = intent_preferred_tool
         if forced_tool and forced_tool not in available_tool_names:
             forced_tool = None
         if forced_tool and forced_tool in recent_tool_names:

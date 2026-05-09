@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     app_host: str = Field(default="0.0.0.0", alias="APP_HOST")
     app_port: int = Field(default=8000, alias="APP_PORT")
     debug: bool = Field(default=False, alias="DEBUG")
+    sql_echo: bool = Field(default=False, alias="SQL_ECHO")
 
     # ============== LLM 配置 ==============
     dashscope_api_key: str = Field(alias="DASHSCOPE_API_KEY")
@@ -33,6 +34,8 @@ class Settings(BaseSettings):
     )
     qwen_temperature: float = 0.7
     qwen_max_tokens: int = 8000
+    qwen_request_timeout_seconds: float = Field(default=180.0, alias="QWEN_REQUEST_TIMEOUT_SECONDS")
+    qwen_max_retries: int = Field(default=1, alias="QWEN_MAX_RETRIES")
 
     # ============== LangSmith 配置 ==============
     langsmith_api_key: str = Field(alias="LANGSMITH_API_KEY")

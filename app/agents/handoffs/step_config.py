@@ -27,6 +27,7 @@ from app.tools.state_transition import (
 from app.tools.mcp_tools import get_hotel_followup_tools, get_weather_tools, get_search_tools, get_date_tools
 from app.tools.memory_tools import update_travel_style_tool, update_dietary_restriction_tool, \
     update_food_preference_tool, add_travel_record_tool, update_accommodation_preference_tool
+from app.tools.rag_tools import get_internal_rag_tools
 from app.core.workflow import PLANNING_STEPS
 from app.utils.logger import app_logger
 
@@ -49,6 +50,7 @@ async def get_step_config():
         hotel_followup_tools = []
         search_tools = []
         date_tools = []
+    internal_rag_tools = get_internal_rag_tools()
 
     step_config = {
         # ========== 步骤 1：需求收集 ==========
@@ -101,6 +103,11 @@ async def get_step_config():
 然后问一句：“我理解得对吗？还有没有‘必须要做’或‘坚决不想要’的点？”
 只有在用户明确确认无误后，才能调用 record_requirement_tool 进行记录。
 
+【业务化模式判断】
+- 如果用户说“省心一点/你们旅行社帮我安排/按旅行社方案/不要我操心/适合亲子或团建”等，视为旅行社方案倾向：后续方案需要更强调成熟路线、服务标准、预算依据和风险避坑。
+- 如果用户只是想自己出去玩或要自由行攻略，视为自由规划倾向：保持中立实用，不做硬性推销。
+- 不要暴露“内部知识库/RAG/工具”这些词，只把内部标准自然转化为顾问建议。
+
 【如果信息缺失】
 继续追问缺失项，但一次最多问 1-2 个问题，避免信息过载。
 """,
@@ -108,6 +115,7 @@ async def get_step_config():
                 record_requirement_tool,
                 query_destination_info,
                 *date_tools,
+                *internal_rag_tools,
                 # 记忆工具
                 update_travel_style_tool,
                 update_dietary_restriction_tool,
@@ -143,6 +151,10 @@ async def get_step_config():
 - 旅行风格：{user_requirement.travel_styles}
 
 【你的任务：先判断属于哪种情况，再严格执行】
+
+【旅行社业务知识使用】
+- 如果用户要求“省心方案/旅行社方案/成熟路线/亲子团建/预算透明/避坑”，可调用内部产品模板、服务 SOP 或风险手册工具辅助判断。
+- 内部知识只用于增强方案依据和服务表达，不要把它说成真实库存或强制购买。
 
 ========================
 情况一：用户已指定明确目的地
@@ -207,6 +219,7 @@ async def get_step_config():
                 go_back_to_requirement,
                 query_destination_info,
                 *search_tools,
+                *internal_rag_tools,
                 update_travel_style_tool,
                 add_travel_record_tool
             ],
@@ -476,6 +489,10 @@ async def get_step_config():
 - 餐饮偏好：{selected_food_types}
 
 【你的任务流程】
+【旅行社业务知识使用】
+- 生成草案或最终行程前，如果用户明显倾向省心方案、亲子/银发/团建，或要求“像旅行社一样安排”，可调用内部产品模板、服务 SOP 或风险手册工具。
+- 内部知识用于控制节奏、动线、留白和 Plan B，不替代真实交通、酒店或景区实时信息。
+
 1) 先判断用户意图：
    - 如果用户已经要求生成/记录/确认最终行程，立即调用 generate_itinerary_tool，不要进入草案输出流程。
    - 如果用户只是想先看草案，再按下面步骤输出自然语言草案。
@@ -529,7 +546,8 @@ async def get_step_config():
                 go_back_to_requirement,
                 go_back_to_transport,
                 go_back_to_accommodation,
-                go_back_to_food
+                go_back_to_food,
+                *internal_rag_tools
             ],
             "requires": [
                 "user_requirement",
@@ -559,6 +577,10 @@ async def get_step_config():
 - 先给结论（是否在预算内），再给明细，再给可调整方案。
 
 【你的任务流程】
+【旅行社业务知识使用】
+- 如果用户询问报价是否合理、费用包含什么、为什么这样估算、怎样降本，优先参考内部报价规则。
+- 预算说明必须区分已确认价格、估算价格和待核验价格，不要写成真实锁价。
+
 1) 先告知用户你将基于当前方案做预算拆分，并说明这是估算（价格会随日期/库存波动）
 2) 计算费用（交通/住宿/餐饮/门票/杂费）
 3) 展示预算时建议结构：
@@ -602,7 +624,8 @@ async def get_step_config():
                 go_back_to_accommodation,
                 go_back_to_food,
                 go_back_to_itinerary,
-                go_back_to_step
+                go_back_to_step,
+                *internal_rag_tools
             ],
             "requires": ["user_requirement", "itinerary"]
         },
@@ -625,6 +648,7 @@ async def get_step_config():
 
 
 **任务**：
+0. 如果用户要求旅行社方案、省心方案或最终报告，可参考内部产品模板、服务 SOP、报价规则、风险手册和报告标准；但不要把内部资料、工具名或 RAG 暴露给用户。
 1. 如果用户只是刚看完预算、只说“进入预算汇总/看预算/预算怎么样/复核预算/看看风险”，不要直接生成订单；必须基于上面的已确认方案摘要复述预算结论和关键风险，不要输出“[根据之前的对话填写]”这类占位符。
 2. 只有当用户明确表示“预算可以/确认/生成订单/生成最终报告/去支付”时，才使用 `generate_order_tool` 工具生成订单。
 3. 生成后提供最终旅行方案报告和订单号；如果当前项目没有真实支付能力，不要编造支付链接。
@@ -634,6 +658,7 @@ async def get_step_config():
    - 交通与住宿：已确认交通、住宿/落脚区域；如未真实确认，明确写“待二次核实”
    - 每日行程：用 Day 1 / Day 2 / Day 3 格式，每天包含上午、下午、晚上、住宿或落脚点；天数必须与用户需求一致，例如 4天3晚必须输出 Day 1 到 Day 4
    - 景点地图：列出每一天的关键路线节点，格式如 Day 1：酒店 → 景点A → 景点B → 餐厅；必须和“每日行程”里的当天地图路线摘要保持一致
+   - 方案依据：自然体现成熟路线结构、服务标准、报价规则和风险避坑；自由规划模式保持中立实用，旅行社方案模式可以体现服务优势
    - 预算明细：交通、住宿、餐饮、景点/体验、其他；给总计和人均，并写每项费用依据、预算置信度和待核验项
    - 费用依据：保留交通票价、酒店晚数/房间数、餐饮人均、门票/体验、其他机动费的估算规则
    - 预算置信度与待核验项：必须作为独立章节保留，并稳定包含“已确认/可追溯价格”“估算项”“待核验项”三组；如果酒店 MCP 或交通 API 失败后使用兜底价格，必须明确写“兜底估算”，不要写成真实锁价
@@ -671,7 +696,8 @@ async def get_step_config():
                 go_back_to_food,
                 go_back_to_itinerary,
                 go_back_to_step,
-                go_back_to_budget
+                go_back_to_budget,
+                *internal_rag_tools
             ],
             "requires": ["user_requirement", "itinerary", "budget"]
         }

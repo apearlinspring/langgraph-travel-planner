@@ -34,6 +34,8 @@ logs/
 # Generated data
 data/vectorstore/
 **/data/vectorstore/
+data/vectorstore_internal/
+**/data/vectorstore_internal/
 
 # OS files
 .DS_Store

@@ -23,7 +23,7 @@ class Base(DeclarativeBase):
 # 创建异步引擎
 engine = create_async_engine(
     settings.database_url.replace("postgresql://", "postgresql+asyncpg://"),
-    echo=settings.debug,
+    echo=settings.sql_echo,
     pool_size=10,
     max_overflow=20
 )

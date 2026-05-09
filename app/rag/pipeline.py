@@ -2,7 +2,6 @@
 完整的 Advanced RAG 管道
 整合所有优化策略
 """
-import os
 from typing import List
 from dotenv import load_dotenv
 from langchain_core.documents import Document
@@ -46,6 +45,7 @@ class AdvancedRAGPipeline:
         """
 
         self.top_k = top_k
+        self.use_llm_reranker = use_llm_reranker
 
         # 1. 查询优化器
         self.query_optimizer = AdvancedQueryOptimizer(strategy=query_strategy)
@@ -57,8 +57,12 @@ class AdvancedRAGPipeline:
             k=top_k * 3  # 先检索更多候选
         )
 
-        # 3. 重排序器
-        self.reranker = LLMReranker(top_k=top_k * 2)
+        # 3. 重排序器。默认关闭 LLM 重排，避免内部知识库小语料检索走慢路径。
+        self.reranker = (
+            LLMReranker(top_k=top_k * 2)
+            if use_llm_reranker
+            else None
+        )
 
         # 4. 父文档映射器
         self.parent_splitter = parent_splitter
@@ -99,12 +103,18 @@ class AdvancedRAGPipeline:
         app_logger.info(f"2️. 混合检索完成，获得 {len(child_docs)} 个候选文档")
 
         # ========== 阶段 3：重排序 ==========
-        reranked_child_docs = self.reranker.rerank(
-            query=query,
-            documents=child_docs,
-            top_k=self.top_k * 2
-        )
-        app_logger.info(f"3️. 重排序完成，保留 {len(reranked_child_docs)} 个文档")
+        if self.reranker is not None:
+            reranked_child_docs = self.reranker.rerank(
+                query=query,
+                documents=child_docs,
+                top_k=self.top_k * 2
+            )
+            app_logger.info(f"3️. LLM 重排序完成，保留 {len(reranked_child_docs)} 个文档")
+        else:
+            reranked_child_docs = child_docs[: self.top_k * 2]
+            app_logger.info(
+                f"3️. 已跳过 LLM 重排序，保留 {len(reranked_child_docs)} 个文档"
+            )
 
         # ========== 阶段 4：上下文优化 ==========
         # 4.1 映射到父文档

@@ -2,7 +2,6 @@
 查询优化模块
 包含 Multi-Query、HyDE、查询改写等策略
 """
-import os
 from typing import List
 from dotenv import load_dotenv
 from langchain_core.prompts import ChatPromptTemplate
@@ -11,11 +10,19 @@ from app.utils.llm_factory import build_chat_model
 
 load_dotenv()
 
-# 初始化模型
-model = build_chat_model(
-    profile="rag",
-    temperature=0,
-)
+_rag_model = None
+
+
+def _get_rag_model():
+    """懒加载 RAG 查询优化模型，避免 original 策略也初始化模型。"""
+
+    global _rag_model
+    if _rag_model is None:
+        _rag_model = build_chat_model(
+            profile="rag",
+            temperature=0,
+        )
+    return _rag_model
 
 
 class MultiQueryOptimizer:
@@ -61,7 +68,7 @@ class MultiQueryOptimizer:
             num=self.num_variants
         )
 
-        response = model.invoke(messages)
+        response = _get_rag_model().invoke(messages)
 
         # 解析结果
         variants = [line.strip() for line in response.content.strip().split('\n') if line.strip()]
@@ -122,7 +129,7 @@ class HyDEOptimizer:
         app_logger.info(f"生成假设性文档: {query}")
 
         messages = self.prompt.format_messages(query=query)
-        response = model.invoke(messages)
+        response = _get_rag_model().invoke(messages)
 
         hypothetical_doc = response.content.strip()
 
@@ -178,7 +185,7 @@ class QueryRewriter:
         app_logger.info(f"改写查询: {query}")
 
         messages = self.prompt.format_messages(query=query)
-        response = model.invoke(messages)
+        response = _get_rag_model().invoke(messages)
 
         rewritten = response.content.strip()
 
@@ -199,6 +206,7 @@ class AdvancedQueryOptimizer:
         """
         Args:
             strategy: 优化策略
+                - "original": 直接使用原始查询
                 - "multi_query": 使用 Multi-Query
                 - "hyde": 使用 HyDE
                 - "rewrite": 使用查询改写
@@ -216,6 +224,9 @@ class AdvancedQueryOptimizer:
         Returns:
             优化后的查询列表
         """
+
+        if self.strategy in {"original", "none", "direct"}:
+            return [query]
 
         if self.strategy == "multi_query":
             return self.multi_query.optimize(query)

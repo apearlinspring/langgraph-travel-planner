@@ -18,6 +18,7 @@ from app.tools.memory_tools import (
     update_food_preference_tool,
     update_travel_style_tool,
 )
+from app.tools.rag_tools import get_internal_rag_tools
 from app.tools.hotel_query import query_hotel_options
 from app.tools.router_query import query_destination_info
 from app.tools.state_transition import (
@@ -76,7 +77,12 @@ async def create_travel_agent(*, force_refresh: bool = False):
 
         all_mcp_tools = await get_all_mcp_tools()
         hotel_followup_tools = await get_hotel_followup_tools()
-        current_signature = _build_tool_signature(all_mcp_tools, hotel_followup_tools)
+        internal_rag_tools = get_internal_rag_tools()
+        current_signature = _build_tool_signature(
+            all_mcp_tools,
+            hotel_followup_tools,
+            internal_rag_tools,
+        )
 
         if (
             _travel_agent is not None
@@ -112,6 +118,7 @@ async def create_travel_agent(*, force_refresh: bool = False):
             update_food_preference_tool,
             update_accommodation_preference_tool,
             add_travel_record_tool,
+            *internal_rag_tools,
             *hotel_followup_tools,
             *all_mcp_tools,
         ]

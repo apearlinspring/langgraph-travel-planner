@@ -1,7 +1,6 @@
 """
 文档加载与预处理
 """
-import os
 from pathlib import Path
 from typing import List
 from langchain_community.document_loaders import DirectoryLoader, TextLoader
@@ -21,32 +20,74 @@ class DocumentManager:
         else:
             self.base_dir = Path(base_dir)
 
-    def load_destination_documents(self) -> List[Document]:
-        """加载所有目的地文档"""
+    def _load_markdown_documents(
+        self,
+        directory: Path,
+        *,
+        source_type: str,
+        default_category: str,
+        visibility: str,
+    ) -> List[Document]:
+        """加载指定目录下的 Markdown 文档，并补充统一元数据。"""
 
-        destinations_dir = self.base_dir / "destinations"
-
-        if not destinations_dir.exists():
-            app_logger.warning(f"目的地文档目录不存在: {destinations_dir}")
+        if not directory.exists():
+            app_logger.warning(f"文档目录不存在: {directory}")
             return []
 
-        # 加载 Markdown 文件
         loader = DirectoryLoader(
-            str(destinations_dir),
+            str(directory),
             glob="**/*.md",
             loader_cls=TextLoader,
-            loader_kwargs={"encoding": "utf-8"} # 自动检测文件编码（避免乱码）
+            loader_kwargs={"encoding": "utf-8"},
+        )
+        documents = loader.load()
+
+        for doc in documents:
+            source = Path(doc.metadata.get("source", ""))
+            try:
+                relative_source = source.relative_to(directory)
+                category = (
+                    relative_source.parts[0]
+                    if len(relative_source.parts) > 1
+                    else default_category
+                )
+            except ValueError:
+                category = default_category
+
+            doc.metadata.update(
+                {
+                    "source_type": source_type,
+                    "category": category,
+                    "visibility": visibility,
+                }
+            )
+
+        app_logger.info(
+            f"加载 {len(documents)} 个 {source_type} 文档，目录: {directory}"
+        )
+        return documents
+
+    def load_destination_documents(self) -> List[Document]:
+        """加载所有目的地文档"""
+        return self._load_markdown_documents(
+            self.base_dir / "destinations",
+            source_type="destination_guide",
+            default_category="destinations",
+            visibility="public",
         )
 
-        documents = loader.load()
-        app_logger.info(f"加载了 {len(documents)} 个目的地文档")
+    def load_internal_documents(self, category: str | None = None) -> List[Document]:
+        """加载旅行社内部知识库文档，可按 category 过滤。"""
 
-        # 添加元数据
-        for doc in documents:
-            doc.metadata["source_type"] = "destination_guide"
-            doc.metadata["category"] = "destinations"
-
-        return documents
+        documents = self._load_markdown_documents(
+            self.base_dir / "internal",
+            source_type="agency_internal",
+            default_category="general",
+            visibility="internal",
+        )
+        if category is None:
+            return documents
+        return [doc for doc in documents if doc.metadata.get("category") == category]
 
     def load_food_documents(self) -> List[Document]:
         """加载美食文档"""

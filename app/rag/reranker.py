@@ -1,8 +1,7 @@
 """
 重排序器：使用 LLM 对检索结果重新排序
 """
-import os
-from typing import List, Tuple
+from typing import List
 from dotenv import load_dotenv
 from langchain_core.documents import Document
 from langchain_core.prompts import ChatPromptTemplate
@@ -11,11 +10,6 @@ from app.utils.logger import app_logger
 from app.utils.llm_factory import build_chat_model
 
 load_dotenv()
-
-model = build_chat_model(
-    profile="rag",
-    temperature=0,
-)
 
 
 # ============== 结构化输出模型 ==============
@@ -66,6 +60,10 @@ class LLMReranker:
         )
 
         # 使用结构化输出
+        model = build_chat_model(
+            profile="rag",
+            temperature=0,
+        )
         self.structured_model = model.with_structured_output(RerankingResult)
 
     def rerank(
@@ -135,49 +133,6 @@ class LLMReranker:
             app_logger.error(f"❌ 重排序失败: {e}，返回原始顺序")
             return documents[:top_k]
 
-
-class LongContextReorder:
-    """
-    长上下文重排序
-
-    基于"Lost in the Middle"研究：
-    - 最相关的文档放在开头
-    - 次相关的放在结尾
-    - 不太相关的放在中间
-    """
-
-    @staticmethod
-    def reorder(documents: List[Document]) -> List[Document]:
-        """
-        重排序文档列表
-
-        策略：
-        - 第1个文档：最相关
-        - 最后1个文档：第2相关
-        - 中间文档：按降序排列
-        """
-
-        if len(documents) <= 2:
-            return documents
-
-        app_logger.info(f"🔀 长上下文重排序: {len(documents)} 个文档")
-
-        # 分成两组
-        odd_rank = []  # 奇数排名：1, 3, 5...
-        even_rank = []  # 偶数排名：2, 4, 6...
-
-        for i, doc in enumerate(documents):
-            if i % 2 == 0:  # i=0对应排名1，i=2对应排名3...
-                odd_rank.append(doc)
-            else:  # i=1对应排名2，i=3对应排名4...
-                even_rank.append(doc)
-
-        # 偶数排名倒序后放在后面
-        reordered = odd_rank + even_rank[::-1]
-
-        app_logger.debug(f"重排序后顺序: 0 -> {list(range(len(documents) - 1, 1, -1))} -> 1")
-
-        return reordered
 
 class LongContextReorder:
     """

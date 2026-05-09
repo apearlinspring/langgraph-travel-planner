@@ -43,6 +43,8 @@ async def test_create_travel_agent_registers_accommodation_tools(monkeypatch):
 
     assert "update_accommodation_preference_tool" in recorded["tool_names"]
     assert "query_hotel_options" in recorded["tool_names"]
+    assert "search_agency_product_templates" in recorded["tool_names"]
+    assert "search_agency_pricing_rules" in recorded["tool_names"]
 
 
 @pytest.mark.asyncio

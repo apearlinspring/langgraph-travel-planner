@@ -2,6 +2,7 @@
 State transition tools for the travel-planning workflow.
 """
 from datetime import datetime
+from functools import lru_cache
 from math import ceil
 from typing import Optional
 from uuid import uuid4
@@ -19,6 +20,7 @@ from app.core.workflow import (
     STEP_LABELS as WORKFLOW_STEP_LABELS,
     STEP_STATE_FIELDS as WORKFLOW_STEP_STATE_FIELDS,
 )
+from app.rag.document_loader import DocumentManager
 from app.utils.logger import app_logger
 
 
@@ -1489,6 +1491,112 @@ def _format_report_risk_lines(
     return risk_lines
 
 
+@lru_cache(maxsize=16)
+def _internal_doc_highlights(category: str, limit: int = 2) -> tuple[str, ...]:
+    """提取内部知识库中某个类别的关键规则，供最终报告稳定引用。"""
+
+    try:
+        documents = DocumentManager().load_internal_documents(category=category)
+    except Exception as exc:
+        app_logger.warning(f"加载内部知识库失败: category={category}, error={exc}")
+        return ()
+
+    highlights: list[str] = []
+    for doc in documents:
+        for raw_line in doc.page_content.splitlines():
+            line = raw_line.strip()
+            if not line.startswith(("-", "1.", "2.", "3.", "4.", "5.")):
+                continue
+            line = line.lstrip("-").strip()
+            if not line or "示例内部文档" in line:
+                continue
+            if line not in highlights:
+                highlights.append(line)
+            if len(highlights) >= limit:
+                return tuple(highlights)
+    return tuple(highlights)
+
+
+def _infer_planning_mode(requirement: dict) -> str:
+    text = " ".join(
+        [
+            str(requirement.get("special_needs") or ""),
+            " ".join(str(item) for item in requirement.get("travel_styles") or []),
+        ]
+    )
+    agency_keywords = ("省心", "旅行社", "成熟路线", "定制游", "跟团", "团建", "亲子", "银发")
+    free_keywords = ("自由行", "自己玩", "不跟团", "自己订")
+    if any(keyword in text for keyword in agency_keywords):
+        return "agency_plan"
+    if any(keyword in text for keyword in free_keywords):
+        return "free_planning"
+    return "free_planning"
+
+
+def _pick_highlight(lines: list[str], keywords: tuple[str, ...], fallback_index: int = 0) -> str | None:
+    for line in lines:
+        if any(keyword in line for keyword in keywords):
+            return line
+    if 0 <= fallback_index < len(lines):
+        return lines[fallback_index]
+    return None
+
+
+def _build_agency_context(requirement: dict) -> dict:
+    mode = _infer_planning_mode(requirement)
+    product_lines = list(_internal_doc_highlights("products", 2))
+    service_lines = list(_internal_doc_highlights("sop", 2))
+    pricing_lines = list(_internal_doc_highlights("pricing", 2))
+    risk_lines = list(_internal_doc_highlights("risk", 2))
+    report_lines = list(_internal_doc_highlights("report", 2))
+
+    if mode == "agency_plan":
+        summary = "本报告按旅行社顾问方案交付：优先使用成熟路线结构、透明预算依据和可执行风险预案。"
+        selected_lines = [
+            item
+            for item in [
+                _pick_highlight(product_lines, ("省心", "成熟路线", "核心体验"), fallback_index=1),
+                _pick_highlight(service_lines, ("方案初稿", "关键确认", "交付"), fallback_index=1),
+                _pick_highlight(pricing_lines, ("预算置信度", "费用说明", "报价"), fallback_index=1),
+                _pick_highlight(risk_lines, ("Plan B", "风险", "复核"), fallback_index=0),
+            ]
+            if item
+        ]
+    else:
+        summary = "本报告按自由规划交付：保持中立实用，重点提供路线、预算、住宿区域和出发前核验建议。"
+        selected_lines = [
+            item
+            for item in [
+                _pick_highlight(product_lines, ("自由规划",), fallback_index=0),
+                _pick_highlight(report_lines, ("行程概览", "每日行程"), fallback_index=0),
+                _pick_highlight(pricing_lines, ("交通", "预算"), fallback_index=0),
+                _pick_highlight(risk_lines, ("天气", "复核"), fallback_index=0),
+            ]
+            if item
+        ]
+
+    return {
+        "source_type": "agency_internal",
+        "mode": mode,
+        "summary": summary,
+        "highlights": selected_lines,
+        "categories": {
+            "products": product_lines,
+            "sop": service_lines,
+            "pricing": pricing_lines,
+            "risk": risk_lines,
+            "report": report_lines,
+        },
+    }
+
+
+def _format_agency_context_lines(agency_context: dict) -> list[str]:
+    lines = [f"- {agency_context['summary']}"]
+    for item in agency_context.get("highlights") or []:
+        lines.append(f"- 方案标准：{item}")
+    return lines
+
+
 def _clean_report_line(line: str) -> str:
     return str(line).strip().lstrip("-").strip()
 
@@ -1534,6 +1642,7 @@ def _build_report_data(
         _clean_report_line(line)
         for line in _format_adjustment_options(state, budget)
     ]
+    agency_context = _build_agency_context(requirement)
 
     return {
         "version": "travel_report.v1",
@@ -1565,6 +1674,7 @@ def _build_report_data(
         },
         "itinerary": itinerary_data,
         "map_routes": route_summaries,
+        "agency_context": agency_context,
         "budget": {
             "currency": budget.get("currency", "CNY"),
             "total": budget.get("total"),
@@ -1586,6 +1696,7 @@ def _build_report_data(
             {"id": "transport_accommodation", "title": "交通与住宿"},
             {"id": "itinerary", "title": "每日行程"},
             {"id": "map_routes", "title": "景点地图"},
+            {"id": "agency_context", "title": "方案依据"},
             {"id": "budget", "title": "预算明细"},
             {"id": "budget_confidence", "title": "预算置信度与待核验项"},
             {"id": "risk", "title": "天气与风险提醒"},
@@ -1613,6 +1724,7 @@ def _build_final_report(
         state.get("selected_transport"),
         state.get("selected_transport", "未确认"),
     )
+    agency_context = _build_agency_context(requirement)
 
     return "\n".join(
         [
@@ -1634,6 +1746,9 @@ def _build_final_report(
             "",
             "景点地图：",
             *_format_report_map_lines(itinerary, state, requirement),
+            "",
+            "方案依据：",
+            *_format_agency_context_lines(agency_context),
             "",
             "预算明细：",
             *_format_budget_breakdown(budget),
