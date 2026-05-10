@@ -53,7 +53,7 @@
 模块 G 还新增了两个专项目录：
 
 - `data/evaluation/rag_quality_scenarios.json`：检查省心方案是否覆盖产品、SOP（标准作业流程）、报价、风险、报告标准等证据类别；自由行场景则重点看模式适配和避免硬推旅行社表达。
-- `data/evaluation/tool_call_scenarios.json`：检查交通、酒店、目的地天气等工具是否按用户意图调用，是否避免重复调用，以及失败后是否进入待核验兜底。
+- `data/evaluation/tool_call_scenarios.json`：检查交通、酒店、目的地天气等工具是否按用户意图调用，是否避免同轮重复调用高成本查询工具，以及失败后是否进入待核验兜底。
 
 列出场景：
 
@@ -103,7 +103,7 @@ $env:ZHIXING_EVAL_PASSWORD="000000"
 - `tool_events`：从 SSE（服务器发送事件）中归一化出来的工具调用事件。
 - `summary.quality_summary.report_quality`：原有结构化报告评分。
 - `summary.quality_summary.rag_quality`：证据契约、类别覆盖、模式适配、费用可追溯和安全交付评分。
-- `summary.quality_summary.tool_quality`：工具意图覆盖、禁用工具规避、同轮重复调用、失败兜底和审计可见性评分。
+- `summary.quality_summary.tool_quality`：工具意图覆盖、禁用工具规避、同轮高成本查询重复调用、失败兜底和审计可见性评分。
 - `summary.quality_summary.runtime_quality`：是否产出 `report_data`、总耗时、首 token 观测、事件计数和 token 近似成本评分。
 - `summary.quality_summary.aggregate`：综合分，当前权重是报告 50%、RAG 20%、工具 20%、运行指标 10%。
 

@@ -9,6 +9,35 @@ from app.evaluation.report_quality import CriterionResult
 
 
 FAILURE_STATUSES = {"failed", "failure", "timeout", "degraded", "error"}
+REDUNDANCY_TRACKED_TOOLS = frozenset(
+    {
+        "query_destination_info",
+        "query_hotel_options",
+        "query_transport_options",
+        "query_train_options",
+        "query_flight_options",
+        "query_driving_route",
+        "query_trains",
+        "query_flights",
+        "plan_driving_route",
+        "get_weather_forecast",
+        "search_travel_info",
+        "search_destination_guide",
+        "search_food_recommendations",
+        "search_accommodation_info",
+        "search_travel_tips",
+        "search_agency_product_templates",
+        "search_agency_service_sop",
+        "search_agency_pricing_rules",
+        "search_agency_risk_playbook",
+        "search_agency_report_standards",
+        "searchHotels",
+        "getHotelDetail",
+        "getHotelSearchTags",
+        "searchFlightItineraries",
+        "get-tickets",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -135,11 +164,15 @@ def redundant_tool_calls(
     records: list[ToolCallRecord],
     *,
     max_duplicate_calls: int = 1,
+    tracked_tools: set[str] | frozenset[str] | None = None,
 ) -> list[str]:
-    """Return tool/turn pairs that exceed the allowed duplicate-call count."""
+    """Return high-cost tool/turn pairs that exceed the allowed duplicate-call count."""
 
+    tracked_tool_names = REDUNDANCY_TRACKED_TOOLS if tracked_tools is None else frozenset(tracked_tools)
     grouped: dict[tuple[int | None, str], int] = defaultdict(int)
     for record in records:
+        if record.tool not in tracked_tool_names:
+            continue
         grouped[(record.turn_index, record.tool)] += 1
 
     redundant = []
@@ -217,9 +250,14 @@ def _criterion_forbidden_tools(
 def _criterion_redundancy(
     records: list[ToolCallRecord],
     max_duplicate_calls: int,
+    tracked_tools: set[str] | frozenset[str] | None,
 ) -> CriterionResult:
     findings: list[str] = []
-    redundant = redundant_tool_calls(records, max_duplicate_calls=max_duplicate_calls)
+    redundant = redundant_tool_calls(
+        records,
+        max_duplicate_calls=max_duplicate_calls,
+        tracked_tools=tracked_tools,
+    )
     score = _score(
         not redundant,
         20,
@@ -277,6 +315,7 @@ def evaluate_tool_quality(
     expected_tools: set[str] | None = None,
     forbidden_tools: set[str] | None = None,
     max_duplicate_calls: int = 1,
+    redundancy_tracked_tools: set[str] | frozenset[str] | None = None,
     requires_fallback: bool = False,
     pass_threshold: float = 80.0,
 ) -> ToolQualityResult:
@@ -290,7 +329,7 @@ def evaluate_tool_quality(
     criteria = [
         _criterion_intent_coverage(records, expected_tools),
         _criterion_forbidden_tools(records, forbidden_tools),
-        _criterion_redundancy(records, max_duplicate_calls),
+        _criterion_redundancy(records, max_duplicate_calls, redundancy_tracked_tools),
         _criterion_failure_fallback(events, records, report_data, requires_fallback),
         _criterion_audit_surface(report_data),
     ]
@@ -316,5 +355,9 @@ def evaluate_tool_quality(
         criteria=criteria,
         summary=summary,
         tool_counts=tool_call_counts(records),
-        redundant_calls=redundant_tool_calls(records, max_duplicate_calls=max_duplicate_calls),
+        redundant_calls=redundant_tool_calls(
+            records,
+            max_duplicate_calls=max_duplicate_calls,
+            tracked_tools=redundancy_tracked_tools,
+        ),
     )

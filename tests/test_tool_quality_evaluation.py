@@ -56,6 +56,34 @@ def test_evaluate_tool_quality_flags_redundant_calls():
     assert any("Redundant tool calls" in item for item in result.summary)
 
 
+def test_evaluate_tool_quality_ignores_repeated_state_mutation_tools():
+    events = [
+        {"type": "tool_call", "tool": "select_destination_tool", "turn_index": 1},
+        {"type": "tool_call", "tool": "select_destination_tool", "turn_index": 1},
+        {"type": "tool_call", "tool": "select_transport_tool", "turn_index": 1},
+        {"type": "tool_call", "tool": "select_transport_tool", "turn_index": 1},
+    ]
+    records = extract_tool_events(events)
+
+    result = evaluate_tool_quality(events, report_data=_valid_report_data())
+
+    assert redundant_tool_calls(records) == []
+    assert result.passed is True
+    assert result.tool_counts["select_destination_tool"] == 2
+
+
+def test_redundant_tool_calls_can_track_custom_tool_set():
+    events = [
+        {"type": "tool_call", "tool": "select_destination_tool", "turn_index": 1},
+        {"type": "tool_call", "tool": "select_destination_tool", "turn_index": 1},
+    ]
+    records = extract_tool_events(events)
+
+    assert redundant_tool_calls(records, tracked_tools={"select_destination_tool"}) == [
+        "turn-1:select_destination_tool called 2 times"
+    ]
+
+
 def test_evaluate_tool_quality_requires_fallback_pending_checks():
     events = [{"type": "error", "message": "hotel MCP timeout"}]
 
