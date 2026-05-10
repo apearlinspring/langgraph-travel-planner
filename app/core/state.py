@@ -7,6 +7,7 @@ from langchain.agents import AgentState
 from typing_extensions import NotRequired, TypedDict
 
 from app.agency.models import AgencyProductData, QuotePolicyData
+from app.core.permissions import ApprovalAction, ApprovalStatus
 from app.core.workflow import INITIAL_PLANNING_STEP, PlanningStep
 
 TravelStyle = Literal["relaxation", "culture", "adventure", "food"]
@@ -206,6 +207,12 @@ class TravelState(AgentState):
 
     approval_pending: NotRequired[bool]
     approval_reason: NotRequired[str]
+    approval_action: NotRequired[ApprovalAction | str]
+    approval_expires_at: NotRequired[float | None]
+    approval_status: NotRequired[ApprovalStatus]
+    approval_record_id: NotRequired[str]
+    approval_required: NotRequired[bool]
+    approval_governance: NotRequired[dict]
 
     user_id: NotRequired[str]
     session_id: NotRequired[str]
@@ -224,6 +231,12 @@ def create_initial_state(user_id: str, session_id: str) -> TravelState:
         accommodation_options=[],
         food_options=[],
         approval_pending=False,
+        approval_reason="",
+        approval_action="",
+        approval_expires_at=None,
+        approval_status="none",
+        approval_required=False,
+        approval_governance={},
         planning_mode_confirmed=False,
         tool_audit_events=[],
         conversation_summary="",
