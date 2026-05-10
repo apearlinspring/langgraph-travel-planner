@@ -20,6 +20,7 @@ class RuntimeMetrics:
     tool_call_count: int
     report_event_count: int
     error_event_count: int
+    session_busy_event_count: int
     assistant_chars: int
     user_chars: int
     estimated_input_tokens: int
@@ -156,6 +157,7 @@ def collect_runtime_metrics(
         tool_call_count=sum(1 for event_type in event_types if event_type == "tool_call"),
         report_event_count=sum(1 for event_type in event_types if event_type == "report_data"),
         error_event_count=sum(1 for event_type in event_types if event_type == "error"),
+        session_busy_event_count=sum(1 for event_type in event_types if event_type == "session_busy"),
         assistant_chars=assistant_chars,
         user_chars=user_chars,
         estimated_input_tokens=input_tokens,

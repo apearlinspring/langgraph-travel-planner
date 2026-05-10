@@ -1,4 +1,11 @@
+import os
 from types import SimpleNamespace
+
+os.environ.setdefault("DASHSCOPE_API_KEY", "test-dashscope-key")
+os.environ.setdefault("LANGSMITH_API_KEY", "test-langsmith-key")
+os.environ.setdefault("POSTGRES_DB", "test_db")
+os.environ.setdefault("POSTGRES_USER", "test_user")
+os.environ.setdefault("POSTGRES_PASSWORD", "test_password")
 
 from app.api.v1.chat import (
     _report_content_from_tool_output,
