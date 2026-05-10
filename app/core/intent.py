@@ -154,7 +154,9 @@ _FREE_PLANNING_KEYWORDS = (
 
 _PRICING_KEYWORDS = (
     "报价",
+    "报价单",
     "费用包含",
+    "费用不含",
     "包含什么",
     "不包含",
     "怎么收费",
@@ -162,6 +164,9 @@ _PRICING_KEYWORDS = (
     "预算依据",
     "报价规则",
     "价格依据",
+    "儿童价",
+    "成人价",
+    "单房差",
 )
 
 _RISK_QUERY_KEYWORDS = (
