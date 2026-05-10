@@ -225,4 +225,3 @@ def _coerce_text(value: Any) -> str:
     if isinstance(value, dict):
         return str(value.get("text") or value.get("summary") or "")
     return str(value)
-

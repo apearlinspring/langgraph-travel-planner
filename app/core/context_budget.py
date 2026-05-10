@@ -142,4 +142,3 @@ def _message_content(message: Any) -> str:
     if isinstance(content, list):
         return "\n".join(str(item) for item in content)
     return str(content or "")
-

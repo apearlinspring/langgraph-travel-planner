@@ -44,4 +44,3 @@ class ToolResultValidation:
     output_summary: dict[str, Any] = field(default_factory=dict)
     error_type: str | None = None
     message: str = ""
-

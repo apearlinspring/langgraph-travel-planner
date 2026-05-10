@@ -108,4 +108,3 @@ def validate_transport_query_args(args: dict[str, Any]) -> ToolValidationResult:
     if messages:
         return _invalid_result("invalid_transport_query_args", messages, args)
     return ToolValidationResult(ok=True, normalized_args=args)
-

@@ -16,6 +16,7 @@ SENSITIVE_INPUT_KEYS = {
     "secret",
     "token",
 }
+SENSITIVE_INPUT_KEY_PARTS = tuple(SENSITIVE_INPUT_KEYS)
 
 TOOL_LABELS = {
     "query_hotel_options": "住宿",
@@ -44,12 +45,17 @@ def start_tool_audit(name: str) -> ToolAuditContext:
     )
 
 
+def _is_sensitive_key(key: Any) -> bool:
+    normalized = str(key or "").lower()
+    return any(part in normalized for part in SENSITIVE_INPUT_KEY_PARTS)
+
+
 def _summarize_value(value: Any, *, max_list_items: int = 5, max_text_length: int = 160) -> Any:
     if isinstance(value, dict):
         return {
             str(key): _summarize_value(item)
             for key, item in value.items()
-            if str(key).lower() not in SENSITIVE_INPUT_KEYS
+            if not _is_sensitive_key(key)
         }
     if isinstance(value, list):
         summarized = [_summarize_value(item) for item in value[:max_list_items]]
@@ -62,11 +68,13 @@ def _summarize_value(value: Any, *, max_list_items: int = 5, max_text_length: in
     return value
 
 
-def summarize_tool_input(args: dict[str, Any]) -> dict[str, Any]:
+def summarize_tool_input(args: Any) -> dict[str, Any]:
+    if not isinstance(args, dict):
+        return {"input": _summarize_value(args)}
     return {
         str(key): _summarize_value(value)
         for key, value in (args or {}).items()
-        if str(key).lower() not in SENSITIVE_INPUT_KEYS and str(key) != "runtime"
+        if not _is_sensitive_key(key) and str(key) != "runtime"
     }
 
 
@@ -157,4 +165,3 @@ def summarize_audit_events_for_report(events: list[dict[str, Any]] | None) -> li
             }
         )
     return summaries
-

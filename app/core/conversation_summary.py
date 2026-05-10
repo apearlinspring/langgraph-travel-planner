@@ -217,4 +217,3 @@ def _format_budget(requirement: dict[str, Any]) -> str:
     if budget_min:
         return f"不少于 {budget_min} 元/人"
     return ""
-
