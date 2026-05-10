@@ -34,6 +34,13 @@ def test_get_scenario_returns_catalog_entry():
     assert scenario.prompt
 
 
+def test_load_scenarios_accepts_runtime_budget_contract():
+    scenario = get_scenario("long_context_revision")
+
+    assert scenario.runtime_budget["max_total_elapsed_seconds"] == 1200
+    assert scenario.runtime_budget["max_estimated_total_tokens"] == 180000
+
+
 def test_load_rag_quality_scenarios_has_business_coverage():
     scenarios = load_rag_quality_scenarios()
     scenario_ids = {scenario.id for scenario in scenarios}

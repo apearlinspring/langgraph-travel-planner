@@ -6,6 +6,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from app.evaluation.runtime_metrics import runtime_budget_from_dict
+
 
 SCENARIO_CATALOG_VERSION = "evaluation_scenarios.v1"
 RAG_SCENARIO_CATALOG_VERSION = "rag_quality_scenarios.v1"
@@ -30,6 +32,7 @@ class EvaluationScenario:
     focus: list[str]
     tags: list[str]
     followups: list[str] = field(default_factory=list)
+    runtime_budget: dict[str, Any] = field(default_factory=dict)
     notes: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -93,6 +96,19 @@ def _as_optional_string_list(
     if not isinstance(value, list) or not all(isinstance(item, str) and item for item in value):
         raise ValueError(f"Scenario {scenario_id!r} field {field_name!r} must be a string list")
     return value
+
+
+def _as_optional_runtime_budget(
+    value: Any,
+    *,
+    scenario_id: str,
+) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(f"Scenario {scenario_id!r} field 'runtime_budget' must be an object")
+    runtime_budget_from_dict(value)
+    return dict(value)
 
 
 def _validate_scenario_id(payload: dict[str, Any]) -> str:
@@ -161,6 +177,10 @@ def _scenario_from_dict(payload: dict[str, Any]) -> EvaluationScenario:
             _as_string_list(payload.get("followups"), field_name="followups", scenario_id=scenario_id)
             if payload.get("followups") is not None
             else []
+        ),
+        runtime_budget=_as_optional_runtime_budget(
+            payload.get("runtime_budget"),
+            scenario_id=scenario_id,
         ),
         notes=str(payload.get("notes") or "").strip(),
     )

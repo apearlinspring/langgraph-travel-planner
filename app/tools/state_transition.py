@@ -26,6 +26,7 @@ from app.core.workflow import (
     STEP_STATE_FIELDS as WORKFLOW_STEP_STATE_FIELDS,
 )
 from app.rag.agency_retrieval import documents_to_evidence
+from app.rag.contracts import get_contract
 from app.reports import build_report_bundle, report_sections
 from app.rag.document_loader import DocumentManager
 from app.tools.audit import pending_checks_from_audit_events, summarize_audit_events_for_report
@@ -2139,10 +2140,49 @@ def _internal_doc_evidence(category: str, limit: int = 2) -> tuple[dict, ...]:
         documents = DocumentManager().load_internal_documents(category=category)
     except Exception as exc:
         app_logger.warning(f"加载内部知识库证据失败: category={category}, error={exc}")
-        return ()
+        return (_fallback_internal_evidence(category),)
 
     evidence = documents_to_evidence(documents[:limit], visibility="internal")
+    if not evidence:
+        return (_fallback_internal_evidence(category),)
     return tuple(dict(item) for item in evidence)
+
+
+def _fallback_internal_evidence(category: str) -> dict:
+    """Build a conservative evidence item when internal documents are unavailable."""
+
+    contract = get_contract(category, "internal")
+    title_by_category = {
+        "products": "轻量产品能力规则",
+        "sop": "顾问服务流程规则",
+        "pricing": "费用说明与报价边界规则",
+        "risk": "风险提醒与 Plan B 规则",
+        "report": "最终报告交付标准规则",
+    }
+    snippet_by_category = {
+        "products": "按用户人群、天数、预算和节奏选择轻量产品能力，只表达路线结构和服务节点，不承诺真实库存或成团。",
+        "sop": "交付前需要完成需求确认、路线初稿、交通住宿核验、预算说明和出发前提醒。",
+        "pricing": "费用需要区分已确认价格、工具返回价格、规则估算价格和待核验价格，不承诺锁价或支付。",
+        "risk": "报告需要保留天气、交通、酒店、预约和体力风险，并给出可执行 Plan B。",
+        "report": "最终报告需要包含行程概览、每日路线、地图节点、预算置信度、待核验项和不支持承诺。",
+    }
+    return {
+        "source": f"agency_rules/{category}",
+        "source_type": contract.source_type,
+        "category": category,
+        "visibility": contract.visibility,
+        "title": title_by_category.get(category, f"{category} 内部规则"),
+        "snippet": snippet_by_category.get(category, "内部知识不可用时采用保守规则证据，所有实时信息均需二次核验。"),
+        "relevance_score": 0.55,
+        "evidence_level": contract.evidence_level,
+        "applicable_modes": list(contract.applicable_modes),
+        "constraints": list(contract.constraints),
+        "user_segments": list(contract.user_segments),
+        "budget_levels": list(contract.budget_levels),
+        "travel_days_range": contract.travel_days_range,
+        "regions": list(contract.regions),
+        "last_reviewed": contract.last_reviewed,
+    }
 
 
 def _state_human_text_for_report(state: TravelState | None) -> str:

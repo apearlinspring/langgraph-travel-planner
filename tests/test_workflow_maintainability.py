@@ -15,6 +15,7 @@ from app.core.workflow import (
     STEP_STATE_FIELDS,
 )
 from app.reports import render_report_markdown, validate_report_data
+from app.tools import state_transition as state_transition_module
 from app.tools.state_transition import (
     check_current_progress,
     confirm_planning_mode_tool,
@@ -42,6 +43,26 @@ def _build_runtime(state):
         tool_call_id="tool-call-1",
         store=None,
     )
+
+
+def test_internal_doc_evidence_falls_back_when_documents_unavailable(monkeypatch):
+    state_transition_module._internal_doc_evidence.cache_clear()
+    monkeypatch.setattr(
+        state_transition_module.DocumentManager,
+        "load_internal_documents",
+        lambda self, category=None: [],
+    )
+
+    evidence = state_transition_module._internal_doc_evidence("pricing", 1)
+
+    assert len(evidence) == 1
+    item = evidence[0]
+    assert item["source"] == "agency_rules/pricing"
+    assert item["source_type"] == "agency_internal"
+    assert item["category"] == "pricing"
+    assert "agency_plan" in item["applicable_modes"]
+    assert item["constraints"]
+    state_transition_module._internal_doc_evidence.cache_clear()
 
 
 def test_workflow_metadata_covers_every_planning_step():

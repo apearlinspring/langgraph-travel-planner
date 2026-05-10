@@ -12,7 +12,13 @@ from typing import Any, Iterable
 
 from app.evaluation.rag_quality import evaluate_rag_quality
 from app.evaluation.report_quality import evaluate_report_quality
-from app.evaluation.runtime_metrics import collect_runtime_metrics, evaluate_runtime_metrics
+from app.evaluation.runtime_metrics import (
+    DEFAULT_RUNTIME_BUDGET,
+    RuntimeBudget,
+    collect_runtime_metrics,
+    evaluate_runtime_metrics,
+    runtime_budget_from_dict,
+)
 from app.evaluation.scenarios import EvaluationScenario
 from app.evaluation.tool_quality import evaluate_tool_quality, extract_tool_events
 
@@ -69,6 +75,7 @@ class LiveRunConfig:
     output_dir: Path = DEFAULT_OUTPUT_DIR
     timeout_seconds: float = 900.0
     conversation_title_prefix: str = "eval"
+    runtime_budget: RuntimeBudget = DEFAULT_RUNTIME_BUDGET
 
 
 @dataclass
@@ -81,6 +88,8 @@ class LiveScenarioResult:
     snapshot_path: str | None
     elapsed_seconds: float
     agent_score: float | None = None
+    runtime_budget_passed: bool | None = None
+    runtime_findings: list[str] | None = None
     error: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -272,6 +281,38 @@ def infer_tool_policy_from_scenario(scenario: EvaluationScenario) -> dict[str, A
     }
 
 
+def runtime_budget_for_scenario(
+    scenario: EvaluationScenario,
+    *,
+    base_budget: RuntimeBudget | None = None,
+) -> RuntimeBudget:
+    """Return the deterministic runtime budget for one evaluation scenario."""
+
+    budget = base_budget or DEFAULT_RUNTIME_BUDGET
+    tags = set(scenario.tags)
+    category = scenario.category.lower()
+    if "long-context" in tags or "long_conversation" in category:
+        budget = runtime_budget_from_dict(
+            {
+                "max_total_elapsed_seconds": 1200,
+                "max_first_token_seconds": 90,
+                "max_tool_call_count": 45,
+                "max_estimated_total_tokens": 180000,
+            },
+            base=budget,
+        )
+    if {"hotel", "transport", "weather", "fallback"} & tags:
+        budget = runtime_budget_from_dict(
+            {
+                "max_tool_call_count": max(budget.max_tool_call_count, 36),
+            },
+            base=budget,
+        )
+    if scenario.runtime_budget:
+        budget = runtime_budget_from_dict(scenario.runtime_budget, base=budget)
+    return budget
+
+
 def build_quality_summary(
     *,
     scenario: EvaluationScenario,
@@ -282,10 +323,18 @@ def build_quality_summary(
     report_evaluation: dict[str, Any],
     elapsed_seconds: float,
     timeout_seconds: float,
+    runtime_budget: RuntimeBudget | None = None,
 ) -> dict[str, Any]:
     """Build the combined Agent run quality score saved in live snapshots."""
 
     tool_policy = infer_tool_policy_from_scenario(scenario)
+    scenario_runtime_budget = runtime_budget or runtime_budget_for_scenario(
+        scenario,
+        base_budget=runtime_budget_from_dict(
+            {"max_total_elapsed_seconds": timeout_seconds},
+            base=DEFAULT_RUNTIME_BUDGET,
+        ),
+    )
     rag_result = evaluate_rag_quality(
         report_data,
         expected_mode=scenario.expected_mode,
@@ -308,7 +357,9 @@ def build_quality_summary(
     )
     runtime_result = evaluate_runtime_metrics(
         metrics,
-        timeout_seconds=timeout_seconds,
+        budget=scenario_runtime_budget,
+        tool_counts=tool_result["tool_counts"],
+        redundant_calls=tool_result["redundant_calls"],
         pass_threshold=80.0,
     ).to_dict()
     weighted_score = round(
@@ -343,6 +394,7 @@ def build_quality_summary(
         "tool_quality": tool_result,
         "runtime_quality": runtime_result,
         "runtime_metrics": metrics.to_dict(),
+        "runtime_governance": runtime_result["governance_summary"],
         "tool_policy": {
             "expected_tools": sorted(tool_policy["expected_tools"]),
             "forbidden_tools": sorted(tool_policy["forbidden_tools"]),
@@ -452,6 +504,10 @@ def run_live_scenario(
             report_evaluation=evaluation,
             elapsed_seconds=elapsed_seconds,
             timeout_seconds=config.timeout_seconds,
+            runtime_budget=runtime_budget_for_scenario(
+                scenario,
+                base_budget=config.runtime_budget,
+            ),
         )
         snapshot = build_snapshot_payload(
             scenario=scenario,
@@ -471,12 +527,19 @@ def run_live_scenario(
         return LiveScenarioResult(
             scenario_id=scenario.id,
             scenario_name=scenario.name,
-            passed=bool(evaluation["passed"]) and evaluation["normalized_score"] >= scenario.min_score,
+            passed=bool(quality_summary["aggregate"]["passed"]),
             normalized_score=float(evaluation["normalized_score"]),
             grade=str(evaluation["grade"]),
             snapshot_path=str(path),
             elapsed_seconds=round(elapsed_seconds, 2),
             agent_score=float(quality_summary["aggregate"]["normalized_score"]),
+            runtime_budget_passed=bool(
+                quality_summary["runtime_quality"]["budget_gate"]["passed"]
+            ),
+            runtime_findings=[
+                *quality_summary["runtime_quality"]["budget_gate"]["violations"],
+                *quality_summary["runtime_quality"]["budget_gate"]["warnings"],
+            ][:5],
         )
     except (urllib.error.URLError, OSError, RuntimeError, ValueError) as exc:
         elapsed_seconds = time.perf_counter() - started_at

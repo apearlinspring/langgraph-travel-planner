@@ -13,6 +13,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from app.evaluation.live_runner import build_quality_summary  # noqa: E402
 from app.evaluation.report_quality import evaluate_report_quality  # noqa: E402
+from app.evaluation.runtime_metrics import runtime_budget_from_dict  # noqa: E402
 from app.evaluation.scenarios import EvaluationScenario, get_scenario, load_scenarios  # noqa: E402
 
 
@@ -78,6 +79,14 @@ def _print_markdown(result: dict[str, Any]) -> None:
         for key in ("rag_quality", "tool_quality", "runtime_quality"):
             item = quality_summary.get(key) or {}
             print(f"- {key}: {item.get('normalized_score')} / 100 ({item.get('grade')})")
+        runtime_quality = quality_summary.get("runtime_quality") or {}
+        budget_gate = runtime_quality.get("budget_gate") or {}
+        print(f"- runtime_budget: {'PASS' if budget_gate.get('passed') else 'FAIL'}")
+        runtime_governance = quality_summary.get("runtime_governance") or {}
+        for section_key in ("slow_path", "cost_risk", "tool_usage", "errors"):
+            section = runtime_governance.get(section_key) or {}
+            for finding in (section.get("findings") or [])[:3]:
+                print(f"  - {section_key}: {finding}")
 
 
 def _scenario_for_snapshot(
@@ -144,6 +153,46 @@ def main() -> int:
         default=None,
         help="Exit with code 2 if normalized score is below this value",
     )
+    parser.add_argument(
+        "--enforce-runtime-budget",
+        action="store_true",
+        help="Exit with code 2 if the runtime budget gate fails",
+    )
+    parser.add_argument(
+        "--enforce-agent-gate",
+        action="store_true",
+        help="Exit with code 2 if the combined Agent quality gate fails",
+    )
+    parser.add_argument(
+        "--max-total-seconds",
+        type=float,
+        default=None,
+        help="Override runtime budget for total elapsed seconds",
+    )
+    parser.add_argument(
+        "--max-first-token-seconds",
+        type=float,
+        default=None,
+        help="Override runtime budget for first token latency",
+    )
+    parser.add_argument(
+        "--max-tool-calls",
+        type=int,
+        default=None,
+        help="Override runtime budget for tool-call count",
+    )
+    parser.add_argument(
+        "--max-estimated-tokens",
+        type=int,
+        default=None,
+        help="Override runtime budget for estimated total tokens",
+    )
+    parser.add_argument(
+        "--max-error-events",
+        type=int,
+        default=None,
+        help="Override runtime budget for SSE error events",
+    )
     args = parser.parse_args()
 
     if args.list_scenarios:
@@ -181,6 +230,17 @@ def main() -> int:
     assistant_text = snapshot.get("assistant_text") if isinstance(snapshot.get("assistant_text"), str) else ""
     elapsed_seconds = summary.get("elapsed_seconds") if isinstance(summary.get("elapsed_seconds"), (int, float)) else 0
     report_evaluation = dict(result)
+    runtime_budget_overrides = {
+        key: value
+        for key, value in {
+            "max_total_elapsed_seconds": args.max_total_seconds,
+            "max_first_token_seconds": args.max_first_token_seconds,
+            "max_tool_call_count": args.max_tool_calls,
+            "max_estimated_total_tokens": args.max_estimated_tokens,
+            "max_error_event_count": args.max_error_events,
+        }.items()
+        if value is not None
+    }
     result["quality_summary"] = build_quality_summary(
         scenario=quality_scenario,
         events=events,
@@ -190,6 +250,11 @@ def main() -> int:
         report_evaluation=report_evaluation,
         elapsed_seconds=float(elapsed_seconds),
         timeout_seconds=900.0,
+        runtime_budget=(
+            runtime_budget_from_dict(runtime_budget_overrides)
+            if runtime_budget_overrides
+            else None
+        ),
     )
 
     if args.format == "json":
@@ -197,9 +262,19 @@ def main() -> int:
     else:
         _print_markdown(result)
 
-    if fail_under is not None and (
+    runtime_quality = result["quality_summary"].get("runtime_quality") or {}
+    runtime_budget_failed = (
+        args.enforce_runtime_budget
+        and not bool((runtime_quality.get("budget_gate") or {}).get("passed"))
+    )
+    agent_gate_failed = (
+        args.enforce_agent_gate
+        and not bool((result["quality_summary"].get("aggregate") or {}).get("passed"))
+    )
+    report_failed = fail_under is not None and (
         result["normalized_score"] < fail_under or not result["passed"]
-    ):
+    )
+    if report_failed or runtime_budget_failed or agent_gate_failed:
         return 2
     return 0
 

@@ -4,6 +4,7 @@ from app.evaluation.tool_quality import (
     evaluate_tool_quality,
     extract_tool_events,
     redundant_tool_calls,
+    tool_overuse_summary,
 )
 from tests.test_report_quality_evaluation import _valid_report_data
 
@@ -54,6 +55,8 @@ def test_evaluate_tool_quality_flags_redundant_calls():
     assert redundant_tool_calls(records) == ["turn-1:query_hotel_options called 2 times"]
     assert result.passed is False
     assert any("Redundant tool calls" in item for item in result.summary)
+    assert result.tool_overuse["redundant_call_count"] == 1
+    assert result.tool_overuse["high_frequency_tools"] == {"query_hotel_options": 2}
 
 
 def test_evaluate_tool_quality_ignores_repeated_state_mutation_tools():
@@ -82,6 +85,25 @@ def test_redundant_tool_calls_can_track_custom_tool_set():
     assert redundant_tool_calls(records, tracked_tools={"select_destination_tool"}) == [
         "turn-1:select_destination_tool called 2 times"
     ]
+
+
+def test_tool_overuse_summary_counts_only_tracked_pressure():
+    records = extract_tool_events(
+        [
+            {"type": "tool_call", "tool": "query_hotel_options", "turn_index": 1},
+            {"type": "tool_call", "tool": "query_hotel_options", "turn_index": 1},
+            {"type": "tool_call", "tool": "select_destination_tool", "turn_index": 1},
+        ]
+    )
+
+    summary = tool_overuse_summary(
+        records,
+        redundant_calls=redundant_tool_calls(records),
+    )
+
+    assert summary["total_call_count"] == 3
+    assert summary["tracked_call_count"] == 2
+    assert summary["redundant_call_count"] == 1
 
 
 def test_evaluate_tool_quality_requires_fallback_pending_checks():

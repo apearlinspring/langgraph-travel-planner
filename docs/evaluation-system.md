@@ -71,7 +71,7 @@
 
 ## 真实链路跑批
 
-`run_evaluation_scenarios.py` 可以把场景真正发给本地后端，读取 SSE（服务端事件流）返回的 `report_data`，保存快照并自动评分。
+`run_evaluation_scenarios.py` 可以把场景真正发给本地后端，读取 SSE（服务器发送事件）返回的 `report_data`，保存快照并自动评分。跑批结果现在按综合 Agent（智能体）质量门禁判断通过，不再只看最终报告分。
 
 先查看将要运行的场景，不调用后端：
 
@@ -83,6 +83,12 @@
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\run_evaluation_scenarios.py --scenario agency_couple_relaxed --base-url http://127.0.0.1:8000
+```
+
+覆盖运行预算阈值：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\run_evaluation_scenarios.py --scenario agency_couple_relaxed --base-url http://127.0.0.1:8000 --max-total-seconds 900 --max-first-token-seconds 60 --max-tool-calls 32 --max-estimated-tokens 120000 --max-error-events 0
 ```
 
 默认账号是 `test / 000000`，也可以通过环境变量覆盖：
@@ -104,10 +110,32 @@ $env:ZHIXING_EVAL_PASSWORD="000000"
 - `summary.quality_summary.report_quality`：原有结构化报告评分。
 - `summary.quality_summary.rag_quality`：证据契约、类别覆盖、模式适配、费用可追溯和安全交付评分。
 - `summary.quality_summary.tool_quality`：工具意图覆盖、禁用工具规避、同轮高成本查询重复调用、失败兜底和审计可见性评分。
-- `summary.quality_summary.runtime_quality`：是否产出 `report_data`、总耗时、首 token 观测、事件计数和 token 近似成本评分。
+- `summary.quality_summary.runtime_quality`：是否产出 `report_data`、总耗时、首 token（词元）时间、事件计数、工具调用次数、错误事件数和 token 近似成本评分。
+- `summary.quality_summary.runtime_quality.budget_gate`：确定性运行预算门禁，包含 `passed`、`violations`、`warnings` 和实际采用的预算阈值。
+- `summary.quality_summary.runtime_governance`：运行治理摘要，用于回答“慢在哪里、成本风险在哪里、工具是否过度调用”。
 - `summary.quality_summary.aggregate`：综合分，当前权重是报告 50%、RAG 20%、工具 20%、运行指标 10%。
 
-`evaluate_report_snapshot.py` 读取旧快照时仍会输出原有报告评分；如果快照里有 `events`、`turns` 和 `assistant_text`，还会补充 Agent 运行质量摘要。
+默认运行预算是：
+
+- 最大总耗时：900 秒。
+- 最大首 token 时间：60 秒，缺失时给出警告，不直接判失败。
+- 最大工具调用次数：32 次。
+- 最大估算 token 数：120000。
+- 最大错误事件数：0。
+
+长对话和工具降级类场景可以在 `data/evaluation/report_quality_scenarios.json` 的 `runtime_budget` 中覆盖阈值。例如长上下文场景允许 1200 秒总耗时、45 次工具调用和 180000 估算 token。
+
+`evaluate_report_snapshot.py` 读取旧快照时仍会输出原有报告评分；如果快照里有 `events`、`turns` 和 `assistant_text`，还会补充 Agent 运行质量摘要。需要把运行预算也作为退出码门禁时，使用：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\evaluate_report_snapshot.py .runtime\evaluations\sample.json --scenario agency_couple_relaxed --enforce-runtime-budget
+```
+
+需要按综合 Agent 质量门禁退出时，使用：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\evaluate_report_snapshot.py .runtime\evaluations\sample.json --scenario agency_couple_relaxed --enforce-agent-gate
+```
 
 ## 第四阶段：模型表现评估
 

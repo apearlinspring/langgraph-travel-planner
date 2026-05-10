@@ -8,6 +8,7 @@ from app.evaluation.live_runner import (
     build_snapshot_payload,
     infer_tool_policy_from_scenario,
     parse_sse_event_line,
+    runtime_budget_for_scenario,
     scenario_message_sequence,
     select_scenarios,
     snapshot_path_for,
@@ -127,6 +128,26 @@ def test_scenario_message_sequence_uses_scenario_followups():
     assert scenario_message_sequence(scenario) == ["Plan a trip", "Finalize now"]
 
 
+def test_runtime_budget_for_scenario_uses_long_context_profile_and_overrides():
+    scenario = EvaluationScenario(
+        id="long",
+        name="Long",
+        category="long_conversation",
+        prompt="Plan a trip",
+        expected_mode="agency_plan",
+        min_score=80,
+        focus=["contract"],
+        tags=["agency", "long-context"],
+        runtime_budget={"max_tool_call_count": 50},
+    )
+
+    budget = runtime_budget_for_scenario(scenario)
+
+    assert budget.max_total_elapsed_seconds == 1200
+    assert budget.max_first_token_seconds == 90
+    assert budget.max_tool_call_count == 50
+
+
 def test_infer_tool_policy_from_scenario_uses_tags():
     scenario = EvaluationScenario(
         id="hotel_fallback",
@@ -187,3 +208,48 @@ def test_build_quality_summary_contains_agent_scores():
     assert summary["aggregate"]["normalized_score"] == 100
     assert summary["rag_quality"]["passed"] is True
     assert summary["runtime_metrics"]["report_event_count"] == 1
+    assert summary["runtime_quality"]["budget_gate"]["passed"] is True
+    assert summary["runtime_governance"]["status"] == "pass"
+
+
+def test_build_quality_summary_fails_aggregate_when_runtime_budget_fails():
+    scenario = _scenario("agency_couple")
+    report_evaluation = {
+        "normalized_score": 100,
+        "passed": True,
+        "grade": "A",
+        "total_score": 100,
+        "max_score": 100,
+        "summary": [],
+        "criteria": [],
+    }
+
+    summary = build_quality_summary(
+        scenario=scenario,
+        events=[
+            {"type": "token", "content": "hello", "turn_index": 1, "elapsed_since_scenario_start": 10},
+            {"type": "report_data", "turn_index": 1},
+        ],
+        turns=[{"turn_index": 1, "user_message": "Plan", "elapsed_seconds": 10}],
+        assistant_text="hello",
+        report_data=_valid_report_data(),
+        report_evaluation=report_evaluation,
+        elapsed_seconds=10,
+        timeout_seconds=900.0,
+        runtime_budget=runtime_budget_for_scenario(
+            EvaluationScenario(
+                id="strict",
+                name="Strict",
+                category="agency_plan",
+                prompt="Plan",
+                expected_mode="agency_plan",
+                min_score=80,
+                focus=["contract"],
+                tags=["agency"],
+                runtime_budget={"max_total_elapsed_seconds": 1},
+            )
+        ),
+    )
+
+    assert summary["runtime_quality"]["budget_gate"]["passed"] is False
+    assert summary["aggregate"]["passed"] is False
