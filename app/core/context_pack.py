@@ -13,7 +13,13 @@ from app.core.context_budget import (
     decide_context_budget,
     trim_text_to_token_budget,
 )
-from app.core.conversation_summary import summarize_conversation, summarize_state_for_context
+from app.core.conversation_summary import (
+    ConversationSummary,
+    ConversationSummaryConfig,
+    asummarize_conversation,
+    summarize_conversation,
+    summarize_state_for_context,
+)
 
 
 @dataclass(frozen=True)
@@ -34,6 +40,61 @@ def build_context_pack(
     budget: ContextBudget = DEFAULT_CONTEXT_BUDGET,
 ) -> ContextPack:
     """Return a layered context pack and the bounded message window."""
+    prepared = _prepare_context_pack_inputs(
+        state=state,
+        messages=messages,
+        budget=budget,
+    )
+    summary = _build_sync_summary(
+        prepared=prepared,
+        budget=budget,
+    )
+    return _compose_context_pack(
+        state=state,
+        messages=messages,
+        memory_prompt=memory_prompt,
+        budget=budget,
+        prepared=prepared,
+        summary=summary,
+    )
+
+
+async def abuild_context_pack(
+    *,
+    state: dict[str, Any],
+    messages: list[Any],
+    memory_prompt: str = "",
+    budget: ContextBudget = DEFAULT_CONTEXT_BUDGET,
+    summary_config: ConversationSummaryConfig | None = None,
+) -> ContextPack:
+    """Async context pack builder that can use an optional LLM summarizer."""
+
+    prepared = _prepare_context_pack_inputs(
+        state=state,
+        messages=messages,
+        budget=budget,
+    )
+    summary = await _build_async_summary(
+        prepared=prepared,
+        budget=budget,
+        summary_config=summary_config or ConversationSummaryConfig.from_environment(),
+    )
+    return _compose_context_pack(
+        state=state,
+        messages=messages,
+        memory_prompt=memory_prompt,
+        budget=budget,
+        prepared=prepared,
+        summary=summary,
+    )
+
+
+def _prepare_context_pack_inputs(
+    *,
+    state: dict[str, Any],
+    messages: list[Any],
+    budget: ContextBudget,
+) -> dict[str, Any]:
     current_step = str(state.get("current_step") or "")
     previous_step = state.get("context_last_step")
     decision = decide_context_budget(
@@ -53,23 +114,91 @@ def build_context_pack(
         budget=budget,
     )
     old_messages = messages[: max(0, len(messages) - len(recent_messages))]
+    return {
+        "current_step": current_step,
+        "decision": decision,
+        "recent_messages": recent_messages,
+        "old_messages": old_messages,
+        "previous_summary": _coerce_text(state.get("conversation_summary")),
+    }
 
-    previous_summary = _coerce_text(state.get("conversation_summary"))
-    summary_text = ""
+
+def _build_sync_summary(
+    *,
+    prepared: dict[str, Any],
+    budget: ContextBudget,
+) -> ConversationSummary | None:
+    decision: ContextBudgetDecision = prepared["decision"]
+    old_messages = prepared["old_messages"]
+    previous_summary = prepared["previous_summary"]
     if decision.should_summarize and old_messages:
-        summary = summarize_conversation(
+        return summarize_conversation(
             old_messages,
-            current_step=current_step,
+            current_step=prepared["current_step"],
             trigger_reason=decision.reason,
             previous_summary=previous_summary,
             token_budget=budget.conversation_summary_tokens,
         )
-        summary_text = summary.text
-    elif previous_summary:
-        summary_text = trim_text_to_token_budget(
-            previous_summary,
-            budget.conversation_summary_tokens,
+    if previous_summary:
+        return ConversationSummary(
+            text=trim_text_to_token_budget(
+                previous_summary,
+                budget.conversation_summary_tokens,
+            ),
+            source_message_count=0,
+            retained_message_count=0,
+            trigger_reason="沿用已有摘要",
+            method="deterministic",
         )
+    return None
+
+
+async def _build_async_summary(
+    *,
+    prepared: dict[str, Any],
+    budget: ContextBudget,
+    summary_config: ConversationSummaryConfig,
+) -> ConversationSummary | None:
+    decision: ContextBudgetDecision = prepared["decision"]
+    old_messages = prepared["old_messages"]
+    previous_summary = prepared["previous_summary"]
+    if decision.should_summarize and old_messages:
+        return await asummarize_conversation(
+            old_messages,
+            current_step=prepared["current_step"],
+            trigger_reason=decision.reason,
+            previous_summary=previous_summary,
+            token_budget=budget.conversation_summary_tokens,
+            config=summary_config,
+        )
+    if previous_summary:
+        return ConversationSummary(
+            text=trim_text_to_token_budget(
+                previous_summary,
+                budget.conversation_summary_tokens,
+            ),
+            source_message_count=0,
+            retained_message_count=0,
+            trigger_reason="沿用已有摘要",
+            method="deterministic",
+        )
+    return None
+
+
+def _compose_context_pack(
+    *,
+    state: dict[str, Any],
+    messages: list[Any],
+    memory_prompt: str,
+    budget: ContextBudget,
+    prepared: dict[str, Any],
+    summary: ConversationSummary | None,
+) -> ContextPack:
+    current_step = prepared["current_step"]
+    decision: ContextBudgetDecision = prepared["decision"]
+    recent_messages = prepared["recent_messages"]
+    old_messages = prepared["old_messages"]
+    summary_text = summary.text if summary else ""
 
     state_summary = trim_text_to_token_budget(
         summarize_state_for_context(state),
@@ -103,6 +232,9 @@ def build_context_pack(
         "estimated_message_tokens": decision.estimated_tokens,
         "summary_triggered": decision.should_summarize and bool(old_messages),
         "summary_reason": decision.reason,
+        "summary_method": summary.method if summary else "none",
+        "summary_model": summary.model_name if summary else None,
+        "summary_fallback_reason": summary.fallback_reason if summary else None,
         "current_step": current_step,
         "layers": {
             "short_term_state": bool(state_summary),

@@ -1,8 +1,15 @@
+import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from app.core.context_budget import ContextBudget, decide_context_budget, estimate_tokens
-from app.core.context_pack import build_context_pack
-from app.core.conversation_summary import summarize_conversation, summarize_state_for_context
+from app.core.context_pack import abuild_context_pack, build_context_pack
+from app.core.conversation_summary import (
+    ConversationSummary,
+    ConversationSummaryConfig,
+    asummarize_conversation,
+    summarize_conversation,
+    summarize_state_for_context,
+)
 from app.core.memory_models import classify_memory_candidate, filter_stable_memory_values
 
 
@@ -40,6 +47,53 @@ def test_conversation_summary_keeps_planning_facts():
     assert "预算12000元" in summary.text
     assert "孩子海鲜过敏" in summary.text
     assert summary.source_message_count == 3
+    assert summary.method == "deterministic"
+
+
+@pytest.mark.asyncio
+async def test_llm_summary_contract_is_configurable_with_injected_summarizer():
+    class FakeSummarizer:
+        async def summarize(self, messages, **kwargs):
+            return ConversationSummary(
+                text="【会话摘要】\n- LLM 摘要：已确认亲子高铁方案。",
+                source_message_count=len(messages),
+                retained_message_count=1,
+                trigger_reason=kwargs["trigger_reason"],
+                highlights=["用户：确认亲子高铁方案"],
+                method="llm",
+                model_name="fake-summary-model",
+            )
+
+    summary = await asummarize_conversation(
+        [HumanMessage(content="确认亲子高铁方案，预算12000元。")],
+        current_step="transport_planning",
+        trigger_reason="测试 LLM 摘要",
+        config=ConversationSummaryConfig(mode="llm"),
+        llm_summarizer=FakeSummarizer(),
+    )
+
+    assert summary.method == "llm"
+    assert summary.model_name == "fake-summary-model"
+    assert "亲子高铁方案" in summary.text
+
+
+@pytest.mark.asyncio
+async def test_async_context_pack_defaults_to_deterministic_summary():
+    messages = [
+        HumanMessage(content=f"第{i}轮：预算{i * 1000}元，确认继续。")
+        for i in range(8)
+    ]
+
+    pack = await abuild_context_pack(
+        state={"current_step": "transport_planning"},
+        messages=messages,
+        budget=ContextBudget(max_messages_without_summary=3),
+        summary_config=ConversationSummaryConfig(mode="deterministic"),
+    )
+
+    assert pack.metadata["summary_triggered"] is True
+    assert pack.metadata["summary_method"] == "deterministic"
+    assert "【会话摘要】" in pack.system_appendix
 
 
 def test_state_summary_prefers_structured_short_term_state():

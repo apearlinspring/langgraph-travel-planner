@@ -8,11 +8,15 @@ does.
 """
 from __future__ import annotations
 
+import os
 import re
+import logging
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from app.core.context_budget import DEFAULT_CONTEXT_BUDGET, trim_text_to_token_budget
+
+logger = logging.getLogger(__name__)
 
 
 ROLE_LABELS = {
@@ -58,6 +62,100 @@ class ConversationSummary:
     retained_message_count: int
     trigger_reason: str
     highlights: list[str] = field(default_factory=list)
+    method: Literal["deterministic", "llm"] = "deterministic"
+    model_name: str | None = None
+    fallback_reason: str | None = None
+
+
+@dataclass(frozen=True)
+class ConversationSummaryConfig:
+    """Runtime controls for conversation summarization."""
+
+    mode: Literal["deterministic", "llm"] = "deterministic"
+    llm_profile: str = "rag"
+    llm_max_tokens: int = 700
+    fallback_to_deterministic: bool = True
+
+    @classmethod
+    def from_environment(cls) -> "ConversationSummaryConfig":
+        """Build config from environment variables without requiring tests to use LLM."""
+
+        mode = os.getenv("ZHIXING_CONTEXT_SUMMARY_MODE", "deterministic").strip().lower()
+        if mode not in {"deterministic", "llm"}:
+            mode = "deterministic"
+        profile = os.getenv("ZHIXING_CONTEXT_SUMMARY_PROFILE", "rag").strip() or "rag"
+        max_tokens = _safe_int(
+            os.getenv("ZHIXING_CONTEXT_SUMMARY_MAX_TOKENS"),
+            default=700,
+        )
+        fallback = os.getenv("ZHIXING_CONTEXT_SUMMARY_FALLBACK", "true").strip().lower()
+        return cls(
+            mode=mode,  # type: ignore[arg-type]
+            llm_profile=profile,
+            llm_max_tokens=max(128, max_tokens),
+            fallback_to_deterministic=fallback not in {"0", "false", "no"},
+        )
+
+
+class LLMConversationSummarizer:
+    """Optional LLM-backed summarizer.
+
+    The model is imported lazily so deterministic tests do not initialize a
+    provider client. All model creation still goes through llm_factory.
+    """
+
+    def __init__(self, config: ConversationSummaryConfig | None = None) -> None:
+        self.config = config or ConversationSummaryConfig()
+
+    async def summarize(
+        self,
+        messages: list[Any],
+        *,
+        current_step: str,
+        trigger_reason: str,
+        previous_summary: str | None = None,
+        token_budget: int = DEFAULT_CONTEXT_BUDGET.conversation_summary_tokens,
+    ) -> ConversationSummary:
+        from langchain_core.messages import HumanMessage, SystemMessage
+
+        from app.utils.llm_factory import build_chat_model, resolve_model_name
+
+        model_name = resolve_model_name(profile=self.config.llm_profile)  # type: ignore[arg-type]
+        model = build_chat_model(
+            profile=self.config.llm_profile,  # type: ignore[arg-type]
+            temperature=0.1,
+            max_tokens=self.config.llm_max_tokens,
+        )
+        prompt = _build_llm_summary_prompt(
+            messages,
+            current_step=current_step,
+            trigger_reason=trigger_reason,
+            previous_summary=previous_summary,
+            token_budget=token_budget,
+        )
+        response = await model.ainvoke(
+            [
+                SystemMessage(
+                    content=(
+                        "你是旅行规划系统的会话压缩器。只保留可复用事实、"
+                        "用户确认、偏好依据和待核验项；不要编造新事实。"
+                    )
+                ),
+                HumanMessage(content=prompt),
+            ]
+        )
+        summary_text = _message_content(response).strip()
+        summary_text = trim_text_to_token_budget(summary_text, token_budget)
+        highlights = _extract_highlights(messages)
+        return ConversationSummary(
+            text=summary_text,
+            source_message_count=len(messages or []),
+            retained_message_count=len(highlights),
+            trigger_reason=trigger_reason,
+            highlights=highlights,
+            method="llm",
+            model_name=model_name,
+        )
 
 
 def summarize_conversation(
@@ -88,7 +186,55 @@ def summarize_conversation(
         retained_message_count=len(highlights),
         trigger_reason=trigger_reason,
         highlights=highlights,
+        method="deterministic",
     )
+
+
+async def asummarize_conversation(
+    messages: list[Any],
+    *,
+    current_step: str,
+    trigger_reason: str,
+    previous_summary: str | None = None,
+    token_budget: int = DEFAULT_CONTEXT_BUDGET.conversation_summary_tokens,
+    config: ConversationSummaryConfig | None = None,
+    llm_summarizer: LLMConversationSummarizer | None = None,
+) -> ConversationSummary:
+    """Summarize messages with optional LLM support and deterministic fallback."""
+
+    summary_config = config or ConversationSummaryConfig()
+    deterministic = summarize_conversation(
+        messages,
+        current_step=current_step,
+        trigger_reason=trigger_reason,
+        previous_summary=previous_summary,
+        token_budget=token_budget,
+    )
+    if summary_config.mode != "llm":
+        return deterministic
+
+    summarizer = llm_summarizer or LLMConversationSummarizer(summary_config)
+    try:
+        return await summarizer.summarize(
+            messages,
+            current_step=current_step,
+            trigger_reason=trigger_reason,
+            previous_summary=previous_summary,
+            token_budget=token_budget,
+        )
+    except Exception as exc:
+        logger.warning("LLM 会话摘要失败，回退确定性摘要: %s", exc)
+        if not summary_config.fallback_to_deterministic:
+            raise
+        return ConversationSummary(
+            text=deterministic.text,
+            source_message_count=deterministic.source_message_count,
+            retained_message_count=deterministic.retained_message_count,
+            trigger_reason=deterministic.trigger_reason,
+            highlights=deterministic.highlights,
+            method="deterministic",
+            fallback_reason=f"LLM 摘要失败：{exc}",
+        )
 
 
 def summarize_state_for_context(state: dict[str, Any]) -> str:
@@ -217,3 +363,39 @@ def _format_budget(requirement: dict[str, Any]) -> str:
     if budget_min:
         return f"不少于 {budget_min} 元/人"
     return ""
+
+
+def _build_llm_summary_prompt(
+    messages: list[Any],
+    *,
+    current_step: str,
+    trigger_reason: str,
+    previous_summary: str | None,
+    token_budget: int,
+) -> str:
+    excerpts = []
+    for message in messages or []:
+        role = ROLE_LABELS.get(_message_role(message), _message_role(message) or "消息")
+        content = _truncate_line(_normalize_text(_message_content(message)), max_chars=260)
+        if content:
+            excerpts.append(f"{role}：{content}")
+    previous = previous_summary or "无"
+    body = "\n".join(excerpts[-24:])
+    return (
+        "请把以下旧对话压缩成中文要点摘要，输出必须包含：\n"
+        "1. 已确认的旅行需求、选择和变更。\n"
+        "2. 稳定长期偏好与本次临时条件的边界。\n"
+        "3. 仍需核验或不能承诺的事项。\n"
+        f"摘要目标预算约 {token_budget} token。\n\n"
+        f"当前阶段：{current_step}\n"
+        f"触发原因：{trigger_reason}\n"
+        f"已有摘要：{previous}\n\n"
+        f"旧对话摘录：\n{body}"
+    )
+
+
+def _safe_int(value: str | None, *, default: int) -> int:
+    try:
+        return int(str(value or "").strip())
+    except (TypeError, ValueError):
+        return default
