@@ -420,6 +420,17 @@ def _exclude_tools_by_name(tools: list[Any], excluded_names: set[str] | frozense
     ]
 
 
+def _keep_tools_by_name(tools: list[Any], kept_names: set[str] | frozenset[str]) -> list[Any]:
+    return [
+        tool
+        for tool in tools
+        if (
+            getattr(tool, "name", tool if isinstance(tool, str) else None)
+            in kept_names
+        )
+    ]
+
+
 def _find_tool_by_name(step_config: dict[str, Any], tool_name: str) -> Any | None:
     for config in step_config.values():
         for tool in config.get("tools", []):
@@ -434,8 +445,29 @@ def _state_value_ready(value: Any) -> bool:
 
 
 def _can_generate_final_report(state_dict: dict[str, Any]) -> bool:
-    required_fields = ("user_requirement", "selected_destination", "itinerary", "budget")
-    return all(_state_value_ready(state_dict.get(field)) for field in required_fields)
+    user_requirement = state_dict.get("user_requirement") or {}
+    if not isinstance(user_requirement, dict) or not _state_value_ready(user_requirement):
+        return False
+
+    destination = state_dict.get("selected_destination") or user_requirement.get("destination")
+    if not _state_value_ready(destination):
+        return False
+
+    if _state_value_ready(state_dict.get("itinerary")) and _state_value_ready(state_dict.get("budget")):
+        return True
+
+    people_count = (
+        (user_requirement.get("adult_count") or 0)
+        + (user_requirement.get("children_count") or 0)
+    )
+    has_people = people_count > 0 or _state_value_ready(user_requirement.get("total_people"))
+    has_days = _state_value_ready(user_requirement.get("travel_days"))
+    has_budget = (
+        _state_value_ready(user_requirement.get("budget_min"))
+        or _state_value_ready(user_requirement.get("budget_max"))
+        or _state_value_ready(user_requirement.get("budget_level"))
+    )
+    return has_days and has_people and has_budget
 
 
 def _preferred_tool_for_intent(intent: TravelIntent, state_dict: dict[str, Any]) -> str | None:
@@ -470,8 +502,9 @@ def _intent_instruction(
         if _can_generate_final_report(state_dict):
             return (
                 "本轮用户明确要求生成最终旅游规划报告。"
-                " 当前已有生成报告所需的核心状态，必须优先调用 `generate_order_tool`，"
+                " 当前已有生成报告所需的核心信息，必须优先调用 `generate_order_tool`，"
                 " 并以工具返回的 report 作为正文，不要手写、压缩或删减正式报告章节。"
+                " 如果行程或预算尚未完整落库，工具会生成带待核验项的结构化报告。"
             )
         return (
             "本轮用户明确要求生成最终旅游规划报告，但当前状态还未具备正式生成条件。"
@@ -484,6 +517,7 @@ def _intent_instruction(
             return (
                 "本轮用户想导出或保存报告。"
                 " 如果尚未生成正式报告，请先调用 `generate_order_tool` 生成结构化报告；"
+                " 如果行程或预算尚未完整落库，工具会先补齐带待核验项的报告数据；"
                 " 如果已经有正式报告，则说明前端导出入口会基于报告内容导出。"
             )
         return (
@@ -876,6 +910,19 @@ class StepConfigMiddleware(AgentMiddleware):
                     f"intent={travel_intent.name}, tool={intent_preferred_tool}"
                 )
 
+        if travel_intent.name in {"final_report", "export_report"} and intent_preferred_tool:
+            report_tools = _keep_tools_by_name(
+                override_kwargs["tools"],
+                {intent_preferred_tool},
+            )
+            if report_tools:
+                override_kwargs["tools"] = report_tools
+                available_tool_names = _tool_names(override_kwargs["tools"])
+                app_logger.info(
+                    "最终报告意图：本轮工具列表已收窄为结构化报告工具: "
+                    f"{sorted(available_tool_names)}"
+                )
+
         recent_tool_names = _recent_tool_names_since_latest_human(request)
         repeat_instruction = _tool_repeat_instruction(current_step, recent_tool_names)
         if repeat_instruction:
@@ -891,13 +938,17 @@ class StepConfigMiddleware(AgentMiddleware):
             if current_step == "destination_recommendation"
             else None
         )
-        forced_tool = (
-            "select_destination_tool"
-            if confirmed_destination
-            else _forced_tool_choice(current_step, latest_human_text, request)
-        )
-        if forced_tool is None:
+        forced_tool = None
+        if travel_intent.name in {"final_report", "export_report"} and intent_preferred_tool:
             forced_tool = intent_preferred_tool
+        else:
+            forced_tool = (
+                "select_destination_tool"
+                if confirmed_destination
+                else _forced_tool_choice(current_step, latest_human_text, request)
+            )
+            if forced_tool is None:
+                forced_tool = intent_preferred_tool
         if forced_tool and forced_tool not in available_tool_names:
             forced_tool = None
         if forced_tool and forced_tool in recent_tool_names:

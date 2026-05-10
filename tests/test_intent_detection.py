@@ -43,6 +43,17 @@ def test_detect_final_report_protects_against_freeform_report():
     assert intent.protect_from_freeform_report is True
 
 
+def test_detect_travel_planning_report_phrase_as_final_report():
+    intent = detect_travel_intent(
+        "方案可以，请生成最终旅游规划报告，包含每日行程、预算明细和地图路线节点。",
+        current_step="itinerary_generation",
+    )
+
+    assert intent.name == "final_report"
+    assert intent.preferred_tool == "generate_order_tool"
+    assert intent.protect_from_freeform_report is True
+
+
 def test_detect_selection_turn_does_not_force_transport_query():
     intent = detect_travel_intent(
         "就选第一个航班，帮我记录为交通方案。",
@@ -291,6 +302,119 @@ async def test_middleware_blocks_freeform_final_report_when_state_is_not_ready()
 
 
 @pytest.mark.asyncio
+async def test_middleware_opens_generate_order_tool_when_report_basics_are_ready():
+    captured = {}
+    compatibility = get_model_compatibility()
+    middleware = StepConfigMiddleware(
+        {
+            "destination_recommendation": {
+                "prompt": "目的地阶段",
+                "tools": ["select_destination_tool"],
+                "requires": ["user_requirement"],
+            },
+            "order_generation": {
+                "prompt": "订单阶段",
+                "tools": ["generate_order_tool"],
+                "requires": ["user_requirement", "itinerary", "budget"],
+            },
+        }
+    )
+    state = {
+        "current_step": "destination_recommendation",
+        "user_requirement": {
+            "departure_city": "\u5317\u4eac",
+            "destination": "\u4e0a\u6d77",
+            "travel_days": 3,
+            "adult_count": 2,
+            "children_count": 0,
+            "budget_max": 8000,
+        },
+    }
+
+    async def handler(request):
+        captured["tools"] = request.tools
+        captured["tool_choice"] = getattr(request, "tool_choice", None)
+        captured["system_prompt"] = getattr(request, "system_prompt", "")
+        return "ok"
+
+    await middleware.awrap_model_call(
+        DummyRequest(
+            state,
+            [HumanMessage(content="\u8bf7\u76f4\u63a5\u751f\u6210\u6700\u7ec8\u65c5\u6e38\u62a5\u544a\u3002")],
+        ),
+        handler,
+    )
+
+    assert captured["tools"] == ["generate_order_tool"]
+    if compatibility.supports_forced_tool_choice:
+        assert captured["tool_choice"] == "generate_order_tool"
+    else:
+        assert captured["tool_choice"] is None
+        assert "generate_order_tool" in captured["system_prompt"]
+
+
+@pytest.mark.asyncio
+async def test_final_report_intent_overrides_destination_selection_confirmation():
+    captured = {}
+    compatibility = get_model_compatibility()
+    middleware = StepConfigMiddleware(
+        {
+            "destination_recommendation": {
+                "prompt": "目的地阶段",
+                "tools": ["select_destination_tool"],
+                "requires": ["user_requirement"],
+            },
+            "order_generation": {
+                "prompt": "订单阶段",
+                "tools": ["generate_order_tool"],
+                "requires": ["user_requirement", "itinerary", "budget"],
+            },
+        }
+    )
+    state = {
+        "current_step": "destination_recommendation",
+        "user_requirement": {
+            "departure_city": "\u5317\u4eac",
+            "destination": "\u4e0a\u6d77",
+            "travel_days": 3,
+            "adult_count": 2,
+            "children_count": 0,
+            "budget_max": 8000,
+        },
+        "destination_options": [{"name": "\u4e0a\u6d77"}],
+    }
+
+    async def handler(request):
+        captured["tools"] = request.tools
+        captured["tool_choice"] = getattr(request, "tool_choice", None)
+        captured["system_prompt"] = getattr(request, "system_prompt", "")
+        return "ok"
+
+    await middleware.awrap_model_call(
+        DummyRequest(
+            state,
+            [
+                HumanMessage(
+                    content=(
+                        "\u4e0a\u6d77\u6ca1\u95ee\u9898\uff0c"
+                        "\u8bf7\u76f4\u63a5\u751f\u6210\u6700\u7ec8\u65c5\u6e38\u62a5\u544a\u3002"
+                    )
+                )
+            ],
+        ),
+        handler,
+    )
+
+    assert captured["tools"] == ["generate_order_tool"]
+    if compatibility.supports_forced_tool_choice:
+        assert captured["tool_choice"] == "generate_order_tool"
+    else:
+        assert captured["tool_choice"] is None
+        assert "generate_order_tool" in captured["system_prompt"]
+        assert "select_destination_tool" not in captured["system_prompt"]
+
+
+@pytest.mark.asyncio
 async def test_middleware_opens_generate_order_tool_when_report_state_is_ready():
     captured = {}
     compatibility = get_model_compatibility()
@@ -330,7 +454,7 @@ async def test_middleware_opens_generate_order_tool_when_report_state_is_ready()
         handler,
     )
 
-    assert "generate_order_tool" in captured["tools"]
+    assert captured["tools"] == ["generate_order_tool"]
     if compatibility.supports_forced_tool_choice:
         assert captured["tool_choice"] == "generate_order_tool"
     else:

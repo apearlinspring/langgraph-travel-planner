@@ -47,6 +47,9 @@
       const getDefaultApiBase = () =>
         window.location.protocol === "file:"
           ? "http://localhost:8000"
+          : ["localhost", "127.0.0.1"].includes(window.location.hostname) &&
+              window.location.port !== "8000"
+            ? "http://127.0.0.1:8000"
           : window.location.origin;
 
       const getApiBase = () =>
@@ -3509,6 +3512,310 @@
         `;
       }
 
+      function getReportDataFromOptions(options = {}) {
+        return (
+          options.reportData ||
+          options.extraInfo?.report_data ||
+          options.extra_info?.report_data ||
+          null
+        );
+      }
+
+      function isStructuredTravelReportData(reportData) {
+        return (
+          reportData &&
+          typeof reportData === "object" &&
+          reportData.version === "travel_report.v1" &&
+          reportData.overview
+        );
+      }
+
+      function formatReportDataMoney(value) {
+        if (typeof value !== "number" || Number.isNaN(value)) return "";
+        return `${Math.round(value).toLocaleString("zh-CN")} 元`;
+      }
+
+      function renderReportDataList(items = [], emptyText = "待补充") {
+        const list = (Array.isArray(items) ? items : [])
+          .map((item) => String(item || "").trim())
+          .filter(Boolean);
+        if (!list.length) return `<p>${escapeHtml(emptyText)}</p>`;
+        return `<ul>${list.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`;
+      }
+
+      function renderReportDataBudgetItems(budget = {}) {
+        const items = Array.isArray(budget.items) ? budget.items : [];
+        if (!items.length) {
+          return renderReportDataList(
+            [
+              budget.total ? `预算总计：${formatReportDataMoney(budget.total)}` : "",
+              budget.per_person
+                ? `人均参考：${formatReportDataMoney(budget.per_person)}`
+                : "",
+              budget.fit || "",
+            ],
+            "预算明细待补充"
+          );
+        }
+
+        return `
+          <div class="travel-report-budget-grid">
+            ${items
+              .map((item) => {
+                const label = item.label || item.key || "预算项";
+                const amount = formatReportDataMoney(item.amount);
+                const note = [item.basis, item.confidence]
+                  .filter(Boolean)
+                  .join(" · ");
+                return `
+                  <article class="travel-report-budget-item">
+                    <div class="travel-report-budget-icon">
+                      <i class="fa-solid fa-wallet"></i>
+                    </div>
+                    <div>
+                      <span>${escapeHtml(label)}</span>
+                      <strong>${escapeHtml(amount || "待核验")}</strong>
+                      <p>${escapeHtml(note || "出发前需要二次核验")}</p>
+                    </div>
+                  </article>
+                `;
+              })
+              .join("")}
+          </div>
+        `;
+      }
+
+      function renderReportDataDailyItinerary(days = []) {
+        const safeDays = Array.isArray(days) ? days : [];
+        if (!safeDays.length) return "<p>每日行程待补充。</p>";
+
+        return `
+          <div class="travel-report-days">
+            ${safeDays
+              .map((day) => {
+                const routeSummary = day.route?.summary || day.route_summary || "";
+                const timeBlocks = Array.isArray(day.time_blocks)
+                  ? day.time_blocks
+                  : [];
+                const meals = Array.isArray(day.meals) ? day.meals : [];
+                const riskNotes = Array.isArray(day.risk_notes)
+                  ? day.risk_notes
+                  : [];
+                return `
+                  <article class="travel-report-day">
+                    <div class="travel-report-day-badge">Day ${escapeHtml(
+                      day.day_number || ""
+                    )}</div>
+                    <div class="travel-report-day-main">
+                      <h5>${escapeHtml(day.title || "当天安排")}</h5>
+                      ${
+                        routeSummary
+                          ? `<p class="travel-report-route-line">${escapeHtml(
+                              routeSummary
+                            )}</p>`
+                          : ""
+                      }
+                      ${renderReportDataList(timeBlocks.slice(0, 4), "当天时段待补充")}
+                      ${
+                        meals.length
+                          ? `<p><strong>餐饮：</strong>${escapeHtml(
+                              meals.slice(0, 3).join("；")
+                            )}</p>`
+                          : ""
+                      }
+                      ${
+                        day.plan_b
+                          ? `<p><strong>Plan B：</strong>${escapeHtml(day.plan_b)}</p>`
+                          : ""
+                      }
+                      ${
+                        riskNotes.length
+                          ? `<p><strong>当天提醒：</strong>${escapeHtml(
+                              riskNotes.slice(0, 2).join("；")
+                            )}</p>`
+                          : ""
+                      }
+                    </div>
+                  </article>
+                `;
+              })
+              .join("")}
+          </div>
+        `;
+      }
+
+      function renderReportDataMapDigest(reportData = {}) {
+        const routes = Array.isArray(reportData.map_routes) ? reportData.map_routes : [];
+        const routeLabel = reportData.overview?.route_label || "路线总览";
+        const waypoints = routes
+          .flatMap((route) => route.route_points || [])
+          .map((item) => cleanJourneyLocationValue(item || ""))
+          .filter(Boolean)
+          .filter((item, index, list) => list.indexOf(item) === index)
+          .slice(0, 6);
+        if (!waypoints.length) return "";
+
+        return `
+          <section class="travel-report-route-digest">
+            <div class="travel-report-route-digest-head">
+              <div>
+                <span>景点地图</span>
+                <h4>${escapeHtml(routeLabel)}</h4>
+              </div>
+              <p>导出版使用结构化路线点生成静态示意；线上仍可继续打开实时地图细化路线。</p>
+            </div>
+            <div class="travel-report-route-digest-body">
+              ${renderReportRouteSketch(waypoints, routeLabel)}
+              <div class="travel-report-route-day-list">
+                ${routes
+                  .map(
+                    (route) => `
+                      <div class="travel-report-route-day-pill">
+                        <strong>Day ${escapeHtml(route.day_number || "")}</strong>
+                        <span>${escapeHtml(route.summary || "当天路线待补齐")}</span>
+                      </div>
+                    `
+                  )
+                  .join("")}
+              </div>
+            </div>
+          </section>
+        `;
+      }
+
+      function renderReportDataCard({
+        tone = "summary",
+        icon = "fa-file-lines",
+        label = "",
+        title = "",
+        body = "",
+      }) {
+        return `
+          <section class="travel-report-card ${tone}">
+            <div class="travel-report-card-head">
+              <span class="travel-report-card-icon">
+                <i class="fa-solid ${icon}"></i>
+              </span>
+              <div>
+                <div class="travel-report-card-label">${escapeHtml(label || title)}</div>
+                <h4>${escapeHtml(title)}</h4>
+              </div>
+            </div>
+            <div class="travel-report-card-body">${body}</div>
+          </section>
+        `;
+      }
+
+      function renderTravelReportFromData(reportData, options = {}) {
+        if (!isStructuredTravelReportData(reportData)) return null;
+
+        const overview = reportData.overview || {};
+        const budget = reportData.budget || {};
+        const routeLabel = overview.route_label || "专属旅程";
+        const dayCount = overview.duration || "分日规划";
+        const budgetLabel =
+          formatReportDataMoney(budget.total) ||
+          reportData.budget_confidence?.level ||
+          "预算已估算";
+        const mapDigest = !options?.suppressJourneyPreview
+          ? renderReportDataMapDigest(reportData)
+          : "";
+
+        return `
+          <div class="travel-report" data-report-source="structured">
+            <div class="travel-report-hero">
+              <div class="travel-report-kicker">
+                <i class="fa-solid fa-file-signature"></i> 个性化旅游规划报告
+              </div>
+              <h3>${escapeHtml(routeLabel)}</h3>
+              <p>我把已确认的信息整理成可查看、可导出的专属报告；后续你继续微调行程时，地图、预算和每日安排也会一起更新。</p>
+              <div class="travel-report-metrics">
+                <span><i class="fa-solid fa-route"></i>${escapeHtml(routeLabel)}</span>
+                <span><i class="fa-regular fa-calendar"></i>${escapeHtml(dayCount)}</span>
+                <span><i class="fa-solid fa-wallet"></i>${escapeHtml(budgetLabel)}</span>
+              </div>
+              <div class="travel-report-actions">
+                <button type="button" data-report-action="tweak">
+                  <i class="fa-solid fa-pen-nib"></i> 继续微调
+                </button>
+                <button type="button" data-report-action="map">
+                  <i class="fa-solid fa-map-location-dot"></i> 查看路线地图
+                </button>
+                <button type="button" data-report-action="export">
+                  <i class="fa-solid fa-file-export"></i> 导出报告
+                </button>
+              </div>
+            </div>
+            <div class="travel-report-grid">
+              ${renderReportDataCard({
+                tone: "summary",
+                icon: "fa-compass",
+                label: "行程概览",
+                title: "你的旅行骨架",
+                body: renderReportDataList([
+                  overview.people ? `出行人数：${overview.people}` : "",
+                  overview.travel_styles?.length
+                    ? `主题偏好：${overview.travel_styles.join("、")}`
+                    : "",
+                  overview.special_needs
+                    ? `特殊需求：${overview.special_needs}`
+                    : "",
+                ]),
+              })}
+              ${renderReportDataCard({
+                tone: "transport",
+                icon: "fa-train-subway",
+                label: "交通与住宿",
+                title: "出行与落脚建议",
+                body: renderReportDataList([
+                  reportData.transport?.summary
+                    ? `交通：${reportData.transport.summary}`
+                    : "",
+                  reportData.accommodation?.summary
+                    ? `住宿：${reportData.accommodation.summary}`
+                    : "",
+                  reportData.food_preferences?.summary
+                    ? `餐饮：${reportData.food_preferences.summary}`
+                    : "",
+                ]),
+              })}
+              ${renderReportDataCard({
+                tone: "daily",
+                icon: "fa-calendar-days",
+                label: "每日行程",
+                title: "按天执行",
+                body: renderReportDataDailyItinerary(reportData.itinerary),
+              })}
+              ${renderReportDataCard({
+                tone: "budget",
+                icon: "fa-wallet",
+                label: "费用拆分",
+                title: "预算明细与依据",
+                body: renderReportDataBudgetItems(budget),
+              })}
+              ${renderReportDataCard({
+                tone: "warning",
+                icon: "fa-triangle-exclamation",
+                label: "风险提醒",
+                title: "出发前核验",
+                body: renderReportDataList(reportData.risks, "风险提醒待补充"),
+              })}
+              ${renderReportDataCard({
+                tone: "summary",
+                icon: "fa-shield-heart",
+                label: "方案依据",
+                title: "服务标准与交付依据",
+                body: renderReportDataList([
+                  reportData.agency_context?.summary || "",
+                  ...(reportData.agency_context?.highlights || []),
+                ]),
+              })}
+            </div>
+            ${mapDigest ? `<div class="travel-report-map">${mapDigest}</div>` : ""}
+          </div>
+        `;
+      }
+
       function buildReportDayEntries(lines = [], previewState = {}, expectedDayCount = 0) {
         const groups = extractReportDayGroups(lines);
         const planMap = new Map(
@@ -4117,6 +4424,12 @@
       }
 
       function renderAssistantText(text, options = {}) {
+        const structuredReport = renderTravelReportFromData(
+          getReportDataFromOptions(options),
+          options
+        );
+        if (structuredReport) return structuredReport;
+
         if (!text) return "";
         const blocks = splitAssistantBlocks(text);
         return (
@@ -4889,6 +5202,7 @@
                       msg.content,
                       msg.created_at || msg.updated_at || new Date(),
                       {
+                        extraInfo: msg.extra_info || msg.extraInfo || {},
                         suppressJourneyPreview:
                           msg.role === "assistant" && index !== lastAssistantIndex,
                       }
@@ -4918,7 +5232,7 @@
         }
       }
 
-      function processSseBuffer(buffer, onContent) {
+      function processSseBuffer(buffer, onContent, onEvent = null) {
         const events = buffer.split("\n\n");
         const remainder = events.pop() || "";
         events.forEach((eventBlock) => {
@@ -4926,7 +5240,15 @@
             .split("\n")
             .filter((line) => line.startsWith("data: "));
           dataLines.forEach((line) => {
-            const content = extractStreamContent(line.slice(6).trim());
+            const rawData = line.slice(6).trim();
+            if (onEvent) {
+              try {
+                onEvent(JSON.parse(rawData));
+              } catch (error) {
+                // 非 JSON SSE 片段仍按纯文本增量处理。
+              }
+            }
+            const content = extractStreamContent(rawData);
             if (content) {
               onContent(content);
             }
@@ -4983,6 +5305,7 @@
         let reachedVerySlowStage = false;
         let streamingMessageId = "";
         let streamingFullText = "";
+        let streamingReportData = null;
         const slowHintTimer = setTimeout(() => {
           reachedSlowStage = true;
           updateLoadingCopy(
@@ -5028,7 +5351,11 @@
                 streamingMessageId = convertLoadingToAssistant(
                   loadingId,
                   streamingFullText,
-                  { suppressJourneyPreview: true, pinToTop: true }
+                  {
+                    suppressJourneyPreview: true,
+                    pinToTop: true,
+                    reportData: streamingReportData,
+                  }
                 );
                 return;
               }
@@ -5036,14 +5363,20 @@
               updateMessage(streamingMessageId, streamingFullText, {
                 suppressJourneyPreview: true,
                 pinToTop: true,
+                reportData: streamingReportData,
               });
+            };
+            const applyStreamEvent = (event) => {
+              if (event?.type === "report_data" && event.report_data) {
+                streamingReportData = event.report_data;
+              }
             };
 
             while (true) {
               const { done, value } = await reader.read();
               if (done) break;
               buffer += decoder.decode(value, { stream: true });
-              buffer = processSseBuffer(buffer, applyChunk);
+              buffer = processSseBuffer(buffer, applyChunk, applyStreamEvent);
             }
 
             const tail = decoder.decode();
@@ -5051,7 +5384,7 @@
               buffer += tail;
             }
             if (buffer.trim()) {
-              processSseBuffer(`${buffer}\n\n`, applyChunk);
+              processSseBuffer(`${buffer}\n\n`, applyChunk, applyStreamEvent);
             }
 
             if (!streamingMessageId) {
@@ -5063,6 +5396,7 @@
               updateMessage(streamingMessageId, streamingFullText, {
                 suppressJourneyPreview: false,
                 pinToTop: true,
+                reportData: streamingReportData,
               });
             }
             setRuntimeStatus("行程建议已生成", "online");
@@ -5092,7 +5426,11 @@
                 hasPartialContent: true,
                 reachedVerySlowStage,
               })}`,
-              { suppressJourneyPreview: true, pinToTop: true }
+              {
+                suppressJourneyPreview: true,
+                pinToTop: true,
+                reportData: streamingReportData,
+              }
             );
           } else {
             removeMessage(loadingId);

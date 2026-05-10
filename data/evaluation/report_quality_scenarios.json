@@ -1,0 +1,86 @@
+{
+  "version": "evaluation_scenarios.v1",
+  "description": "Fixed regression scenarios for structured travel report quality checks.",
+  "scenarios": [
+    {
+      "id": "free_weekend_nearby",
+      "name": "Free planning: weekend nearby trip",
+      "category": "free_planning",
+      "prompt": "\u6211\u60f3\u5468\u672b\u4ece\u897f\u5b89\u51fa\u53d1\u53bb\u9644\u8fd1\u8f7b\u677e\u73a9\u4e24\u5929\uff0c2\u4e2a\u4eba\uff0c\u9884\u7b971500\uff0c\u60f3\u770b\u81ea\u7136\u98ce\u666f\u548c\u5403\u70b9\u5f53\u5730\u5c0f\u5403\u3002",
+      "expected_mode": "free_planning",
+      "min_score": 82,
+      "focus": ["nearby pacing", "daily route", "budget explanation", "food and scenery"],
+      "tags": ["free", "nearby", "weekend"]
+    },
+    {
+      "id": "free_city_three_days",
+      "name": "Free planning: first-time city trip",
+      "category": "free_planning",
+      "prompt": "\u6211\u7b2c\u4e00\u6b21\u53bb\u5357\u4eac\uff0c3\u59292\u665a\uff0c\u81ea\u7531\u884c\uff0c\u60f3\u8981\u6587\u5316\u52a0\u7f8e\u98df\uff0c\u4e0d\u60f3\u592a\u8d76\u3002",
+      "expected_mode": "free_planning",
+      "min_score": 82,
+      "focus": ["first-time destination", "culture and food", "low-stress route", "map routes"],
+      "tags": ["free", "city", "culture"]
+    },
+    {
+      "id": "free_long_distance",
+      "name": "Free planning: long-distance route",
+      "category": "free_planning",
+      "prompt": "\u6211\u60f3\u4ece\u5317\u4eac\u53bb\u4e0a\u6d77\u73a94\u59293\u665a\uff0c\u4e3b\u8981\u81ea\u7531\u884c\uff0c\u9884\u7b976000\uff0c\u5e2e\u6211\u89c4\u5212\u4ea4\u901a\u3001\u4f4f\u5bbf\u548c\u6bcf\u65e5\u5b89\u6392\u3002",
+      "expected_mode": "free_planning",
+      "min_score": 84,
+      "focus": ["transport comparison", "hotel area", "4-day itinerary", "budget confidence"],
+      "tags": ["free", "long-distance", "transport"]
+    },
+    {
+      "id": "agency_couple_relaxed",
+      "name": "Agency plan: relaxed couple trip",
+      "category": "agency_plan",
+      "prompt": "\u6211\u4eec\u4e24\u4e2a\u4eba\u60f3\u4ece\u897f\u5b89\u51fa\u53d1\uff0c2026\u5e745\u670823\u65e5\u53bb\u957f\u6c994\u59293\u665a\uff0c\u603b\u9884\u7b977000\uff0c\u5e0c\u671b\u7701\u5fc3\u4e00\u70b9\uff0c\u5e2e\u6211\u6309\u65c5\u884c\u793e\u65b9\u6848\u5b89\u6392\u3002",
+      "expected_mode": "agency_plan",
+      "min_score": 86,
+      "focus": ["agency playbook", "romantic pacing", "hotel and food", "service standards"],
+      "tags": ["agency", "couple", "relaxed"]
+    },
+    {
+      "id": "agency_family_parent_child",
+      "name": "Agency plan: parent-child trip",
+      "category": "agency_plan",
+      "prompt": "\u4eb2\u5b50\u6e38\uff0c2\u59271\u5c0f\uff0c\u4ece\u4e0a\u6d77\u53bb\u676d\u5dde3\u59292\u665a\uff0c\u5e0c\u671b\u5c11\u8d70\u8def\u3001\u9152\u5e97\u5e72\u51c0\u3001\u884c\u7a0b\u8f7b\u677e\u3002",
+      "expected_mode": "agency_plan",
+      "min_score": 86,
+      "focus": ["family suitability", "low walking load", "clean hotel", "risk fallback"],
+      "tags": ["agency", "family", "parent-child"]
+    },
+    {
+      "id": "agency_senior_low_stress",
+      "name": "Agency plan: senior low-stress trip",
+      "category": "agency_plan",
+      "prompt": "\u7ed9\u7236\u6bcd\u505a\u94f6\u53d1\u6e38\uff0c5\u59294\u665a\uff0c\u60f3\u53bb\u5317\u4eac\uff0c\u4ea4\u901a\u4f4f\u5bbf\u90fd\u5e0c\u671b\u7a33\u59a5\uff0c\u522b\u592a\u7d2f\u3002",
+      "expected_mode": "agency_plan",
+      "min_score": 86,
+      "focus": ["senior-friendly pacing", "stable transport", "accessible hotel", "safety reminders"],
+      "tags": ["agency", "senior", "low-stress"]
+    },
+    {
+      "id": "edge_tight_budget",
+      "name": "Edge case: unrealistic budget",
+      "category": "edge_case",
+      "prompt": "\u6211\u60f3\u53bb\u4e09\u4e9a5\u59294\u665a\uff0c2\u4e2a\u4eba\u603b\u9884\u7b972500\uff0c\u770b\u770b\u80fd\u4e0d\u80fd\u5b89\u6392\uff0c\u5982\u679c\u4e0d\u591f\u8bf7\u8bf4\u660e\u3002",
+      "expected_mode": "free_planning",
+      "min_score": 80,
+      "focus": ["budget feasibility", "honest constraints", "alternatives", "risk disclosure"],
+      "tags": ["edge", "budget", "constraint"]
+    },
+    {
+      "id": "edge_hotel_tool_fallback",
+      "name": "Edge case: hotel tool fallback",
+      "category": "edge_case",
+      "prompt": "\u6211\u60f3\u53bb\u957f\u6c99\uff0c\u4f4f\u6e58\u6c5f\u8fb9\u6c5f\u666f\u623f\uff0c4\u59293\u665a\uff0c\u5982\u679c\u67e5\u4e0d\u5230\u5177\u4f53\u9152\u5e97\u4e5f\u8bf7\u7ed9\u6211\u53ef\u6267\u884c\u7684\u515c\u5e95\u65b9\u6848\u3002",
+      "expected_mode": "agency_plan",
+      "min_score": 82,
+      "focus": ["hotel preference parsing", "fuzzy matching", "tool failure fallback", "clear verification"],
+      "tags": ["edge", "hotel", "fallback"]
+    }
+  ]
+}

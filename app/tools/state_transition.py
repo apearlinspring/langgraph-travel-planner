@@ -151,6 +151,133 @@ KNOWN_POI_PROFILES = {
         "estimated_cost": 0.0,
         "tags": ["城市漫步", "建筑", "免费"],
     },
+    "南京路步行街": {
+        "area": "南京路/人民广场",
+        "best_time": "傍晚/晚上",
+        "duration_hours": 1.5,
+        "reservation_required": False,
+        "indoor": False,
+        "estimated_cost": 0.0,
+        "tags": ["城市漫步", "商业街区", "美食"],
+    },
+    "陆家嘴": {
+        "area": "浦东/陆家嘴",
+        "best_time": "下午/晚上",
+        "duration_hours": 2.0,
+        "reservation_required": False,
+        "indoor": False,
+        "estimated_cost": 0.0,
+        "tags": ["天际线", "城市景观", "免费"],
+    },
+    "东方明珠": {
+        "area": "浦东/陆家嘴",
+        "best_time": "下午/晚上",
+        "duration_hours": 2.0,
+        "reservation_required": True,
+        "indoor": True,
+        "estimated_cost": 199.0,
+        "tags": ["地标", "观景", "门票"],
+    },
+    "城隍庙": {
+        "area": "老城厢/豫园",
+        "best_time": "上午/下午",
+        "duration_hours": 1.5,
+        "reservation_required": False,
+        "indoor": False,
+        "estimated_cost": 0.0,
+        "tags": ["传统街区", "小吃", "免费"],
+    },
+    "橘子洲头": {
+        "area": "湘江沿岸/橘子洲",
+        "best_time": "傍晚/晚上",
+        "duration_hours": 2.0,
+        "reservation_required": False,
+        "indoor": False,
+        "estimated_cost": 0.0,
+        "tags": ["江景", "城市漫步", "免费"],
+    },
+    "岳麓山": {
+        "area": "岳麓山/大学城",
+        "best_time": "上午",
+        "duration_hours": 3.0,
+        "reservation_required": False,
+        "indoor": False,
+        "estimated_cost": 0.0,
+        "tags": ["自然", "人文", "免费"],
+    },
+    "岳麓书院": {
+        "area": "岳麓山/大学城",
+        "best_time": "上午/下午",
+        "duration_hours": 1.5,
+        "reservation_required": True,
+        "indoor": False,
+        "estimated_cost": 40.0,
+        "tags": ["历史", "文化", "预约"],
+    },
+    "湖南博物院": {
+        "area": "开福区/烈士公园",
+        "best_time": "上午/下午",
+        "duration_hours": 3.0,
+        "reservation_required": True,
+        "indoor": True,
+        "estimated_cost": 0.0,
+        "tags": ["室内", "文化", "预约"],
+    },
+    "五一广场": {
+        "area": "五一广场/黄兴路",
+        "best_time": "下午/晚上",
+        "duration_hours": 1.5,
+        "reservation_required": False,
+        "indoor": False,
+        "estimated_cost": 0.0,
+        "tags": ["商圈", "美食", "步行"],
+    },
+    "太平老街": {
+        "area": "五一广场/太平街",
+        "best_time": "下午/晚上",
+        "duration_hours": 1.5,
+        "reservation_required": False,
+        "indoor": False,
+        "estimated_cost": 0.0,
+        "tags": ["老街", "小吃", "步行"],
+    },
+    "杜甫江阁": {
+        "area": "湘江沿岸/杜甫江阁",
+        "best_time": "晚上",
+        "duration_hours": 1.0,
+        "reservation_required": False,
+        "indoor": False,
+        "estimated_cost": 0.0,
+        "tags": ["夜景", "江景", "城市漫步"],
+    },
+}
+
+DEFAULT_DESTINATION_ATTRACTIONS = {
+    "上海": ["外滩", "南京路步行街", "上海博物馆", "豫园", "城隍庙", "武康路", "陆家嘴"],
+    "北京": ["故宫", "天安门广场", "国家博物馆", "什刹海", "南锣鼓巷"],
+    "西安": ["秦始皇兵马俑", "西安城墙", "钟楼", "鼓楼", "回民街", "陕西历史博物馆"],
+    "南京": ["中山陵", "南京博物院", "总统府", "夫子庙", "老门东", "玄武湖"],
+    "杭州": ["西湖", "灵隐寺", "河坊街", "京杭大运河", "西溪湿地"],
+    "成都": ["宽窄巷子", "武侯祠", "锦里", "成都大熊猫繁育研究基地", "人民公园"],
+    "\u957f\u6c99": [
+        "\u6a58\u5b50\u6d32\u5934",
+        "\u5cb3\u9e93\u5c71",
+        "\u5cb3\u9e93\u4e66\u9662",
+        "\u6e56\u5357\u535a\u7269\u9662",
+        "\u4e94\u4e00\u5e7f\u573a",
+        "\u592a\u5e73\u8001\u8857",
+        "\u675c\u752b\u6c5f\u9601",
+    ],
+}
+
+DEFAULT_ACCOMMODATION_AREAS = {
+    "上海": "人民广场/南京东路",
+    "北京": "前门/王府井",
+    "西安": "钟楼/鼓楼",
+    "南京": "新街口/夫子庙",
+    "杭州": "湖滨/武林广场",
+    "成都": "春熙路/天府广场",
+    "\u957f\u6c99": "\u4e94\u4e00\u5e7f\u573a/\u9ec4\u5174\u8def\u6b65\u884c\u8857",
 }
 
 KNOWN_FOOD_POI_PROFILES = {
@@ -193,6 +320,59 @@ KNOWN_FOOD_POI_PROFILES = {
         "queue_risk": "低",
         "suitable_for": ["赶路", "带娃", "省心"],
         "tags": ["稳定", "省心"],
+    },
+    "茶颜悦色": {
+        "type": "local",
+        "area": "五一广场/黄兴路",
+        "meal_time": "下午茶/夜宵",
+        "average_cost": 25.0,
+        "reservation_required": False,
+        "queue_risk": "中",
+        "suitable_for": ["本地打卡", "轻松休闲"],
+        "tags": ["长沙特色", "饮品", "排队错峰"],
+    },
+    "黑色经典臭豆腐": {
+        "type": "local",
+        "area": "五一广场/太平街",
+        "meal_time": "午餐/下午茶/夜宵",
+        "average_cost": 35.0,
+        "reservation_required": False,
+        "queue_risk": "中",
+        "suitable_for": ["小吃扫街", "本地风味"],
+        "tags": ["长沙小吃", "步行可达"],
+    },
+    "笨萝卜浏阳菜馆": {
+        "type": "specialty",
+        "area": "五一广场/芙蓉区",
+        "meal_time": "午餐/晚餐",
+        "average_cost": 90.0,
+        "reservation_required": False,
+        "queue_risk": "高",
+        "suitable_for": ["湘菜", "特色餐厅"],
+        "tags": ["湘菜", "热门餐厅", "建议错峰"],
+    },
+    "超级文和友": {
+        "type": "specialty",
+        "area": "海信广场/湘江中路",
+        "meal_time": "晚餐/夜宵",
+        "average_cost": 120.0,
+        "reservation_required": False,
+        "queue_risk": "高",
+        "suitable_for": ["城市打卡", "小吃集合"],
+        "tags": ["长沙地标", "夜间氛围", "排队风险"],
+    },
+}
+
+DEFAULT_DESTINATION_FOOD_POIS = {
+    "长沙": {
+        "local": ["茶颜悦色", "黑色经典臭豆腐"],
+        "specialty": ["笨萝卜浏阳菜馆", "超级文和友"],
+        "chain": ["五一广场商场简餐"],
+    },
+    "上海": {
+        "local": ["南京路小吃", "城隍庙小吃"],
+        "specialty": ["本帮菜餐厅"],
+        "chain": ["商场连锁简餐"],
     },
 }
 
@@ -655,6 +835,87 @@ def _ensure_budget_quality_contract(
     normalized = dict(budget or {})
     destination = state.get("selected_destination") or requirement.get("destination") or ""
     destination_context = _get_destination_context(state, destination)
+    travel_days = (
+        normalized.get("travel_days")
+        or _get_expected_travel_days(requirement, len(itinerary))
+        or 1
+    )
+    total_people = (
+        normalized.get("total_people")
+        or (requirement.get("adult_count") or 0) + (requirement.get("children_count") or 0)
+        or 1
+    )
+    selected_accommodation = state.get("selected_accommodation_option") or {}
+
+    transport_cost = normalized.get("transport")
+    if not isinstance(transport_cost, (int, float)):
+        transport_cost = _estimate_transport_cost(state, total_people)
+        normalized["transport"] = transport_cost
+
+    accommodation_cost = normalized.get("accommodation")
+    accommodation_assumption = ""
+    if not isinstance(accommodation_cost, (int, float)):
+        accommodation_cost, accommodation_assumption = _estimate_accommodation_cost(
+            selected_accommodation,
+            travel_days,
+            total_people,
+        )
+        normalized["accommodation"] = accommodation_cost
+
+    food_cost = normalized.get("food")
+    food_assumption = ""
+    if not isinstance(food_cost, (int, float)):
+        food_cost, food_assumption = _estimate_food_cost_from_itinerary(
+            state,
+            itinerary,
+            travel_days,
+            total_people,
+        )
+        normalized["food"] = food_cost
+
+    attractions_cost = normalized.get("attractions")
+    attractions_assumption = ""
+    if not isinstance(attractions_cost, (int, float)):
+        attractions_cost, attractions_assumption = _estimate_attractions_cost(
+            destination_context,
+            itinerary,
+            travel_days,
+            total_people,
+        )
+        normalized["attractions"] = attractions_cost
+
+    misc_cost = normalized.get("misc")
+    if not isinstance(misc_cost, (int, float)):
+        misc_cost = 100 * travel_days * total_people
+        normalized["misc"] = misc_cost
+
+    normalized.setdefault("currency", "CNY")
+    normalized.setdefault("travel_days", travel_days)
+    normalized.setdefault("nights", max(travel_days - 1, 1))
+    normalized.setdefault("total_people", total_people)
+    if not isinstance(normalized.get("total"), (int, float)):
+        normalized["total"] = (
+            transport_cost
+            + accommodation_cost
+            + food_cost
+            + attractions_cost
+            + misc_cost
+        )
+    if not isinstance(normalized.get("per_person"), (int, float)):
+        normalized["per_person"] = _safe_per_person(normalized["total"], total_people)
+    if not normalized.get("assumptions"):
+        assumptions = [
+            "交通按已选具体方案价格估算；缺少具体价格时按交通类型基准估算。",
+            accommodation_assumption
+            or "住宿按已确认预算明细估算；缺少具体酒店价格时使用兜底每间夜规则。",
+            food_assumption
+            or "餐饮按已确认预算明细估算；缺少具体餐饮 POI 时按偏好类型兜底。",
+            attractions_assumption
+            or "景点/体验按已确认预算明细估算；缺少结构化 POI 时保留待核验项。",
+            "其他机动费用按 100 元/人/天估算，用于市内交通、临时休息、寄存和小额杂费。",
+        ]
+        normalized["assumptions"] = [item for item in assumptions if item]
+
     quality_notes = _build_budget_quality_notes(
         state,
         destination_context,
@@ -668,22 +929,16 @@ def _ensure_budget_quality_contract(
             normalized[key] = list(quality_notes[key])
 
     if not normalized.get("line_items"):
-        travel_days = requirement.get("travel_days") or normalized.get("travel_days") or 1
-        total_people = (
-            normalized.get("total_people")
-            or (requirement.get("adult_count") or 0) + (requirement.get("children_count") or 0)
-            or 1
-        )
         normalized["line_items"] = _build_budget_line_items(
             state,
             itinerary,
             travel_days,
             total_people,
-            normalized.get("transport") or 0.0,
-            normalized.get("accommodation") or 0.0,
-            normalized.get("food") or 0.0,
-            normalized.get("attractions") or 0.0,
-            normalized.get("misc") or 0.0,
+            transport_cost,
+            accommodation_cost,
+            food_cost,
+            attractions_cost,
+            misc_cost,
         )
 
     normalized["budget_confidence"] = _budget_confidence_payload(normalized)
@@ -733,6 +988,67 @@ def _get_destination_pois(destination_context: dict) -> list[dict]:
         raw_pois = destination_context.get("attractions") or []
     pois = [_normalize_poi(item) for item in raw_pois]
     return [poi for poi in pois if poi.get("name")]
+
+
+def _default_destination_pois(destination: str) -> list[dict]:
+    names = DEFAULT_DESTINATION_ATTRACTIONS.get(str(destination or "").strip(), [])
+    pois = [_normalize_poi(name) for name in names]
+    return [poi for poi in pois if poi.get("name")]
+
+
+def _destination_pois_for_report(state: TravelState, requirement: dict) -> list[dict]:
+    destination = state.get("selected_destination") or requirement.get("destination") or ""
+    destination_context = _get_destination_context(state, destination)
+    return _get_destination_pois(destination_context) or _default_destination_pois(destination)
+
+
+def _recommended_accommodation_area(destination: str) -> str:
+    normalized = str(destination or "").strip()
+    return DEFAULT_ACCOMMODATION_AREAS.get(normalized) or f"{normalized or '目的地'}交通便利核心区"
+
+
+def _build_fallback_accommodation_option(
+    state: TravelState,
+    requirement: dict,
+) -> dict:
+    selected = state.get("selected_accommodation_option") or {}
+    if selected.get("name"):
+        return dict(selected)
+
+    for option in state.get("accommodation_options") or []:
+        if option.get("name"):
+            return dict(option)
+
+    destination = state.get("selected_destination") or requirement.get("destination") or ""
+    area = _recommended_accommodation_area(destination)
+    return {
+        "name": f"{area}附近舒适型酒店",
+        "location": area,
+        "type": "comfort_hotel",
+        "amenities": ["交通便利", "便于晚间返回", "价格需二次核实"],
+        "status": "待二次核实",
+    }
+
+
+def _pick_report_pois_for_day(
+    pois: list[dict],
+    day_number: int,
+    expected_days: int,
+) -> list[dict]:
+    if not pois:
+        return []
+    if day_number == 1:
+        evening_first = [
+            poi
+            for poi in pois
+            if any(token in str(poi.get("best_time") or "") for token in ["傍晚", "晚上"])
+        ]
+        return (evening_first or pois)[:1]
+    if day_number == expected_days:
+        start = min(max(len(pois) - 2, 0), max((day_number - 1) * 2, 0))
+        return _pick_pois_by_area(pois, start, 1) or pois[-1:]
+    start = max((day_number - 2) * 2 + 1, 0)
+    return _pick_pois_by_area(pois, start, 2)
 
 
 def _area_tokens(area: object) -> list[str]:
@@ -874,8 +1190,9 @@ def _normalize_food_poi(item: object, fallback_type: str = "local") -> dict:
     return profile
 
 
-def _default_food_pois(food_types: list[str]) -> list[dict]:
-    defaults_by_type = {
+def _default_food_pois(food_types: list[str], destination: str = "") -> list[dict]:
+    normalized_destination = str(destination or "").strip()
+    defaults_by_type = DEFAULT_DESTINATION_FOOD_POIS.get(normalized_destination) or {
         "local": ["南京路小吃", "城隍庙小吃"],
         "specialty": ["本帮菜餐厅"],
         "chain": ["商场连锁简餐"],
@@ -897,7 +1214,9 @@ def _get_food_pois(state: TravelState) -> list[dict]:
     if raw_pois:
         pois = [_normalize_food_poi(item) for item in raw_pois]
         return [poi for poi in pois if poi.get("name")]
-    return _default_food_pois(state.get("selected_food_types") or [])
+    requirement = state.get("user_requirement") or {}
+    destination = state.get("selected_destination") or requirement.get("destination") or ""
+    return _default_food_pois(state.get("selected_food_types") or [], str(destination))
 
 
 def _pick_food_poi(
@@ -1172,6 +1491,16 @@ def _dedupe_report_points(points: list[str], max_items: int = 6) -> list[str]:
     return picked
 
 
+def _is_pending_route_point(point: str) -> bool:
+    pending_tokens = (
+        "\u5f85",
+        "\u5f85\u786e\u8ba4",
+        "\u5f85\u6838\u9a8c",
+        "\u5f85\u7ed3\u5408",
+    )
+    return any(token in point for token in pending_tokens)
+
+
 def _collect_report_route_candidates(state: TravelState) -> list[str]:
     candidates = []
     destination = state.get("selected_destination")
@@ -1200,19 +1529,88 @@ def _collect_report_route_candidates(state: TravelState) -> list[str]:
     return _dedupe_report_points(candidates, max_items=40)
 
 
+def _route_points_have_specific_visual_node(
+    points: list[str],
+    *,
+    destination: str,
+    departure_city: str,
+    accommodation_points: Optional[list[str]] = None,
+) -> bool:
+    generic_points = {
+        str(destination or "").strip(),
+        str(departure_city or "").strip(),
+        "返程交通",
+        "返程缓冲",
+    }
+    for accommodation_point in accommodation_points or []:
+        normalized = str(accommodation_point or "").strip()
+        if normalized:
+            generic_points.add(normalized)
+    generic_points.discard("")
+    return any(
+        point not in generic_points and not _is_pending_route_point(point)
+        for point in points
+    )
+
+
+def _fallback_report_route_points_for_day(
+    day_number: int,
+    expected_days: int,
+    state: TravelState,
+    requirement: dict,
+) -> list[str]:
+    destination = state.get("selected_destination") or requirement.get("destination") or ""
+    departure_city = requirement.get("departure_city") or ""
+    selected_accommodation = state.get("selected_accommodation_option") or {}
+    accommodation = selected_accommodation.get("location") or selected_accommodation.get("name")
+    if not accommodation or _is_pending_route_point(str(accommodation)):
+        accommodation = _recommended_accommodation_area(str(destination))
+
+    destination_pois = _destination_pois_for_report(state, requirement)
+    day_pois = _pick_report_pois_for_day(destination_pois, day_number, expected_days)
+    day_poi_names = _poi_names(day_pois)
+
+    if day_number == 1:
+        points = [departure_city, destination, accommodation, *day_poi_names[:1]]
+    elif day_number == expected_days:
+        points = [accommodation, *day_poi_names[:1], "返程交通"]
+    else:
+        points = [accommodation, *day_poi_names]
+    return _dedupe_report_points([str(point) for point in points if point])
+
+
 def _format_report_route_points(
     day: dict,
     state: TravelState,
     requirement: dict,
 ) -> list[str]:
-    explicit_points = day.get("route_points")
-    if isinstance(explicit_points, list) and explicit_points:
-        return _dedupe_report_points([str(point) for point in explicit_points])
-
     day_number = day.get("day_number") or 0
     destination = state.get("selected_destination") or requirement.get("destination") or ""
     departure_city = requirement.get("departure_city") or ""
-    accommodation = day.get("accommodation") or (state.get("selected_accommodation_option") or {}).get("name")
+    expected_days = _get_expected_travel_days(requirement, 0)
+    selected_accommodation = state.get("selected_accommodation_option") or {}
+    accommodation_candidates = [
+        day.get("accommodation"),
+        selected_accommodation.get("location"),
+        selected_accommodation.get("name"),
+    ]
+    explicit_points = day.get("route_points")
+    if isinstance(explicit_points, list) and explicit_points:
+        explicit = _dedupe_report_points([str(point) for point in explicit_points])
+        explicit_visual_points = [
+            point for point in explicit if not _is_pending_route_point(point)
+        ]
+        if len(explicit_visual_points) >= 2 and _route_points_have_specific_visual_node(
+            explicit_visual_points,
+            destination=str(destination),
+            departure_city=str(departure_city),
+            accommodation_points=[str(point) for point in accommodation_candidates if point],
+        ):
+            return explicit
+    else:
+        explicit = []
+
+    accommodation = day.get("accommodation") or selected_accommodation.get("name")
     text = "\n".join(
         str(item)
         for item in [
@@ -1226,7 +1624,7 @@ def _format_report_route_points(
         if item
     )
 
-    points = []
+    points = [point for point in explicit if not _is_pending_route_point(point)]
     if day_number == 1 and departure_city:
         points.append(str(departure_city))
     if day_number == 1 and destination:
@@ -1238,10 +1636,28 @@ def _format_report_route_points(
             matches.append((text.index(candidate), candidate))
     points.extend(candidate for _, candidate in sorted(matches, key=lambda item: item[0]))
 
-    if accommodation and "待确认" not in str(accommodation):
+    if accommodation and not _is_pending_route_point(str(accommodation)):
         points.append(str(accommodation))
-    if not points and destination:
+    if day_number == expected_days:
+        points.append("\u8fd4\u7a0b\u4ea4\u901a")
+    if len(_dedupe_report_points(points)) < 2 or not _route_points_have_specific_visual_node(
+        _dedupe_report_points(points),
+        destination=str(destination),
+        departure_city=str(departure_city),
+        accommodation_points=[str(point) for point in accommodation_candidates if point],
+    ):
+        points.extend(
+            _fallback_report_route_points_for_day(
+                int(day_number or 0),
+                expected_days,
+                state,
+                requirement,
+            )
+        )
+    if len(_dedupe_report_points(points)) < 2 and destination:
         points.append(str(destination))
+    if len(_dedupe_report_points(points)) < 2 and day_number == expected_days:
+        points.append("\u8fd4\u7a0b\u7f13\u51b2")
 
     return _dedupe_report_points(points)
 
@@ -1268,54 +1684,102 @@ def _build_placeholder_itinerary_day(
 ) -> dict:
     destination = state.get("selected_destination") or requirement.get("destination") or "目的地"
     selected_accommodation = state.get("selected_accommodation_option") or {}
-    accommodation = selected_accommodation.get("name") or "住宿/落脚点待二次核实"
+    if not selected_accommodation.get("name"):
+        selected_accommodation = _build_fallback_accommodation_option(state, requirement)
+    accommodation = selected_accommodation.get("name") or f"{destination}交通便利区域住宿"
     destination_context = _get_destination_context(state, destination)
+    destination_pois = _destination_pois_for_report(state, requirement)
+    day_pois = _pick_report_pois_for_day(destination_pois, day_number, expected_days)
+    day_poi_names = _poi_names(day_pois)
+    primary_poi = day_poi_names[0] if day_poi_names else f"{destination}核心街区"
+    lunch_food = _pick_food_poi(
+        _get_food_pois(state),
+        day_number * 2 - 2,
+        target_area=day_pois[0].get("area") if day_pois else None,
+        meal_keyword="午餐",
+    )
+    dinner_food = _pick_food_poi(
+        _get_food_pois(state),
+        day_number * 2 - 1,
+        target_area=day_pois[-1].get("area") if day_pois else None,
+        meal_keyword="晚餐",
+        exclude_names={str(lunch_food["name"])} if lunch_food and lunch_food.get("name") else None,
+    )
     plan_b = _format_weather_plan_b(destination_context.get("weather_info"))
 
     if day_number == 1:
-        theme = "抵达与轻松适应"
+        theme = f"抵达与{primary_poi}轻松适应"
         time_blocks = [
             "上午/出发：按已确认交通方案执行，预留到站/到机场缓冲。",
-            f"下午/抵达：前往 {destination} 住宿区域，办理入住或寄存行李。",
-            "晚上/适应：安排酒店周边低强度散步和省心用餐。",
+            f"下午/抵达：前往 {accommodation}，办理入住或寄存行李。",
+            f"晚上/适应：安排 {primary_poi} 轻量游览和就近晚餐。",
         ]
-        activities = [f"抵达 {destination}", "办理入住或寄存行李", "酒店周边轻松活动"]
-        route_note = "该日为最终报告兜底补齐：以抵达点、住宿区域和酒店周边短动线为主。"
+        activities = [
+            f"抵达 {destination}",
+            f"入住/寄存：{accommodation}",
+            _format_poi_activity(day_pois, f"{destination}住宿周边轻松活动"),
+        ]
+        route_note = "动线原则：抵达日只安排住宿区域和一个低强度夜间/傍晚体验，避免刚到就跨区奔波。"
+        route_points = _dedupe_report_points(
+            [
+                requirement.get("departure_city") or "",
+                destination,
+                accommodation,
+                *day_poi_names,
+            ]
+        )
     elif day_number == expected_days:
-        theme = "返程缓冲与补漏"
+        theme = f"{primary_poi}补漏与返程缓冲"
         time_blocks = [
-            "上午/补漏：安排一个低强度同区域体验，避免跨区奔波。",
+            f"上午/补漏：安排 {primary_poi} 或同区域低强度体验，避免跨区奔波。",
             "下午/收尾：退房、寄存或取行李，预留前往车站/机场的缓冲时间。",
             "晚上/返程：按实时交通情况出发，再次核对票务、证件和行李。",
         ]
-        activities = ["低强度补漏体验", "退房/寄存/取行李", "返程交通缓冲"]
-        route_note = "该日为最终报告兜底补齐：优先保证返程稳定，不再塞入高强度跨区活动。"
+        activities = [
+            _format_poi_activity(day_pois, f"{destination}低强度补漏体验"),
+            "退房/寄存/取行李",
+            "返程交通缓冲",
+        ]
+        route_note = "动线原则：返程日优先保证稳定，只保留一个顺路体验和充分交通缓冲。"
+        route_points = _dedupe_report_points([accommodation, *day_poi_names, "返程交通"])
     else:
-        theme = f"{destination} 顺路体验待细化"
+        theme = " + ".join(day_poi_names) if day_poi_names else f"{destination}顺路体验"
         time_blocks = [
-            "上午/核心体验：选择一个与旅行偏好匹配的同区域核心景点或街区。",
-            "下午/顺路延展：安排同区域景点、商圈或室内场馆，减少折返。",
+            f"上午/核心体验：{_format_poi_activity(day_pois[:1], f'{destination}核心景点或街区')}",
+            f"下午/顺路延展：{_format_poi_activity(day_pois[1:], '同区域景点、商圈或室内场馆')}，减少折返。",
             "晚上/餐饮放松：结合已确认餐饮偏好就近用餐，保留休息时间。",
         ]
-        activities = ["同区域核心体验", "顺路延展活动", "就近餐饮与休息"]
-        route_note = "该日为最终报告兜底补齐：具体 POI 待二次细化，但动线按同区域、少折返原则安排。"
+        activities = [
+            *_poi_names(day_pois),
+            "就近餐饮与休息",
+        ]
+        route_note = "动线原则：当天围绕同一区域或相邻街区展开，优先减少折返、保留休息。"
+        route_points = _dedupe_report_points([accommodation, *day_poi_names])
+
+    reservation_note = _format_reservation_note(day_pois)
+    if reservation_note:
+        time_blocks.append(f"预约/费用提醒：{reservation_note}")
+    indoor_backup = _format_indoor_backup(day_pois)
+    if indoor_backup:
+        time_blocks.append(indoor_backup)
 
     return {
         "day_number": day_number,
         "theme": theme,
         "activities": activities,
+        "route_points": route_points,
         "time_blocks": time_blocks,
         "meals": [
             "早餐：以酒店/周边省心用餐为主",
-            "午餐：结合当日动线就近安排",
-            "晚餐：优先匹配已确认餐饮偏好",
+            f"午餐：{_format_food_poi_summary(lunch_food, '结合当日动线就近安排')}",
+            f"晚餐：{_format_food_poi_summary(dinner_food, '优先匹配已确认餐饮偏好')}",
         ],
         "accommodation": accommodation,
         "transport_note": "当天交通以同区域步行、地铁或短途打车为主；跨区安排需二次核实。",
         "plan_b": plan_b,
         "route_note": route_note,
         "risk_notes": [
-            "该日为按出行天数自动补齐的安排，具体开放时间、预约和票价需二次核实。",
+            "具体开放时间、预约和票价需在出发前二次核实。",
             "如遇天气、排队或体力变化，优先执行 Plan B 并保留休息时间。",
         ],
     }
@@ -1430,7 +1894,13 @@ def _format_report_daily_itinerary(
             lines.append(f"- Plan B：{plan_b}")
         risk_notes = day.get("risk_notes") or []
         if risk_notes:
-            lines.append(f"- 当天风险：{'；'.join(str(item) for item in risk_notes[:2])}")
+            risk_text = "；".join(
+                str(item).strip().rstrip("。；;")
+                for item in risk_notes[:2]
+                if str(item).strip()
+            )
+            if risk_text:
+                lines.append(f"- 当天风险：{risk_text}。")
 
     if len(itinerary) > max_days:
         lines.append(f"- 其余 {len(itinerary) - max_days} 天按已生成行程继续执行。")
@@ -1517,11 +1987,31 @@ def _internal_doc_highlights(category: str, limit: int = 2) -> tuple[str, ...]:
     return tuple(highlights)
 
 
-def _infer_planning_mode(requirement: dict) -> str:
+def _state_human_text_for_report(state: TravelState | None) -> str:
+    if not state:
+        return ""
+
+    texts: list[str] = []
+    for message in (state.get("messages") or [])[-8:]:
+        content = None
+        if isinstance(message, dict):
+            role = message.get("role") or message.get("type")
+            if role in {"user", "human"}:
+                content = message.get("content")
+        elif getattr(message, "type", None) == "human" or getattr(message, "role", None) == "user":
+            content = getattr(message, "content", None)
+
+        if content:
+            texts.append(content if isinstance(content, str) else str(content))
+    return "\n".join(texts)
+
+
+def _infer_planning_mode(requirement: dict, state: TravelState | None = None) -> str:
     text = " ".join(
         [
             str(requirement.get("special_needs") or ""),
             " ".join(str(item) for item in requirement.get("travel_styles") or []),
+            _state_human_text_for_report(state),
         ]
     )
     agency_keywords = ("省心", "旅行社", "成熟路线", "定制游", "跟团", "团建", "亲子", "银发")
@@ -1542,8 +2032,8 @@ def _pick_highlight(lines: list[str], keywords: tuple[str, ...], fallback_index:
     return None
 
 
-def _build_agency_context(requirement: dict) -> dict:
-    mode = _infer_planning_mode(requirement)
+def _build_agency_context(requirement: dict, state: TravelState | None = None) -> dict:
+    mode = _infer_planning_mode(requirement, state)
     product_lines = list(_internal_doc_highlights("products", 2))
     service_lines = list(_internal_doc_highlights("sop", 2))
     pricing_lines = list(_internal_doc_highlights("pricing", 2))
@@ -1642,7 +2132,7 @@ def _build_report_data(
         _clean_report_line(line)
         for line in _format_adjustment_options(state, budget)
     ]
-    agency_context = _build_agency_context(requirement)
+    agency_context = _build_agency_context(requirement, state)
 
     return {
         "version": "travel_report.v1",
@@ -1724,7 +2214,7 @@ def _build_final_report(
         state.get("selected_transport"),
         state.get("selected_transport", "未确认"),
     )
-    agency_context = _build_agency_context(requirement)
+    agency_context = _build_agency_context(requirement, state)
 
     return "\n".join(
         [
@@ -2336,26 +2826,64 @@ def generate_order_tool(
 
     app_logger.info("开始生成订单")
     state = _runtime_state(runtime)
-    if not state.get("budget") or not state.get("itinerary"):
+    requirement = state.get("user_requirement") or {}
+    if not isinstance(requirement, dict):
+        requirement = {}
+    selected_destination = state.get("selected_destination") or requirement.get("destination")
+    expected_days = _get_expected_travel_days(
+        requirement,
+        len(state.get("itinerary") or []),
+    )
+    total_people = (
+        (requirement.get("adult_count") or 0)
+        + (requirement.get("children_count") or 0)
+        or (state.get("budget") or {}).get("total_people")
+        or 0
+    )
+    has_budget_hint = (
+        bool(state.get("budget"))
+        or requirement.get("budget_min") is not None
+        or requirement.get("budget_max") is not None
+        or bool(requirement.get("budget_level"))
+    )
+    missing_items = []
+    if not selected_destination:
+        missing_items.append("目的地")
+    if expected_days <= 0:
+        missing_items.append("行程天数")
+    if total_people <= 0:
+        missing_items.append("出行人数")
+    if not has_budget_hint:
+        missing_items.append("预算")
+
+    if missing_items:
         return _command_with_message(
-            "订单生成前需要先完成行程和预算确认。",
+            f"生成最终报告前还需要先确认：{'、'.join(missing_items)}。",
             runtime,
         )
 
     order_id = f"ORDER-{uuid4().hex[:8].upper()}"
-    requirement = state.get("user_requirement") or {}
     selected_transport_option = state.get("selected_transport_option") or {}
-    selected_accommodation = state.get("selected_accommodation_option") or {}
-    itinerary = _ensure_itinerary_day_count(state.get("itinerary") or [], state, requirement)
-    budget = _ensure_budget_quality_contract(
-        state,
+    selected_accommodation = _build_fallback_accommodation_option(state, requirement)
+    report_state = dict(state)
+    if not report_state.get("selected_destination") and selected_destination:
+        report_state["selected_destination"] = selected_destination
+    if not report_state.get("selected_accommodation_option"):
+        report_state["selected_accommodation_option"] = selected_accommodation
+    itinerary = _ensure_itinerary_day_count(
+        report_state.get("itinerary") or [],
+        report_state,
         requirement,
-        state.get("budget") or {},
+    )
+    budget = _ensure_budget_quality_contract(
+        report_state,
+        requirement,
+        report_state.get("budget") or {},
         itinerary,
     )
     selected_food_types = state.get("selected_food_types") or []
     report = _build_final_report(
-        state,
+        report_state,
         requirement,
         budget,
         itinerary,
@@ -2364,7 +2892,7 @@ def generate_order_tool(
         selected_food_types,
     )
     report_data = _build_report_data(
-        state,
+        report_state,
         requirement,
         budget,
         itinerary,
@@ -2386,10 +2914,13 @@ def generate_order_tool(
         message,
         runtime,
         order_id=order_id,
+        selected_destination=selected_destination,
+        selected_accommodation_option=selected_accommodation,
         itinerary=itinerary,
         budget=budget,
         report=report,
         report_data=report_data,
+        current_step="order_generation",
     )
 
 

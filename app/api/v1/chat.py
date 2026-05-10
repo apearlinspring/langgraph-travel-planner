@@ -52,6 +52,34 @@ def sse(data: dict) -> str:
     return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
+def _extract_command_update(output) -> dict:
+    """Extract LangGraph Command.update from a tool event output."""
+    update = getattr(output, "update", None)
+    if isinstance(update, dict):
+        return update
+    if isinstance(output, dict):
+        nested_update = output.get("update")
+        if isinstance(nested_update, dict):
+            return nested_update
+    return {}
+
+
+def _report_extra_info_from_tool_output(output) -> dict:
+    """Build persisted message metadata from generate_order_tool output."""
+    update = _extract_command_update(output)
+    report_data = update.get("report_data")
+    if not isinstance(report_data, dict):
+        return {}
+
+    extra_info = {
+        "message_type": "travel_report",
+        "report_data": report_data,
+    }
+    if update.get("order_id"):
+        extra_info["order_id"] = update["order_id"]
+    return extra_info
+
+
 async def generate_sse_stream(
         conversation_id: str,
         user_message: str,
@@ -63,6 +91,7 @@ async def generate_sse_stream(
     first_token_elapsed = None
     tool_started_at = {}
     tool_name_by_run = {}
+    assistant_extra_info = {}
 
     try:
         app_logger.info(
@@ -134,6 +163,23 @@ async def generate_sse_stream(
                 tool_name = event.get("name", "") or tool_name_by_run.get(run_id, "")
                 started_at = tool_started_at.pop(run_id, None)
                 tool_name_by_run.pop(run_id, None)
+                if tool_name == "generate_order_tool":
+                    report_extra_info = _report_extra_info_from_tool_output(
+                        event.get("data", {}).get("output")
+                    )
+                    if report_extra_info:
+                        assistant_extra_info.update(report_extra_info)
+                        yield sse(
+                            {
+                                "type": "report_data",
+                                "report_data": report_extra_info["report_data"],
+                                "order_id": report_extra_info.get("order_id"),
+                            }
+                        )
+                        app_logger.info(
+                            "Captured structured report metadata from generate_order_tool: "
+                            f"conversation_id={conversation_id}, user_id={user.id}"
+                        )
                 if started_at is not None:
                     elapsed = time.perf_counter() - started_at
                     app_logger.info(
@@ -151,6 +197,7 @@ async def generate_sse_stream(
                 conversation_id,
                 "assistant",
                 assistant_message,
+                extra_info=assistant_extra_info,
             )
 
         total_elapsed = time.perf_counter() - request_started_at

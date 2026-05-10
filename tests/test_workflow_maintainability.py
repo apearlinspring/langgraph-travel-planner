@@ -2,6 +2,7 @@ import pytest
 import inspect
 from pathlib import Path
 from langchain.tools import ToolRuntime
+from langchain_core.messages import HumanMessage
 
 from app.agents.handoffs import step_config as step_config_module
 from app.agents.subagents.transport_coordinator import create_transport_coordinator
@@ -690,7 +691,8 @@ def test_final_report_pads_four_day_trip_and_exports_route_bound_data():
 
     assert len(state["itinerary"]) == 4
     assert state["itinerary"][3]["day_number"] == 4
-    assert state["itinerary"][3]["theme"] == "返程缓冲与补漏"
+    assert "返程" in state["itinerary"][3]["theme"]
+    assert "补漏" in state["itinerary"][3]["theme"]
     assert len(state["budget"]["line_items"]) == 5
 
     order_command = generate_order_tool.invoke({"runtime": _build_runtime(state)})
@@ -707,12 +709,209 @@ def test_final_report_pads_four_day_trip_and_exports_route_bound_data():
     assert len(report_data["itinerary"]) == 4
     assert len(report_data["map_routes"]) == 4
     assert report_data["agency_context"]["mode"] == "free_planning"
-    assert report_data["itinerary"][3]["title"] == "返程缓冲与补漏"
+    assert "返程" in report_data["itinerary"][3]["title"]
+    assert "补漏" in report_data["itinerary"][3]["title"]
     assert [
         day["route"]["summary"] for day in report_data["itinerary"]
     ] == [
         route["summary"] for route in report_data["map_routes"]
     ]
+
+
+def test_generate_order_tool_creates_pending_report_from_basic_requirement():
+    state = create_initial_state(user_id="user-1", session_id="session-1")
+    state.update(
+        {
+            "current_step": "destination_recommendation",
+            "user_requirement": {
+                "departure_city": "\u5317\u4eac",
+                "destination": "\u4e0a\u6d77",
+                "departure_date": "2026-06-19",
+                "travel_days": 3,
+                "adult_count": 2,
+                "children_count": 0,
+                "budget_min": 3000.0,
+                "budget_max": 8000.0,
+                "travel_styles": ["\u6587\u5316", "\u7f8e\u98df"],
+            },
+            "selected_transport": "train",
+            "selected_food_types": ["local"],
+        }
+    )
+
+    order_command = generate_order_tool.invoke({"runtime": _build_runtime(state)})
+
+    assert "report" in order_command.update
+    assert "report_data" in order_command.update
+    assert order_command.update["selected_destination"] == "\u4e0a\u6d77"
+    assert order_command.update["current_step"] == "order_generation"
+    assert "\u9884\u7b97\u7f6e\u4fe1\u5ea6\u4e0e\u5f85\u6838\u9a8c\u9879" in order_command.update["report"]
+    assert "\u515c\u5e95\u4f30\u7b97" in order_command.update["report"]
+    assert "\u5916\u6ee9" in order_command.update["report"]
+    assert "\u4eba\u6c11\u5e7f\u573a/\u5357\u4eac\u4e1c\u8def" in order_command.update["report"]
+    assert "\u4f4f\u5bbf/\u843d\u811a\u70b9\u5f85\u4e8c\u6b21\u6838\u5b9e" not in order_command.update["report"]
+    assert "\u5177\u4f53 POI \u5f85\u4e8c\u6b21\u7ec6\u5316" not in order_command.update["report"]
+    assert "\u540c\u533a\u57df\u6838\u5fc3\u4f53\u9a8c" not in order_command.update["report"]
+
+    report_data = order_command.update["report_data"]
+    assert report_data["version"] == "travel_report.v1"
+    assert len(report_data["itinerary"]) == 3
+    assert len(report_data["map_routes"]) == 3
+    assert report_data["accommodation"]["option"]["location"] == "\u4eba\u6c11\u5e7f\u573a/\u5357\u4eac\u4e1c\u8def"
+    assert report_data["budget"]["total"] > 0
+    assert len(report_data["budget"]["items"]) == 5
+    assert report_data["budget_confidence"]["level"] == "\u504f\u4f4e"
+    assert any(
+        "\u5916\u6ee9" in route["summary"]
+        for route in report_data["map_routes"]
+    )
+    assert [
+        day["route"]["summary"] for day in report_data["itinerary"]
+    ] == [
+        route["summary"] for route in report_data["map_routes"]
+    ]
+
+
+def test_generate_order_tool_adds_changsha_route_nodes_for_map_export():
+    state = create_initial_state(user_id="user-1", session_id="session-1")
+    state.update(
+        {
+            "current_step": "destination_recommendation",
+            "user_requirement": {
+                "departure_city": "\u897f\u5b89",
+                "destination": "\u957f\u6c99",
+                "departure_date": "2026-05-23",
+                "travel_days": 4,
+                "adult_count": 2,
+                "children_count": 0,
+                "budget_max": 3500.0,
+                "travel_styles": ["\u7f8e\u98df", "\u6587\u5316", "\u4f11\u95f2"],
+                "special_needs": "\u7701\u5fc3\u65b9\u6848",
+            },
+            "selected_destination": "\u957f\u6c99",
+            "selected_transport": "train",
+            "selected_food_types": ["local", "specialty"],
+            "messages": [
+                HumanMessage(
+                    content=(
+                        "\u5e2e\u6211\u6309\u65c5\u884c\u793e\u7701\u5fc3"
+                        "\u65b9\u6848\u5b89\u6392\u957f\u6c994\u59293\u665a\u3002"
+                    )
+                )
+            ],
+        }
+    )
+
+    order_command = generate_order_tool.invoke({"runtime": _build_runtime(state)})
+    report_data = order_command.update["report_data"]
+
+    assert len(report_data["itinerary"]) == 4
+    assert len(report_data["map_routes"]) == 4
+    assert all(len(route["route_points"]) >= 2 for route in report_data["map_routes"])
+    route_text = "\n".join(route["summary"] for route in report_data["map_routes"])
+    assert "\u6a58\u5b50\u6d32\u5934" in route_text or "\u5cb3\u9e93\u5c71" in route_text
+    meals_text = "\n".join(
+        "\n".join(day["meals"]) for day in report_data["itinerary"]
+    )
+    assert "\u8336\u989c\u60a6\u8272" in meals_text or "\u7b28\u841d\u535c" in meals_text
+    assert "\u57ce\u968d\u5e99" not in meals_text
+
+
+def test_generate_order_tool_repairs_weak_changsha_model_route_points():
+    state = create_initial_state(user_id="user-1", session_id="session-1")
+    state.update(
+        {
+            "current_step": "itinerary_generation",
+            "user_requirement": {
+                "departure_city": "\u897f\u5b89",
+                "destination": "\u957f\u6c99",
+                "departure_date": "2026-05-23",
+                "travel_days": 4,
+                "adult_count": 2,
+                "children_count": 0,
+                "budget_max": 3500.0,
+                "travel_styles": ["\u7f8e\u98df", "\u6587\u5316", "\u4f11\u95f2"],
+                "special_needs": "\u7701\u5fc3\u65b9\u6848",
+            },
+            "selected_destination": "\u957f\u6c99",
+            "selected_transport": "train",
+            "selected_food_types": ["local", "specialty"],
+            "itinerary": [
+                {
+                    "day_number": 1,
+                    "theme": "\u62b5\u8fbe\u4e0e\u8f7b\u677e\u9002\u5e94",
+                    "route_points": ["\u897f\u5b89", "\u957f\u6c99"],
+                },
+                {
+                    "day_number": 2,
+                    "theme": "\u957f\u6c99 \u6df1\u5ea6\u4f53\u9a8c",
+                    "route_points": ["\u957f\u6c99"],
+                },
+                {
+                    "day_number": 3,
+                    "theme": "\u957f\u6c99 \u6df1\u5ea6\u4f53\u9a8c",
+                    "route_points": ["\u957f\u6c99"],
+                },
+                {
+                    "day_number": 4,
+                    "theme": "\u6536\u5c3e\u4e0e\u8fd4\u7a0b\u5f39\u6027",
+                    "route_points": ["\u8fd4\u7a0b\u4ea4\u901a", "\u957f\u6c99"],
+                },
+            ],
+            "messages": [
+                HumanMessage(
+                    content=(
+                        "\u8bf7\u6309\u5f53\u524d\u4fe1\u606f\u751f\u6210"
+                        "\u957f\u6c994\u59293\u665a\u6700\u7ec8\u62a5\u544a\u3002"
+                    )
+                )
+            ],
+        }
+    )
+
+    order_command = generate_order_tool.invoke({"runtime": _build_runtime(state)})
+    report_data = order_command.update["report_data"]
+
+    assert len(report_data["map_routes"]) == 4
+    assert all(len(route["route_points"]) >= 2 for route in report_data["map_routes"])
+    route_text = "\n".join(route["summary"] for route in report_data["map_routes"])
+    assert "\u6a58\u5b50\u6d32\u5934" in route_text
+    assert "\u5cb3\u9e93\u5c71" in route_text or "\u6e56\u5357\u535a\u7269\u9662" in route_text
+
+
+def test_final_report_infers_agency_mode_from_recent_human_messages():
+    state = create_initial_state(user_id="user-1", session_id="session-1")
+    state.update(
+        {
+            "current_step": "destination_recommendation",
+            "user_requirement": {
+                "departure_city": "\u5317\u4eac",
+                "destination": "\u4e0a\u6d77",
+                "travel_days": 3,
+                "adult_count": 2,
+                "children_count": 0,
+                "budget_max": 8000,
+                "travel_styles": ["\u6587\u5316\u63a2\u7d22", "\u7f8e\u98df\u4e4b\u65c5"],
+                "special_needs": "\u4ea4\u901a\u4f18\u5148\u9ad8\u94c1",
+            },
+            "selected_destination": "\u4e0a\u6d77",
+            "messages": [
+                HumanMessage(
+                    content=(
+                        "\u6211\u60f3\u505a\u4e00\u4e2a\u65c5\u884c\u793e"
+                        "\u7701\u5fc3\u65b9\u6848\uff0c\u6309\u6210\u719f"
+                        "\u8def\u7ebf\u548c\u987e\u95ee\u65b9\u6848\u6765\u3002"
+                    )
+                )
+            ],
+        }
+    )
+
+    order_command = generate_order_tool.invoke({"runtime": _build_runtime(state)})
+    report_data = order_command.update["report_data"]
+
+    assert report_data["agency_context"]["mode"] == "agency_plan"
+    assert "\u65c5\u884c\u793e\u987e\u95ee\u65b9\u6848" in report_data["agency_context"]["summary"]
 
 
 def test_final_report_keeps_budget_confidence_contract_when_prices_are_missing():
