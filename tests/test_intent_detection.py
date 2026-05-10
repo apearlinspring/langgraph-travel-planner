@@ -1,7 +1,7 @@
 import pytest
 from langchain_core.messages import HumanMessage
 
-from app.core.intent import detect_travel_intent
+from app.core.intent import detect_travel_intent, resolve_planning_mode
 from app.core.middleware import StepConfigMiddleware
 from app.utils.llm_factory import get_model_compatibility
 
@@ -71,6 +71,7 @@ def test_detect_agency_plan_prefers_internal_product_tool():
     )
 
     assert intent.name == "agency_plan_query"
+    assert intent.planning_mode == "agency_plan"
     assert intent.preferred_tool == "search_agency_product_templates"
 
 
@@ -81,7 +82,56 @@ def test_detect_free_planning_keeps_neutral_mode():
     )
 
     assert intent.name == "free_planning_query"
+    assert intent.planning_mode == "free_planning"
     assert intent.preferred_tool is None
+
+
+def test_detect_agency_plan_can_override_no_group_tour_wording():
+    intent = detect_travel_intent(
+        "我不跟大团，但想让你们旅行社做定制游，不用我自己操心。",
+        current_step="destination_recommendation",
+    )
+
+    assert intent.name == "agency_plan_query"
+    assert intent.planning_mode == "agency_plan"
+    assert intent.preferred_tool == "search_agency_product_templates"
+
+
+def test_detect_rejected_agency_plan_stays_free_planning():
+    intent = detect_travel_intent(
+        "不要旅行社产品，也别推销套餐，我只要自由行攻略。",
+        current_step="destination_recommendation",
+    )
+
+    assert intent.name == "free_planning_query"
+    assert intent.planning_mode == "free_planning"
+    assert intent.preferred_tool is None
+
+
+def test_resolve_planning_mode_marks_ambiguous_mode_for_confirmation():
+    decision = resolve_planning_mode(
+        "我想省心一点，但也想自己订酒店机票，不确定要不要旅行社方案。",
+        state={},
+    )
+
+    assert decision.mode is None
+    assert decision.needs_confirmation is True
+    assert decision.confirmed is False
+
+
+def test_resolve_planning_mode_uses_persisted_state_when_latest_text_is_neutral():
+    decision = resolve_planning_mode(
+        "那继续安排下一步。",
+        state={
+            "planning_mode": "agency_plan",
+            "planning_mode_reason": "用户已确认希望按旅行社顾问方案交付",
+            "planning_mode_confirmed": True,
+        },
+    )
+
+    assert decision.mode == "agency_plan"
+    assert decision.source == "state"
+    assert decision.confirmed is True
 
 
 def test_detect_pricing_query_prefers_internal_pricing_rules():
@@ -194,6 +244,175 @@ async def test_middleware_removes_agency_tools_for_free_planning_intent():
     assert "query_destination_info" in captured["tools"]
     assert "search_agency_product_templates" not in captured["tools"]
     assert "search_agency_risk_playbook" not in captured["tools"]
+    assert "当前规划模式：自由规划" in captured["system_prompt"]
+
+
+@pytest.mark.asyncio
+async def test_middleware_uses_persisted_free_planning_mode_across_steps():
+    captured = {}
+    middleware = StepConfigMiddleware(
+        {
+            "destination_recommendation": {
+                "prompt": "destination",
+                "tools": [
+                    "select_destination_tool",
+                    "query_destination_info",
+                    "search_agency_product_templates",
+                    "search_agency_risk_playbook",
+                ],
+                "requires": ["user_requirement"],
+            },
+        }
+    )
+    state = {
+        "current_step": "destination_recommendation",
+        "planning_mode": "free_planning",
+        "planning_mode_confirmed": True,
+        "user_requirement": {
+            "destination": "上海",
+            "planning_mode": "free_planning",
+            "planning_mode_confirmed": True,
+        },
+    }
+
+    async def handler(request):
+        captured["tools"] = request.tools
+        captured["system_prompt"] = getattr(request, "system_prompt", "")
+        return "ok"
+
+    await middleware.awrap_model_call(
+        DummyRequest(state, [HumanMessage(content="帮我推荐几个适合城市漫步的景点。")]),
+        handler,
+    )
+
+    assert "query_destination_info" in captured["tools"]
+    assert "search_agency_product_templates" not in captured["tools"]
+    assert "search_agency_risk_playbook" not in captured["tools"]
+    assert "当前规划模式：自由规划" in captured["system_prompt"]
+
+
+@pytest.mark.asyncio
+async def test_middleware_keeps_pricing_tool_in_free_planning_mode():
+    captured = {}
+    middleware = StepConfigMiddleware(
+        {
+            "itinerary_generation": {
+                "prompt": "itinerary",
+                "tools": ["generate_itinerary_tool", "search_agency_product_templates"],
+                "requires": ["user_requirement"],
+            },
+            "budget_summarization": {
+                "prompt": "budget",
+                "tools": ["search_agency_pricing_rules"],
+                "requires": ["user_requirement"],
+            },
+        }
+    )
+    state = {
+        "current_step": "itinerary_generation",
+        "planning_mode": "free_planning",
+        "user_requirement": {"planning_mode": "free_planning"},
+    }
+
+    async def handler(request):
+        captured["tools"] = request.tools
+        captured["system_prompt"] = getattr(request, "system_prompt", "")
+        return "ok"
+
+    await middleware.awrap_model_call(
+        DummyRequest(state, [HumanMessage(content="自由行也帮我看下预算依据和费用包含什么。")]),
+        handler,
+    )
+
+    assert "search_agency_pricing_rules" in captured["tools"]
+    assert "search_agency_product_templates" not in captured["tools"]
+    assert "当前规划模式：自由规划" in captured["system_prompt"]
+
+
+@pytest.mark.asyncio
+async def test_middleware_latest_agency_mode_overrides_persisted_free_mode():
+    captured = {}
+    middleware = StepConfigMiddleware(
+        {
+            "transport_planning": {
+                "prompt": "transport",
+                "tools": ["query_transport_options"],
+                "requires": ["user_requirement", "selected_destination"],
+            },
+            "requirement_collection": {
+                "prompt": "collect",
+                "tools": [
+                    "set_planning_mode_tool",
+                    "confirm_planning_mode_tool",
+                    "search_agency_product_templates",
+                ],
+                "requires": [],
+            },
+        }
+    )
+    state = {
+        "current_step": "transport_planning",
+        "planning_mode": "free_planning",
+        "planning_mode_confirmed": True,
+        "user_requirement": {
+            "planning_mode": "free_planning",
+            "planning_mode_confirmed": True,
+        },
+        "selected_destination": "成都",
+    }
+
+    async def handler(request):
+        captured["tools"] = request.tools
+        captured["system_prompt"] = getattr(request, "system_prompt", "")
+        return "ok"
+
+    await middleware.awrap_model_call(
+        DummyRequest(
+            state,
+            [HumanMessage(content="还是按你们旅行社省心方案来，我不想自己做攻略。")],
+        ),
+        handler,
+    )
+
+    assert "search_agency_product_templates" in captured["tools"]
+    assert "当前规划模式：旅行社顾问方案" in captured["system_prompt"]
+
+
+@pytest.mark.asyncio
+async def test_middleware_asks_to_confirm_ambiguous_planning_mode():
+    captured = {}
+    middleware = StepConfigMiddleware(
+        {
+            "requirement_collection": {
+                "prompt": "collect",
+                "tools": [
+                    "record_requirement_tool",
+                    "set_planning_mode_tool",
+                    "confirm_planning_mode_tool",
+                    "search_agency_product_templates",
+                ],
+                "requires": [],
+            },
+        }
+    )
+    state = {"current_step": "requirement_collection"}
+
+    async def handler(request):
+        captured["tools"] = request.tools
+        captured["system_prompt"] = getattr(request, "system_prompt", "")
+        return "ok"
+
+    await middleware.awrap_model_call(
+        DummyRequest(
+            state,
+            [HumanMessage(content="我想省心一点，但也想自己订酒店机票，不确定要不要旅行社方案。")],
+        ),
+        handler,
+    )
+
+    assert "confirm_planning_mode_tool" in captured["tools"]
+    assert "search_agency_product_templates" not in captured["tools"]
+    assert "规划模式表达不够明确" in captured["system_prompt"]
 
 
 @pytest.mark.asyncio
