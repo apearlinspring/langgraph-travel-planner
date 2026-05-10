@@ -133,6 +133,8 @@ async def _persist_tool_audit_events_safely(
 ) -> None:
     if not events:
         return
+    if not callable(getattr(db, "add", None)):
+        return
     try:
         await persist_tool_audit_events(
             db,
@@ -141,7 +143,9 @@ async def _persist_tool_audit_events_safely(
             conversation_id=conversation_id,
         )
     except Exception:
-        await db.rollback()
+        rollback = getattr(db, "rollback", None)
+        if callable(rollback):
+            await rollback()
         app_logger.exception(
             "工具审计事件持久化失败，已保留在消息 extra_info 中: "
             f"conversation_id={conversation_id}, user_id={user_id}"
