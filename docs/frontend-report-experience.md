@@ -29,4 +29,4 @@ node scripts\verify_frontend_report_renderer.js
 - 检查报告第一屏规划模式标签、预算置信度、待核验清单、每日路线草图。
 - 点击“导出报告”，打开导出的 HTML 文件，确认预算置信度和待核验章节仍在。
 
-当前工作区未能安装浏览器自动化依赖，因此截图回归仍需在本地浏览器手动补验。
+本次模块 H 自审还额外生成了 `.runtime/frontend-report-preview.html` 预览页，并用 Chrome headless（无界面浏览器模式）截图检查桌面和移动宽度。截图产物位于 `.runtime/`，属于本地临时验证文件，不纳入提交。
