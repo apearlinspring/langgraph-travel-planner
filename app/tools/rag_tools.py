@@ -6,6 +6,10 @@ from pathlib import Path
 from typing import Optional
 from langchain.tools import tool
 from langchain_core.tools import ToolException
+from app.rag.agency_retrieval import (
+    filter_documents_by_category,
+    format_evidence_response,
+)
 from app.rag.pipeline import AdvancedRAGPipeline
 from app.rag.document_loader import DocumentManager
 from app.rag.text_splitter import AdvancedParentDocumentSplitter
@@ -160,21 +164,20 @@ async def _get_internal_rag_pipeline() -> AdvancedRAGPipeline:
     return _internal_rag_pipeline
 
 
-def _format_rag_results(documents: list, query: str) -> str:
+def _format_rag_results(
+    documents: list,
+    query: str,
+    *,
+    visibility: str = "public",
+    empty_message: str | None = None,
+) -> str:
     """格式化 RAG 检索结果"""
-    if not documents:
-        return f"未找到与「{query}」相关的信息。"
-
-    result_parts = []
-    for i, doc in enumerate(documents, 1):
-        content = doc.page_content[:800]
-        if len(doc.page_content) > 800:
-            content += "..."
-
-        source = doc.metadata.get("source", "未知来源")
-        result_parts.append(f"【资料 {i}】\n{content}\n来源：{source}")
-
-    return "\n\n".join(result_parts)
+    return format_evidence_response(
+        query=query,
+        documents=documents,
+        visibility=visibility,
+        empty_message=empty_message,
+    )
 
 
 def _extract_requested_destinations(query: str) -> set[str]:
@@ -211,11 +214,17 @@ def _filter_documents_by_requested_destinations(
 
 def _format_public_destination_gap(query: str, requested_destinations: set[str]) -> str:
     destination_label = "、".join(sorted(requested_destinations))
-    return (
+    message = (
         f"本地公开攻略库暂未覆盖「{destination_label}」的专门资料。"
         "为避免把其他目的地攻略误当作当前目的地，我没有返回不匹配内容；"
         "请优先使用实时搜索工具，或基于当前对话给出通用规划建议。"
         f"\n原始查询：{query}"
+    )
+    return _format_rag_results(
+        [],
+        query,
+        visibility="public",
+        empty_message=message,
     )
 
 
@@ -237,13 +246,30 @@ async def _retrieve_public(query: str, enhanced_query: str | None = None) -> str
             return _format_public_destination_gap(query, requested_destinations)
         documents = matched_documents
 
-    return _format_rag_results(documents, query)
+    return _format_rag_results(documents, query, visibility="public")
 
 
-async def _retrieve_internal(query: str, enhanced_query: str | None = None) -> str:
+async def _retrieve_internal(
+    query: str,
+    enhanced_query: str | None = None,
+    *,
+    expected_category: str | None = None,
+) -> str:
     pipeline = await _get_internal_rag_pipeline()
     documents = pipeline.retrieve(enhanced_query or query)
-    return _format_rag_results(documents, query)
+    documents = filter_documents_by_category(documents, expected_category)
+    empty_message = None
+    if expected_category and not documents:
+        empty_message = (
+            f"内部知识库暂未命中「{expected_category}」类证据。"
+            "为避免跨类别误用，我没有返回其他内部资料；请基于已确认信息给出保守建议。"
+        )
+    return _format_rag_results(
+        documents,
+        query,
+        visibility="internal",
+        empty_message=empty_message,
+    )
 
 
 # ============== RAG 检索工具定义 ==============
@@ -357,7 +383,11 @@ async def search_agency_product_templates(query: str) -> str:
     当用户希望省心安排、旅行社方案、亲子/情侣/银发/团建等产品化路线时使用。
     """
     try:
-        return await _retrieve_internal(query, f"{query} 产品 路线 模板 适合人群 成熟路线")
+        return await _retrieve_internal(
+            query,
+            f"{query} 产品 路线 模板 适合人群 成熟路线",
+            expected_category="products",
+        )
     except Exception as e:
         app_logger.error(f"❌ 内部产品模板检索失败: {e}")
         raise ToolException(f"检索过程中出现错误：{str(e)}")
@@ -371,7 +401,11 @@ async def search_agency_service_sop(query: str) -> str:
     当需要让回复像真实旅行顾问、解释服务流程或整理交付逻辑时使用。
     """
     try:
-        return await _retrieve_internal(query, f"{query} 服务 SOP 顾问 流程 交付")
+        return await _retrieve_internal(
+            query,
+            f"{query} 服务 SOP 顾问 流程 交付",
+            expected_category="sop",
+        )
     except Exception as e:
         app_logger.error(f"❌ 内部服务 SOP 检索失败: {e}")
         raise ToolException(f"检索过程中出现错误：{str(e)}")
@@ -385,7 +419,11 @@ async def search_agency_pricing_rules(query: str) -> str:
     当用户询问预算、报价、费用包含/不包含或最终报告预算说明时使用。
     """
     try:
-        return await _retrieve_internal(query, f"{query} 报价 预算 费用 置信度 待核验")
+        return await _retrieve_internal(
+            query,
+            f"{query} 报价 预算 费用 置信度 待核验",
+            expected_category="pricing",
+        )
     except Exception as e:
         app_logger.error(f"❌ 内部报价规则检索失败: {e}")
         raise ToolException(f"检索过程中出现错误：{str(e)}")
@@ -399,7 +437,11 @@ async def search_agency_risk_playbook(query: str) -> str:
     当需要给出避坑提醒、Plan B、风险说明或出发前核验清单时使用。
     """
     try:
-        return await _retrieve_internal(query, f"{query} 风险 避坑 天气 交通 酒店 景区 Plan B")
+        return await _retrieve_internal(
+            query,
+            f"{query} 风险 避坑 天气 交通 酒店 景区 Plan B",
+            expected_category="risk",
+        )
     except Exception as e:
         app_logger.error(f"❌ 内部风险手册检索失败: {e}")
         raise ToolException(f"检索过程中出现错误：{str(e)}")
@@ -413,7 +455,11 @@ async def search_agency_report_standards(query: str) -> str:
     当用户要求生成最终报告、导出报告或调整报告结构时使用。
     """
     try:
-        return await _retrieve_internal(query, f"{query} 最终报告 章节 结构 导出 禁止内容")
+        return await _retrieve_internal(
+            query,
+            f"{query} 最终报告 章节 结构 导出 禁止内容",
+            expected_category="report",
+        )
     except Exception as e:
         app_logger.error(f"❌ 内部报告标准检索失败: {e}")
         raise ToolException(f"检索过程中出现错误：{str(e)}")
