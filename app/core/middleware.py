@@ -1,10 +1,12 @@
 import re
+import time
 from types import SimpleNamespace
 from typing import Any, Callable
 
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
 from langchain_core.messages import HumanMessage, ToolMessage
 
+from app.core.context_pack import build_context_pack
 from app.core.intent import PlanningModeDecision, TravelIntent, detect_travel_intent, resolve_planning_mode
 from app.core.state import TravelState
 from app.core.store import get_user_memory_service
@@ -895,17 +897,38 @@ class StepConfigMiddleware(AgentMiddleware):
             prompt_values = {key: _to_prompt_value(value) for key, value in state_dict.items()}
             system_prompt = step_config["prompt"].format_map(prompt_values)
 
-            if memory_prompt:
-                system_prompt = f"{system_prompt}\n\n{memory_prompt}"
-
         except (KeyError, AttributeError) as exc:
             app_logger.warning(f"提示词变量缺失: {exc}，使用原始模板")
             system_prompt = step_config["prompt"]
+
+        context_messages = list(request.messages or [])
+        if not context_messages:
+            context_messages = list(state_dict.get("messages") or [])
+        context_pack = build_context_pack(
+            state=state_dict,
+            messages=context_messages,
+            memory_prompt=memory_prompt,
+        )
+        system_prompt = f"{system_prompt}\n\n{context_pack.system_appendix}"
+        if context_pack.summary_text:
+            state["conversation_summary"] = context_pack.summary_text
+            state["context_summary_updated_at"] = time.time()
+        state["context_last_step"] = current_step
+        state["context_pack_metadata"] = context_pack.metadata
+        app_logger.info(
+            "上下文打包完成: "
+            f"messages={context_pack.metadata['message_count']}, "
+            f"retained={context_pack.metadata['retained_message_count']}, "
+            f"summary={context_pack.metadata['summary_triggered']}, "
+            f"reason={context_pack.metadata['summary_reason']}"
+        )
 
         override_kwargs = {
             "system_prompt": system_prompt,
             "tools": step_config["tools"],
         }
+        if context_messages:
+            override_kwargs["messages"] = context_pack.messages
 
         compatibility = get_model_compatibility(profile="planner")
         latest_human_text = _latest_human_text(request)
