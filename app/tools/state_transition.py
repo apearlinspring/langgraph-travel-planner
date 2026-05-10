@@ -15,6 +15,7 @@ from app.agency.evidence import build_rule_evidence
 from app.agency.planning_mode import infer_planning_mode
 from app.agency.pricing_rules import build_quote_policy, format_quote_policy_lines
 from app.agency.product_rules import build_light_product, format_light_product_lines
+from app.core.approval import approval_state_update, mark_sensitive_action
 from app.core.state import TravelState, UserRequirement
 from app.core.workflow import (
     FINAL_PLANNING_STEP,
@@ -2367,6 +2368,25 @@ def _build_report_tool_audit_summary(
     }
 
 
+def _approval_report_payload(approval_update: dict) -> dict:
+    governance = approval_update.get("approval_governance") or {}
+    return {
+        "approval_id": approval_update.get("approval_record_id"),
+        "action": approval_update.get("approval_action"),
+        "status": approval_update.get("approval_status"),
+        "pending": approval_update.get("approval_pending", False),
+        "requires_approval": approval_update.get("approval_required", False),
+        "is_blocking": governance.get("is_blocking", False),
+        "record_only": governance.get("record_only", True),
+        "expires_at": approval_update.get("approval_expires_at"),
+        "reason": approval_update.get("approval_reason") or "",
+        "boundary": governance.get("boundary") or "",
+        "unsupported_without_integration": list(
+            governance.get("unsupported_without_integration") or []
+        ),
+    }
+
+
 def _build_report_data(
     state: TravelState,
     requirement: dict,
@@ -3180,9 +3200,22 @@ def generate_order_tool(
         )
 
     order_id = f"ORDER-{uuid4().hex[:8].upper()}"
+    approval_record = mark_sensitive_action(
+        action="generate_order_id",
+        reason="生成项目内模拟订单号，用于最终旅行方案归档；当前不触发真实支付或真实预订。",
+        user_id=str(state.get("user_id") or "anonymous"),
+        conversation_id=state.get("session_id"),
+        metadata={
+            "order_id": order_id,
+            "destination": selected_destination,
+            "report_version": "travel_report.v1",
+        },
+    )
+    approval_update = approval_state_update(approval_record)
     selected_transport_option = state.get("selected_transport_option") or {}
     selected_accommodation = _build_fallback_accommodation_option(state, requirement)
     report_state = dict(state)
+    report_state.update(approval_update)
     if not report_state.get("selected_destination") and selected_destination:
         report_state["selected_destination"] = selected_destination
     if not report_state.get("selected_accommodation_option"):
@@ -3208,6 +3241,11 @@ def generate_order_tool(
         selected_accommodation,
         selected_food_types,
     )
+    approval_payload = _approval_report_payload(approval_update)
+    report_data.setdefault("tool_audit_summary", {})["approval"] = approval_payload
+    report_data.setdefault("evidence_bundle", {})[
+        "approval_governance"
+    ] = approval_payload
     report_bundle = build_report_bundle(report_data)
     if not report_bundle.validation.ok:
         return _command_with_message(
@@ -3222,6 +3260,8 @@ def generate_order_tool(
             "订单生成成功：",
             f"- 订单号：{order_id}",
             "- 支付链接：当前项目未接入真实支付服务，暂不生成支付链接。",
+            "- 审批治理：生成订单号当前为记录型敏感动作，不阻塞报告交付；未来接入真实支付或真实预订时必须先完成人工审批。",
+            f"- 治理边界：{approval_payload['boundary']}",
             "感谢使用智能旅行规划系统。",
         ]
     )
@@ -3236,6 +3276,7 @@ def generate_order_tool(
         report=report,
         report_data=report_data,
         current_step="order_generation",
+        **approval_update,
     )
 
 

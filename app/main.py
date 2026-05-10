@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api.v1 import chat, conversations, maps, users
+from app.api.v1 import approvals, chat, conversations, maps, users
 from app.core.checkpointer import CheckpointerManager
 from app.core.store import StoreManager
 from app.mcp_core.client import MCPClientManager
@@ -146,6 +146,7 @@ app.add_middleware(
 app.include_router(users.router, prefix="/api/v1")
 app.include_router(conversations.router, prefix="/api/v1")
 app.include_router(maps.router, prefix="/api/v1")
+app.include_router(approvals.router, prefix="/api/v1")
 app.include_router(chat.router, prefix="/api/v1")
 
 

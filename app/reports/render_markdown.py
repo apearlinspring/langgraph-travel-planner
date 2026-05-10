@@ -133,6 +133,7 @@ def _format_tool_audit(tool_audit: dict[str, Any]) -> list[str]:
     used_sources = _as_list(tool_audit.get("used_sources"))
     pending_checks = _as_list(tool_audit.get("pending_checks"))
     unsupported_actions = _as_list(tool_audit.get("unsupported_actions"))
+    approval = _as_dict(tool_audit.get("approval"))
 
     if used_sources:
         lines.append("- 已用来源：")
@@ -143,6 +144,18 @@ def _format_tool_audit(tool_audit: dict[str, Any]) -> list[str]:
     if unsupported_actions:
         lines.append("- 不支持承诺：")
         lines.extend(f"  - {item}" for item in unsupported_actions)
+    if approval:
+        blocking_text = "需人工审批" if approval.get("is_blocking") else "当前不阻塞"
+        lines.append("- 审批治理：")
+        lines.append(
+            "  - 动作：{action}；状态：{status}；{blocking_text}。".format(
+                action=approval.get("action") or "敏感动作",
+                status=approval.get("status") or "none",
+                blocking_text=blocking_text,
+            )
+        )
+        if approval.get("boundary"):
+            lines.append(f"  - 治理边界：{approval['boundary']}")
     return lines
 
 
