@@ -4,13 +4,16 @@ from pathlib import Path
 import pytest
 
 from app.evaluation.live_runner import (
+    build_quality_summary,
     build_snapshot_payload,
+    infer_tool_policy_from_scenario,
     parse_sse_event_line,
     scenario_message_sequence,
     select_scenarios,
     snapshot_path_for,
 )
 from app.evaluation.scenarios import EvaluationScenario
+from tests.test_report_quality_evaluation import _valid_report_data
 
 
 def _scenario(scenario_id: str, mode: str = "agency_plan") -> EvaluationScenario:
@@ -75,6 +78,8 @@ def test_build_snapshot_payload_contains_report_and_evaluation_summary():
     assert payload["summary"]["elapsed_seconds"] == 12.35
     assert payload["summary"]["has_report_data"] is True
     assert payload["summary"]["evaluation"]["normalized_score"] == 90
+    assert payload["summary"]["tool_event_count"] == 0
+    assert payload["tool_events"] == []
     assert payload["turns"][0]["produced_report_data"] is True
 
 
@@ -120,3 +125,65 @@ def test_scenario_message_sequence_uses_scenario_followups():
     )
 
     assert scenario_message_sequence(scenario) == ["Plan a trip", "Finalize now"]
+
+
+def test_infer_tool_policy_from_scenario_uses_tags():
+    scenario = EvaluationScenario(
+        id="hotel_fallback",
+        name="Hotel fallback",
+        category="edge_case",
+        prompt="Find hotel",
+        expected_mode="agency_plan",
+        min_score=80,
+        focus=["hotel"],
+        tags=["hotel", "fallback"],
+    )
+
+    policy = infer_tool_policy_from_scenario(scenario)
+
+    assert policy["expected_tools"] == {"query_hotel_options"}
+    assert policy["requires_fallback"] is True
+
+
+def test_build_quality_summary_contains_agent_scores():
+    scenario = _scenario("agency_couple")
+    events = [
+        {"type": "tool_call", "tool": "query_transport_options", "turn_index": 1},
+        {"type": "token", "content": "hello", "turn_index": 1, "elapsed_since_scenario_start": 0.5},
+        {"type": "report_data", "turn_index": 1},
+    ]
+    turns = [
+        {
+            "turn_index": 1,
+            "user_message": "Plan a trip",
+            "event_count": 3,
+            "elapsed_seconds": 1.0,
+            "tool_call_count": 1,
+            "produced_report_data": True,
+        }
+    ]
+    report_evaluation = {
+        "normalized_score": 100,
+        "passed": True,
+        "grade": "A",
+        "total_score": 100,
+        "max_score": 100,
+        "summary": [],
+        "criteria": [],
+    }
+
+    summary = build_quality_summary(
+        scenario=scenario,
+        events=events,
+        turns=turns,
+        assistant_text="hello",
+        report_data=_valid_report_data(),
+        report_evaluation=report_evaluation,
+        elapsed_seconds=1.0,
+        timeout_seconds=900.0,
+    )
+
+    assert summary["version"] == "agent_quality_summary.v1"
+    assert summary["aggregate"]["normalized_score"] == 100
+    assert summary["rag_quality"]["passed"] is True
+    assert summary["runtime_metrics"]["report_event_count"] == 1
