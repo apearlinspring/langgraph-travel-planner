@@ -11,12 +11,16 @@ from app.core.context_budget import (
     ContextBudget,
     ContextBudgetDecision,
     decide_context_budget,
+    estimate_messages_tokens,
+    estimate_tokens,
     trim_text_to_token_budget,
 )
 from app.core.conversation_summary import (
     ConversationSummary,
     ConversationSummaryConfig,
     asummarize_conversation,
+    extract_key_history_turns,
+    format_key_history_turns,
     summarize_conversation,
     summarize_state_for_context,
 )
@@ -30,6 +34,7 @@ class ContextPack:
     messages: list[Any]
     metadata: dict[str, Any] = field(default_factory=dict)
     summary_text: str = ""
+    key_history_turns: list[dict[str, Any]] = field(default_factory=list)
 
 
 def build_context_pack(
@@ -199,6 +204,20 @@ def _compose_context_pack(
     recent_messages = prepared["recent_messages"]
     old_messages = prepared["old_messages"]
     summary_text = summary.text if summary else ""
+    key_history_turns = (
+        extract_key_history_turns(
+            old_messages,
+            query=_latest_human_text(recent_messages),
+            limit=budget.max_key_history_turns,
+            token_budget=budget.key_history_tokens,
+        )
+        if old_messages and (decision.should_summarize or summary_text)
+        else []
+    )
+    key_history_text = trim_text_to_token_budget(
+        format_key_history_turns(key_history_turns),
+        budget.key_history_tokens,
+    )
 
     state_summary = trim_text_to_token_budget(
         summarize_state_for_context(state),
@@ -223,32 +242,43 @@ def _compose_context_pack(
         sections.append(memory_text)
     if summary_text:
         sections.append(summary_text)
+    if key_history_text:
+        sections.append(key_history_text)
     if evidence_text:
         sections.append(evidence_text)
+    system_appendix = "\n\n".join(section for section in sections if section)
+    context_token_estimate = estimate_tokens(system_appendix) + estimate_messages_tokens(
+        recent_messages if decision.should_summarize else _trim_messages(messages, budget)
+    )
 
     metadata = {
         "message_count": len(messages or []),
         "retained_message_count": len(recent_messages),
         "estimated_message_tokens": decision.estimated_tokens,
+        "estimated_context_pack_tokens": context_token_estimate,
         "summary_triggered": decision.should_summarize and bool(old_messages),
         "summary_reason": decision.reason,
         "summary_method": summary.method if summary else "none",
         "summary_model": summary.model_name if summary else None,
         "summary_fallback_reason": summary.fallback_reason if summary else None,
+        "key_history_turn_count": len(key_history_turns),
         "current_step": current_step,
+        "context_layer_boundaries": _context_layer_boundaries(),
         "layers": {
             "short_term_state": bool(state_summary),
             "recent_messages": len(recent_messages),
             "conversation_summary": bool(summary_text),
+            "key_history": len(key_history_turns),
             "long_term_memory": bool(memory_text),
             "evidence_bundle": bool(evidence_text),
         },
     }
     return ContextPack(
-        system_appendix="\n\n".join(section for section in sections if section),
+        system_appendix=system_appendix,
         messages=recent_messages if decision.should_summarize else _trim_messages(messages, budget),
         metadata=metadata,
         summary_text=summary_text,
+        key_history_turns=[turn.to_dict() for turn in key_history_turns],
     )
 
 
@@ -324,6 +354,13 @@ def _message_content(message: Any) -> str:
     return str(content or "")
 
 
+def _latest_human_text(messages: list[Any]) -> str:
+    for message in reversed(messages or []):
+        if _is_human_message(message):
+            return _message_content(message)
+    return ""
+
+
 def _format_evidence_bundle(evidence_bundle: Any) -> str:
     if not isinstance(evidence_bundle, dict) or not evidence_bundle:
         return ""
@@ -357,3 +394,14 @@ def _coerce_text(value: Any) -> str:
     if isinstance(value, dict):
         return str(value.get("text") or value.get("summary") or "")
     return str(value)
+
+
+def _context_layer_boundaries() -> dict[str, str]:
+    return {
+        "short_term_state": "TravelState 当前规划字段，是本次行程的可信结构化状态。",
+        "recent_messages": "最近原始对话，用于承接用户最新修改、确认或反悔。",
+        "conversation_summary": "旧消息压缩摘要，只承载可复用事实和阶段变更。",
+        "key_history": "从旧消息检索出的少量原文轮次，用于补充摘要之外的证据。",
+        "long_term_memory": "跨会话稳定偏好和历史事实，不代表本次临时条件。",
+        "evidence_bundle": "RAG 和工具证据摘要，用于报告依据、预算置信度和待核验项。",
+    }

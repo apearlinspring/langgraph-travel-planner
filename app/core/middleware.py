@@ -1016,6 +1016,8 @@ class StepConfigMiddleware(AgentMiddleware):
             state["context_summary_updated_at"] = time.time()
         state["context_last_step"] = current_step
         state["context_pack_metadata"] = context_pack.metadata
+        state["key_history_turns"] = context_pack.key_history_turns
+        state["context_layer_boundaries"] = context_pack.metadata.get("context_layer_boundaries", {})
         app_logger.info(
             "上下文打包完成: "
             f"messages={context_pack.metadata['message_count']}, "

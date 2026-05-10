@@ -4,7 +4,23 @@
 """
 from typing import Optional
 from pydantic import BaseModel, Field
-from datetime import datetime
+from datetime import datetime, timezone
+
+
+class MemoryAuditEntry(BaseModel):
+    """
+    长期记忆写入审计条目。
+
+    记录来源、理由和置信度，避免无依据地扩大用户画像。
+    """
+    field: str = Field(..., description="被写入的长期记忆字段")
+    value: str = Field(..., description="写入或评估的记忆值")
+    source: str = Field(default="user_statement", description="记忆来源")
+    reason: str = Field(default="", description="接受或拒绝写入的原因")
+    confidence: float = Field(default=0.75, ge=0.0, le=1.0, description="写入置信度")
+    scope: str = Field(default="stable", description="stable 或 temporary")
+    accepted: bool = Field(default=True, description="是否写入长期记忆")
+    recorded_at: Optional[str] = Field(default=None, description="记录时间")
 
 
 # ============== 用户画像模型 ==============
@@ -36,6 +52,11 @@ class UserProfile(BaseModel):
     updated_at: Optional[str] = Field(
         default=None,
         description="最后更新时间"
+    )
+
+    memory_audit_log: list[MemoryAuditEntry] = Field(
+        default_factory=list,
+        description="长期画像写入审计记录"
     )
 
 
@@ -97,6 +118,11 @@ class TravelHistory(BaseModel):
         description="最后更新时间"
     )
 
+    memory_audit_log: list[MemoryAuditEntry] = Field(
+        default_factory=list,
+        description="出行历史和住宿偏好写入审计记录"
+    )
+
 
 # ============== 完整用户记忆模型 ==============
 
@@ -128,6 +154,9 @@ class MemoryWriteCandidate(BaseModel):
     accepted: bool = Field(..., description="是否允许写入长期记忆")
     scope: str = Field(default="stable", description="stable 或 temporary")
     reason: str = Field(default="", description="接受或拒绝原因")
+    source: str = Field(default="user_statement", description="记忆来源")
+    confidence: float = Field(default=0.75, ge=0.0, le=1.0, description="置信度")
+    evidence: str = Field(default="", description="可解释依据或原始线索摘要")
 
 
 TEMPORARY_MEMORY_SCOPE_VALUES = {
@@ -180,6 +209,8 @@ def classify_memory_candidate(
     value: str,
     *,
     memory_scope: str | None = None,
+    source: str = "user_statement",
+    evidence: str | None = None,
 ) -> MemoryWriteCandidate:
     text = str(value or "").strip()
     if not text:
@@ -188,6 +219,9 @@ def classify_memory_candidate(
             accepted=False,
             scope="temporary",
             reason="空内容不写入长期记忆",
+            source=source,
+            confidence=0.0,
+            evidence=evidence or "",
         )
 
     scope = normalize_memory_scope(memory_scope)
@@ -197,6 +231,9 @@ def classify_memory_candidate(
             accepted=False,
             scope=scope,
             reason="用户或模型标记为本次旅行临时条件",
+            source=source,
+            confidence=0.3,
+            evidence=evidence or text,
         )
 
     has_temporary_hint = any(keyword in text for keyword in TEMPORARY_MEMORY_KEYWORDS)
@@ -207,6 +244,9 @@ def classify_memory_candidate(
             accepted=False,
             scope="temporary",
             reason="内容包含临时行程表达，未体现稳定偏好",
+            source=source,
+            confidence=0.35,
+            evidence=evidence or text,
         )
 
     return MemoryWriteCandidate(
@@ -214,6 +254,9 @@ def classify_memory_candidate(
         accepted=True,
         scope="stable",
         reason="稳定偏好或历史事实，可写入长期记忆",
+        source=source,
+        confidence=0.9 if has_stable_override else 0.75,
+        evidence=evidence or text,
     )
 
 
@@ -221,11 +264,44 @@ def filter_stable_memory_values(
     values: list[str] | None,
     *,
     memory_scope: str | None = None,
+    source: str = "user_statement",
 ) -> tuple[list[str], list[MemoryWriteCandidate]]:
     candidates = [
-        classify_memory_candidate(value, memory_scope=memory_scope)
+        classify_memory_candidate(value, memory_scope=memory_scope, source=source)
         for value in values or []
     ]
     accepted = [candidate.value for candidate in candidates if candidate.accepted]
     rejected = [candidate for candidate in candidates if not candidate.accepted]
     return accepted, rejected
+
+
+def build_memory_audit_entries(
+    field: str,
+    values: list[str] | None,
+    *,
+    memory_scope: str | None = None,
+    source: str = "user_statement",
+    accepted_only: bool = True,
+) -> list[MemoryAuditEntry]:
+    entries: list[MemoryAuditEntry] = []
+    for value in values or []:
+        candidate = classify_memory_candidate(
+            value,
+            memory_scope=memory_scope,
+            source=source,
+        )
+        if accepted_only and not candidate.accepted:
+            continue
+        entries.append(
+            MemoryAuditEntry(
+                field=field,
+                value=candidate.value,
+                source=candidate.source,
+                reason=candidate.reason,
+                confidence=candidate.confidence,
+                scope=candidate.scope,
+                accepted=candidate.accepted,
+                recorded_at=datetime.now(timezone.utc).isoformat(),
+            )
+        )
+    return entries

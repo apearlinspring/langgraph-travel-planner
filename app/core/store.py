@@ -8,7 +8,13 @@ from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
 from app.config import settings
-from app.core.memory_models import TravelHistory, TravelRecord, UserMemory, UserProfile
+from app.core.memory_models import (
+    MemoryAuditEntry,
+    TravelHistory,
+    TravelRecord,
+    UserMemory,
+    UserProfile,
+)
 from app.utils.logger import app_logger
 
 
@@ -112,6 +118,32 @@ class UserMemoryService:
     def _get_current_time(self) -> str:
         return datetime.now(timezone.utc).isoformat()
 
+    def _prepare_audit_entries(
+        self,
+        entries: Optional[List[MemoryAuditEntry | dict]],
+    ) -> list[MemoryAuditEntry]:
+        prepared: list[MemoryAuditEntry] = []
+        for entry in entries or []:
+            audit_entry = (
+                entry
+                if isinstance(entry, MemoryAuditEntry)
+                else MemoryAuditEntry(**entry)
+            )
+            if not audit_entry.recorded_at:
+                audit_entry.recorded_at = self._get_current_time()
+            prepared.append(audit_entry)
+        return prepared
+
+    def _merge_audit_log(
+        self,
+        existing: list[MemoryAuditEntry],
+        entries: Optional[List[MemoryAuditEntry | dict]],
+        *,
+        max_entries: int = 40,
+    ) -> list[MemoryAuditEntry]:
+        merged = [*existing, *self._prepare_audit_entries(entries)]
+        return merged[-max_entries:]
+
     async def get_user_profile(self, user_id: str) -> UserProfile:
         try:
             result = await self.store.aget(namespace=("user_profiles", user_id), key="profile")
@@ -131,19 +163,49 @@ class UserMemoryService:
         )
         app_logger.info(f"Saved user profile: {user_id}")
 
-    async def update_travel_styles(self, user_id: str, styles: List[str]) -> None:
+    async def update_travel_styles(
+        self,
+        user_id: str,
+        styles: List[str],
+        *,
+        audit_entries: Optional[List[MemoryAuditEntry | dict]] = None,
+    ) -> None:
         profile = await self.get_user_profile(user_id)
         profile.travel_styles = list(set(profile.travel_styles).union(styles))
+        profile.memory_audit_log = self._merge_audit_log(
+            profile.memory_audit_log,
+            audit_entries,
+        )
         await self.save_user_profile(user_id, profile)
 
-    async def update_dietary_restrictions(self, user_id: str, restrictions: List[str]) -> None:
+    async def update_dietary_restrictions(
+        self,
+        user_id: str,
+        restrictions: List[str],
+        *,
+        audit_entries: Optional[List[MemoryAuditEntry | dict]] = None,
+    ) -> None:
         profile = await self.get_user_profile(user_id)
         profile.dietary_restrictions = list(set(profile.dietary_restrictions).union(restrictions))
+        profile.memory_audit_log = self._merge_audit_log(
+            profile.memory_audit_log,
+            audit_entries,
+        )
         await self.save_user_profile(user_id, profile)
 
-    async def update_food_preferences(self, user_id: str, preferences: List[str]) -> None:
+    async def update_food_preferences(
+        self,
+        user_id: str,
+        preferences: List[str],
+        *,
+        audit_entries: Optional[List[MemoryAuditEntry | dict]] = None,
+    ) -> None:
         profile = await self.get_user_profile(user_id)
         profile.food_preferences = list(set(profile.food_preferences).union(preferences))
+        profile.memory_audit_log = self._merge_audit_log(
+            profile.memory_audit_log,
+            audit_entries,
+        )
         await self.save_user_profile(user_id, profile)
 
     async def get_travel_history(self, user_id: str) -> TravelHistory:
@@ -172,6 +234,8 @@ class UserMemoryService:
         start_date: str,
         end_date: str,
         visited_attractions: List[str],
+        *,
+        audit_entries: Optional[List[MemoryAuditEntry | dict]] = None,
     ) -> None:
         history = await self.get_travel_history(user_id)
         history.completed_trips.append(
@@ -185,6 +249,22 @@ class UserMemoryService:
         history.visited_attractions = list(
             set(history.visited_attractions).union(visited_attractions)
         )
+        if audit_entries is None:
+            audit_entries = [
+                MemoryAuditEntry(
+                    field="history.completed_trips",
+                    value=destination,
+                    source="memory_tool:add_travel_record_tool",
+                    reason="用户陈述历史出行记录，可作为避免重复推荐的长期事实",
+                    confidence=0.75,
+                    scope="stable",
+                    accepted=True,
+                )
+            ]
+        history.memory_audit_log = self._merge_audit_log(
+            history.memory_audit_log,
+            audit_entries,
+        )
         await self.save_travel_history(user_id, history)
         app_logger.info(f"Added completed trip for {user_id}: {destination}")
 
@@ -193,6 +273,8 @@ class UserMemoryService:
         user_id: str,
         preferred_types: Optional[List[str]] = None,
         avg_budget: Optional[float] = None,
+        *,
+        audit_entries: Optional[List[MemoryAuditEntry | dict]] = None,
     ) -> None:
         history = await self.get_travel_history(user_id)
 
@@ -206,6 +288,10 @@ class UserMemoryService:
             history.accommodation_preference.avg_budget_per_night = (
                 (current + avg_budget) / 2 if current is not None else avg_budget
             )
+        history.memory_audit_log = self._merge_audit_log(
+            history.memory_audit_log,
+            audit_entries,
+        )
 
         await self.save_travel_history(user_id, history)
         app_logger.info(f"Updated accommodation preference for {user_id}")
@@ -258,9 +344,31 @@ class UserMemoryService:
         if acc_pref.avg_budget_per_night:
             parts.append(f"- 住宿预算：约 {acc_pref.avg_budget_per_night:.0f} 元/晚")
 
+        audit_lines = self._format_memory_audit_for_prompt(
+            [*memory.profile.memory_audit_log, *memory.history.memory_audit_log]
+        )
+        if audit_lines:
+            parts.append("- 记忆依据：" + "；".join(audit_lines))
+
         if len(parts) == 1:
             return ""
         return "\n".join(parts)
+
+    def _format_memory_audit_for_prompt(
+        self,
+        audit_log: list[MemoryAuditEntry],
+        *,
+        limit: int = 4,
+    ) -> list[str]:
+        accepted = [entry for entry in audit_log if entry.accepted]
+        lines: list[str] = []
+        for entry in accepted[-limit:]:
+            confidence = f"{entry.confidence:.2f}"
+            lines.append(
+                f"{entry.field}={entry.value}（来源：{entry.source}，"
+                f"原因：{entry.reason}，置信度：{confidence}）"
+            )
+        return lines
 
 
 async def get_user_memory_service() -> UserMemoryService:

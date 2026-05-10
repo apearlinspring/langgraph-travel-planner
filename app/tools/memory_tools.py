@@ -2,6 +2,7 @@ from langchain.tools import tool, ToolRuntime
 
 from app.core.memory_models import (
     MemoryWriteCandidate,
+    build_memory_audit_entries,
     filter_stable_memory_values,
     normalize_memory_scope,
 )
@@ -15,6 +16,21 @@ def _format_temporary_memory_response(rejected: list[MemoryWriteCandidate]) -> s
     if not values:
         return "已识别为本次旅行临时条件，未写入长期记忆。"
     return "已作为本次旅行临时条件处理，未写入长期记忆：" + "、".join(values)
+
+
+def _memory_audit_entries(
+        field: str,
+        values: list[str] | None,
+        *,
+        memory_scope: str,
+        tool_name: str,
+):
+    return build_memory_audit_entries(
+        field,
+        values,
+        memory_scope=memory_scope,
+        source=f"memory_tool:{tool_name}",
+    )
 
 
 # ============== 1️⃣ 读取用户记忆工具 ==============
@@ -87,13 +103,23 @@ async def update_travel_style_tool(
     stable_styles, rejected = filter_stable_memory_values(
         styles,
         memory_scope=memory_scope,
+        source="memory_tool:update_travel_style_tool",
     )
     if not stable_styles:
         return _format_temporary_memory_response(rejected)
 
     try:
         service = await get_user_memory_service()
-        await service.update_travel_styles(user_id, stable_styles)
+        await service.update_travel_styles(
+            user_id,
+            stable_styles,
+            audit_entries=_memory_audit_entries(
+                "profile.travel_styles",
+                stable_styles,
+                memory_scope=memory_scope,
+                tool_name="update_travel_style_tool",
+            ),
+        )
 
         app_logger.info(f"💾 保存旅行风格: {user_id} -> {stable_styles}")
         return f"✅ 已记录您的长期旅行风格偏好：{', '.join(stable_styles)}"
@@ -143,13 +169,23 @@ async def update_dietary_restriction_tool(
     stable_restrictions, rejected = filter_stable_memory_values(
         restrictions,
         memory_scope=memory_scope,
+        source="memory_tool:update_dietary_restriction_tool",
     )
     if not stable_restrictions:
         return _format_temporary_memory_response(rejected)
 
     try:
         service = await get_user_memory_service()
-        await service.update_dietary_restrictions(user_id, stable_restrictions)
+        await service.update_dietary_restrictions(
+            user_id,
+            stable_restrictions,
+            audit_entries=_memory_audit_entries(
+                "profile.dietary_restrictions",
+                stable_restrictions,
+                memory_scope=memory_scope,
+                tool_name="update_dietary_restriction_tool",
+            ),
+        )
 
         app_logger.info(f"💾 保存饮食禁忌: {user_id} -> {stable_restrictions}")
         return f"✅ 已记录您的长期饮食禁忌：{', '.join(stable_restrictions)}。后续推荐会特别注意避开这些食物。"
@@ -204,13 +240,23 @@ async def update_food_preference_tool(
     stable_preferences, rejected = filter_stable_memory_values(
         preferences,
         memory_scope=memory_scope,
+        source="memory_tool:update_food_preference_tool",
     )
     if not stable_preferences:
         return _format_temporary_memory_response(rejected)
 
     try:
         service = await get_user_memory_service()
-        await service.update_food_preferences(user_id, stable_preferences)
+        await service.update_food_preferences(
+            user_id,
+            stable_preferences,
+            audit_entries=_memory_audit_entries(
+                "profile.food_preferences",
+                stable_preferences,
+                memory_scope=memory_scope,
+                tool_name="update_food_preference_tool",
+            ),
+        )
 
         app_logger.info(f"💾 保存饮食偏好: {user_id} -> {stable_preferences}")
         return f"✅ 已记录您的长期饮食偏好：{', '.join(stable_preferences)}"
@@ -257,6 +303,7 @@ async def update_accommodation_preference_tool(
     stable_types, rejected = filter_stable_memory_values(
         preferred_types,
         memory_scope=memory_scope,
+        source="memory_tool:update_accommodation_preference_tool",
     )
     is_temporary_scope = normalize_memory_scope(memory_scope) == "temporary"
     if not stable_types and (preferred_types or is_temporary_scope):
@@ -266,10 +313,29 @@ async def update_accommodation_preference_tool(
 
     try:
         service = await get_user_memory_service()
+        audit_entries = _memory_audit_entries(
+            "history.accommodation_preference.preferred_types",
+            stable_types,
+            memory_scope=memory_scope,
+            tool_name="update_accommodation_preference_tool",
+        )
+        if avg_budget_per_night:
+            audit_entries.append(
+                {
+                    "field": "history.accommodation_preference.avg_budget_per_night",
+                    "value": f"{avg_budget_per_night:.0f}",
+                    "source": "memory_tool:update_accommodation_preference_tool",
+                    "reason": "用户表达长期住宿预算偏好",
+                    "confidence": 0.7,
+                    "scope": "stable",
+                    "accepted": True,
+                }
+            )
         await service.update_accommodation_preference(
             user_id=user_id,
             preferred_types=stable_types,
-            avg_budget=avg_budget_per_night
+            avg_budget=avg_budget_per_night,
+            audit_entries=audit_entries,
         )
 
         result_parts = ["✅ 已记录您的住宿偏好："]

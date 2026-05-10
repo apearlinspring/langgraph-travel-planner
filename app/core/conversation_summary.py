@@ -14,7 +14,11 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from app.core.context_budget import DEFAULT_CONTEXT_BUDGET, trim_text_to_token_budget
+from app.core.context_budget import (
+    DEFAULT_CONTEXT_BUDGET,
+    estimate_tokens,
+    trim_text_to_token_budget,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +69,26 @@ class ConversationSummary:
     method: Literal["deterministic", "llm"] = "deterministic"
     model_name: str | None = None
     fallback_reason: str | None = None
+
+
+@dataclass(frozen=True)
+class KeyConversationTurn:
+    """Original turn retained as evidence beside the compressed summary."""
+
+    index: int
+    role: str
+    content: str
+    score: float
+    reason: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "index": self.index,
+            "role": self.role,
+            "content": self.content,
+            "score": self.score,
+            "reason": self.reason,
+        }
 
 
 @dataclass(frozen=True)
@@ -285,6 +309,59 @@ def summarize_state_for_context(state: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def extract_key_history_turns(
+    messages: list[Any],
+    *,
+    query: str = "",
+    limit: int = DEFAULT_CONTEXT_BUDGET.max_key_history_turns,
+    token_budget: int = DEFAULT_CONTEXT_BUDGET.key_history_tokens,
+) -> list[KeyConversationTurn]:
+    """Select a small set of original historical turns worth retaining."""
+
+    if not messages or limit <= 0 or token_budget <= 0:
+        return []
+
+    query_terms = _important_query_terms(query)
+    scored: list[KeyConversationTurn] = []
+    for index, message in enumerate(messages):
+        content = _normalize_text(_message_content(message))
+        if not content:
+            continue
+        score, reasons = _score_key_turn(content, _message_role(message), query_terms)
+        if score <= 0:
+            continue
+        scored.append(
+            KeyConversationTurn(
+                index=index,
+                role=ROLE_LABELS.get(_message_role(message), _message_role(message) or "消息"),
+                content=_truncate_line(content, max_chars=220),
+                score=score,
+                reason="；".join(reasons),
+            )
+        )
+
+    selected = sorted(scored, key=lambda item: (item.score, item.index), reverse=True)[:limit]
+    selected = sorted(selected, key=lambda item: item.index)
+    bounded: list[KeyConversationTurn] = []
+    used_tokens = 0
+    for turn in selected:
+        estimated = estimate_tokens(f"{turn.role} {turn.reason} {turn.content}")
+        if bounded and used_tokens + estimated > token_budget:
+            break
+        bounded.append(turn)
+        used_tokens += estimated
+    return bounded
+
+
+def format_key_history_turns(turns: list[KeyConversationTurn]) -> str:
+    if not turns:
+        return ""
+    lines = ["【关键历史轮次】"]
+    for turn in turns:
+        lines.append(f"- {turn.role}（#{turn.index + 1}，{turn.reason}）：{turn.content}")
+    return "\n".join(lines)
+
+
 def _extract_highlights(messages: list[Any]) -> list[str]:
     highlights: list[str] = []
     seen: set[str] = set()
@@ -311,6 +388,44 @@ def _looks_important(text: str) -> bool:
     if re.search(r"20\d{2}[-年/.]\d{1,2}", text):
         return True
     return False
+
+
+def _score_key_turn(
+    text: str,
+    role: str,
+    query_terms: set[str],
+) -> tuple[float, list[str]]:
+    score = 0.0
+    reasons: list[str] = []
+    keyword_hits = [keyword for keyword in IMPORTANT_KEYWORDS if keyword in text]
+    if keyword_hits:
+        score += min(4, len(keyword_hits))
+        reasons.append("含关键规划词")
+    if re.search(r"\d+\s*(天|晚|人|元|万)", text):
+        score += 1.5
+        reasons.append("含人数/天数/预算")
+    if re.search(r"20\d{2}[-年/.]\d{1,2}", text):
+        score += 1.0
+        reasons.append("含日期")
+    overlap = {term for term in query_terms if term and term in text}
+    if overlap:
+        score += min(3, len(overlap))
+        reasons.append("匹配当前问题")
+    if role in {"human", "user"}:
+        score += 0.5
+        reasons.append("用户原话")
+    if role == "tool":
+        score += 0.5
+        reasons.append("工具证据")
+    return score, reasons
+
+
+def _important_query_terms(query: str) -> set[str]:
+    text = _normalize_text(query)
+    if not text:
+        return set()
+    terms = set(re.findall(r"[\u4e00-\u9fff]{2,}|[A-Za-z][A-Za-z0-9_-]{2,}", text))
+    return {term for term in terms if term not in {"请帮我", "这个", "一下"}}
 
 
 def _message_role(message: Any) -> str:

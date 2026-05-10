@@ -154,6 +154,8 @@ async def test_step_middleware_packs_long_context_into_summary():
     assert "【短期规划状态】" in captured["system_prompt"]
     assert len(captured["messages"]) == 6
     assert state["conversation_summary"]
+    assert state["key_history_turns"]
+    assert "key_history" in state["context_layer_boundaries"]
     assert state["context_pack_metadata"]["summary_triggered"] is True
 
 

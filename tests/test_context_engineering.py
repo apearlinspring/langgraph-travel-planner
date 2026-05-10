@@ -7,10 +7,15 @@ from app.core.conversation_summary import (
     ConversationSummary,
     ConversationSummaryConfig,
     asummarize_conversation,
+    extract_key_history_turns,
     summarize_conversation,
     summarize_state_for_context,
 )
-from app.core.memory_models import classify_memory_candidate, filter_stable_memory_values
+from app.core.memory_models import (
+    build_memory_audit_entries,
+    classify_memory_candidate,
+    filter_stable_memory_values,
+)
 
 
 def test_estimate_tokens_handles_chinese_more_conservatively():
@@ -48,6 +53,30 @@ def test_conversation_summary_keeps_planning_facts():
     assert "孩子海鲜过敏" in summary.text
     assert summary.source_message_count == 3
     assert summary.method == "deterministic"
+
+
+def test_key_history_turns_retain_original_evidence():
+    messages = [
+        HumanMessage(content="闲聊一句。"),
+        HumanMessage(content="我们一家三口从上海出发，预算12000元，孩子海鲜过敏。"),
+        AIMessage(content="收到，我按亲子节奏处理。"),
+        ToolMessage(
+            content="高铁候选：G1，价格626元，来源12306-mcp，正式购票前待核实。",
+            name="query_transport_options",
+            tool_call_id="tool-1",
+        ),
+    ]
+
+    turns = extract_key_history_turns(
+        messages,
+        query="最终报告里记得说明预算和海鲜过敏",
+        limit=3,
+        token_budget=180,
+    )
+
+    assert len(turns) >= 2
+    assert any("预算12000元" in turn.content for turn in turns)
+    assert any("12306-mcp" in turn.content for turn in turns)
 
 
 @pytest.mark.asyncio
@@ -162,8 +191,39 @@ def test_context_pack_summarizes_old_messages_and_keeps_recent_window():
     assert pack.metadata["summary_triggered"] is True
     assert len(pack.messages) == 2
     assert "孩子海鲜过敏" in pack.system_appendix
+    assert "【关键历史轮次】" in pack.system_appendix
+    assert pack.metadata["key_history_turn_count"] >= 1
+    assert pack.key_history_turns
     assert "【证据包摘要】" in pack.system_appendix
     assert "已按上下文预算截断" in pack.messages[-1].content
+
+
+def test_context_pack_has_layer_boundaries_and_token_ceiling():
+    messages = [
+        HumanMessage(content=f"第{i}轮：确认预算{i * 1000}元，孩子海鲜过敏。")
+        for i in range(30)
+    ]
+
+    pack = build_context_pack(
+        state={"current_step": "order_generation"},
+        messages=messages,
+        budget=ContextBudget(
+            max_messages_without_summary=4,
+            final_stage_recent_human_turns=1,
+            conversation_summary_tokens=180,
+            key_history_tokens=120,
+            short_term_state_tokens=120,
+            long_term_memory_tokens=80,
+            evidence_bundle_tokens=80,
+            max_message_chars=120,
+        ),
+    )
+
+    assert pack.metadata["estimated_context_pack_tokens"] < 12000
+    boundaries = pack.metadata["context_layer_boundaries"]
+    assert "short_term_state" in boundaries
+    assert "long_term_memory" in boundaries
+    assert "evidence_bundle" in boundaries
 
 
 def test_memory_policy_rejects_temporary_trip_conditions():
@@ -177,6 +237,9 @@ def test_memory_policy_rejects_temporary_trip_conditions():
     assert temporary_like.accepted is False
     assert stable.accepted is True
     assert stable.scope == "stable"
+    assert stable.source == "user_statement"
+    assert stable.reason
+    assert stable.confidence >= 0.75
     assert explicit_temporary.accepted is False
 
 
@@ -187,3 +250,20 @@ def test_memory_policy_filters_mixed_candidates():
 
     assert accepted == ["我喜欢博物馆"]
     assert [item.value for item in rejected] == ["本次想少走路"]
+
+
+def test_memory_audit_entries_include_source_reason_and_confidence():
+    entries = build_memory_audit_entries(
+        "profile.travel_styles",
+        ["我一直喜欢博物馆", "这次想少走路"],
+        source="memory_tool:update_travel_style_tool",
+        accepted_only=False,
+    )
+
+    assert len(entries) == 2
+    accepted = [entry for entry in entries if entry.accepted]
+    rejected = [entry for entry in entries if not entry.accepted]
+    assert accepted[0].source == "memory_tool:update_travel_style_tool"
+    assert accepted[0].reason
+    assert accepted[0].confidence >= 0.75
+    assert rejected[0].scope == "temporary"
