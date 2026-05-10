@@ -3546,6 +3546,88 @@
         return `<ul>${list.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`;
       }
 
+      function normalizeReportDataList(items = []) {
+        return (Array.isArray(items) ? items : [])
+          .map((item) => String(item || "").trim())
+          .filter(Boolean);
+      }
+
+      function getReportPlanningModeMeta(reportData = {}) {
+        const mode = reportData.agency_context?.mode || "";
+        if (mode === "agency_plan") {
+          return {
+            mode,
+            label: "旅行社顾问方案",
+            shortLabel: "顾问方案",
+            icon: "fa-user-tie",
+            tone: "agency",
+            copy:
+              "按顾问交付视角组织服务节点、成熟路线、费用依据和出发前核验项。",
+          };
+        }
+        if (mode === "free_planning") {
+          return {
+            mode,
+            label: "自由规划",
+            shortLabel: "自由规划",
+            icon: "fa-route",
+            tone: "free",
+            copy:
+              "按自己预订、灵活调整的方式呈现路线、预算依据和风险提醒。",
+          };
+        }
+        return {
+          mode: "unknown",
+          label: "规划方案",
+          shortLabel: "规划方案",
+          icon: "fa-compass",
+          tone: "neutral",
+          copy: "已按当前结构化信息整理路线、预算和后续核验项。",
+        };
+      }
+
+      function getBudgetConfidenceTone(level = "") {
+        const normalized = String(level || "").trim();
+        if (/高|中高/.test(normalized)) return "strong";
+        if (/中/.test(normalized)) return "medium";
+        if (/低|待/.test(normalized)) return "caution";
+        return "neutral";
+      }
+
+      function buildReportDataViewModel(reportData = {}) {
+        const budgetConfidence = reportData.budget_confidence || {};
+        const toolAudit = reportData.tool_audit_summary || {};
+        const agencyContext = reportData.agency_context || {};
+        const pendingChecks = normalizeReportDataList([
+          ...normalizeReportDataList(budgetConfidence.verification_items),
+          ...normalizeReportDataList(toolAudit.pending_checks),
+        ]).filter((item, index, list) => list.indexOf(item) === index);
+
+        return {
+          mode: getReportPlanningModeMeta(reportData),
+          budgetConfidence: {
+            level: budgetConfidence.level || "待评估",
+            tone: getBudgetConfidenceTone(budgetConfidence.level),
+            confirmedItems: normalizeReportDataList(budgetConfidence.confirmed_items),
+            estimatedItems: normalizeReportDataList(budgetConfidence.estimated_items),
+            verificationItems: normalizeReportDataList(
+              budgetConfidence.verification_items
+            ),
+          },
+          handoff: {
+            readiness: toolAudit.readiness || "可交付，预订前需核验",
+            usedSources: normalizeReportDataList(toolAudit.used_sources),
+            pendingChecks,
+            unsupportedActions: normalizeReportDataList(toolAudit.unsupported_actions),
+          },
+          agency: {
+            summary: String(agencyContext.summary || "").trim(),
+            highlights: normalizeReportDataList(agencyContext.highlights),
+            modeReason: String(agencyContext.mode_reason || "").trim(),
+          },
+        };
+      }
+
       function renderReportDataBudgetItems(budget = {}) {
         const items = Array.isArray(budget.items) ? budget.items : [];
         if (!items.length) {
@@ -3714,6 +3796,7 @@
 
         const overview = reportData.overview || {};
         const budget = reportData.budget || {};
+        const viewModel = buildReportDataViewModel(reportData);
         const routeLabel = overview.route_label || "专属旅程";
         const dayCount = overview.duration || "分日规划";
         const budgetLabel =
@@ -3725,14 +3808,22 @@
           : "";
 
         return `
-          <div class="travel-report" data-report-source="structured">
+          <div class="travel-report travel-report--${escapeHtml(
+            viewModel.mode.tone
+          )}" data-report-source="structured" data-planning-mode="${escapeHtml(
+            viewModel.mode.mode
+          )}">
             <div class="travel-report-hero">
               <div class="travel-report-kicker">
-                <i class="fa-solid fa-file-signature"></i> 个性化旅游规划报告
+                <i class="fa-solid ${escapeHtml(viewModel.mode.icon)}"></i>
+                ${escapeHtml(viewModel.mode.label)}
               </div>
               <h3>${escapeHtml(routeLabel)}</h3>
-              <p>我把已确认的信息整理成可查看、可导出的专属报告；后续你继续微调行程时，地图、预算和每日安排也会一起更新。</p>
+              <p>${escapeHtml(viewModel.mode.copy)}</p>
               <div class="travel-report-metrics">
+                <span><i class="fa-solid ${escapeHtml(
+                  viewModel.mode.icon
+                )}"></i>${escapeHtml(viewModel.mode.shortLabel)}</span>
                 <span><i class="fa-solid fa-route"></i>${escapeHtml(routeLabel)}</span>
                 <span><i class="fa-regular fa-calendar"></i>${escapeHtml(dayCount)}</span>
                 <span><i class="fa-solid fa-wallet"></i>${escapeHtml(budgetLabel)}</span>
