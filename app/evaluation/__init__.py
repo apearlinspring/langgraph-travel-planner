@@ -35,6 +35,7 @@ from app.evaluation.tool_quality import (
     ToolQualityResult,
     evaluate_tool_quality,
     extract_tool_events,
+    tool_overuse_summary,
 )
 
 __all__ = [
@@ -69,4 +70,5 @@ __all__ = [
     "load_tool_call_scenarios",
     "runtime_budget_from_dict",
     "run_live_scenario",
+    "tool_overuse_summary",
 ]

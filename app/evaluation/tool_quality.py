@@ -67,6 +67,7 @@ class ToolQualityResult:
     summary: list[str]
     tool_counts: dict[str, int] = field(default_factory=dict)
     redundant_calls: list[str] = field(default_factory=list)
+    tool_overuse: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -78,6 +79,7 @@ class ToolQualityResult:
             "summary": self.summary,
             "tool_counts": self.tool_counts,
             "redundant_calls": self.redundant_calls,
+            "tool_overuse": self.tool_overuse,
             "criteria": [criterion.to_dict() for criterion in self.criteria],
         }
 
@@ -181,6 +183,36 @@ def redundant_tool_calls(
             turn_label = "unknown-turn" if turn_index is None else f"turn-{turn_index}"
             redundant.append(f"{turn_label}:{tool} called {count} times")
     return redundant
+
+
+def tool_overuse_summary(
+    records: list[ToolCallRecord],
+    *,
+    tracked_tools: set[str] | frozenset[str] | None = None,
+    redundant_calls: list[str] | None = None,
+) -> dict[str, Any]:
+    """Summarize high-cost tool pressure for runtime governance."""
+
+    tracked_tool_names = REDUNDANCY_TRACKED_TOOLS if tracked_tools is None else frozenset(tracked_tools)
+    counts = Counter(record.tool for record in records)
+    tracked_call_count = sum(count for tool, count in counts.items() if tool in tracked_tool_names)
+    total_call_count = sum(counts.values())
+    high_frequency_tools = {
+        tool: count
+        for tool, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+        if count > 1 and tool in tracked_tool_names
+    }
+    return {
+        "total_call_count": total_call_count,
+        "tracked_call_count": tracked_call_count,
+        "tracked_call_ratio": (
+            round(tracked_call_count / total_call_count, 3)
+            if total_call_count
+            else 0.0
+        ),
+        "redundant_call_count": len(redundant_calls or []),
+        "high_frequency_tools": high_frequency_tools,
+    }
 
 
 def _pending_checks(report_data: dict[str, Any] | None) -> list[Any]:
@@ -326,6 +358,11 @@ def evaluate_tool_quality(
     expected_tools = expected_tools or set()
     forbidden_tools = forbidden_tools or set()
     records = extract_tool_events(events)
+    redundant = redundant_tool_calls(
+        records,
+        max_duplicate_calls=max_duplicate_calls,
+        tracked_tools=redundancy_tracked_tools,
+    )
     criteria = [
         _criterion_intent_coverage(records, expected_tools),
         _criterion_forbidden_tools(records, forbidden_tools),
@@ -355,9 +392,10 @@ def evaluate_tool_quality(
         criteria=criteria,
         summary=summary,
         tool_counts=tool_call_counts(records),
-        redundant_calls=redundant_tool_calls(
+        redundant_calls=redundant,
+        tool_overuse=tool_overuse_summary(
             records,
-            max_duplicate_calls=max_duplicate_calls,
             tracked_tools=redundancy_tracked_tools,
+            redundant_calls=redundant,
         ),
     )
