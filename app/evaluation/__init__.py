@@ -1,5 +1,17 @@
 """Evaluation helpers for travel-planning outputs."""
 
+from app.evaluation.acceptance_gate import (
+    ACCEPTANCE_GATE_VERSION,
+    ACCEPTANCE_SUMMARY_VERSION,
+    DEFAULT_ACCEPTANCE_THRESHOLDS,
+    AcceptanceThresholds,
+    acceptance_thresholds_from_dict,
+    build_acceptance_gate_result,
+    build_acceptance_run_summary,
+    build_error_acceptance_gate_result,
+    render_acceptance_markdown,
+    write_acceptance_summary_files,
+)
 from app.evaluation.rag_quality import RagQualityResult, evaluate_rag_quality
 from app.evaluation.report_quality import (
     CriterionResult,
@@ -19,9 +31,12 @@ from app.evaluation.runtime_metrics import (
     runtime_budget_from_dict,
 )
 from app.evaluation.scenarios import (
+    ACCEPTANCE_CORE_TAG,
     EvaluationScenario,
+    MIN_ACCEPTANCE_CORE_SCENARIOS,
     RagQualityScenario,
     ToolCallScenario,
+    acceptance_core_scenarios,
     get_rag_quality_scenario,
     get_scenario,
     get_tool_call_scenario,
@@ -40,6 +55,7 @@ from app.evaluation.tool_quality import (
 
 __all__ = [
     "CriterionResult",
+    "AcceptanceThresholds",
     "EvaluationScenario",
     "LiveRunConfig",
     "LiveScenarioResult",
@@ -53,6 +69,16 @@ __all__ = [
     "ToolCallRecord",
     "ToolCallScenario",
     "ToolQualityResult",
+    "ACCEPTANCE_CORE_TAG",
+    "ACCEPTANCE_GATE_VERSION",
+    "ACCEPTANCE_SUMMARY_VERSION",
+    "DEFAULT_ACCEPTANCE_THRESHOLDS",
+    "MIN_ACCEPTANCE_CORE_SCENARIOS",
+    "acceptance_core_scenarios",
+    "acceptance_thresholds_from_dict",
+    "build_acceptance_gate_result",
+    "build_acceptance_run_summary",
+    "build_error_acceptance_gate_result",
     "DEFAULT_RUNTIME_BUDGET",
     "build_runtime_governance_summary",
     "collect_runtime_metrics",
@@ -68,7 +94,9 @@ __all__ = [
     "load_rag_quality_scenarios",
     "load_scenarios",
     "load_tool_call_scenarios",
+    "render_acceptance_markdown",
     "runtime_budget_from_dict",
     "run_live_scenario",
     "tool_overuse_summary",
+    "write_acceptance_summary_files",
 ]

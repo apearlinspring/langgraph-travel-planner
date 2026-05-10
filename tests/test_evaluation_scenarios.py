@@ -4,6 +4,9 @@ from pathlib import Path
 import pytest
 
 from app.evaluation.scenarios import (
+    ACCEPTANCE_CORE_TAG,
+    MIN_ACCEPTANCE_CORE_SCENARIOS,
+    acceptance_core_scenarios,
     get_rag_quality_scenario,
     get_scenario,
     get_tool_call_scenario,
@@ -23,6 +26,17 @@ def test_load_default_scenarios_has_expected_coverage():
     assert len(scenario_ids) == len(scenarios)
     assert {"free_planning", "agency_plan"}.issubset(modes)
     assert {"free", "agency", "edge", "hotel", "budget", "transport", "risk"}.issubset(tags)
+
+
+def test_acceptance_core_scenarios_cover_first_stage_gate():
+    scenarios = acceptance_core_scenarios()
+    categories = {scenario.category for scenario in scenarios}
+    tags = {tag for scenario in scenarios for tag in scenario.tags}
+
+    assert len(scenarios) >= MIN_ACCEPTANCE_CORE_SCENARIOS
+    assert all(ACCEPTANCE_CORE_TAG in scenario.tags for scenario in scenarios)
+    assert {"free_planning", "agency_plan", "pricing", "risk", "edge_case"}.issubset(categories)
+    assert {"hotel", "transport", "budget", "weather"}.issubset(tags)
 
 
 def test_get_scenario_returns_catalog_entry():

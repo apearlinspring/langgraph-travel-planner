@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from app.evaluation.runtime_metrics import runtime_budget_from_dict
 
@@ -13,6 +13,8 @@ SCENARIO_CATALOG_VERSION = "evaluation_scenarios.v1"
 RAG_SCENARIO_CATALOG_VERSION = "rag_quality_scenarios.v1"
 TOOL_SCENARIO_CATALOG_VERSION = "tool_call_scenarios.v1"
 VALID_PLANNING_MODES = {"agency_plan", "free_planning"}
+ACCEPTANCE_CORE_TAG = "acceptance-core"
+MIN_ACCEPTANCE_CORE_SCENARIOS = 8
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_SCENARIO_FILE = PROJECT_ROOT / "data" / "evaluation" / "report_quality_scenarios.json"
 DEFAULT_RAG_SCENARIO_FILE = PROJECT_ROOT / "data" / "evaluation" / "rag_quality_scenarios.json"
@@ -261,6 +263,26 @@ def load_scenarios(path: Path | None = None) -> list[EvaluationScenario]:
     ]
     _validate_unique_ids(scenarios)
     return scenarios
+
+
+def acceptance_core_scenarios(
+    scenarios: Iterable[EvaluationScenario] | None = None,
+    *,
+    min_count: int = MIN_ACCEPTANCE_CORE_SCENARIOS,
+) -> list[EvaluationScenario]:
+    """Return the first-stage core acceptance scenarios in catalog order."""
+
+    selected = [
+        scenario
+        for scenario in (list(scenarios) if scenarios is not None else load_scenarios())
+        if ACCEPTANCE_CORE_TAG in scenario.tags
+    ]
+    if len(selected) < min_count:
+        raise ValueError(
+            "Acceptance core scenario set must contain at least "
+            f"{min_count} scenarios tagged {ACCEPTANCE_CORE_TAG!r}; found {len(selected)}"
+        )
+    return selected
 
 
 def load_rag_quality_scenarios(path: Path | None = None) -> list[RagQualityScenario]:

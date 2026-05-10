@@ -10,7 +10,7 @@
       "expected_mode": "free_planning",
       "min_score": 82,
       "focus": ["nearby pacing", "daily route", "budget explanation", "food and scenery"],
-      "tags": ["free", "nearby", "weekend"]
+      "tags": ["free", "nearby", "weekend", "acceptance-core"]
     },
     {
       "id": "free_city_three_days",
@@ -20,7 +20,7 @@
       "expected_mode": "free_planning",
       "min_score": 82,
       "focus": ["first-time destination", "culture and food", "low-stress route", "map routes"],
-      "tags": ["free", "city", "culture"]
+      "tags": ["free", "city", "culture", "acceptance-core"]
     },
     {
       "id": "free_long_distance",
@@ -40,7 +40,7 @@
       "expected_mode": "agency_plan",
       "min_score": 86,
       "focus": ["agency playbook", "romantic pacing", "hotel and food", "service standards"],
-      "tags": ["agency", "couple", "relaxed"]
+      "tags": ["agency", "couple", "relaxed", "acceptance-core"]
     },
     {
       "id": "agency_family_parent_child",
@@ -50,7 +50,7 @@
       "expected_mode": "agency_plan",
       "min_score": 86,
       "focus": ["family suitability", "low walking load", "clean hotel", "risk fallback"],
-      "tags": ["agency", "family", "parent-child"]
+      "tags": ["agency", "family", "parent-child", "acceptance-core"]
     },
     {
       "id": "agency_senior_low_stress",
@@ -60,7 +60,7 @@
       "expected_mode": "agency_plan",
       "min_score": 86,
       "focus": ["senior-friendly pacing", "stable transport", "accessible hotel", "safety reminders"],
-      "tags": ["agency", "senior", "low-stress"]
+      "tags": ["agency", "senior", "low-stress", "acceptance-core"]
     },
     {
       "id": "edge_tight_budget",
@@ -80,7 +80,7 @@
       "expected_mode": "agency_plan",
       "min_score": 82,
       "focus": ["hotel preference parsing", "fuzzy matching", "tool failure fallback", "clear verification"],
-      "tags": ["edge", "hotel", "fallback"],
+      "tags": ["edge", "hotel", "fallback", "acceptance-core"],
       "runtime_budget": {
         "max_tool_call_count": 36,
         "max_first_token_seconds": 75
@@ -104,7 +104,7 @@
       "expected_mode": "agency_plan",
       "min_score": 86,
       "focus": ["price evidence", "included and excluded costs", "verification items", "agency quote policy"],
-      "tags": ["agency", "pricing", "budget"]
+      "tags": ["agency", "pricing", "budget", "acceptance-core"]
     },
     {
       "id": "risk_weather_disruption",
@@ -114,7 +114,7 @@
       "expected_mode": "agency_plan",
       "min_score": 84,
       "focus": ["weather fallback", "senior-friendly route", "risk checklist", "verification items"],
-      "tags": ["agency", "risk", "weather", "senior"],
+      "tags": ["agency", "risk", "weather", "senior", "acceptance-core"],
       "runtime_budget": {
         "max_first_token_seconds": 75,
         "max_tool_call_count": 36
@@ -128,7 +128,7 @@
       "expected_mode": "free_planning",
       "min_score": 82,
       "focus": ["transport lookup intent", "tool failure fallback", "verification", "route feasibility"],
-      "tags": ["edge", "transport", "fallback"],
+      "tags": ["edge", "transport", "fallback", "acceptance-core"],
       "runtime_budget": {
         "max_tool_call_count": 36,
         "max_first_token_seconds": 75

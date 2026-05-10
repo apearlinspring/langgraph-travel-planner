@@ -1,0 +1,647 @@
+"""Acceptance quality gate aggregation for first-stage project verification."""
+from __future__ import annotations
+
+import json
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Iterable
+
+from app.evaluation.scenarios import ACCEPTANCE_CORE_TAG, EvaluationScenario
+
+
+ACCEPTANCE_GATE_VERSION = "acceptance_quality_gate.v1"
+ACCEPTANCE_SUMMARY_VERSION = "acceptance_run_summary.v1"
+
+
+@dataclass(frozen=True)
+class AcceptanceThresholds:
+    """Thresholds used by the auditable first-stage acceptance quality gate."""
+
+    min_agent_score: float = 82.0
+    min_report_score: float = 80.0
+    min_rag_score: float = 80.0
+    min_tool_score: float = 80.0
+    min_runtime_score: float = 80.0
+    min_budget_confidence_score: float = 100.0
+    min_tool_audit_score: float = 100.0
+    min_internal_evidence_categories: int = 3
+    require_runtime_budget_pass: bool = True
+    require_internal_evidence_for_agency: bool = True
+    require_tool_audit_surface: bool = True
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+DEFAULT_ACCEPTANCE_THRESHOLDS = AcceptanceThresholds()
+
+
+DIMENSION_LABELS = {
+    "agent_quality": "Agent aggregate quality",
+    "report_quality": "Report quality",
+    "rag_quality": "RAG evidence quality",
+    "tool_quality": "Tool governance quality",
+    "runtime_quality": "Runtime metrics quality",
+    "runtime_budget": "Runtime budget gate",
+    "budget_confidence": "Budget confidence contract",
+    "internal_evidence": "Internal evidence references",
+    "tool_audit": "Tool audit surface",
+    "live_run": "Live scenario execution",
+}
+
+
+DIMENSION_SUGGESTIONS = {
+    "agent_quality": (
+        "Check the per-dimension scores first; the aggregate gate usually fails "
+        "because one report, RAG, tool, or runtime dimension is already failing."
+    ),
+    "report_quality": (
+        "Inspect report_data structure, itinerary/map parity, budget items, risks, "
+        "and app/reports contract rendering."
+    ),
+    "rag_quality": (
+        "Inspect agency_context.evidence and evidence_bundle coverage; agency-plan "
+        "scenarios should cite product, SOP, pricing, and risk evidence."
+    ),
+    "tool_quality": (
+        "Inspect SSE tool_call events, forbidden tools, duplicate high-cost calls, "
+        "and fallback pending checks."
+    ),
+    "runtime_quality": (
+        "Inspect total elapsed time, first-token latency, error events, tool-call "
+        "count, and estimated token pressure."
+    ),
+    "runtime_budget": (
+        "Inspect runtime_budget violations; slow or repeated external tools usually "
+        "need either a code fix or a scenario-specific budget override."
+    ),
+    "budget_confidence": (
+        "Inspect budget_confidence; it must expose a level, confirmed or estimated "
+        "items, and verification items."
+    ),
+    "internal_evidence": (
+        "Inspect internal evidence category coverage; agency-plan reports need at "
+        "least three agency evidence categories."
+    ),
+    "tool_audit": (
+        "Inspect tool_audit_summary; it must expose used sources, pending checks, "
+        "and unsupported actions."
+    ),
+    "live_run": (
+        "Inspect the saved snapshot, backend logs, SSE stream events, and the final "
+        "state-transition turn that should produce report_data."
+    ),
+}
+
+
+def acceptance_thresholds_from_dict(
+    payload: dict[str, Any] | None,
+    *,
+    base: AcceptanceThresholds | None = None,
+) -> AcceptanceThresholds:
+    """Build thresholds from optional CLI or test overrides."""
+
+    thresholds = base or DEFAULT_ACCEPTANCE_THRESHOLDS
+    if payload is None:
+        return thresholds
+    if not isinstance(payload, dict):
+        raise TypeError("acceptance thresholds payload must be a dictionary")
+
+    allowed_fields = set(AcceptanceThresholds.__dataclass_fields__)
+    unknown_fields = sorted(set(payload) - allowed_fields)
+    if unknown_fields:
+        raise ValueError(f"Unknown acceptance threshold fields: {', '.join(unknown_fields)}")
+
+    values = thresholds.to_dict()
+    for key, value in payload.items():
+        if key == "min_internal_evidence_categories":
+            if not isinstance(value, int) or value < 0:
+                raise ValueError(f"Acceptance threshold field {key!r} must be a non-negative integer")
+            values[key] = value
+        elif key.startswith("require_"):
+            if not isinstance(value, bool):
+                raise ValueError(f"Acceptance threshold field {key!r} must be a boolean")
+            values[key] = value
+        else:
+            if not isinstance(value, (int, float)) or not 0 <= float(value) <= 100:
+                raise ValueError(f"Acceptance threshold field {key!r} must be between 0 and 100")
+            values[key] = float(value)
+    return AcceptanceThresholds(**values)
+
+
+def _as_dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _as_list(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else []
+
+
+def _has_text(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _score_bool(parts: Iterable[bool]) -> float:
+    checks = list(parts)
+    if not checks:
+        return 0.0
+    return round(sum(1 for item in checks if item) / len(checks) * 100, 2)
+
+
+def _result_findings(result: dict[str, Any]) -> list[str]:
+    summary_items = (
+        []
+        if result.get("passed") is True
+        else [str(item) for item in _as_list(result.get("summary")) if str(item).strip()]
+    )
+    criteria_findings = [
+        f"{criterion.get('name')}: {finding}"
+        for criterion in _as_list(result.get("criteria"))
+        if isinstance(criterion, dict)
+        for finding in _as_list(criterion.get("findings"))
+    ]
+    return [*summary_items, *criteria_findings][:10]
+
+
+def _dimension_result(
+    *,
+    key: str,
+    score: float | None,
+    threshold: float | None,
+    passed: bool,
+    findings: list[str] | None = None,
+) -> dict[str, Any]:
+    return {
+        "key": key,
+        "label": DIMENSION_LABELS.get(key, key),
+        "score": score,
+        "threshold": threshold,
+        "passed": passed,
+        "findings": findings or [],
+        "suggestion": DIMENSION_SUGGESTIONS.get(key, "Inspect this dimension's detailed result."),
+    }
+
+
+def _scored_quality_dimension(
+    key: str,
+    result: dict[str, Any],
+    threshold: float,
+) -> dict[str, Any]:
+    score = result.get("normalized_score")
+    numeric_score = float(score) if isinstance(score, (int, float)) else None
+    findings = _result_findings(result)
+    passed = (
+        bool(result.get("passed"))
+        and numeric_score is not None
+        and numeric_score >= threshold
+        and not findings
+    )
+    if numeric_score is not None and numeric_score < threshold:
+        findings = [
+            f"{DIMENSION_LABELS[key]} score {numeric_score} is below threshold {threshold}",
+            *findings,
+        ]
+    if not result:
+        findings = [f"{DIMENSION_LABELS[key]} result is missing"]
+    return _dimension_result(
+        key=key,
+        score=numeric_score,
+        threshold=threshold,
+        passed=passed,
+        findings=findings[:10],
+    )
+
+
+def _budget_confidence_dimension(
+    report_data: dict[str, Any] | None,
+    thresholds: AcceptanceThresholds,
+) -> dict[str, Any]:
+    budget_confidence = _as_dict(_as_dict(report_data).get("budget_confidence"))
+    has_level = _has_text(budget_confidence.get("level"))
+    has_status_items = bool(
+        _as_list(budget_confidence.get("confirmed_items"))
+        or _as_list(budget_confidence.get("estimated_items"))
+    )
+    has_verification = bool(_as_list(budget_confidence.get("verification_items")))
+    checks = [has_level, has_status_items, has_verification]
+    score = _score_bool(checks)
+    findings: list[str] = []
+    if not has_level:
+        findings.append("budget_confidence.level is missing")
+    if not has_status_items:
+        findings.append("budget_confidence needs confirmed_items or estimated_items")
+    if not has_verification:
+        findings.append("budget_confidence.verification_items is missing")
+    return _dimension_result(
+        key="budget_confidence",
+        score=score,
+        threshold=thresholds.min_budget_confidence_score,
+        passed=score >= thresholds.min_budget_confidence_score and not findings,
+        findings=findings,
+    )
+
+
+def _internal_evidence_categories(report_data: dict[str, Any] | None) -> set[str]:
+    report = _as_dict(report_data)
+    agency_context = _as_dict(report.get("agency_context"))
+    categories: set[str] = set()
+    for item in _as_list(agency_context.get("evidence")):
+        evidence = _as_dict(item)
+        if evidence.get("source_type") == "agency_internal" and _has_text(evidence.get("category")):
+            categories.add(str(evidence["category"]).strip())
+
+    for category, value in _as_dict(agency_context.get("categories")).items():
+        if _has_text(category) and value:
+            categories.add(str(category).strip())
+
+    bundle_categories = _as_dict(_as_dict(report.get("evidence_bundle")).get("agency_categories"))
+    for category, value in bundle_categories.items():
+        if _has_text(category) and isinstance(value, (int, float)) and value > 0:
+            categories.add(str(category).strip())
+    return categories
+
+
+def _internal_evidence_dimension(
+    scenario: EvaluationScenario,
+    report_data: dict[str, Any] | None,
+    thresholds: AcceptanceThresholds,
+) -> dict[str, Any]:
+    if scenario.expected_mode != "agency_plan" or not thresholds.require_internal_evidence_for_agency:
+        return _dimension_result(
+            key="internal_evidence",
+            score=100.0,
+            threshold=None,
+            passed=True,
+            findings=[],
+        )
+
+    categories = _internal_evidence_categories(report_data)
+    required = thresholds.min_internal_evidence_categories
+    score = 100.0 if required == 0 else round(min(len(categories) / required, 1.0) * 100, 2)
+    findings = []
+    if len(categories) < required:
+        findings.append(
+            "Internal evidence category coverage "
+            f"{len(categories)} is below required {required}; covered={sorted(categories)}"
+        )
+    return _dimension_result(
+        key="internal_evidence",
+        score=score,
+        threshold=100.0,
+        passed=len(categories) >= required,
+        findings=findings,
+    )
+
+
+def _tool_audit_dimension(
+    report_data: dict[str, Any] | None,
+    thresholds: AcceptanceThresholds,
+) -> dict[str, Any]:
+    if not thresholds.require_tool_audit_surface:
+        return _dimension_result(
+            key="tool_audit",
+            score=100.0,
+            threshold=None,
+            passed=True,
+            findings=[],
+        )
+
+    tool_audit = _as_dict(_as_dict(report_data).get("tool_audit_summary"))
+    has_used_sources = bool(_as_list(tool_audit.get("used_sources")))
+    has_pending_checks = bool(_as_list(tool_audit.get("pending_checks")))
+    has_unsupported_actions = bool(_as_list(tool_audit.get("unsupported_actions")))
+    checks = [has_used_sources, has_pending_checks, has_unsupported_actions]
+    score = _score_bool(checks)
+    findings: list[str] = []
+    if not has_used_sources:
+        findings.append("tool_audit_summary.used_sources is missing")
+    if not has_pending_checks:
+        findings.append("tool_audit_summary.pending_checks is missing")
+    if not has_unsupported_actions:
+        findings.append("tool_audit_summary.unsupported_actions is missing")
+    return _dimension_result(
+        key="tool_audit",
+        score=score,
+        threshold=thresholds.min_tool_audit_score,
+        passed=score >= thresholds.min_tool_audit_score and not findings,
+        findings=findings,
+    )
+
+
+def _runtime_budget_dimension(
+    quality_summary: dict[str, Any],
+    thresholds: AcceptanceThresholds,
+) -> dict[str, Any]:
+    runtime_quality = _as_dict(quality_summary.get("runtime_quality"))
+    budget_gate = _as_dict(runtime_quality.get("budget_gate"))
+    passed = bool(budget_gate.get("passed")) or not thresholds.require_runtime_budget_pass
+    findings = [
+        str(item)
+        for item in [
+            *_as_list(budget_gate.get("violations")),
+            *_as_list(budget_gate.get("warnings")),
+        ]
+        if str(item).strip()
+    ]
+    if thresholds.require_runtime_budget_pass and not budget_gate:
+        findings.insert(0, "runtime_quality.budget_gate is missing")
+    return _dimension_result(
+        key="runtime_budget",
+        score=100.0 if passed else 0.0,
+        threshold=100.0 if thresholds.require_runtime_budget_pass else None,
+        passed=passed,
+        findings=findings[:10],
+    )
+
+
+def _agent_quality_dimension(
+    scenario: EvaluationScenario,
+    quality_summary: dict[str, Any],
+    thresholds: AcceptanceThresholds,
+) -> dict[str, Any]:
+    aggregate = _as_dict(quality_summary.get("aggregate"))
+    score = aggregate.get("normalized_score")
+    numeric_score = float(score) if isinstance(score, (int, float)) else None
+    threshold = max(thresholds.min_agent_score, scenario.min_score)
+    findings: list[str] = []
+    if numeric_score is None:
+        findings.append("aggregate.normalized_score is missing")
+    elif numeric_score < threshold:
+        findings.append(f"Aggregate score {numeric_score} is below threshold {threshold}")
+    if not bool(aggregate.get("passed")):
+        findings.append("aggregate.passed is false")
+    return _dimension_result(
+        key="agent_quality",
+        score=numeric_score,
+        threshold=threshold,
+        passed=not findings,
+        findings=findings,
+    )
+
+
+def _failure_records(
+    *,
+    scenario: EvaluationScenario,
+    dimensions: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    failures = []
+    for key, dimension in dimensions.items():
+        if dimension["passed"]:
+            continue
+        failures.append(
+            {
+                "scenario_id": scenario.id,
+                "scenario_name": scenario.name,
+                "dimension": key,
+                "dimension_label": dimension["label"],
+                "score": dimension["score"],
+                "threshold": dimension["threshold"],
+                "findings": dimension["findings"] or [f"{dimension['label']} failed"],
+                "suggestion": dimension["suggestion"],
+            }
+        )
+    return failures
+
+
+def build_acceptance_gate_result(
+    *,
+    scenario: EvaluationScenario,
+    quality_summary: dict[str, Any],
+    report_data: dict[str, Any] | None,
+    snapshot_path: str | None = None,
+    thresholds: AcceptanceThresholds | None = None,
+) -> dict[str, Any]:
+    """Build one auditable acceptance gate result for a completed scenario."""
+
+    gate_thresholds = thresholds or DEFAULT_ACCEPTANCE_THRESHOLDS
+    if not isinstance(quality_summary, dict):
+        raise TypeError("quality_summary must be a dictionary")
+
+    dimensions = {
+        "agent_quality": _agent_quality_dimension(scenario, quality_summary, gate_thresholds),
+        "report_quality": _scored_quality_dimension(
+            "report_quality",
+            _as_dict(quality_summary.get("report_quality")),
+            gate_thresholds.min_report_score,
+        ),
+        "rag_quality": _scored_quality_dimension(
+            "rag_quality",
+            _as_dict(quality_summary.get("rag_quality")),
+            gate_thresholds.min_rag_score,
+        ),
+        "tool_quality": _scored_quality_dimension(
+            "tool_quality",
+            _as_dict(quality_summary.get("tool_quality")),
+            gate_thresholds.min_tool_score,
+        ),
+        "runtime_quality": _scored_quality_dimension(
+            "runtime_quality",
+            _as_dict(quality_summary.get("runtime_quality")),
+            gate_thresholds.min_runtime_score,
+        ),
+        "runtime_budget": _runtime_budget_dimension(quality_summary, gate_thresholds),
+        "budget_confidence": _budget_confidence_dimension(report_data, gate_thresholds),
+        "internal_evidence": _internal_evidence_dimension(scenario, report_data, gate_thresholds),
+        "tool_audit": _tool_audit_dimension(report_data, gate_thresholds),
+    }
+    failures = _failure_records(scenario=scenario, dimensions=dimensions)
+    return {
+        "version": ACCEPTANCE_GATE_VERSION,
+        "scenario_id": scenario.id,
+        "scenario_name": scenario.name,
+        "scenario_category": scenario.category,
+        "expected_mode": scenario.expected_mode,
+        "passed": not failures,
+        "snapshot_path": snapshot_path,
+        "thresholds": gate_thresholds.to_dict(),
+        "dimensions": dimensions,
+        "failures": failures,
+    }
+
+
+def build_error_acceptance_gate_result(
+    *,
+    scenario: EvaluationScenario,
+    error: str,
+    snapshot_path: str | None = None,
+    thresholds: AcceptanceThresholds | None = None,
+) -> dict[str, Any]:
+    """Build an acceptance result for a scenario that failed before scoring."""
+
+    gate_thresholds = thresholds or DEFAULT_ACCEPTANCE_THRESHOLDS
+    dimension = _dimension_result(
+        key="live_run",
+        score=0.0,
+        threshold=100.0,
+        passed=False,
+        findings=[error],
+    )
+    dimensions = {"live_run": dimension}
+    return {
+        "version": ACCEPTANCE_GATE_VERSION,
+        "scenario_id": scenario.id,
+        "scenario_name": scenario.name,
+        "scenario_category": scenario.category,
+        "expected_mode": scenario.expected_mode,
+        "passed": False,
+        "snapshot_path": snapshot_path,
+        "thresholds": gate_thresholds.to_dict(),
+        "dimensions": dimensions,
+        "failures": _failure_records(scenario=scenario, dimensions=dimensions),
+    }
+
+
+def build_acceptance_run_summary(
+    *,
+    results: list[dict[str, Any]],
+    scenarios: list[EvaluationScenario],
+    base_url: str,
+    output_dir: Path,
+    thresholds: AcceptanceThresholds | None = None,
+    created_at: datetime | None = None,
+) -> dict[str, Any]:
+    """Build the JSON-serializable run-level acceptance summary."""
+
+    gate_thresholds = thresholds or DEFAULT_ACCEPTANCE_THRESHOLDS
+    created = created_at or datetime.now(timezone.utc)
+    scenario_ids = [scenario.id for scenario in scenarios]
+    completed_ids = [str(result.get("scenario_id")) for result in results]
+    missing_ids = [scenario_id for scenario_id in scenario_ids if scenario_id not in set(completed_ids)]
+    gates = [_as_dict(result.get("acceptance_gate")) for result in results]
+    failures = [
+        failure
+        for gate in gates
+        for failure in _as_list(gate.get("failures"))
+        if isinstance(failure, dict)
+    ]
+    if missing_ids:
+        failures.append(
+            {
+                "scenario_id": "__run__",
+                "scenario_name": "Incomplete run",
+                "dimension": "live_run",
+                "dimension_label": DIMENSION_LABELS["live_run"],
+                "score": 0.0,
+                "threshold": 100.0,
+                "findings": [
+                    "The run stopped before these selected scenarios completed: "
+                    + ", ".join(missing_ids)
+                ],
+                "suggestion": DIMENSION_SUGGESTIONS["live_run"],
+            }
+        )
+
+    passed_count = sum(1 for gate in gates if gate.get("passed"))
+    scores = [
+        float(_as_dict(gate.get("dimensions")).get("agent_quality", {}).get("score"))
+        for gate in gates
+        if isinstance(_as_dict(gate.get("dimensions")).get("agent_quality", {}).get("score"), (int, float))
+    ]
+    return {
+        "version": ACCEPTANCE_SUMMARY_VERSION,
+        "created_at": created.isoformat(),
+        "base_url": base_url,
+        "output_dir": str(output_dir),
+        "core_tag": ACCEPTANCE_CORE_TAG,
+        "thresholds": gate_thresholds.to_dict(),
+        "selected_scenarios": [scenario.to_dict() for scenario in scenarios],
+        "result_count": len(results),
+        "selected_count": len(scenarios),
+        "passed_count": passed_count,
+        "failed_count": len(results) - passed_count + len(missing_ids),
+        "passed": not failures and len(results) == len(scenarios) and bool(results),
+        "average_agent_score": round(sum(scores) / len(scores), 2) if scores else None,
+        "results": results,
+        "failures": failures,
+    }
+
+
+def render_acceptance_markdown(summary: dict[str, Any]) -> str:
+    """Render a human-readable Markdown acceptance summary."""
+
+    status = "PASS" if summary.get("passed") else "FAIL"
+    lines = [
+        "# 第一阶段验收质量门禁",
+        "",
+        f"- 结论: {status}",
+        f"- 场景: {summary.get('passed_count')} / {summary.get('selected_count')} 通过",
+        f"- 平均 Agent（智能体）综合分: {summary.get('average_agent_score')}",
+        f"- 生成时间: {summary.get('created_at')}",
+        f"- 后端地址: {summary.get('base_url')}",
+        "",
+        "## 门禁阈值",
+    ]
+    thresholds = _as_dict(summary.get("thresholds"))
+    lines.extend(
+        [
+            f"- 报告质量: >= {thresholds.get('min_report_score')}",
+            f"- RAG（检索增强生成）质量: >= {thresholds.get('min_rag_score')}",
+            f"- 工具治理质量: >= {thresholds.get('min_tool_score')}",
+            f"- 运行时质量: >= {thresholds.get('min_runtime_score')}",
+            f"- 预算置信度契约: >= {thresholds.get('min_budget_confidence_score')}",
+            f"- 旅行社内部证据类别: >= {thresholds.get('min_internal_evidence_categories')}",
+        ]
+    )
+    lines.extend(
+        [
+            "",
+            "## 场景结果",
+            "",
+            "| 场景 | 状态 | Agent 分 | 报告 | RAG | 工具 | 运行时 | 快照 |",
+            "|---|---:|---:|---:|---:|---:|---:|---|",
+        ]
+    )
+    for result in _as_list(summary.get("results")):
+        if not isinstance(result, dict):
+            continue
+        gate = _as_dict(result.get("acceptance_gate"))
+        dimensions = _as_dict(gate.get("dimensions"))
+
+        def score(key: str) -> Any:
+            return _as_dict(dimensions.get(key)).get("score", "-")
+
+        result_status = "PASS" if gate.get("passed") else "FAIL"
+        snapshot = result.get("snapshot_path") or gate.get("snapshot_path") or "-"
+        lines.append(
+            "| "
+            f"{result.get('scenario_id')} | {result_status} | {score('agent_quality')} | "
+            f"{score('report_quality')} | {score('rag_quality')} | {score('tool_quality')} | "
+            f"{score('runtime_quality')} | {snapshot} |"
+        )
+
+    lines.extend(["", "## 失败排查"])
+    failures = _as_list(summary.get("failures"))
+    if not failures:
+        lines.append("- 未发现失败维度。")
+    for failure in failures:
+        if not isinstance(failure, dict):
+            continue
+        findings = "; ".join(str(item) for item in _as_list(failure.get("findings"))[:3])
+        lines.append(
+            "- "
+            f"{failure.get('scenario_id')} / {failure.get('dimension_label')}: {findings} "
+            f"建议: {failure.get('suggestion')}"
+        )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def write_acceptance_summary_files(
+    summary: dict[str, Any],
+    output_dir: Path,
+    *,
+    prefix: str = "acceptance-summary",
+    created_at: datetime | None = None,
+) -> dict[str, str]:
+    """Write JSON and Markdown summary artifacts and return their paths."""
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    created = created_at or datetime.now(timezone.utc)
+    timestamp = created.strftime("%Y%m%d-%H%M%S")
+    safe_prefix = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "-" for ch in prefix)
+    json_path = output_dir / f"{timestamp}-{safe_prefix}.json"
+    markdown_path = output_dir / f"{timestamp}-{safe_prefix}.md"
+    json_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    markdown_path.write_text(render_acceptance_markdown(summary), encoding="utf-8")
+    return {"json": str(json_path), "markdown": str(markdown_path)}
