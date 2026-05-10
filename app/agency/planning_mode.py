@@ -24,6 +24,18 @@ AGENCY_MODE_KEYWORDS = (
     "你帮我安排",
 )
 
+AGENCY_FALLBACK_CONTEXT_KEYWORDS = (
+    "酒店",
+    "住宿",
+    "民宿",
+    "宾馆",
+    "客栈",
+    "房型",
+    "江景房",
+    "景观房",
+    "住",
+)
+
 FREE_MODE_KEYWORDS = (
     "自由行",
     "自由规划",
@@ -33,6 +45,13 @@ FREE_MODE_KEYWORDS = (
     "自己订",
     "只要攻略",
 )
+
+
+def _has_agency_fallback_signal(text: str) -> bool:
+    return (
+        any(keyword in text for keyword in ("兜底方案", "兜底安排"))
+        and any(keyword in text for keyword in AGENCY_FALLBACK_CONTEXT_KEYWORDS)
+    )
 
 
 def _recent_human_text(state: dict[str, Any] | None) -> str:
@@ -80,6 +99,8 @@ def infer_planning_mode(
     text = requirement_text(requirement, state)
     if any(keyword in text for keyword in FREE_MODE_KEYWORDS):
         return "free_planning"
+    if _has_agency_fallback_signal(text):
+        return "agency_plan"
     if any(keyword in text for keyword in AGENCY_MODE_KEYWORDS):
         return "agency_plan"
     return "free_planning"

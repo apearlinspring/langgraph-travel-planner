@@ -115,6 +115,14 @@ def _report_content_from_tool_output(output) -> str:
     return ""
 
 
+def _is_transient_stream_disconnect(exc: Exception) -> bool:
+    message = str(exc)
+    return (
+        "peer closed connection without sending complete message body" in message
+        or "incomplete chunked read" in message
+    )
+
+
 async def generate_sse_stream(
         conversation_id: str,
         user_message: str,
@@ -129,9 +137,11 @@ async def generate_sse_stream(
     tool_input_by_run = {}
     tool_name_by_run = {}
     tool_audit_events = []
+    emitted_tool_call_names = set()
     assistant_extra_info = {}
     fallback_assistant_message = ""
     session_lock = None
+    final_report_emitted = False
 
     try:
         try:
@@ -216,10 +226,18 @@ async def generate_sse_stream(
                     "SSE tool started: "
                     f"conversation_id={conversation_id}, user_id={user.id}, tool={tool_name}"
                 )
-                yield sse({
-                    "type": "tool_call",
-                    "tool": tool_name,
-                })
+                if tool_name and tool_name in emitted_tool_call_names:
+                    app_logger.info(
+                        "SSE duplicate tool_call event suppressed: "
+                        f"conversation_id={conversation_id}, user_id={user.id}, tool={tool_name}"
+                    )
+                else:
+                    if tool_name:
+                        emitted_tool_call_names.add(tool_name)
+                    yield sse({
+                        "type": "tool_call",
+                        "tool": tool_name,
+                    })
             elif kind == "on_tool_end":
                 run_id = event.get("run_id", "")
                 tool_name = event.get("name", "") or tool_name_by_run.get(run_id, "")
@@ -249,6 +267,7 @@ async def generate_sse_stream(
                             "Captured structured report metadata from generate_order_tool: "
                             f"conversation_id={conversation_id}, user_id={user.id}"
                         )
+                        final_report_emitted = True
                 if started_at is not None:
                     elapsed = time.perf_counter() - started_at
                     app_logger.info(
@@ -269,6 +288,12 @@ async def generate_sse_stream(
                         "type": "tool_audit",
                         "event": audit_event,
                     })
+                if final_report_emitted:
+                    app_logger.info(
+                        "SSE final report emitted; ending stream without model post-processing: "
+                        f"conversation_id={conversation_id}, user_id={user.id}"
+                    )
+                    break
             elif kind == "on_tool_error":
                 run_id = event.get("run_id", "")
                 tool_name = event.get("name", "") or tool_name_by_run.pop(run_id, "")
@@ -326,6 +351,38 @@ async def generate_sse_stream(
         raise
     except Exception as e:
         total_elapsed = time.perf_counter() - request_started_at
+        if _is_transient_stream_disconnect(e):
+            app_logger.warning(
+                "SSE upstream stream disconnected after partial generation; "
+                "finishing turn without emitting user-facing error: "
+                f"conversation_id={conversation_id}, user_id={user.id}, "
+                f"elapsed_seconds={total_elapsed:.2f}, assistant_chars={len(assistant_message)}"
+            )
+            if not assistant_message.strip() and fallback_assistant_message:
+                assistant_message = fallback_assistant_message
+            if not assistant_message.strip():
+                assistant_message = (
+                    "本轮模型流式连接中断，已保留当前规划状态；"
+                    "可以继续下一步处理。"
+                )
+                if first_token_elapsed is None:
+                    first_token_elapsed = total_elapsed
+                    yield sse({
+                        "type": "token",
+                        "content": assistant_message,
+                    })
+            if tool_audit_events:
+                assistant_extra_info["tool_audit_events"] = tool_audit_events
+            if assistant_message.strip():
+                await save_message(
+                    db,
+                    conversation_id,
+                    "assistant",
+                    assistant_message,
+                    extra_info=assistant_extra_info,
+                )
+            yield sse({"type": "done"})
+            return
         app_logger.exception(
             "SSE chat failed: "
             f"conversation_id={conversation_id}, user_id={user.id}, "

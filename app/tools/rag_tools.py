@@ -5,7 +5,6 @@ RAG 检索工具
 from pathlib import Path
 from typing import Optional
 from langchain.tools import tool
-from langchain_core.tools import ToolException
 from app.rag.agency_retrieval import (
     filter_documents_by_category,
     format_evidence_response,
@@ -228,6 +227,28 @@ def _format_public_destination_gap(query: str, requested_destinations: set[str])
     )
 
 
+def _format_retrieval_failure(
+    query: str,
+    *,
+    label: str,
+    visibility: str,
+    exc: Exception,
+    expected_category: str | None = None,
+) -> str:
+    category_hint = f"「{expected_category}」类" if expected_category else ""
+    message = (
+        f"{label}{category_hint}检索暂时不可用（{type(exc).__name__}）。"
+        "本轮不要把它视为业务失败；请基于已确认信息给出保守建议，"
+        "并把价格、库存、开放时间、预约、天气等动态信息标注为待二次核实。"
+    )
+    return _format_rag_results(
+        [],
+        query,
+        visibility=visibility,
+        empty_message=message,
+    )
+
+
 async def _retrieve_public(query: str, enhanced_query: str | None = None) -> str:
     pipeline = await _get_rag_pipeline()
     requested_destinations = _extract_requested_destinations(query)
@@ -296,8 +317,13 @@ async def search_destination_guide(query: str) -> str:
     try:
         return await _retrieve_public(query)
     except Exception as e:
-        app_logger.error(f"❌ RAG 检索失败: {e}")
-        raise ToolException(f"检索过程中出现错误：{str(e)}")
+        app_logger.exception(f"❌ RAG 检索失败，已降级为空证据: {e}")
+        return _format_retrieval_failure(
+            query,
+            label="公开攻略知识库",
+            visibility="public",
+            exc=e,
+        )
 
 
 @tool
@@ -321,8 +347,13 @@ async def search_food_recommendations(query: str) -> str:
     try:
         return await _retrieve_public(query, f"{query} 美食 餐厅 小吃")
     except Exception as e:
-        app_logger.error(f"❌ 美食检索失败: {e}")
-        raise ToolException(f"检索过程中出现错误：{str(e)}")
+        app_logger.exception(f"❌ 美食检索失败，已降级为空证据: {e}")
+        return _format_retrieval_failure(
+            query,
+            label="美食知识库",
+            visibility="public",
+            exc=e,
+        )
 
 
 @tool
@@ -346,8 +377,13 @@ async def search_accommodation_info(query: str) -> str:
     try:
         return await _retrieve_public(query, f"{query} 住宿 酒店 民宿")
     except Exception as e:
-        app_logger.error(f"❌ 住宿检索失败: {e}")
-        raise ToolException(f"检索过程中出现错误：{str(e)}")
+        app_logger.exception(f"❌ 住宿检索失败，已降级为空证据: {e}")
+        return _format_retrieval_failure(
+            query,
+            label="住宿知识库",
+            visibility="public",
+            exc=e,
+        )
 
 
 @tool
@@ -371,8 +407,13 @@ async def search_travel_tips(query: str) -> str:
     try:
         return await _retrieve_public(query, f"{query} 注意事项 建议 提示")
     except Exception as e:
-        app_logger.error(f"❌ 旅行贴士检索失败: {e}")
-        raise ToolException(f"检索过程中出现错误：{str(e)}")
+        app_logger.exception(f"❌ 旅行贴士检索失败，已降级为空证据: {e}")
+        return _format_retrieval_failure(
+            query,
+            label="旅行贴士知识库",
+            visibility="public",
+            exc=e,
+        )
 
 
 @tool
@@ -389,8 +430,14 @@ async def search_agency_product_templates(query: str) -> str:
             expected_category="products",
         )
     except Exception as e:
-        app_logger.error(f"❌ 内部产品模板检索失败: {e}")
-        raise ToolException(f"检索过程中出现错误：{str(e)}")
+        app_logger.exception(f"❌ 内部产品模板检索失败，已降级为空证据: {e}")
+        return _format_retrieval_failure(
+            query,
+            label="旅行社内部知识库",
+            visibility="internal",
+            exc=e,
+            expected_category="products",
+        )
 
 
 @tool
@@ -407,8 +454,14 @@ async def search_agency_service_sop(query: str) -> str:
             expected_category="sop",
         )
     except Exception as e:
-        app_logger.error(f"❌ 内部服务 SOP 检索失败: {e}")
-        raise ToolException(f"检索过程中出现错误：{str(e)}")
+        app_logger.exception(f"❌ 内部服务 SOP 检索失败，已降级为空证据: {e}")
+        return _format_retrieval_failure(
+            query,
+            label="旅行社内部知识库",
+            visibility="internal",
+            exc=e,
+            expected_category="sop",
+        )
 
 
 @tool
@@ -425,8 +478,14 @@ async def search_agency_pricing_rules(query: str) -> str:
             expected_category="pricing",
         )
     except Exception as e:
-        app_logger.error(f"❌ 内部报价规则检索失败: {e}")
-        raise ToolException(f"检索过程中出现错误：{str(e)}")
+        app_logger.exception(f"❌ 内部报价规则检索失败，已降级为空证据: {e}")
+        return _format_retrieval_failure(
+            query,
+            label="旅行社内部知识库",
+            visibility="internal",
+            exc=e,
+            expected_category="pricing",
+        )
 
 
 @tool
@@ -443,8 +502,14 @@ async def search_agency_risk_playbook(query: str) -> str:
             expected_category="risk",
         )
     except Exception as e:
-        app_logger.error(f"❌ 内部风险手册检索失败: {e}")
-        raise ToolException(f"检索过程中出现错误：{str(e)}")
+        app_logger.exception(f"❌ 内部风险手册检索失败，已降级为空证据: {e}")
+        return _format_retrieval_failure(
+            query,
+            label="旅行社内部知识库",
+            visibility="internal",
+            exc=e,
+            expected_category="risk",
+        )
 
 
 @tool
@@ -461,8 +526,14 @@ async def search_agency_report_standards(query: str) -> str:
             expected_category="report",
         )
     except Exception as e:
-        app_logger.error(f"❌ 内部报告标准检索失败: {e}")
-        raise ToolException(f"检索过程中出现错误：{str(e)}")
+        app_logger.exception(f"❌ 内部报告标准检索失败，已降级为空证据: {e}")
+        return _format_retrieval_failure(
+            query,
+            label="旅行社内部知识库",
+            visibility="internal",
+            exc=e,
+            expected_category="report",
+        )
 
 
 # ============== 工具集合 ==============

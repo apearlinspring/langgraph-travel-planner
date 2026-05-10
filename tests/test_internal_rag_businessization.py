@@ -305,3 +305,40 @@ async def test_public_rag_keeps_matching_destination_content(monkeypatch):
 
     assert "兵马俑" in result
     assert "xian.md" in result
+
+
+async def _failing_rag_pipeline():
+    class FailingPipeline:
+        def retrieve(self, query):
+            raise RuntimeError("temporary embedding outage")
+
+    return FailingPipeline()
+
+
+@pytest.mark.asyncio
+async def test_public_rag_tool_degrades_to_empty_evidence_on_retrieval_failure(monkeypatch):
+    monkeypatch.setattr(rag_tools, "_get_rag_pipeline", _failing_rag_pipeline)
+
+    result = await rag_tools.search_destination_guide.ainvoke(
+        {"query": "长沙 4天3晚 攻略"}
+    )
+
+    assert "RAG 检索证据契约" in result
+    assert '"result_status": "empty"' in result
+    assert "检索暂时不可用" in result
+    assert "待二次核实" in result
+
+
+@pytest.mark.asyncio
+async def test_internal_rag_tool_degrades_to_empty_evidence_on_retrieval_failure(monkeypatch):
+    monkeypatch.setattr(rag_tools, "_get_internal_rag_pipeline", _failing_rag_pipeline)
+
+    result = await rag_tools.search_agency_pricing_rules.ainvoke(
+        {"query": "长沙 4天3晚 报价规则"}
+    )
+
+    assert "RAG 检索证据契约" in result
+    assert '"knowledge_base": "agency_internal_knowledge"' in result
+    assert '"result_status": "empty"' in result
+    assert "pricing" in result
+    assert "检索暂时不可用" in result

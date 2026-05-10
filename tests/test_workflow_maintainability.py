@@ -312,6 +312,53 @@ def test_record_requirement_persists_planning_mode():
     assert "规划模式：旅行社顾问方案" in command.update["messages"][0].content
 
 
+def test_record_requirement_treats_hotel_fallback_as_agency_plan():
+    state = create_initial_state(user_id="user-1", session_id="session-1")
+
+    command = record_requirement_tool.invoke(
+        {
+            "departure_city": "上海",
+            "destination": "长沙",
+            "departure_date": "2026-06-01",
+            "travel_days": 4,
+            "adult_count": 2,
+            "children_count": 0,
+            "budget_min": 2000.0,
+            "budget_max": 3500.0,
+            "travel_styles": ["relaxation", "food"],
+            "special_needs": "住湘江边江景房，如果查不到具体酒店也给可执行兜底方案",
+            "runtime": _build_runtime(state),
+        }
+    )
+
+    assert command.update["planning_mode"] == "agency_plan"
+    assert command.update["user_requirement"]["planning_mode"] == "agency_plan"
+
+
+def test_record_requirement_corrects_weak_free_mode_when_hotel_fallback_is_requested():
+    state = create_initial_state(user_id="user-1", session_id="session-1")
+
+    command = record_requirement_tool.invoke(
+        {
+            "departure_city": "上海",
+            "destination": "长沙",
+            "departure_date": "2026-06-01",
+            "travel_days": 4,
+            "adult_count": 2,
+            "children_count": 0,
+            "budget_min": 2000.0,
+            "budget_max": 3500.0,
+            "travel_styles": ["relaxation", "food"],
+            "special_needs": "住湘江边江景房，如果查不到具体酒店也给可执行兜底方案",
+            "planning_mode": "free_planning",
+            "runtime": _build_runtime(state),
+        }
+    )
+
+    assert command.update["planning_mode"] == "agency_plan"
+    assert "修正为旅行社顾问方案" in command.update["planning_mode_reason"]
+
+
 def test_select_transport_tool_can_persist_concrete_transport_option():
     state = create_initial_state(user_id="user-1", session_id="session-1")
 

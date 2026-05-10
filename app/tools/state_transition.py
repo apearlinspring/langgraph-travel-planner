@@ -2633,12 +2633,19 @@ def record_requirement_tool(
     inferred_text_mode = None
     if any(
         keyword in mode_seed_text
-        for keyword in ("省心", "旅行社", "成熟路线", "定制游", "跟团", "小包团", "私家团", "团建", "亲子", "银发", "自由行", "自由规划", "自助游", "自己玩", "不跟团", "自己订")
+        for keyword in ("省心", "旅行社", "成熟路线", "定制游", "跟团", "小包团", "私家团", "团建", "亲子", "银发", "兜底", "自由行", "自由规划", "自助游", "自己玩", "不跟团", "自己订")
     ):
         inferred_text_mode = _infer_planning_mode(mode_seed)
+    tool_planning_mode = _normalize_planning_mode(planning_mode)
+    if tool_planning_mode == "free_planning" and inferred_text_mode == "agency_plan":
+        tool_planning_mode = None
+        planning_mode_reason = (
+            planning_mode_reason
+            or "已按用户提出的住宿兜底方案诉求修正为旅行社顾问方案"
+        )
     state_mode = _state_planning_mode(runtime.state if runtime else None)
     normalized_planning_mode = (
-        _normalize_planning_mode(planning_mode)
+        tool_planning_mode
         or inferred_text_mode
         or state_mode
         or "free_planning"

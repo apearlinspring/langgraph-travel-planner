@@ -84,6 +84,29 @@ DESTINATION_HINT_KEYWORDS = (
     "城市",
 )
 
+COMMON_CITY_NAMES = (
+    "北京",
+    "上海",
+    "广州",
+    "深圳",
+    "杭州",
+    "南京",
+    "成都",
+    "重庆",
+    "西安",
+    "武汉",
+    "长沙",
+    "苏州",
+    "厦门",
+    "青岛",
+    "三亚",
+    "桂林",
+    "丽江",
+    "大理",
+    "昆明",
+    "张家界",
+)
+
 AGENCY_INTERNAL_TOOL_NAMES = frozenset(
     {
         "search_agency_product_templates",
@@ -113,6 +136,49 @@ INTENT_INTERNAL_TOOL_ALLOWLIST = {
         }
     ),
 }
+
+ONE_SHOT_TOOLS_AFTER_CALL = frozenset(
+    {
+        "record_requirement_tool",
+        "query_destination_info",
+        "query_hotel_options",
+        "query_transport_options",
+        "select_destination_tool",
+        "select_transport_tool",
+        "select_accommodation_tool",
+        "select_food_tool",
+        "generate_itinerary_tool",
+        "summarize_budget_tool",
+        "generate_order_tool",
+    }
+)
+
+DATE_TOOL_NAMES = frozenset({"get-current-date", "getTodayDate"})
+
+RELATIVE_DATE_TOOL_KEYWORDS = (
+    "今天",
+    "明天",
+    "后天",
+    "大后天",
+    "本周",
+    "这周",
+    "下周",
+    "下下周",
+    "周末",
+    "月初",
+    "月底",
+    "下个月",
+    "春节",
+    "五一",
+    "端午",
+    "中秋",
+    "国庆",
+    "暑假",
+    "寒假",
+    "元旦",
+    "清明",
+    "劳动节",
+)
 
 
 def _to_prompt_value(value: Any) -> Any:
@@ -332,6 +398,13 @@ def _tool_repeat_instruction(current_step: str, recent_tool_names: set[str]) -> 
         return (
             "本轮已经执行过 `query_transport_options`。不要在同一轮再次调用交通查询；"
             "请直接基于已有工具结果做比较和推荐。"
+        )
+    repeated_one_shot_tools = sorted(ONE_SHOT_TOOLS_AFTER_CALL & recent_tool_names)
+    if repeated_one_shot_tools:
+        return (
+            "本轮已经完成这些一次性工具调用："
+            f"{', '.join(f'`{name}`' for name in repeated_one_shot_tools)}。"
+            "不要在同一轮再次调用它们；请基于已有工具结果继续总结、推荐或推进下一步。"
         )
     return ""
 
@@ -683,6 +756,39 @@ def _confirmed_destination_name(state_dict: dict[str, Any], text: str) -> str | 
     if len(candidate_names) == 1:
         return candidate_names[0]
 
+    inferred_destination = _infer_destination_from_state_messages(state_dict)
+    if inferred_destination:
+        return inferred_destination
+
+    return None
+
+
+def _infer_destination_from_route_text(text: str) -> str | None:
+    for match in re.finditer(r"(?:去|到)([^，。；\n]{0,24})", text or ""):
+        segment = match.group(1)
+        for city in COMMON_CITY_NAMES:
+            if city in segment:
+                return city
+    return None
+
+
+def _infer_destination_from_state_messages(state_dict: dict[str, Any]) -> str | None:
+    texts: list[str] = []
+    for message in state_dict.get("messages") or []:
+        content = None
+        if isinstance(message, dict):
+            role = message.get("role") or message.get("type")
+            if role in {"user", "human"}:
+                content = message.get("content")
+        elif getattr(message, "type", None) == "human" or getattr(message, "role", None) == "user":
+            content = getattr(message, "content", None)
+        if content:
+            texts.append(content if isinstance(content, str) else str(content))
+
+    for text in reversed(texts):
+        destination = _infer_destination_from_route_text(text)
+        if destination:
+            return destination
     return None
 
 
@@ -731,26 +837,9 @@ def _has_people_hint(text: str) -> bool:
 
 def _has_route_hint(text: str) -> bool:
     route_keywords = ("从", "出发", "去", "目的地", "想去")
-    city_keywords = (
-        "北京",
-        "上海",
-        "广州",
-        "深圳",
-        "杭州",
-        "南京",
-        "成都",
-        "重庆",
-        "西安",
-        "武汉",
-        "长沙",
-        "苏州",
-        "厦门",
-        "青岛",
-        "三亚",
-    )
     return (
         any(keyword in text for keyword in route_keywords)
-        and sum(1 for city in city_keywords if city in text) >= 1
+        and sum(1 for city in COMMON_CITY_NAMES if city in text) >= 1
     )
 
 
@@ -830,6 +919,18 @@ def _should_finalize_requirement_after_followup(
         _has_style_hint(combined_text),
     ]
     return sum(1 for item in checks if item) >= 5
+
+
+def _should_allow_date_tools(text: str) -> bool:
+    normalized = (text or "").strip()
+    if not normalized:
+        return False
+    if any(keyword in normalized for keyword in RELATIVE_DATE_TOOL_KEYWORDS):
+        return True
+    return bool(
+        re.search(r"(这|本|下|下下)周[一二三四五六日天]?", normalized)
+        or re.search(r"\d{1,2}\s*月\s*(上旬|中旬|下旬|月初|月底)", normalized)
+    )
 
 
 class StepConfigMiddleware(AgentMiddleware):
@@ -932,6 +1033,15 @@ class StepConfigMiddleware(AgentMiddleware):
 
         compatibility = get_model_compatibility(profile="planner")
         latest_human_text = _latest_human_text(request)
+        if current_step == "requirement_collection" and not _should_allow_date_tools(
+            latest_human_text
+        ):
+            filtered_tools = _exclude_tools_by_name(override_kwargs["tools"], DATE_TOOL_NAMES)
+            if len(filtered_tools) != len(override_kwargs["tools"]):
+                override_kwargs["tools"] = filtered_tools
+                app_logger.info(
+                    "需求收集未检测到相对日期，本轮移除日期工具以降低首 token 延迟"
+                )
         travel_intent = detect_travel_intent(
             latest_human_text,
             current_step=current_step,
@@ -1050,6 +1160,16 @@ class StepConfigMiddleware(AgentMiddleware):
 
         recent_tool_names = _recent_tool_names_since_latest_human(request)
         repeat_instruction = _tool_repeat_instruction(current_step, recent_tool_names)
+        used_one_shot_tools = ONE_SHOT_TOOLS_AFTER_CALL & recent_tool_names
+        if used_one_shot_tools:
+            filtered_tools = _exclude_tools_by_name(override_kwargs["tools"], used_one_shot_tools)
+            if len(filtered_tools) != len(override_kwargs["tools"]):
+                override_kwargs["tools"] = filtered_tools
+                available_tool_names = _tool_names(override_kwargs["tools"])
+                app_logger.info(
+                    "本轮移除已完成的一次性工具: "
+                    f"step={current_step}, tools={sorted(used_one_shot_tools)}"
+                )
         if repeat_instruction:
             override_kwargs["system_prompt"] = (
                 f"{override_kwargs['system_prompt']}\n\n{repeat_instruction}"
@@ -1103,7 +1223,7 @@ class StepConfigMiddleware(AgentMiddleware):
                 app_logger.info(f"模型不支持强制 tool_choice，改为提示词引导: {forced_tool}")
 
         modified_request = request.override(**override_kwargs)
-        app_logger.info(f"已注入步骤配置，工具数量: {len(step_config['tools'])}")
+        app_logger.info(f"已注入步骤配置，工具数量: {len(override_kwargs['tools'])}")
         return await handler(modified_request)
 
 

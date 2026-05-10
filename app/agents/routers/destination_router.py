@@ -82,6 +82,52 @@ EXPLORE_KEYWORDS = (
     "休闲",
 )
 
+LIVE_SEARCH_KEYWORDS = (
+    "最新",
+    "最近",
+    "近期",
+    "现在",
+    "实时",
+    "今天",
+    "明天",
+    "本周",
+    "当季",
+    "开放",
+    "闭园",
+    "限流",
+    "预约",
+    "门票",
+    "票价",
+    "活动",
+    "演出",
+    "临时",
+)
+
+FOOD_QUERY_KEYWORDS = (
+    "美食",
+    "餐饮",
+    "吃",
+    "小吃",
+    "餐厅",
+)
+
+ACCOMMODATION_QUERY_KEYWORDS = (
+    "住宿",
+    "酒店",
+    "民宿",
+    "宾馆",
+    "客栈",
+)
+
+TRAVEL_TIP_QUERY_KEYWORDS = (
+    "注意",
+    "避坑",
+    "季节",
+    "穿衣",
+    "贴士",
+    "提醒",
+)
+
 
 def _build_llm(temperature: float = 0.7):
     return build_chat_model(profile="router", temperature=temperature)
@@ -190,7 +236,69 @@ def route_to_agents(state: DestinationRouterState) -> list[Send]:
 
 
 async def _get_explore_tools():
+    return await _get_explore_tools_for_query(include_live_search=True)
+
+
+def _should_include_live_search(query: str) -> bool:
+    normalized = (query or "").strip()
+    return _contains_any_keyword(normalized, LIVE_SEARCH_KEYWORDS)
+
+
+def _select_stable_rag_tool(query: str):
+    tools = {tool.name: tool for tool in get_rag_tools()}
+    normalized = (query or "").strip()
+    if _contains_any_keyword(normalized, FOOD_QUERY_KEYWORDS):
+        return tools.get("search_food_recommendations")
+    if _contains_any_keyword(normalized, ACCOMMODATION_QUERY_KEYWORDS):
+        return tools.get("search_accommodation_info")
+    if _contains_any_keyword(normalized, TRAVEL_TIP_QUERY_KEYWORDS):
+        return tools.get("search_travel_tips")
+    return tools.get("search_destination_guide")
+
+
+async def _run_stable_rag_query(destination: str, query: str) -> str | None:
+    tool = _select_stable_rag_tool(query)
+    if tool is None:
+        return None
+    search_query = query if destination and destination in query else f"{destination} {query}"
+    result = await tool.ainvoke({"query": search_query})
+    return (
+        "已检索本地知识库，以下为可用于顾问判断的证据；"
+        "面向用户表达时不要暴露内部契约、工具名或文档路径。\n\n"
+        f"{result}"
+    )
+
+
+async def _run_live_search_query(destination: str, query: str) -> str | None:
+    try:
+        search_tools = await get_search_tools()
+    except Exception as exc:
+        app_logger.warning(f"Failed to load live search tool for destination router: {exc}")
+        return "实时搜索工具暂时不可用；涉及开放、票价、预约和活动的信息请出发前二次核实。"
+
+    search_tool = next(
+        (tool for tool in search_tools if tool.name == "search_travel_info"),
+        search_tools[0] if search_tools else None,
+    )
+    if search_tool is None:
+        return "实时搜索工具暂时不可用；涉及开放、票价、预约和活动的信息请出发前二次核实。"
+
+    search_query = query if destination and destination in query else f"{destination} {query}"
+    try:
+        result = await search_tool.ainvoke({"query": search_query, "max_results": 3})
+    except Exception as exc:
+        app_logger.warning(f"Live search failed for destination router: {exc}")
+        return f"实时搜索暂时失败（{type(exc).__name__}）；动态信息请出发前二次核实。"
+    return (
+        "实时搜索补充如下；只用于动态信息校验，价格、开放和预约仍需出发前二次核实。\n\n"
+        f"{result}"
+    )
+
+
+async def _get_explore_tools_for_query(*, include_live_search: bool):
     tools = list(get_rag_tools())
+    if not include_live_search:
+        return tools
     try:
         tools.extend(await get_search_tools())
     except Exception as exc:
@@ -216,10 +324,10 @@ def _create_explore_agent(tools):
     )
 
 
-async def _get_or_create_explore_agent():
+async def _get_or_create_explore_agent(*, include_live_search: bool):
     global _explore_agent, _explore_agent_signature
 
-    tools = await _get_explore_tools()
+    tools = await _get_explore_tools_for_query(include_live_search=include_live_search)
     signature = tuple(sorted(tool.name for tool in tools))
     if _explore_agent is None or signature != _explore_agent_signature:
         _explore_agent = _create_explore_agent(tools)
@@ -232,18 +340,20 @@ async def explore_agent_node(state: dict) -> dict:
     destination = state["destination"]
 
     app_logger.info(f"Destination explore agent running: {destination} - {query}")
-    agent = await _get_or_create_explore_agent()
-    response = await agent.ainvoke(
-        {
-            "messages": [
-                {
-                    "role": "user",
-                    "content": f"请为我提供关于 {destination} 的以下信息：{query}",
-                }
-            ]
-        }
+    include_live_search = _should_include_live_search(query)
+    result_parts = []
+    stable_result = await _run_stable_rag_query(destination, query)
+    if stable_result:
+        result_parts.append(stable_result)
+    if include_live_search:
+        live_result = await _run_live_search_query(destination, query)
+        if live_result:
+            result_parts.append(live_result)
+    final_message = (
+        "\n\n".join(result_parts)
+        if result_parts
+        else "暂时未找到足够目的地资料；请基于已确认需求给出保守建议，并标注待二次核实项。"
     )
-    final_message = response["messages"][-1].content
 
     formatted_result = (
         f"## {destination} 目的地信息\n\n"

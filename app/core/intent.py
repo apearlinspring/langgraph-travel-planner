@@ -498,6 +498,22 @@ def detect_travel_intent(
             reason="用户关注避坑、风险、预约或 Plan B",
         )
 
+    hotel_hit = _contains_any(normalized, _HOTEL_KEYWORDS)
+    if (
+        hotel_hit
+        and current_step == "accommodation_planning"
+        and any(keyword in normalized for keyword in ("真实", "锁价", "待核验", "查不到", "具体酒店", "酒店候选"))
+    ):
+        return TravelIntent(
+            "hotel_query",
+            confidence=0.9,
+            preferred_tool="query_hotel_options",
+            target_step="accommodation_planning",
+            planning_mode=planning_decision.mode,
+            slots=slots,
+            reason="住宿阶段用户要求真实酒店、锁价核验或兜底酒店方案",
+        )
+
     if planning_decision.mode == "agency_plan":
         return TravelIntent(
             "agency_plan_query",
@@ -519,7 +535,6 @@ def detect_travel_intent(
             reason=planning_decision.reason or "用户表达自由行/自助规划意图",
         )
 
-    hotel_hit = _contains_any(normalized, _HOTEL_KEYWORDS)
     if (
         hotel_hit
         and not selection_turn

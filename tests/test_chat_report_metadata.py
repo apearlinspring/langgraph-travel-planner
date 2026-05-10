@@ -1,5 +1,8 @@
 import os
+import json
 from types import SimpleNamespace
+
+import pytest
 
 os.environ.setdefault("DASHSCOPE_API_KEY", "test-dashscope-key")
 os.environ.setdefault("LANGSMITH_API_KEY", "test-langsmith-key")
@@ -7,10 +10,12 @@ os.environ.setdefault("POSTGRES_DB", "test_db")
 os.environ.setdefault("POSTGRES_USER", "test_user")
 os.environ.setdefault("POSTGRES_PASSWORD", "test_password")
 
+from app.api.v1 import chat
 from app.api.v1.chat import (
     _report_content_from_tool_output,
     _report_extra_info_from_tool_output,
 )
+from app.core.session_lock import reset_session_locks_for_tests
 
 
 def test_report_extra_info_from_command_output():
@@ -54,3 +59,194 @@ def test_report_content_from_command_output_falls_back_to_tool_message():
     )
 
     assert _report_content_from_tool_output(output) == "工具消息报告"
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_stops_after_structured_report_event(monkeypatch):
+    await reset_session_locks_for_tests()
+    saved_messages = []
+    report_data = {
+        "version": "travel_report.v1",
+        "overview": {"route_label": "上海 -> 杭州"},
+    }
+
+    async def fake_save_message(db, conversation_id, role, content, extra_info=None):
+        saved_messages.append(
+            {
+                "role": role,
+                "content": content,
+                "extra_info": extra_info or {},
+            }
+        )
+        return SimpleNamespace()
+
+    class FakeAgent:
+        async def astream_events(self, *args, **kwargs):
+            yield {
+                "event": "on_tool_start",
+                "name": "generate_order_tool",
+                "run_id": "run-1",
+                "data": {"input": {}},
+            }
+            yield {
+                "event": "on_tool_end",
+                "name": "generate_order_tool",
+                "run_id": "run-1",
+                "data": {
+                    "output": SimpleNamespace(
+                        update={
+                            "order_id": "ORDER-1234",
+                            "report": "# 完整报告",
+                            "report_data": report_data,
+                        }
+                    )
+                },
+            }
+            yield {
+                "event": "on_chat_model_stream",
+                "data": {"chunk": SimpleNamespace(content="不应继续生成")},
+            }
+
+    async def fake_create_travel_agent():
+        return FakeAgent()
+
+    monkeypatch.setattr(chat, "save_message", fake_save_message)
+    monkeypatch.setattr(chat, "create_travel_agent", fake_create_travel_agent)
+
+    events = []
+    async for frame in chat.generate_sse_stream(
+        "conversation-1",
+        "生成最终报告",
+        db=SimpleNamespace(),
+        user=SimpleNamespace(id="user-1"),
+    ):
+        events.append(json.loads(frame.removeprefix("data: ").strip()))
+
+    assert [event["type"] for event in events] == [
+        "tool_call",
+        "report_data",
+        "tool_audit",
+        "done",
+    ]
+    assert events[1]["report_data"] == report_data
+    assert saved_messages[-1]["role"] == "assistant"
+    assert saved_messages[-1]["content"] == "# 完整报告"
+    assert saved_messages[-1]["extra_info"]["report_data"] == report_data
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_suppresses_duplicate_tool_call_events(monkeypatch):
+    await reset_session_locks_for_tests()
+
+    async def fake_save_message(db, conversation_id, role, content, extra_info=None):
+        return SimpleNamespace()
+
+    class FakeAgent:
+        async def astream_events(self, *args, **kwargs):
+            for index in (1, 2):
+                yield {
+                    "event": "on_tool_start",
+                    "name": "search_travel_info",
+                    "run_id": f"run-{index}",
+                    "data": {"input": {"query": "杭州最新开放"}},
+                }
+                yield {
+                    "event": "on_tool_end",
+                    "name": "search_travel_info",
+                    "run_id": f"run-{index}",
+                    "data": {"output": "ok"},
+                }
+
+    async def fake_create_travel_agent():
+        return FakeAgent()
+
+    monkeypatch.setattr(chat, "save_message", fake_save_message)
+    monkeypatch.setattr(chat, "create_travel_agent", fake_create_travel_agent)
+
+    events = []
+    async for frame in chat.generate_sse_stream(
+        "conversation-dup-tool",
+        "查一下杭州最新开放",
+        db=SimpleNamespace(),
+        user=SimpleNamespace(id="user-1"),
+    ):
+        events.append(json.loads(frame.removeprefix("data: ").strip()))
+
+    tool_call_events = [event for event in events if event["type"] == "tool_call"]
+    assert tool_call_events == [{"type": "tool_call", "tool": "search_travel_info"}]
+    assert [event["type"] for event in events].count("tool_audit") == 2
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_finishes_transient_disconnect_after_partial_content(monkeypatch):
+    await reset_session_locks_for_tests()
+    saved_messages = []
+
+    async def fake_save_message(db, conversation_id, role, content, extra_info=None):
+        saved_messages.append({"role": role, "content": content, "extra_info": extra_info or {}})
+        return SimpleNamespace()
+
+    class FakeAgent:
+        async def astream_events(self, *args, **kwargs):
+            yield {
+                "event": "on_chat_model_stream",
+                "data": {"chunk": SimpleNamespace(content="已生成部分回答")},
+            }
+            raise RuntimeError(
+                "peer closed connection without sending complete message body "
+                "(incomplete chunked read)"
+            )
+
+    async def fake_create_travel_agent():
+        return FakeAgent()
+
+    monkeypatch.setattr(chat, "save_message", fake_save_message)
+    monkeypatch.setattr(chat, "create_travel_agent", fake_create_travel_agent)
+
+    events = []
+    async for frame in chat.generate_sse_stream(
+        "conversation-2",
+        "继续规划",
+        db=SimpleNamespace(),
+        user=SimpleNamespace(id="user-1"),
+    ):
+        events.append(json.loads(frame.removeprefix("data: ").strip()))
+
+    assert [event["type"] for event in events] == ["token", "done"]
+    assert events[0]["content"] == "已生成部分回答"
+    assert saved_messages[-1]["content"] == "已生成部分回答"
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_uses_fallback_token_for_empty_transient_disconnect(monkeypatch):
+    await reset_session_locks_for_tests()
+    saved_messages = []
+
+    async def fake_save_message(db, conversation_id, role, content, extra_info=None):
+        saved_messages.append({"role": role, "content": content, "extra_info": extra_info or {}})
+        return SimpleNamespace()
+
+    class FakeAgent:
+        async def astream_events(self, *args, **kwargs):
+            if False:
+                yield {}
+            raise RuntimeError("incomplete chunked read")
+
+    async def fake_create_travel_agent():
+        return FakeAgent()
+
+    monkeypatch.setattr(chat, "save_message", fake_save_message)
+    monkeypatch.setattr(chat, "create_travel_agent", fake_create_travel_agent)
+
+    events = []
+    async for frame in chat.generate_sse_stream(
+        "conversation-3",
+        "继续规划",
+        db=SimpleNamespace(),
+        user=SimpleNamespace(id="user-1"),
+    ):
+        events.append(json.loads(frame.removeprefix("data: ").strip()))
+
+    assert [event["type"] for event in events] == ["token", "done"]
+    assert "模型流式连接中断" in events[0]["content"]
+    assert saved_messages[-1]["content"] == events[0]["content"]

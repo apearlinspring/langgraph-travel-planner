@@ -97,6 +97,15 @@ def test_detect_agency_plan_can_override_no_group_tour_wording():
     assert intent.preferred_tool == "search_agency_product_templates"
 
 
+def test_transport_fallback_plan_stays_neutral_mode():
+    decision = resolve_planning_mode(
+        "从西宁去敦煌，优先高铁，如果查不到合适车次也请给待核验兜底交通方案。",
+        state={},
+    )
+
+    assert decision.mode is None
+
+
 def test_detect_rejected_agency_plan_stays_free_planning():
     intent = detect_travel_intent(
         "不要旅行社产品，也别推销套餐，我只要自由行攻略。",
@@ -106,6 +115,16 @@ def test_detect_rejected_agency_plan_stays_free_planning():
     assert intent.name == "free_planning_query"
     assert intent.planning_mode == "free_planning"
     assert intent.preferred_tool is None
+
+
+def test_accommodation_selection_with_price_verification_queries_hotels():
+    intent = detect_travel_intent(
+        "住宿按省心、干净、动线方便的方案记录；如果没有真实锁价，请标注待核验。",
+        current_step="accommodation_planning",
+    )
+
+    assert intent.name == "hotel_query"
+    assert intent.preferred_tool == "query_hotel_options"
 
 
 def test_resolve_planning_mode_marks_ambiguous_mode_for_confirmation():
