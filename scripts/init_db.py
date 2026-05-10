@@ -17,6 +17,7 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.store.postgres import AsyncPostgresStore
 from app.config import settings
 from app.utils.logger import app_logger
+import app.models  # noqa: F401
 from app.models.base import init_db
 
 
@@ -27,7 +28,7 @@ async def init_database():
     app_logger.info(f"连接数据库: {settings.postgres_host}:{settings.postgres_port}/{settings.postgres_db}")
 
     try:
-        # 1. 初始化业务表（用户、会话、消息）
+        # 1. 初始化业务表（用户、会话、消息、治理审计）
         app_logger.info("初始化业务表...")
         await init_db()
         app_logger.info("✅ 业务表创建成功")

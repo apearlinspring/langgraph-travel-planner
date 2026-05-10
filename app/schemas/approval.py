@@ -54,8 +54,25 @@ class ApprovalResponse(BaseModel):
     decided_at: float | None = None
 
 
+class ApprovalEventResponse(BaseModel):
+    approval_id: str
+    action: str
+    event_type: str
+    from_status: ApprovalStatus | None = None
+    to_status: ApprovalStatus
+    actor_id: str | None = None
+    reason: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: float
+
+
 class ApprovalListResponse(BaseModel):
     approvals: list[ApprovalResponse]
+    total: int
+
+
+class ApprovalEventListResponse(BaseModel):
+    events: list[ApprovalEventResponse]
     total: int
 
 
