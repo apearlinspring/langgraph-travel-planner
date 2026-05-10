@@ -14,6 +14,7 @@ from app.core.workflow import (
     STEP_LABELS,
     STEP_STATE_FIELDS,
 )
+from app.reports import render_report_markdown, validate_report_data
 from app.tools.state_transition import (
     check_current_progress,
     generate_itinerary_tool,
@@ -573,6 +574,8 @@ def test_itinerary_budget_and_order_report_use_selected_real_options():
     assert "估算项" in order_command.update["report"]
     assert "天气与风险提醒" in order_command.update["report"]
     assert "后续可调整" in order_command.update["report"]
+    assert "顾问交付清单" in order_command.update["report"]
+    assert "顾问核验清单" in order_command.update["report"]
     assert "Day 1" in order_command.update["report"]
     assert "Day 1：" in order_command.update["report"]
     assert "上午/" in order_command.update["report"]
@@ -588,6 +591,15 @@ def test_itinerary_budget_and_order_report_use_selected_real_options():
     assert report_data["agency_context"]["source_type"] == "agency_internal"
     assert report_data["agency_context"]["highlights"]
     assert report_data["budget"]["items"]
+    assert report_data["evidence_bundle"]["source_type"] == "structured_state"
+    assert report_data["tool_audit_summary"]["readiness"] == "可交付，预订前需核验"
+    assert report_data["tool_audit_summary"]["pending_checks"]
+    assert any(
+        section["id"] == "tool_audit_summary"
+        for section in report_data["sections"]
+    )
+    assert validate_report_data(report_data).ok is True
+    assert order_command.update["report"] == render_report_markdown(report_data)
     assert [
         day["route"]["summary"] for day in report_data["itinerary"]
     ] == [
@@ -993,6 +1005,7 @@ def test_final_report_keeps_budget_confidence_contract_when_prices_are_missing()
     assert "兜底估算" in report
     assert "交通 API 未提供具体票价" in report
     assert "酒店 MCP 未提供可追溯价格" in report
+    assert "顾问交付清单" in report
     for day_number in range(1, 5):
         assert f"Day {day_number}" in report
 
@@ -1008,7 +1021,17 @@ def test_final_report_keeps_budget_confidence_contract_when_prices_are_missing()
     )
     assert report_data["budget"]["confidence"] == report_data["budget_confidence"]
     assert any(
+        "交通 API 未提供具体票价" in item
+        for item in report_data["tool_audit_summary"]["pending_checks"]
+    )
+    assert report_data["evidence_bundle"]["price_evidence"]["estimated"]
+    assert validate_report_data(report_data).ok is True
+    assert any(
         section["title"] == "预算置信度与待核验项"
+        for section in report_data["sections"]
+    )
+    assert any(
+        section["title"] == "顾问交付清单"
         for section in report_data["sections"]
     )
 
