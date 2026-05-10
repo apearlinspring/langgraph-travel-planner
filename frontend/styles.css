@@ -2535,6 +2535,16 @@ html {
         color: #fffaf0;
         box-shadow: 0 22px 42px rgba(18, 63, 70, 0.18);
       }
+      .message.assistant .message-text .travel-report--agency .travel-report-hero {
+        background:
+          radial-gradient(circle at 82% 10%, rgba(219, 169, 104, 0.26), transparent 32%),
+          linear-gradient(135deg, #123f46, #1d5a62 56%, #7b5133);
+      }
+      .message.assistant .message-text .travel-report--free .travel-report-hero {
+        background:
+          radial-gradient(circle at 84% 12%, rgba(36, 166, 161, 0.22), transparent 30%),
+          linear-gradient(135deg, #173f55, #277177 55%, #e5b56f);
+      }
       .message.assistant .message-text .travel-report-kicker {
         display: inline-flex;
         align-items: center;
@@ -2627,6 +2637,10 @@ html {
       .message.assistant .message-text .travel-report-card.budget {
         grid-column: 1 / -1;
       }
+      .message.assistant .message-text .travel-report-card.confidence,
+      .message.assistant .message-text .travel-report-card.handoff {
+        grid-column: 1 / -1;
+      }
       .message.assistant .message-text .travel-report-card.warning {
         background:
           linear-gradient(145deg, rgba(255, 247, 247, 0.98), rgba(255, 250, 244, 0.9));
@@ -2712,6 +2726,93 @@ html {
         color: var(--text-muted);
         font-size: 12px;
         line-height: 1.6;
+      }
+      .message.assistant .message-text .travel-report-confidence,
+      .message.assistant .message-text .travel-report-handoff {
+        display: grid;
+        gap: 12px;
+      }
+      .message.assistant .message-text .travel-report-confidence-head,
+      .message.assistant .message-text .travel-report-handoff-status {
+        display: grid;
+        gap: 5px;
+        padding: 14px;
+        border-radius: 18px;
+        background: rgba(26, 77, 84, 0.055);
+        border: 1px solid rgba(26, 77, 84, 0.08);
+      }
+      .message.assistant .message-text .travel-report-confidence--strong
+        .travel-report-confidence-head {
+        background: linear-gradient(135deg, rgba(36, 166, 161, 0.12), rgba(219, 169, 104, 0.1));
+      }
+      .message.assistant .message-text .travel-report-confidence--caution
+        .travel-report-confidence-head {
+        background: linear-gradient(135deg, rgba(180, 35, 24, 0.08), rgba(219, 169, 104, 0.12));
+      }
+      .message.assistant .message-text .travel-report-confidence-head span,
+      .message.assistant .message-text .travel-report-handoff-status span {
+        color: var(--accent);
+        font-size: 12px;
+        font-weight: 900;
+      }
+      .message.assistant .message-text .travel-report-confidence-head strong,
+      .message.assistant .message-text .travel-report-handoff-status strong {
+        color: var(--primary);
+        font-size: 22px;
+        line-height: 1.25;
+      }
+      .message.assistant .message-text .travel-report-confidence-head p {
+        margin: 0;
+        color: var(--text-muted);
+        font-size: 13px;
+        line-height: 1.7;
+      }
+      .message.assistant .message-text .travel-report-insight-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
+      }
+      .message.assistant .message-text .travel-report-insight-grid.compact {
+        grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+      }
+      .message.assistant .message-text .travel-report-insight-group {
+        min-width: 0;
+        padding: 13px;
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.78);
+        border: 1px solid rgba(26, 77, 84, 0.08);
+      }
+      .message.assistant .message-text .travel-report-insight-group.confirmed {
+        border-color: rgba(36, 166, 161, 0.24);
+      }
+      .message.assistant .message-text .travel-report-insight-group.verification,
+      .message.assistant .message-text .travel-report-insight-group.unsupported {
+        border-color: rgba(180, 35, 24, 0.16);
+        background: rgba(255, 247, 247, 0.72);
+      }
+      .message.assistant .message-text .travel-report-insight-group-head {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        color: var(--primary);
+        font-size: 13px;
+        font-weight: 900;
+        margin-bottom: 8px;
+      }
+      .message.assistant .message-text .travel-report-insight-group-head i {
+        color: var(--accent);
+      }
+      .message.assistant .message-text .travel-report-insight-group ul {
+        margin: 0;
+        padding-left: 18px;
+      }
+      .message.assistant .message-text .travel-report-insight-group li,
+      .message.assistant .message-text .travel-report-insight-group p {
+        margin: 0 0 5px;
+        color: var(--text-main);
+        font-size: 12px;
+        line-height: 1.65;
+        overflow-wrap: anywhere;
       }
       .message.assistant .message-text .travel-report-days {
         display: grid;
@@ -2923,6 +3024,10 @@ html {
           grid-template-columns: 1fr;
         }
         .message.assistant .message-text .travel-report-budget-grid {
+          grid-template-columns: 1fr;
+        }
+        .message.assistant .message-text .travel-report-insight-grid,
+        .message.assistant .message-text .travel-report-insight-grid.compact {
           grid-template-columns: 1fr;
         }
         .message.assistant .message-text .travel-report-day {
