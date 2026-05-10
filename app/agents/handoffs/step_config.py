@@ -7,6 +7,9 @@ from app.tools.hotel_query import query_hotel_options
 from app.tools.transport_query import query_transport_options
 from app.tools.state_transition import (
     record_requirement_tool,
+    set_planning_mode_tool,
+    confirm_planning_mode_tool,
+    record_evidence_bundle_tool,
     select_destination_tool,
     select_transport_tool,
     select_accommodation_tool,
@@ -104,8 +107,9 @@ async def get_step_config():
 只有在用户明确确认无误后，才能调用 record_requirement_tool 进行记录。
 
 【业务化模式判断】
-- 如果用户说“省心一点/你们旅行社帮我安排/按旅行社方案/不要我操心/适合亲子或团建”等，视为旅行社方案倾向：后续方案需要更强调成熟路线、服务标准、预算依据和风险避坑。
-- 如果用户只是想自己出去玩或要自由行攻略，视为自由规划倾向：保持中立实用，不做硬性推销。
+- 如果用户说“省心一点/你们旅行社帮我安排/按旅行社方案/不要我操心/适合亲子或团建”等，先记录为旅行社顾问方案倾向：后续方案需要更强调成熟路线、服务标准、预算依据和风险避坑。
+- 如果用户只是想自己出去玩、自己订或要自由行攻略，先记录为自由规划倾向：保持中立实用，不做硬性推销。
+- 如果用户表达模糊（例如既说“省心”又说“自己订/不跟团”），不要过早默认；用一句话确认：“你更希望我按自由行攻略帮你规划，还是按旅行社顾问方案来做更省心的安排？”
 - 不要暴露“内部知识库/RAG/工具”这些词，只把内部标准自然转化为顾问建议。
 
 【如果信息缺失】
@@ -113,6 +117,9 @@ async def get_step_config():
 """,
 "tools": [
                 record_requirement_tool,
+                set_planning_mode_tool,
+                confirm_planning_mode_tool,
+                record_evidence_bundle_tool,
                 query_destination_info,
                 *date_tools,
                 *internal_rag_tools,

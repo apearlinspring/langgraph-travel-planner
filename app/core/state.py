@@ -13,6 +13,7 @@ BudgetLevel = Literal["economy", "comfort", "luxury"]
 TransportType = Literal["flight", "train", "driving"]
 AccommodationType = Literal["star_hotel", "economy_hotel", "hostel", "youth_hostel"]
 FoodType = Literal["specialty", "chain", "local"]
+PlanningMode = Literal["free_planning", "agency_plan"]
 
 
 class UserRequirement(TypedDict):
@@ -27,6 +28,9 @@ class UserRequirement(TypedDict):
     budget_level: BudgetLevel
     travel_styles: list[TravelStyle]
     special_needs: Optional[str]
+    planning_mode: NotRequired[PlanningMode]
+    planning_mode_reason: NotRequired[str]
+    planning_mode_confirmed: NotRequired[bool]
 
 
 class DestinationInfo(TypedDict):
@@ -161,6 +165,11 @@ class ReportData(TypedDict, total=False):
 
 class TravelState(AgentState):
     current_step: NotRequired[PlanningStep]
+    planning_mode: NotRequired[PlanningMode]
+    planning_mode_reason: NotRequired[str]
+    planning_mode_confirmed: NotRequired[bool]
+    evidence_bundle: NotRequired[dict]
+    tool_audit_events: NotRequired[list[dict]]
 
     user_requirement: NotRequired[UserRequirement]
 
@@ -203,6 +212,8 @@ def create_initial_state(user_id: str, session_id: str) -> TravelState:
         accommodation_options=[],
         food_options=[],
         approval_pending=False,
+        planning_mode_confirmed=False,
+        tool_audit_events=[],
         user_id=user_id,
         session_id=session_id,
         created_at=time.time(),

@@ -23,13 +23,16 @@ from app.tools.hotel_query import query_hotel_options
 from app.tools.router_query import query_destination_info
 from app.tools.state_transition import (
     ALL_ROLLBACK_TOOLS,
+    confirm_planning_mode_tool,
     generate_itinerary_tool,
     generate_order_tool,
+    record_evidence_bundle_tool,
     record_requirement_tool,
     select_accommodation_tool,
     select_destination_tool,
     select_food_tool,
     select_transport_tool,
+    set_planning_mode_tool,
     summarize_budget_tool,
 )
 from app.tools.transport_query import query_transport_options
@@ -102,6 +105,9 @@ async def create_travel_agent(*, force_refresh: bool = False):
 
         all_tools = [
             record_requirement_tool,
+            set_planning_mode_tool,
+            confirm_planning_mode_tool,
+            record_evidence_bundle_tool,
             select_destination_tool,
             select_transport_tool,
             select_accommodation_tool,
