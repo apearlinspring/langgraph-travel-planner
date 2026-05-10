@@ -20,6 +20,7 @@ from app.evaluation.live_runner import (  # noqa: E402
     scenario_message_sequence,
     select_scenarios,
 )
+from app.evaluation.runtime_metrics import runtime_budget_from_dict  # noqa: E402
 from app.evaluation.scenarios import load_scenarios  # noqa: E402
 
 
@@ -40,10 +41,18 @@ def _print_results(results: list[dict[str, Any]]) -> None:
         score = result["normalized_score"] if result["normalized_score"] is not None else "-"
         agent_score = result.get("agent_score")
         agent_score_text = f", agent_score={agent_score}" if agent_score is not None else ""
+        runtime_budget_passed = result.get("runtime_budget_passed")
+        runtime_budget_text = (
+            f", runtime_budget={'PASS' if runtime_budget_passed else 'FAIL'}"
+            if runtime_budget_passed is not None
+            else ""
+        )
         print(
             f"- {status} {result['scenario_id']}: "
-            f"score={score}{agent_score_text}, elapsed={result['elapsed_seconds']}s"
+            f"score={score}{agent_score_text}{runtime_budget_text}, elapsed={result['elapsed_seconds']}s"
         )
+        for finding in result.get("runtime_findings") or []:
+            print(f"  runtime={finding}")
         if result.get("snapshot_path"):
             print(f"  snapshot={result['snapshot_path']}")
         if result.get("error"):
@@ -111,6 +120,36 @@ def main() -> int:
         action="store_true",
         help="Print machine-readable JSON summary",
     )
+    parser.add_argument(
+        "--max-total-seconds",
+        type=float,
+        default=None,
+        help="Override runtime budget for total elapsed seconds",
+    )
+    parser.add_argument(
+        "--max-first-token-seconds",
+        type=float,
+        default=None,
+        help="Override runtime budget for first token latency",
+    )
+    parser.add_argument(
+        "--max-tool-calls",
+        type=int,
+        default=None,
+        help="Override runtime budget for tool-call count",
+    )
+    parser.add_argument(
+        "--max-estimated-tokens",
+        type=int,
+        default=None,
+        help="Override runtime budget for estimated total tokens",
+    )
+    parser.add_argument(
+        "--max-error-events",
+        type=int,
+        default=None,
+        help="Override runtime budget for SSE error events",
+    )
     args = parser.parse_args()
 
     scenarios = select_scenarios(load_scenarios(args.scenarios_file), args.scenario)
@@ -118,6 +157,17 @@ def main() -> int:
         _print_plan(scenarios)
         return 0
 
+    runtime_budget_overrides = {
+        key: value
+        for key, value in {
+            "max_total_elapsed_seconds": args.max_total_seconds,
+            "max_first_token_seconds": args.max_first_token_seconds,
+            "max_tool_call_count": args.max_tool_calls,
+            "max_estimated_total_tokens": args.max_estimated_tokens,
+            "max_error_event_count": args.max_error_events,
+        }.items()
+        if value is not None
+    }
     config = LiveRunConfig(
         base_url=args.base_url,
         username=args.username,
@@ -125,6 +175,7 @@ def main() -> int:
         output_dir=args.output_dir,
         timeout_seconds=args.timeout,
         conversation_title_prefix=args.title_prefix,
+        runtime_budget=runtime_budget_from_dict(runtime_budget_overrides or None),
     )
     results = []
     for scenario in scenarios:

@@ -80,7 +80,11 @@
       "expected_mode": "agency_plan",
       "min_score": 82,
       "focus": ["hotel preference parsing", "fuzzy matching", "tool failure fallback", "clear verification"],
-      "tags": ["edge", "hotel", "fallback"]
+      "tags": ["edge", "hotel", "fallback"],
+      "runtime_budget": {
+        "max_tool_call_count": 36,
+        "max_first_token_seconds": 75
+      }
     },
     {
       "id": "agency_team_building",
@@ -110,7 +114,11 @@
       "expected_mode": "agency_plan",
       "min_score": 84,
       "focus": ["weather fallback", "senior-friendly route", "risk checklist", "verification items"],
-      "tags": ["agency", "risk", "weather", "senior"]
+      "tags": ["agency", "risk", "weather", "senior"],
+      "runtime_budget": {
+        "max_first_token_seconds": 75,
+        "max_tool_call_count": 36
+      }
     },
     {
       "id": "edge_transport_tool_fallback",
@@ -120,7 +128,11 @@
       "expected_mode": "free_planning",
       "min_score": 82,
       "focus": ["transport lookup intent", "tool failure fallback", "verification", "route feasibility"],
-      "tags": ["edge", "transport", "fallback"]
+      "tags": ["edge", "transport", "fallback"],
+      "runtime_budget": {
+        "max_tool_call_count": 36,
+        "max_first_token_seconds": 75
+      }
     },
     {
       "id": "long_context_revision",
@@ -131,6 +143,12 @@
       "min_score": 84,
       "focus": ["long context", "preference carryover", "mode stability", "final report readiness"],
       "tags": ["agency", "long-context", "family", "risk"],
+      "runtime_budget": {
+        "max_total_elapsed_seconds": 1200,
+        "max_first_token_seconds": 90,
+        "max_tool_call_count": 45,
+        "max_estimated_total_tokens": 180000
+      },
       "followups": [
         "目的地改成青岛，还是5天4晚，预算维持9000，孩子喜欢海边但老人不能走太多路。",
         "请按旅行社顾问方案推进，交通住宿如果没有真实价格就标注待核验。",

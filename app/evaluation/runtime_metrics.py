@@ -550,6 +550,8 @@ def evaluate_runtime_metrics(
     *,
     timeout_seconds: float = 900.0,
     budget: RuntimeBudget | None = None,
+    tool_counts: dict[str, int] | None = None,
+    redundant_calls: list[str] | None = None,
     pass_threshold: float = 80.0,
 ) -> RuntimeQualityResult:
     """Evaluate live-run observability, latency, and token-cost estimates."""
@@ -563,6 +565,8 @@ def evaluate_runtime_metrics(
         metrics,
         budget=runtime_budget,
         budget_gate=budget_gate,
+        tool_counts=tool_counts,
+        redundant_calls=redundant_calls,
     )
     criteria = [
         _criterion_task_completion(metrics),
