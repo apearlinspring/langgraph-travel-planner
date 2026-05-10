@@ -126,6 +126,38 @@ async def test_step_middleware_injects_order_stage_summaries():
 
 
 @pytest.mark.asyncio
+async def test_step_middleware_packs_long_context_into_summary():
+    captured = {}
+    middleware = StepConfigMiddleware(
+        {
+            "requirement_collection": {
+                "prompt": "需求收集阶段",
+                "tools": ["record_requirement_tool"],
+                "requires": [],
+            }
+        }
+    )
+    state = {"current_step": "requirement_collection"}
+    messages = [
+        HumanMessage(content=f"第{i}轮：预算{i * 1000}元，确认继续。")
+        for i in range(20)
+    ]
+
+    async def handler(request):
+        captured["system_prompt"] = request.system_prompt
+        captured["messages"] = request.messages
+        return "ok"
+
+    await middleware.awrap_model_call(DummyRequest(state, messages), handler)
+
+    assert "【会话摘要】" in captured["system_prompt"]
+    assert "【短期规划状态】" in captured["system_prompt"]
+    assert len(captured["messages"]) == 6
+    assert state["conversation_summary"]
+    assert state["context_pack_metadata"]["summary_triggered"] is True
+
+
+@pytest.mark.asyncio
 async def test_step_middleware_forces_direct_hotel_query_only_on_user_turn():
     captured = []
     compatibility = get_model_compatibility()

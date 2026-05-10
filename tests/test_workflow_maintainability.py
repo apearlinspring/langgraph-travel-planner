@@ -139,6 +139,10 @@ async def test_step_config_covers_all_planning_steps(monkeypatch):
     assert "不要输出" in config["order_generation"]["prompt"]
     assert "[根据之前的对话填写]" in config["order_generation"]["prompt"]
     assert "用一句话确认" in config["requirement_collection"]["prompt"]
+    assert "memory_scope（记忆作用域参数）" in config["requirement_collection"]["prompt"]
+    assert "不写入长期画像" in config["destination_recommendation"]["prompt"]
+    assert 'memory_scope="temporary"' in config["accommodation_planning"]["prompt"]
+    assert "不要污染长期记忆" in config["food_planning"]["prompt"]
     requirement_tool_names = {tool.name for tool in config["requirement_collection"]["tools"]}
     assert "set_planning_mode_tool" in requirement_tool_names
     assert "confirm_planning_mode_tool" in requirement_tool_names

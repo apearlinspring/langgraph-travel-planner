@@ -178,6 +178,10 @@ class TravelState(AgentState):
     planning_mode_confirmed: NotRequired[bool]
     evidence_bundle: NotRequired[dict]
     tool_audit_events: NotRequired[list[dict]]
+    conversation_summary: NotRequired[str]
+    context_last_step: NotRequired[PlanningStep]
+    context_pack_metadata: NotRequired[dict]
+    context_summary_updated_at: NotRequired[float]
 
     user_requirement: NotRequired[UserRequirement]
 
@@ -222,6 +226,9 @@ def create_initial_state(user_id: str, session_id: str) -> TravelState:
         approval_pending=False,
         planning_mode_confirmed=False,
         tool_audit_events=[],
+        conversation_summary="",
+        context_last_step=INITIAL_PLANNING_STEP,
+        context_pack_metadata={},
         user_id=user_id,
         session_id=session_id,
         created_at=time.time(),
