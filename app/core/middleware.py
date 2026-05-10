@@ -5,7 +5,7 @@ from typing import Any, Callable
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
 from langchain_core.messages import HumanMessage, ToolMessage
 
-from app.core.intent import TravelIntent, detect_travel_intent
+from app.core.intent import PlanningModeDecision, TravelIntent, detect_travel_intent, resolve_planning_mode
 from app.core.state import TravelState
 from app.core.store import get_user_memory_service
 from app.core.workflow import INITIAL_PLANNING_STEP
@@ -91,6 +91,26 @@ AGENCY_INTERNAL_TOOL_NAMES = frozenset(
         "search_agency_report_standards",
     }
 )
+
+MODE_MANAGEMENT_TOOL_NAMES = frozenset(
+    {
+        "set_planning_mode_tool",
+        "confirm_planning_mode_tool",
+        "record_evidence_bundle_tool",
+    }
+)
+
+INTENT_INTERNAL_TOOL_ALLOWLIST = {
+    "pricing_query": frozenset({"search_agency_pricing_rules"}),
+    "risk_query": frozenset({"search_agency_risk_playbook"}),
+    "agency_plan_query": frozenset(
+        {
+            "search_agency_product_templates",
+            "search_agency_service_sop",
+            "search_agency_risk_playbook",
+        }
+    ),
+}
 
 
 def _to_prompt_value(value: Any) -> Any:
@@ -440,6 +460,23 @@ def _find_tool_by_name(step_config: dict[str, Any], tool_name: str) -> Any | Non
     return None
 
 
+def _append_tools_by_name(
+    tools: list[Any],
+    step_config: dict[str, Any],
+    tool_names: set[str] | frozenset[str],
+) -> list[Any]:
+    available_names = _tool_names(tools)
+    updated_tools = list(tools)
+    for tool_name in tool_names:
+        if tool_name in available_names:
+            continue
+        extra_tool = _find_tool_by_name(step_config, tool_name)
+        if extra_tool is not None:
+            updated_tools.append(extra_tool)
+            available_names.add(tool_name)
+    return updated_tools
+
+
 def _state_value_ready(value: Any) -> bool:
     return value not in (None, "", [], {})
 
@@ -571,6 +608,31 @@ def _intent_instruction(
         return (
             "本轮用户关注目的地、景点或玩法。"
             " 请优先回答目的地问题；只有用户明确要求完整规划时，才继续推进完整流程。"
+        )
+
+    return ""
+
+
+def _planning_mode_instruction(decision: PlanningModeDecision) -> str:
+    if decision.needs_confirmation:
+        return (
+            "本轮用户的规划模式表达不够明确。"
+            " 请先用一句话确认：用户更希望按自由行攻略自己决策，还是按旅行社顾问方案省心安排；"
+            " 在确认前不要默认切到旅行社方案，也不要主动使用内部产品模板做推销式表达。"
+        )
+
+    if decision.mode == "agency_plan":
+        return (
+            "当前规划模式：旅行社顾问方案。"
+            " 你要像真实旅行社顾问一样，把托付诉求转化为成熟路线、服务节奏、预算依据和风险预案；"
+            " 可以自然参考内部产品模板、服务标准、报价规则和风险经验，但不要暴露内部资料、RAG 或工具名。"
+        )
+
+    if decision.mode == "free_planning":
+        return (
+            "当前规划模式：自由规划。"
+            " 回复保持中立实用，重点帮助用户自己完成路线、交通、住宿区域、预算和避坑判断；"
+            " 不要主动推旅行社产品或省心套餐，只有用户明确询问报价、风险或托付式服务时才切换相应表达。"
         )
 
     return ""
@@ -852,6 +914,29 @@ class StepConfigMiddleware(AgentMiddleware):
             current_step=current_step,
             state=state_dict,
         )
+        planning_mode = resolve_planning_mode(
+            latest_human_text,
+            state=state_dict,
+            intent=travel_intent,
+        )
+        planning_instruction = _planning_mode_instruction(planning_mode)
+        if planning_instruction:
+            override_kwargs["system_prompt"] = (
+                f"{override_kwargs['system_prompt']}\n\n{planning_instruction}"
+            )
+            override_kwargs["tools"] = _append_tools_by_name(
+                override_kwargs["tools"],
+                self._step_config,
+                MODE_MANAGEMENT_TOOL_NAMES,
+            )
+            app_logger.info(
+                "识别规划模式并注入提示: "
+                f"mode={planning_mode.mode}, source={planning_mode.source}, "
+                f"confirmed={planning_mode.confirmed}, "
+                f"needs_confirmation={planning_mode.needs_confirmation}, "
+                f"reason={planning_mode.reason}"
+            )
+
         intent_instruction = _intent_instruction(travel_intent, state_dict, current_step)
         if intent_instruction:
             override_kwargs["system_prompt"] = (
@@ -863,15 +948,17 @@ class StepConfigMiddleware(AgentMiddleware):
                 f"reason={travel_intent.reason}"
             )
 
-        if current_step == "requirement_collection" and travel_intent.name == "free_planning_query":
-            filtered_tools = _exclude_tools_by_name(
-                override_kwargs["tools"],
-                AGENCY_INTERNAL_TOOL_NAMES,
+        if planning_mode.mode == "free_planning" or planning_mode.needs_confirmation:
+            allowed_internal_tools = INTENT_INTERNAL_TOOL_ALLOWLIST.get(
+                travel_intent.name,
+                frozenset(),
             )
+            excluded_internal_tools = AGENCY_INTERNAL_TOOL_NAMES - allowed_internal_tools
+            filtered_tools = _exclude_tools_by_name(override_kwargs["tools"], excluded_internal_tools)
             if len(filtered_tools) != len(override_kwargs["tools"]):
                 override_kwargs["tools"] = filtered_tools
                 app_logger.info(
-                    "Free-planning intent: removed agency internal RAG tools from this turn"
+                    "自由规划或待确认模式：本轮移除不相关旅行社内部 RAG 工具"
                 )
 
         cross_step_tool_names = _cross_step_verification_tools(latest_human_text)
