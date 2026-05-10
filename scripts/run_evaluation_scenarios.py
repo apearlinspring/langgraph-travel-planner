@@ -38,7 +38,12 @@ def _print_results(results: list[dict[str, Any]]) -> None:
     for result in results:
         status = "PASS" if result["passed"] else "FAIL"
         score = result["normalized_score"] if result["normalized_score"] is not None else "-"
-        print(f"- {status} {result['scenario_id']}: score={score}, elapsed={result['elapsed_seconds']}s")
+        agent_score = result.get("agent_score")
+        agent_score_text = f", agent_score={agent_score}" if agent_score is not None else ""
+        print(
+            f"- {status} {result['scenario_id']}: "
+            f"score={score}{agent_score_text}, elapsed={result['elapsed_seconds']}s"
+        )
         if result.get("snapshot_path"):
             print(f"  snapshot={result['snapshot_path']}")
         if result.get("error"):
