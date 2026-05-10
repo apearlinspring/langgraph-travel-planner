@@ -123,7 +123,7 @@ def _require_string_fields(payload: dict[str, Any], scenario_id: str, fields: tu
 
 
 def _load_catalog(path: Path, version: str) -> list[dict[str, Any]]:
-    catalog = json.loads(path.read_text(encoding="utf-8"))
+    catalog = json.loads(path.read_text(encoding="utf-8-sig"))
     if catalog.get("version") != version:
         raise ValueError(f"Scenario catalog version must be {version}")
 

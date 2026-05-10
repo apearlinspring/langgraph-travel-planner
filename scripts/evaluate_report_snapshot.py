@@ -160,7 +160,7 @@ def main() -> int:
     if fail_under is None and scenario:
         fail_under = scenario.min_score
 
-    snapshot = json.loads(args.snapshot.read_text(encoding="utf-8"))
+    snapshot = json.loads(args.snapshot.read_text(encoding="utf-8-sig"))
     report_data = _extract_latest_report_data(snapshot)
     result = evaluate_report_quality(
         report_data,
