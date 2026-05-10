@@ -3628,6 +3628,101 @@
         };
       }
 
+      function renderReportDataInsightGroup({
+        title = "",
+        items = [],
+        emptyText = "待补充",
+        icon = "fa-circle-check",
+        tone = "",
+      } = {}) {
+        const list = normalizeReportDataList(items);
+        return `
+          <div class="travel-report-insight-group ${tone}">
+            <div class="travel-report-insight-group-head">
+              <i class="fa-solid ${escapeHtml(icon)}"></i>
+              <span>${escapeHtml(title)}</span>
+            </div>
+            ${
+              list.length
+                ? `<ul>${list.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`
+                : `<p>${escapeHtml(emptyText)}</p>`
+            }
+          </div>
+        `;
+      }
+
+      function renderReportDataBudgetConfidence(viewModel) {
+        const confidence = viewModel.budgetConfidence;
+        return `
+          <div class="travel-report-confidence travel-report-confidence--${escapeHtml(
+            confidence.tone
+          )}">
+            <div class="travel-report-confidence-head">
+              <span>预算置信度</span>
+              <strong>${escapeHtml(confidence.level)}</strong>
+              <p>把已确认价格、规则估算和出发前需要复核的项目分开看，避免把估算误当成锁价。</p>
+            </div>
+            <div class="travel-report-insight-grid">
+              ${renderReportDataInsightGroup({
+                title: "已确认 / 可追溯",
+                items: confidence.confirmedItems,
+                emptyText: "暂无已确认价格，正式预订前都需要二次核验。",
+                icon: "fa-circle-check",
+                tone: "confirmed",
+              })}
+              ${renderReportDataInsightGroup({
+                title: "规则估算",
+                items: confidence.estimatedItems,
+                emptyText: "暂无估算项。",
+                icon: "fa-calculator",
+                tone: "estimated",
+              })}
+              ${renderReportDataInsightGroup({
+                title: "待核验",
+                items: confidence.verificationItems,
+                emptyText: "正式预订或出发前复核票价、酒店、景点开放和天气。",
+                icon: "fa-clipboard-check",
+                tone: "verification",
+              })}
+            </div>
+          </div>
+        `;
+      }
+
+      function renderReportDataHandoffPanel(viewModel) {
+        return `
+          <div class="travel-report-handoff">
+            <div class="travel-report-handoff-status">
+              <span>交付状态</span>
+              <strong>${escapeHtml(viewModel.handoff.readiness)}</strong>
+            </div>
+            <div class="travel-report-insight-grid compact">
+              ${renderReportDataInsightGroup({
+                title: "已用依据",
+                items: viewModel.handoff.usedSources,
+                emptyText: "来源摘要待补充。",
+                icon: "fa-file-shield",
+                tone: "sources",
+              })}
+              ${renderReportDataInsightGroup({
+                title: "待核验清单",
+                items: viewModel.handoff.pendingChecks,
+                emptyText: "暂无额外待核验项。",
+                icon: "fa-list-check",
+                tone: "verification",
+              })}
+              ${renderReportDataInsightGroup({
+                title: "不支持承诺",
+                items: viewModel.handoff.unsupportedActions,
+                emptyText: "暂无额外限制说明。",
+                icon: "fa-ban",
+                tone: "unsupported",
+              })}
+            </div>
+          </div>
+        `;
+      }
+
       function renderReportDataBudgetItems(budget = {}) {
         const items = Array.isArray(budget.items) ? budget.items : [];
         if (!items.length) {
@@ -3670,15 +3765,26 @@
         `;
       }
 
-      function renderReportDataDailyItinerary(days = []) {
+      function renderReportDataDailyItinerary(days = [], mapRoutes = []) {
         const safeDays = Array.isArray(days) ? days : [];
         if (!safeDays.length) return "<p>每日行程待补充。</p>";
+        const routeByDay = new Map(
+          (Array.isArray(mapRoutes) ? mapRoutes : []).map((route) => [
+            Number(route.day_number || route.day || 0),
+            route,
+          ])
+        );
 
         return `
           <div class="travel-report-days">
             ${safeDays
               .map((day) => {
-                const routeSummary = day.route?.summary || day.route_summary || "";
+                const route = routeByDay.get(Number(day.day_number || 0)) || day.route || {};
+                const routeSummary =
+                  route.summary || day.route?.summary || day.route_summary || "";
+                const routePoints = normalizeReportDataList(
+                  route.route_points || day.waypoints || []
+                );
                 const timeBlocks = Array.isArray(day.time_blocks)
                   ? day.time_blocks
                   : [];
@@ -3720,6 +3826,15 @@
                             )}</p>`
                           : ""
                       }
+                    </div>
+                    <div class="travel-report-day-map">
+                      <div class="travel-report-day-map-head">
+                        <span>路线联动</span>
+                        <strong>${escapeHtml(
+                          route.summary || routeSummary || "路线待核验"
+                        )}</strong>
+                      </div>
+                      ${renderReportRouteSketch(routePoints, `Day ${day.day_number || ""}`)}
                     </div>
                   </article>
                 `;
@@ -3878,7 +3993,10 @@
                 icon: "fa-calendar-days",
                 label: "每日行程",
                 title: "按天执行",
-                body: renderReportDataDailyItinerary(reportData.itinerary),
+                body: renderReportDataDailyItinerary(
+                  reportData.itinerary,
+                  reportData.map_routes
+                ),
               })}
               ${renderReportDataCard({
                 tone: "budget",
@@ -3888,20 +4006,42 @@
                 body: renderReportDataBudgetItems(budget),
               })}
               ${renderReportDataCard({
+                tone: "confidence",
+                icon: "fa-gauge-high",
+                label: "预算核验",
+                title: "置信度与价格边界",
+                body: renderReportDataBudgetConfidence(viewModel),
+              })}
+              ${renderReportDataCard({
                 tone: "warning",
                 icon: "fa-triangle-exclamation",
                 label: "风险提醒",
-                title: "出发前核验",
-                body: renderReportDataList(reportData.risks, "风险提醒待补充"),
+                title: "待核验与风险",
+                body: `
+                  ${renderReportDataList(reportData.risks, "风险提醒待补充")}
+                  ${renderReportDataInsightGroup({
+                    title: "顾问待核验",
+                    items: viewModel.handoff.pendingChecks,
+                    emptyText: "暂无额外待核验项。",
+                    icon: "fa-clipboard-list",
+                    tone: "verification",
+                  })}
+                `,
               })}
               ${renderReportDataCard({
                 tone: "summary",
                 icon: "fa-shield-heart",
                 label: "方案依据",
-                title: "服务标准与交付依据",
+                title:
+                  viewModel.mode.mode === "free_planning"
+                    ? "规划依据与执行提醒"
+                    : "服务标准与交付依据",
                 body: renderReportDataList([
-                  reportData.agency_context?.summary || "",
-                  ...(reportData.agency_context?.highlights || []),
+                  viewModel.agency.summary || "",
+                  viewModel.agency.modeReason
+                    ? `模式依据：${viewModel.agency.modeReason}`
+                    : "",
+                  ...viewModel.agency.highlights,
                 ]),
               })}
               ${renderReportDataCard({
@@ -3909,19 +4049,7 @@
                 icon: "fa-list-check",
                 label: "交付清单",
                 title: "顾问核验与下一步",
-                body: renderReportDataList([
-                  reportData.tool_audit_summary?.readiness
-                    ? `交付状态：${reportData.tool_audit_summary.readiness}`
-                    : "",
-                  ...(Array.isArray(reportData.tool_audit_summary?.pending_checks)
-                    ? reportData.tool_audit_summary.pending_checks.map(
-                        (item) => `待核验：${item}`
-                      )
-                    : []),
-                  ...(Array.isArray(reportData.tool_audit_summary?.unsupported_actions)
-                    ? reportData.tool_audit_summary.unsupported_actions
-                    : []),
-                ]),
+                body: renderReportDataHandoffPanel(viewModel),
               })}
             </div>
             ${mapDigest ? `<div class="travel-report-map">${mapDigest}</div>` : ""}
@@ -4399,7 +4527,7 @@
 
         if (action === "export") {
           exportTravelReport(report)
-            .then(() => showToast("旅游报告 HTML 文件已开始导出"))
+            .then(() => showToast("旅游报告 HTML（超文本标记语言）文件已开始导出"))
             .catch((error) => {
               console.error(error);
               showToast("导出失败，请稍后重试。", true);
