@@ -11,6 +11,10 @@ from langchain.tools import ToolRuntime, tool
 from langchain_core.messages import ToolMessage
 from langgraph.types import Command
 
+from app.agency.evidence import build_rule_evidence
+from app.agency.planning_mode import infer_planning_mode
+from app.agency.pricing_rules import build_quote_policy, format_quote_policy_lines
+from app.agency.product_rules import build_light_product, format_light_product_lines
 from app.core.state import TravelState, UserRequirement
 from app.core.workflow import (
     FINAL_PLANNING_STEP,
@@ -1068,6 +1072,14 @@ def _ensure_budget_quality_contract(
         )
 
     normalized["budget_confidence"] = _budget_confidence_payload(normalized)
+    if not normalized.get("quote_policy"):
+        product = build_light_product(requirement, state)
+        normalized["quote_policy"] = build_quote_policy(
+            requirement,
+            normalized,
+            product=product,
+            state=state,
+        )
     return normalized
 
 
@@ -2170,21 +2182,7 @@ def _infer_planning_mode(requirement: dict, state: TravelState | None = None) ->
     explicit_mode = _normalize_planning_mode(requirement.get("planning_mode")) or _state_planning_mode(state)
     if explicit_mode:
         return explicit_mode
-
-    text = " ".join(
-        [
-            str(requirement.get("special_needs") or ""),
-            " ".join(str(item) for item in requirement.get("travel_styles") or []),
-            _state_human_text_for_report(state),
-        ]
-    )
-    agency_keywords = ("省心", "旅行社", "成熟路线", "定制游", "跟团游", "小包团", "私家团", "团建", "亲子", "银发")
-    free_keywords = ("自由行", "自由规划", "自助游", "自己玩", "不跟团", "自己订", "只要攻略")
-    if any(keyword in text for keyword in agency_keywords):
-        return "agency_plan"
-    if any(keyword in text for keyword in free_keywords):
-        return "free_planning"
-    return "free_planning"
+    return infer_planning_mode(requirement, state)
 
 
 def _pick_highlight(lines: list[str], keywords: tuple[str, ...], fallback_index: int = 0) -> str | None:
@@ -2207,6 +2205,7 @@ def _build_agency_context(requirement: dict, state: TravelState | None = None) -
         requirement.get("planning_mode_confirmed")
         or (state.get("planning_mode_confirmed") if state else False)
     )
+    light_product = build_light_product(requirement, state)
     product_lines = list(_internal_doc_highlights("products", 2))
     service_lines = list(_internal_doc_highlights("sop", 2))
     pricing_lines = list(_internal_doc_highlights("pricing", 2))
@@ -2243,7 +2242,7 @@ def _build_agency_context(requirement: dict, state: TravelState | None = None) -
             if item
         ]
 
-    return {
+    context = {
         "source_type": "agency_internal",
         "mode": mode,
         "mode_reason": str(mode_reason),
@@ -2259,10 +2258,24 @@ def _build_agency_context(requirement: dict, state: TravelState | None = None) -
         },
         "evidence": evidence,
     }
+    context["light_product"] = light_product
+    context["rule_evidence"] = build_rule_evidence(
+        light_product,
+        None,
+        context["categories"],
+    )
+    return context
 
 
 def _format_agency_context_lines(agency_context: dict) -> list[str]:
     lines = [f"- {agency_context['summary']}"]
+    light_product = agency_context.get("light_product") or {}
+    if light_product:
+        lines.append(
+            f"- 产品匹配：{light_product.get('name', '轻量产品')}｜{light_product.get('positioning', '定位待补充')}"
+        )
+        if light_product.get("service_nodes"):
+            lines.append(f"- 服务节点：{' → '.join(light_product['service_nodes'])}")
     for item in agency_context.get("highlights") or []:
         lines.append(f"- 方案标准：{item}")
     return lines
@@ -2314,6 +2327,19 @@ def _build_report_data(
         for line in _format_adjustment_options(state, budget)
     ]
     agency_context = _build_agency_context(requirement, state)
+    light_product = agency_context.get("light_product") or build_light_product(requirement, state)
+    quote_policy = budget.get("quote_policy") or build_quote_policy(
+        requirement,
+        budget,
+        product=light_product,
+        state=state,
+    )
+    agency_context["quote_policy"] = quote_policy
+    agency_context["rule_evidence"] = build_rule_evidence(
+        light_product,
+        quote_policy,
+        agency_context.get("categories") or {},
+    )
 
     return {
         "version": "travel_report.v1",
@@ -2346,6 +2372,7 @@ def _build_report_data(
         "itinerary": itinerary_data,
         "map_routes": route_summaries,
         "agency_context": agency_context,
+        "agency_product": light_product,
         "budget": {
             "currency": budget.get("currency", "CNY"),
             "total": budget.get("total"),
@@ -2358,8 +2385,10 @@ def _build_report_data(
             "verification_items": list(budget.get("verification_items") or []),
             "confidence": budget_confidence,
             "fit": _format_budget_fit(requirement, budget),
+            "quote_policy": quote_policy,
         },
         "budget_confidence": budget_confidence,
+        "quote_policy": quote_policy,
         "risks": risks,
         "adjustment_options": adjustment_options,
         "sections": [
@@ -2368,6 +2397,7 @@ def _build_report_data(
             {"id": "itinerary", "title": "每日行程"},
             {"id": "map_routes", "title": "景点地图"},
             {"id": "agency_context", "title": "方案依据"},
+            {"id": "product_quote", "title": "产品与报价规则"},
             {"id": "budget", "title": "预算明细"},
             {"id": "budget_confidence", "title": "预算置信度与待核验项"},
             {"id": "risk", "title": "天气与风险提醒"},
@@ -2396,6 +2426,13 @@ def _build_final_report(
         state.get("selected_transport", "未确认"),
     )
     agency_context = _build_agency_context(requirement, state)
+    light_product = agency_context.get("light_product") or build_light_product(requirement, state)
+    quote_policy = budget.get("quote_policy") or build_quote_policy(
+        requirement,
+        budget,
+        product=light_product,
+        state=state,
+    )
 
     return "\n".join(
         [
@@ -2420,6 +2457,10 @@ def _build_final_report(
             "",
             "方案依据：",
             *_format_agency_context_lines(agency_context),
+            "",
+            "产品与报价规则：",
+            *format_light_product_lines(light_product),
+            *format_quote_policy_lines(quote_policy),
             "",
             "预算明细：",
             *_format_budget_breakdown(budget),
@@ -3000,6 +3041,14 @@ def summarize_budget_tool(
         "assumptions": assumptions,
         **budget_quality,
     }
+    budget_breakdown["budget_confidence"] = _budget_confidence_payload(budget_breakdown)
+    light_product = build_light_product(requirement, state)
+    budget_breakdown["quote_policy"] = build_quote_policy(
+        requirement,
+        budget_breakdown,
+        product=light_product,
+        state=state,
+    )
     budget_fit = _format_budget_fit(requirement, budget_breakdown)
 
     budget_summary = "\n".join(
@@ -3010,6 +3059,10 @@ def summarize_budget_tool(
             *_format_budget_breakdown(budget_breakdown),
             "",
             budget_fit,
+            "",
+            "轻量产品与报价规则：",
+            *format_light_product_lines(light_product),
+            *format_quote_policy_lines(budget_breakdown["quote_policy"]),
             "",
             "费用依据：",
             *_format_budget_assumptions(budget_breakdown),
