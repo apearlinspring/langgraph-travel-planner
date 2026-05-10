@@ -11,6 +11,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from app.evaluation.acceptance_gate import build_acceptance_gate_result  # noqa: E402
 from app.evaluation.live_runner import build_quality_summary  # noqa: E402
 from app.evaluation.report_quality import evaluate_report_quality  # noqa: E402
 from app.evaluation.runtime_metrics import runtime_budget_from_dict  # noqa: E402
@@ -87,6 +88,17 @@ def _print_markdown(result: dict[str, Any]) -> None:
             section = runtime_governance.get(section_key) or {}
             for finding in (section.get("findings") or [])[:3]:
                 print(f"  - {section_key}: {finding}")
+    acceptance_gate = result.get("acceptance_gate")
+    if isinstance(acceptance_gate, dict):
+        print()
+        print("## Acceptance Gate")
+        print(f"- Passed: {acceptance_gate.get('passed')}")
+        for failure in (acceptance_gate.get("failures") or [])[:10]:
+            findings = "; ".join(str(item) for item in (failure.get("findings") or [])[:3])
+            print(
+                f"- {failure.get('dimension_label')}: {findings} "
+                f"Next: {failure.get('suggestion')}"
+            )
 
 
 def _scenario_for_snapshot(
@@ -162,6 +174,11 @@ def main() -> int:
         "--enforce-agent-gate",
         action="store_true",
         help="Exit with code 2 if the combined Agent quality gate fails",
+    )
+    parser.add_argument(
+        "--enforce-acceptance-gate",
+        action="store_true",
+        help="Exit with code 2 if the first-stage acceptance quality gate fails",
     )
     parser.add_argument(
         "--max-total-seconds",
@@ -256,6 +273,12 @@ def main() -> int:
             else None
         ),
     )
+    result["acceptance_gate"] = build_acceptance_gate_result(
+        scenario=quality_scenario,
+        quality_summary=result["quality_summary"],
+        report_data=report_data,
+        snapshot_path=str(args.snapshot),
+    )
 
     if args.format == "json":
         print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -271,10 +294,14 @@ def main() -> int:
         args.enforce_agent_gate
         and not bool((result["quality_summary"].get("aggregate") or {}).get("passed"))
     )
+    acceptance_gate_failed = (
+        args.enforce_acceptance_gate
+        and not bool(result["acceptance_gate"].get("passed"))
+    )
     report_failed = fail_under is not None and (
         result["normalized_score"] < fail_under or not result["passed"]
     )
-    if report_failed or runtime_budget_failed or agent_gate_failed:
+    if report_failed or runtime_budget_failed or agent_gate_failed or acceptance_gate_failed:
         return 2
     return 0
 
