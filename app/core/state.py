@@ -150,8 +150,10 @@ class ReportData(TypedDict, total=False):
     overview: dict
     transport: dict
     accommodation: dict
+    food_preferences: dict
     itinerary: list[dict]
     map_routes: list[dict]
+    agency_context: dict
     budget: dict
     budget_confidence: BudgetConfidenceData
     risks: list[str]

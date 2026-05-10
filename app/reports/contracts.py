@@ -25,6 +25,7 @@ REQUIRED_REPORT_TOP_LEVEL_KEYS = {
     "overview",
     "transport",
     "accommodation",
+    "food_preferences",
     "itinerary",
     "map_routes",
     "agency_context",

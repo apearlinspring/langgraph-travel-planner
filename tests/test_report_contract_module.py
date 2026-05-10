@@ -33,3 +33,25 @@ def test_report_validator_blocks_pseudo_report_without_required_contract():
     assert "itinerary" in validation.missing_fields
     assert "tool_audit_summary" in validation.missing_fields
     assert "缺少必要结构" in validation.to_user_message()
+
+
+def test_report_validator_requires_food_preferences_contract():
+    report_data = _valid_report_data()
+    report_data.pop("food_preferences")
+
+    validation = validate_report_data(report_data)
+
+    assert validation.ok is False
+    assert "food_preferences" in validation.missing_fields
+
+
+def test_report_validator_rejects_empty_itinerary_and_map_routes():
+    report_data = _valid_report_data()
+    report_data["itinerary"] = []
+    report_data["map_routes"] = []
+
+    validation = validate_report_data(report_data)
+
+    assert validation.ok is False
+    assert "每日行程不能为空。" in validation.route_mismatches
+    assert "地图路线不能为空。" in validation.route_mismatches

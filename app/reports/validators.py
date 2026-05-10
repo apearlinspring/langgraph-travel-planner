@@ -78,9 +78,13 @@ def validate_report_data(report_data: dict[str, Any]) -> ReportValidationResult:
     itinerary = [_as_dict(day) for day in _as_list(report_data.get("itinerary"))]
     map_routes = [_as_dict(route) for route in _as_list(report_data.get("map_routes"))]
     route_mismatches: list[str] = []
-    if len(itinerary) != len(map_routes):
+    if not itinerary:
+        route_mismatches.append("每日行程不能为空。")
+    if not map_routes:
+        route_mismatches.append("地图路线不能为空。")
+    if itinerary and map_routes and len(itinerary) != len(map_routes):
         route_mismatches.append("每日行程数量必须和地图路线数量一致。")
-    else:
+    elif itinerary and map_routes:
         for day, route in zip(itinerary, map_routes):
             day_summary = _as_dict(day.get("route")).get("summary")
             route_summary = route.get("summary")
