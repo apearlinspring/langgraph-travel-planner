@@ -2,6 +2,8 @@ from langchain_core.documents import Document
 import pytest
 
 from app.rag.document_loader import DocumentManager
+from app.rag.contracts import CONTRACT_VERSION, INTERNAL_KNOWLEDGE_BASE
+from app.rag.agency_retrieval import document_to_evidence
 from app.rag.pipeline import AdvancedRAGPipeline
 from app.rag.query_optimizer import AdvancedQueryOptimizer
 from app.tools import rag_tools
@@ -15,6 +17,11 @@ def test_document_manager_loads_internal_documents_with_business_metadata():
     assert {"products", "sop", "pricing", "risk", "report"}.issubset(categories)
     assert all(doc.metadata.get("source_type") == "agency_internal" for doc in documents)
     assert all(doc.metadata.get("visibility") == "internal" for doc in documents)
+    assert all(doc.metadata.get("contract_version") == CONTRACT_VERSION for doc in documents)
+    assert all(doc.metadata.get("knowledge_base") == INTERNAL_KNOWLEDGE_BASE for doc in documents)
+    assert all(doc.metadata.get("evidence_level") for doc in documents)
+    assert all(doc.metadata.get("applicable_modes") for doc in documents)
+    assert all(doc.metadata.get("constraints") for doc in documents)
 
 
 def test_document_manager_filters_internal_documents_by_category():
@@ -23,6 +30,44 @@ def test_document_manager_filters_internal_documents_by_category():
     assert documents
     assert {doc.metadata.get("category") for doc in documents} == {"pricing"}
     assert any("报价" in doc.page_content for doc in documents)
+    assert all("待核验" in doc.metadata.get("constraints", "") or "锁价" in doc.metadata.get("constraints", "") for doc in documents)
+
+
+def test_document_manager_loads_public_documents_with_evidence_contract():
+    documents = DocumentManager().load_destination_documents()
+
+    assert documents
+    assert all(doc.metadata.get("contract_version") == CONTRACT_VERSION for doc in documents)
+    assert all(doc.metadata.get("visibility") == "public" for doc in documents)
+    assert all(doc.metadata.get("evidence_level") == "guide" for doc in documents)
+    assert all("二次核实" in doc.metadata.get("constraints", "") for doc in documents)
+
+
+def test_document_to_evidence_matches_refactor_plan_contract():
+    evidence = document_to_evidence(
+        Document(
+            page_content="# 报价规则\n- 预算必须区分真实价格和估算价格。",
+            metadata={
+                "source": "internal/pricing/pricing_rules.md",
+                "source_type": "agency_internal",
+                "category": "pricing",
+                "visibility": "internal",
+                "evidence_level": "rule",
+                "applicable_modes": "agency_plan|free_planning",
+                "constraints": "不得承诺锁价|必须标记待核验",
+            },
+        )
+    )
+
+    assert evidence["source"].endswith("pricing_rules.md")
+    assert evidence["source_type"] == "agency_internal"
+    assert evidence["category"] == "pricing"
+    assert evidence["visibility"] == "internal"
+    assert evidence["title"] == "报价规则"
+    assert evidence["relevance_score"] > 0
+    assert evidence["evidence_level"] == "rule"
+    assert evidence["applicable_modes"] == ["agency_plan", "free_planning"]
+    assert "不得承诺锁价" in evidence["constraints"]
 
 
 def test_internal_rag_tools_are_separate_from_public_rag_tools():
@@ -62,6 +107,45 @@ async def test_internal_pricing_tool_uses_internal_pipeline(monkeypatch):
 
     assert "内部报价规则命中" in result
     assert "报价" in result
+    assert "RAG 检索证据契约" in result
+    assert '"knowledge_base": "agency_internal_knowledge"' in result
+    assert '"category": "pricing"' in result
+    assert '"evidence_level": "rule"' in result
+    assert "待二次核实" in result
+
+
+async def _fake_internal_pipeline_with_wrong_category():
+    class FakePipeline:
+        def retrieve(self, query):
+            return [
+                Document(
+                    page_content="内部产品模板，不应该被报价工具返回。",
+                    metadata={
+                        "source": "internal/products/route_templates.md",
+                        "category": "products",
+                        "visibility": "internal",
+                    },
+                )
+            ]
+
+    return FakePipeline()
+
+
+@pytest.mark.asyncio
+async def test_internal_rag_tool_blocks_cross_category_results(monkeypatch):
+    monkeypatch.setattr(
+        rag_tools,
+        "_get_internal_rag_pipeline",
+        _fake_internal_pipeline_with_wrong_category,
+    )
+
+    result = await rag_tools.search_agency_pricing_rules.ainvoke(
+        {"query": "预算包含什么"}
+    )
+
+    assert "暂未命中" in result
+    assert "pricing" in result
+    assert "内部产品模板" not in result
 
 
 def test_rag_pipeline_respects_disabled_llm_reranker(monkeypatch):
