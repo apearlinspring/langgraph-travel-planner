@@ -1,7 +1,20 @@
 from langchain.tools import tool, ToolRuntime
+
+from app.core.memory_models import (
+    MemoryWriteCandidate,
+    filter_stable_memory_values,
+    normalize_memory_scope,
+)
 from app.core.state import TravelState
 from app.core.store import get_user_memory_service
 from app.utils.logger import app_logger
+
+
+def _format_temporary_memory_response(rejected: list[MemoryWriteCandidate]) -> str:
+    values = [candidate.value for candidate in rejected if candidate.value]
+    if not values:
+        return "已识别为本次旅行临时条件，未写入长期记忆。"
+    return "已作为本次旅行临时条件处理，未写入长期记忆：" + "、".join(values)
 
 
 # ============== 1️⃣ 读取用户记忆工具 ==============
@@ -46,6 +59,7 @@ async def get_user_memory_tool(
 @tool
 async def update_travel_style_tool(
         styles: list[str],
+        memory_scope: str = "stable",
         runtime: ToolRuntime[None, TravelState] = None
 ) -> str:
     """
@@ -64,18 +78,25 @@ async def update_travel_style_tool(
       * 文化探索（历史、博物馆、古迹）
       * 户外冒险（徒步、攀岩、极限运动）
       * 美食之旅（吃货、美食、小吃）
+    - memory_scope: stable 表示长期稳定偏好；temporary/current_trip 表示仅本次旅行使用，不写入长期记忆。
     """
     user_id = runtime.state.get("user_id")
 
     if not user_id:
         return "⚠️ 未识别到用户身份，无法保存偏好"
+    stable_styles, rejected = filter_stable_memory_values(
+        styles,
+        memory_scope=memory_scope,
+    )
+    if not stable_styles:
+        return _format_temporary_memory_response(rejected)
 
     try:
         service = await get_user_memory_service()
-        await service.update_travel_styles(user_id, styles)
+        await service.update_travel_styles(user_id, stable_styles)
 
-        app_logger.info(f"💾 保存旅行风格: {user_id} -> {styles}")
-        return f"✅ 已记录您的旅行风格偏好：{', '.join(styles)}"
+        app_logger.info(f"💾 保存旅行风格: {user_id} -> {stable_styles}")
+        return f"✅ 已记录您的长期旅行风格偏好：{', '.join(stable_styles)}"
 
     except Exception as e:
         app_logger.error(f"❌ 保存旅行风格失败: {e}")
@@ -87,6 +108,7 @@ async def update_travel_style_tool(
 @tool
 async def update_dietary_restriction_tool(
         restrictions: list[str],
+        memory_scope: str = "stable",
         runtime: ToolRuntime[None, TravelState] = None
 ) -> str:
     """
@@ -110,6 +132,7 @@ async def update_dietary_restriction_tool(
       * 不吃猪肉
       * 不吃羊肉
       * 鸡蛋过敏
+    - memory_scope: stable 表示用户长期饮食禁忌；temporary/current_trip 表示仅本次同行人或本次行程使用，不写入长期记忆。
 
     注意：这些信息对用户健康很重要，务必准确记录！
     """
@@ -117,13 +140,19 @@ async def update_dietary_restriction_tool(
 
     if not user_id:
         return "⚠️ 未识别到用户身份，无法保存饮食禁忌"
+    stable_restrictions, rejected = filter_stable_memory_values(
+        restrictions,
+        memory_scope=memory_scope,
+    )
+    if not stable_restrictions:
+        return _format_temporary_memory_response(rejected)
 
     try:
         service = await get_user_memory_service()
-        await service.update_dietary_restrictions(user_id, restrictions)
+        await service.update_dietary_restrictions(user_id, stable_restrictions)
 
-        app_logger.info(f"💾 保存饮食禁忌: {user_id} -> {restrictions}")
-        return f"✅ 已记录您的饮食禁忌：{', '.join(restrictions)}。后续推荐会特别注意避开这些食物。"
+        app_logger.info(f"💾 保存饮食禁忌: {user_id} -> {stable_restrictions}")
+        return f"✅ 已记录您的长期饮食禁忌：{', '.join(stable_restrictions)}。后续推荐会特别注意避开这些食物。"
 
     except Exception as e:
         app_logger.error(f"❌ 保存饮食禁忌失败: {e}")
@@ -135,6 +164,7 @@ async def update_dietary_restriction_tool(
 @tool
 async def update_food_preference_tool(
         preferences: list[str],
+        memory_scope: str = "stable",
         runtime: ToolRuntime[None, TravelState] = None
 ) -> str:
     """
@@ -165,18 +195,25 @@ async def update_food_preference_tool(
       * 西餐
       * 日料
       * 韩餐
+    - memory_scope: stable 表示长期口味偏好；temporary/current_trip 表示仅本次旅行使用，不写入长期记忆。
     """
     user_id = runtime.state.get("user_id")
 
     if not user_id:
         return "⚠️ 未识别到用户身份，无法保存饮食偏好"
+    stable_preferences, rejected = filter_stable_memory_values(
+        preferences,
+        memory_scope=memory_scope,
+    )
+    if not stable_preferences:
+        return _format_temporary_memory_response(rejected)
 
     try:
         service = await get_user_memory_service()
-        await service.update_food_preferences(user_id, preferences)
+        await service.update_food_preferences(user_id, stable_preferences)
 
-        app_logger.info(f"💾 保存饮食偏好: {user_id} -> {preferences}")
-        return f"✅ 已记录您的饮食偏好：{', '.join(preferences)}"
+        app_logger.info(f"💾 保存饮食偏好: {user_id} -> {stable_preferences}")
+        return f"✅ 已记录您的长期饮食偏好：{', '.join(stable_preferences)}"
 
     except Exception as e:
         app_logger.error(f"❌ 保存饮食偏好失败: {e}")
@@ -189,6 +226,7 @@ async def update_food_preference_tool(
 async def update_accommodation_preference_tool(
         preferred_types: list[str] = None,
         avg_budget_per_night: float = None,
+        memory_scope: str = "stable",
         runtime: ToolRuntime[None, TravelState] = None
 ) -> str:
     """
@@ -207,6 +245,7 @@ async def update_accommodation_preference_tool(
       * 特色民宿（有特色的民宿、客栈）
       * 青年旅社（背包客、青旅）
     - avg_budget_per_night: 平均每晚预算（元），可选
+    - memory_scope: stable 表示长期住宿偏好；temporary/current_trip 表示仅本次旅行使用，不写入长期记忆。
     """
     user_id = runtime.state.get("user_id")
 
@@ -215,19 +254,28 @@ async def update_accommodation_preference_tool(
 
     if not preferred_types and not avg_budget_per_night:
         return "⚠️ 请至少提供住宿类型或预算信息"
+    stable_types, rejected = filter_stable_memory_values(
+        preferred_types,
+        memory_scope=memory_scope,
+    )
+    is_temporary_scope = normalize_memory_scope(memory_scope) == "temporary"
+    if not stable_types and (preferred_types or is_temporary_scope):
+        return _format_temporary_memory_response(rejected)
+    if is_temporary_scope and avg_budget_per_night:
+        return "已作为本次旅行住宿预算处理，未写入长期住宿偏好。"
 
     try:
         service = await get_user_memory_service()
         await service.update_accommodation_preference(
             user_id=user_id,
-            preferred_types=preferred_types,
+            preferred_types=stable_types,
             avg_budget=avg_budget_per_night
         )
 
         result_parts = ["✅ 已记录您的住宿偏好："]
 
-        if preferred_types:
-            result_parts.append(f"类型偏好 - {', '.join(preferred_types)}")
+        if stable_types:
+            result_parts.append(f"类型偏好 - {', '.join(stable_types)}")
 
         if avg_budget_per_night:
             result_parts.append(f"预算 - 约 {avg_budget_per_night:.0f} 元/晚")

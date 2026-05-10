@@ -116,3 +116,116 @@ class UserMemory(BaseModel):
         default_factory=TravelHistory,
         description="用户出行历史记录"
     )
+
+
+class MemoryWriteCandidate(BaseModel):
+    """
+    单条长期记忆写入候选。
+
+    用于区分稳定偏好/历史事实和本次旅行临时条件，避免把临时上下文污染长期用户画像。
+    """
+    value: str = Field(..., description="候选记忆内容")
+    accepted: bool = Field(..., description="是否允许写入长期记忆")
+    scope: str = Field(default="stable", description="stable 或 temporary")
+    reason: str = Field(default="", description="接受或拒绝原因")
+
+
+TEMPORARY_MEMORY_SCOPE_VALUES = {
+    "temporary",
+    "current_trip",
+    "session",
+    "this_trip",
+    "本次",
+    "这次",
+    "临时",
+}
+
+TEMPORARY_MEMORY_KEYWORDS = (
+    "这次",
+    "本次",
+    "这趟",
+    "本趟",
+    "这回",
+    "这一次",
+    "当前行程",
+    "这次旅行",
+    "临时",
+    "今天",
+    "明天",
+    "后天",
+)
+
+STABLE_OVERRIDE_KEYWORDS = (
+    "一直",
+    "长期",
+    "以后",
+    "每次",
+    "通常",
+    "习惯",
+    "偏好",
+    "过敏",
+    "忌口",
+    "不能吃",
+    "不吃",
+    "记住",
+)
+
+
+def normalize_memory_scope(memory_scope: str | None) -> str:
+    value = (memory_scope or "stable").strip().casefold()
+    return "temporary" if value in TEMPORARY_MEMORY_SCOPE_VALUES else "stable"
+
+
+def classify_memory_candidate(
+    value: str,
+    *,
+    memory_scope: str | None = None,
+) -> MemoryWriteCandidate:
+    text = str(value or "").strip()
+    if not text:
+        return MemoryWriteCandidate(
+            value=text,
+            accepted=False,
+            scope="temporary",
+            reason="空内容不写入长期记忆",
+        )
+
+    scope = normalize_memory_scope(memory_scope)
+    if scope == "temporary":
+        return MemoryWriteCandidate(
+            value=text,
+            accepted=False,
+            scope=scope,
+            reason="用户或模型标记为本次旅行临时条件",
+        )
+
+    has_temporary_hint = any(keyword in text for keyword in TEMPORARY_MEMORY_KEYWORDS)
+    has_stable_override = any(keyword in text for keyword in STABLE_OVERRIDE_KEYWORDS)
+    if has_temporary_hint and not has_stable_override:
+        return MemoryWriteCandidate(
+            value=text,
+            accepted=False,
+            scope="temporary",
+            reason="内容包含临时行程表达，未体现稳定偏好",
+        )
+
+    return MemoryWriteCandidate(
+        value=text,
+        accepted=True,
+        scope="stable",
+        reason="稳定偏好或历史事实，可写入长期记忆",
+    )
+
+
+def filter_stable_memory_values(
+    values: list[str] | None,
+    *,
+    memory_scope: str | None = None,
+) -> tuple[list[str], list[MemoryWriteCandidate]]:
+    candidates = [
+        classify_memory_candidate(value, memory_scope=memory_scope)
+        for value in values or []
+    ]
+    accepted = [candidate.value for candidate in candidates if candidate.accepted]
+    rejected = [candidate for candidate in candidates if not candidate.accepted]
+    return accepted, rejected

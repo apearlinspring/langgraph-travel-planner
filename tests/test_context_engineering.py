@@ -3,6 +3,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from app.core.context_budget import ContextBudget, decide_context_budget, estimate_tokens
 from app.core.context_pack import build_context_pack
 from app.core.conversation_summary import summarize_conversation, summarize_state_for_context
+from app.core.memory_models import classify_memory_candidate, filter_stable_memory_values
 
 
 def test_estimate_tokens_handles_chinese_more_conservatively():
@@ -110,3 +111,25 @@ def test_context_pack_summarizes_old_messages_and_keeps_recent_window():
     assert "【证据包摘要】" in pack.system_appendix
     assert "已按上下文预算截断" in pack.messages[-1].content
 
+
+def test_memory_policy_rejects_temporary_trip_conditions():
+    temporary = classify_memory_candidate("这次想住江景房")
+    temporary_like = classify_memory_candidate("这次喜欢安静一点")
+    stable = classify_memory_candidate("我一直喜欢安静的酒店")
+    explicit_temporary = classify_memory_candidate("清淡饮食", memory_scope="temporary")
+
+    assert temporary.accepted is False
+    assert temporary.scope == "temporary"
+    assert temporary_like.accepted is False
+    assert stable.accepted is True
+    assert stable.scope == "stable"
+    assert explicit_temporary.accepted is False
+
+
+def test_memory_policy_filters_mixed_candidates():
+    accepted, rejected = filter_stable_memory_values(
+        ["我喜欢博物馆", "本次想少走路"],
+    )
+
+    assert accepted == ["我喜欢博物馆"]
+    assert [item.value for item in rejected] == ["本次想少走路"]

@@ -75,6 +75,8 @@ async def get_step_config():
 - 饮食口味偏好（如“爱吃辣/不吃香菜/爱甜口”）→ update_food_preference_tool
 - 提到去过某地（如“我之前去过成都/西安”）→ add_travel_record_tool
 - 提到住宿偏好（此阶段若提到也可先记着，后续也会再确认）→ update_accommodation_preference_tool（若你有此工具也可用）
+- 只有“长期稳定偏好/长期禁忌/已经发生的历史旅行”才写入长期记忆；“这次/本次/当前行程/同行人临时要求”只作为本轮短期上下文处理。
+- 调用记忆工具时，如果只是本次旅行条件，传 memory_scope（记忆作用域参数）= "temporary"；如果用户明确说“一直/以后/每次/我习惯/我过敏/请记住”，才用默认 stable。
 
 【你的任务】
 你需要通过“聊天”把下面信息收集齐（不要求一次问完，分轮问）：
@@ -148,6 +150,7 @@ async def get_step_config():
 【智能记忆管理】
 - 用户提到新的旅行偏好 → update_travel_style_tool
 - 用户提到“我去过XX” → add_travel_record_tool
+- 只有稳定偏好和真实历史旅行写入长期记忆；“这次更想轻松一点/本次不想爬山”只影响当前方案，不写入长期画像。
 系统已加载用户历史去过的目的地/景点：尽量避免推荐用户已去过的地方与已玩过的核心景点。
 
 【用户需求】
@@ -319,7 +322,8 @@ async def get_step_config():
 系统已自动加载用户历史住宿偏好与预算倾向。优先贴合历史偏好。
 
 【智能记忆管理】
-用户表达新的住宿偏好（如“想住民宿/要泳池/要早餐/要亲子房/要安静/要离地铁近”）→ 必须调用 update_accommodation_preference_tool 保存。
+用户表达长期住宿偏好（如“我习惯住民宿/以后都要早餐/我一直要安静/常住离地铁近”）→ 调用 update_accommodation_preference_tool 保存。
+如果用户只是说“这次想住亲子房/本次要江景/这趟预算 500 一晚”，这是当前行程条件，调用工具时传 memory_scope="temporary"，或仅作为 query_hotel_options 的 preferences，不写入长期记忆。
 
 【已确定信息】
 - 目的地：{selected_destination}
@@ -408,8 +412,9 @@ async def get_step_config():
 系统已加载用户历史饮食禁忌与口味偏好。推荐时必须避开过敏/禁忌。
 
 【重要 - 饮食安全】
-- 如果用户提到新的过敏/禁忌 → update_dietary_restriction_tool
-- 如果用户提到新的口味偏好 → update_food_preference_tool
+- 如果用户提到自己的长期过敏/禁忌 → update_dietary_restriction_tool
+- 如果用户提到自己的长期口味偏好 → update_food_preference_tool
+- 如果只是本次同行人的临时忌口或“这次想清淡一点”，不要污染长期记忆；调用记忆工具时传 memory_scope="temporary"，并在当前餐饮方案里执行。
 
 【已确定信息】
 - 目的地：{selected_destination}
