@@ -175,4 +175,3 @@ def format_evidence_response(
             ]
         )
     return "\n".join(lines)
-

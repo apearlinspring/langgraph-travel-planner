@@ -12,4 +12,3 @@ def build_non_commitment_constraints(
     if quote_policy and quote_policy.get("disclaimer"):
         constraints.append(str(quote_policy["disclaimer"]))
     return list(dict.fromkeys(constraints))
-

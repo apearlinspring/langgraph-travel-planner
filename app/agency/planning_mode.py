@@ -83,4 +83,3 @@ def infer_planning_mode(
     if any(keyword in text for keyword in AGENCY_MODE_KEYWORDS):
         return "agency_plan"
     return "free_planning"
-

@@ -62,4 +62,3 @@ class AgencyContextData(TypedDict, total=False):
     quote_policy: QuotePolicyData
     rule_evidence: AgencyRuleEvidence
     categories: dict[str, list[str]]
-

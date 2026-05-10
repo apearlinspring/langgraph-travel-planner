@@ -240,4 +240,3 @@ def normalized_source(metadata: dict) -> str:
         return str(Path(str(source)))
     except (TypeError, ValueError):
         return str(source)
-

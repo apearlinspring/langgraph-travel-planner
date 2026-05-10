@@ -212,4 +212,3 @@ def format_light_product_lines(product: AgencyProductData) -> list[str]:
     if product.get("non_commitments"):
         lines.append("- 不承诺项：" + "；".join(product["non_commitments"][:3]))
     return lines
-
