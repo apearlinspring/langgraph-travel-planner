@@ -514,13 +514,20 @@ class ToolAuditEvent(TypedDict):
 - `scripts/run_evaluation_scenarios.py`
 - `docs/evaluation-system.md`
 
+当前落地状态：
+
+- 已新增 `app/evaluation/rag_quality.py`、`app/evaluation/tool_quality.py`、`app/evaluation/runtime_metrics.py` 三类确定性评分器。
+- 已新增 `data/evaluation/rag_quality_scenarios.json` 和 `data/evaluation/tool_call_scenarios.json`，并把报告质量场景扩展到自由行、省心方案、报价、风险、工具失败和长对话。
+- live snapshot（真实链路快照）已保存 `tool_events` 和 `summary.quality_summary`，其中包含报告、RAG、工具、运行指标和综合评分。
+- 评估脚本已能在读取快照时输出 Agent（智能体）运行质量摘要；跑批脚本结果会展示综合 `agent_score`。
+
 新增指标：
 
 - 任务成功率：是否产出合格 `report_data`。
 - RAG 类别覆盖：省心方案是否命中产品、SOP、报价、风险。
 - 证据精度：证据是否与用户模式和场景匹配。
 - 工具调用准确率：该调用的工具是否符合用户意图。
-- 冗余工具调用率：同一轮是否重复查酒店/交通。
+- 冗余工具调用率：同一轮是否重复查酒店/交通等高成本外部或证据检索工具，状态落盘工具只计数不作为冗余扣分。
 - 失败兜底质量：工具失败后是否产生待核验项。
 - 延迟：首 token 时间、总耗时、工具耗时。
 - 成本：估算 token 使用量，先可用近似统计。

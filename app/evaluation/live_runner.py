@@ -10,8 +10,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from app.evaluation.rag_quality import evaluate_rag_quality
 from app.evaluation.report_quality import evaluate_report_quality
+from app.evaluation.runtime_metrics import collect_runtime_metrics, evaluate_runtime_metrics
 from app.evaluation.scenarios import EvaluationScenario
+from app.evaluation.tool_quality import evaluate_tool_quality, extract_tool_events
 
 
 DEFAULT_BASE_URL = "http://127.0.0.1:8000"
@@ -77,6 +80,7 @@ class LiveScenarioResult:
     grade: str | None
     snapshot_path: str | None
     elapsed_seconds: float
+    agent_score: float | None = None
     error: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -124,10 +128,12 @@ def build_snapshot_payload(
     elapsed_seconds: float,
     base_url: str,
     turns: list[dict[str, Any]] | None = None,
+    quality_summary: dict[str, Any] | None = None,
     error: str | None = None,
 ) -> dict[str, Any]:
     """Build the JSON artifact saved after a live scenario run."""
 
+    tool_events = [record.to_dict() for record in extract_tool_events(events)]
     return {
         "version": "evaluation_live_snapshot.v1",
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -140,11 +146,14 @@ def build_snapshot_payload(
             "assistant_chars": len(assistant_text),
             "has_report_data": report_data is not None,
             "evaluation": evaluation,
+            "quality_summary": quality_summary,
+            "tool_event_count": len(tool_events),
             "error": error,
         },
         "turns": turns or [],
         "assistant_text": assistant_text,
         "report_data": report_data,
+        "tool_events": tool_events,
         "events": events,
     }
 
@@ -239,6 +248,110 @@ def scenario_message_sequence(scenario: EvaluationScenario) -> list[str]:
     return [scenario.prompt, *followups]
 
 
+def infer_tool_policy_from_scenario(scenario: EvaluationScenario) -> dict[str, Any]:
+    """Infer a lightweight tool policy from scenario tags for snapshot scoring."""
+
+    tags = set(scenario.tags)
+    expected_tools: set[str] = set()
+    forbidden_tools: set[str] = set()
+
+    if "hotel" in tags:
+        expected_tools.add("query_hotel_options")
+    if "transport" in tags:
+        expected_tools.add("query_transport_options")
+    if "weather" in tags or "destination" in tags:
+        expected_tools.add("query_destination_info")
+    if "free" in tags and "budget" in tags and "transport" not in tags and "hotel" not in tags:
+        forbidden_tools.update({"query_hotel_options", "query_transport_options"})
+
+    return {
+        "expected_tools": expected_tools,
+        "forbidden_tools": forbidden_tools,
+        "requires_fallback": bool({"fallback", "risk", "weather"} & tags),
+        "max_duplicate_calls": 1,
+    }
+
+
+def build_quality_summary(
+    *,
+    scenario: EvaluationScenario,
+    events: list[dict[str, Any]],
+    turns: list[dict[str, Any]],
+    assistant_text: str,
+    report_data: dict[str, Any],
+    report_evaluation: dict[str, Any],
+    elapsed_seconds: float,
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    """Build the combined Agent run quality score saved in live snapshots."""
+
+    tool_policy = infer_tool_policy_from_scenario(scenario)
+    rag_result = evaluate_rag_quality(
+        report_data,
+        expected_mode=scenario.expected_mode,
+        pass_threshold=80.0,
+    ).to_dict()
+    tool_result = evaluate_tool_quality(
+        events,
+        report_data=report_data,
+        expected_tools=tool_policy["expected_tools"],
+        forbidden_tools=tool_policy["forbidden_tools"],
+        max_duplicate_calls=tool_policy["max_duplicate_calls"],
+        requires_fallback=tool_policy["requires_fallback"],
+        pass_threshold=80.0,
+    ).to_dict()
+    metrics = collect_runtime_metrics(
+        events=events,
+        turns=turns,
+        assistant_text=assistant_text,
+        elapsed_seconds=elapsed_seconds,
+    )
+    runtime_result = evaluate_runtime_metrics(
+        metrics,
+        timeout_seconds=timeout_seconds,
+        pass_threshold=80.0,
+    ).to_dict()
+    weighted_score = round(
+        report_evaluation["normalized_score"] * 0.5
+        + rag_result["normalized_score"] * 0.2
+        + tool_result["normalized_score"] * 0.2
+        + runtime_result["normalized_score"] * 0.1,
+        2,
+    )
+    aggregate = {
+        "version": "agent_quality_summary.v1",
+        "normalized_score": weighted_score,
+        "passed": (
+            bool(report_evaluation.get("passed"))
+            and rag_result["passed"]
+            and tool_result["passed"]
+            and runtime_result["passed"]
+            and weighted_score >= scenario.min_score
+        ),
+        "weights": {
+            "report_quality": 0.5,
+            "rag_quality": 0.2,
+            "tool_quality": 0.2,
+            "runtime_quality": 0.1,
+        },
+    }
+    return {
+        "version": "agent_quality_summary.v1",
+        "aggregate": aggregate,
+        "report_quality": report_evaluation,
+        "rag_quality": rag_result,
+        "tool_quality": tool_result,
+        "runtime_quality": runtime_result,
+        "runtime_metrics": metrics.to_dict(),
+        "tool_policy": {
+            "expected_tools": sorted(tool_policy["expected_tools"]),
+            "forbidden_tools": sorted(tool_policy["forbidden_tools"]),
+            "max_duplicate_calls": tool_policy["max_duplicate_calls"],
+            "requires_fallback": tool_policy["requires_fallback"],
+        },
+    }
+
+
 def run_live_scenario(
     scenario: EvaluationScenario,
     config: LiveRunConfig,
@@ -279,7 +392,12 @@ def run_live_scenario(
                     {"content": user_message},
                     token=token,
                 ):
-                    event_with_turn = {"turn_index": turn_index, **event}
+                    event_with_turn = {
+                        **event,
+                        "turn_index": turn_index,
+                        "elapsed_since_scenario_start": round(time.perf_counter() - started_at, 3),
+                        "elapsed_since_turn_start": round(time.perf_counter() - turn_started_at, 3),
+                    }
                     events.append(event_with_turn)
                     event_type = event.get("type")
                     if event_type == "token":
@@ -295,12 +413,14 @@ def run_live_scenario(
             except (urllib.error.URLError, OSError) as exc:
                 turn_error = str(exc)
 
+            turn_events = events[turn_event_count_before:]
             turns.append(
                 {
                     "turn_index": turn_index,
                     "user_message": user_message,
                     "assistant_chars": len("".join(turn_assistant_parts)),
                     "event_count": len(events) - turn_event_count_before,
+                    "tool_call_count": sum(1 for event in turn_events if event.get("type") == "tool_call"),
                     "elapsed_seconds": round(time.perf_counter() - turn_started_at, 2),
                     "produced_report_data": report_data is not None,
                     "error": turn_error,
@@ -323,6 +443,16 @@ def run_live_scenario(
         ).to_dict()
         assistant_text = "".join(assistant_parts)
         elapsed_seconds = time.perf_counter() - started_at
+        quality_summary = build_quality_summary(
+            scenario=scenario,
+            events=events,
+            turns=turns,
+            assistant_text=assistant_text,
+            report_data=report_data,
+            report_evaluation=evaluation,
+            elapsed_seconds=elapsed_seconds,
+            timeout_seconds=config.timeout_seconds,
+        )
         snapshot = build_snapshot_payload(
             scenario=scenario,
             conversation=conversation,
@@ -333,6 +463,7 @@ def run_live_scenario(
             elapsed_seconds=elapsed_seconds,
             base_url=config.base_url,
             turns=turns,
+            quality_summary=quality_summary,
         )
         path = snapshot_path_for(scenario, config.output_dir)
         path.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -345,6 +476,7 @@ def run_live_scenario(
             grade=str(evaluation["grade"]),
             snapshot_path=str(path),
             elapsed_seconds=round(elapsed_seconds, 2),
+            agent_score=float(quality_summary["aggregate"]["normalized_score"]),
         )
     except (urllib.error.URLError, OSError, RuntimeError, ValueError) as exc:
         elapsed_seconds = time.perf_counter() - started_at

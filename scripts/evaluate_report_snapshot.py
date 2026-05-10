@@ -11,8 +11,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from app.evaluation.live_runner import build_quality_summary  # noqa: E402
 from app.evaluation.report_quality import evaluate_report_quality  # noqa: E402
-from app.evaluation.scenarios import get_scenario, load_scenarios  # noqa: E402
+from app.evaluation.scenarios import EvaluationScenario, get_scenario, load_scenarios  # noqa: E402
 
 
 def _extract_latest_report_data(snapshot: dict[str, Any]) -> dict[str, Any]:
@@ -67,6 +68,43 @@ def _print_markdown(result: dict[str, Any]) -> None:
     print("## Summary")
     for item in result["summary"]:
         print(f"- {item}")
+    quality_summary = result.get("quality_summary")
+    if isinstance(quality_summary, dict):
+        aggregate = quality_summary.get("aggregate") or {}
+        print()
+        print("## Agent Run Quality")
+        print(f"- Aggregate: {aggregate.get('normalized_score')} / 100")
+        print(f"- Passed: {aggregate.get('passed')}")
+        for key in ("rag_quality", "tool_quality", "runtime_quality"):
+            item = quality_summary.get(key) or {}
+            print(f"- {key}: {item.get('normalized_score')} / 100 ({item.get('grade')})")
+
+
+def _scenario_for_snapshot(
+    *,
+    scenario: EvaluationScenario | None,
+    report_data: dict[str, Any],
+    expected_mode: str | None,
+    min_score: float,
+) -> EvaluationScenario:
+    if scenario is not None:
+        return scenario
+    agency_context = report_data.get("agency_context") if isinstance(report_data, dict) else {}
+    mode = expected_mode or (
+        agency_context.get("mode") if isinstance(agency_context, dict) else None
+    )
+    if mode not in {"agency_plan", "free_planning"}:
+        mode = "agency_plan"
+    return EvaluationScenario(
+        id="adhoc_snapshot",
+        name="Ad hoc snapshot",
+        category="snapshot",
+        prompt="",
+        expected_mode=mode,
+        min_score=min_score,
+        focus=["snapshot"],
+        tags=["snapshot"],
+    )
 
 
 def main() -> int:
@@ -122,7 +160,7 @@ def main() -> int:
     if fail_under is None and scenario:
         fail_under = scenario.min_score
 
-    snapshot = json.loads(args.snapshot.read_text(encoding="utf-8"))
+    snapshot = json.loads(args.snapshot.read_text(encoding="utf-8-sig"))
     report_data = _extract_latest_report_data(snapshot)
     result = evaluate_report_quality(
         report_data,
@@ -130,6 +168,29 @@ def main() -> int:
     ).to_dict()
     if scenario:
         result["scenario"] = scenario.to_dict()
+
+    quality_scenario = _scenario_for_snapshot(
+        scenario=scenario,
+        report_data=report_data,
+        expected_mode=expected_mode,
+        min_score=fail_under or 80.0,
+    )
+    summary = snapshot.get("summary") if isinstance(snapshot.get("summary"), dict) else {}
+    events = snapshot.get("events") if isinstance(snapshot.get("events"), list) else []
+    turns = snapshot.get("turns") if isinstance(snapshot.get("turns"), list) else []
+    assistant_text = snapshot.get("assistant_text") if isinstance(snapshot.get("assistant_text"), str) else ""
+    elapsed_seconds = summary.get("elapsed_seconds") if isinstance(summary.get("elapsed_seconds"), (int, float)) else 0
+    report_evaluation = dict(result)
+    result["quality_summary"] = build_quality_summary(
+        scenario=quality_scenario,
+        events=events,
+        turns=turns,
+        assistant_text=assistant_text,
+        report_data=report_data,
+        report_evaluation=report_evaluation,
+        elapsed_seconds=float(elapsed_seconds),
+        timeout_seconds=900.0,
+    )
 
     if args.format == "json":
         print(json.dumps(result, ensure_ascii=False, indent=2))

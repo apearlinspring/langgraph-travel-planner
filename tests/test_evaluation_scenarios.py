@@ -3,7 +3,14 @@ from pathlib import Path
 
 import pytest
 
-from app.evaluation.scenarios import get_scenario, load_scenarios
+from app.evaluation.scenarios import (
+    get_rag_quality_scenario,
+    get_scenario,
+    get_tool_call_scenario,
+    load_rag_quality_scenarios,
+    load_scenarios,
+    load_tool_call_scenarios,
+)
 
 
 def test_load_default_scenarios_has_expected_coverage():
@@ -12,10 +19,10 @@ def test_load_default_scenarios_has_expected_coverage():
     modes = {scenario.expected_mode for scenario in scenarios}
     tags = {tag for scenario in scenarios for tag in scenario.tags}
 
-    assert len(scenarios) >= 8
+    assert len(scenarios) >= 10
     assert len(scenario_ids) == len(scenarios)
     assert {"free_planning", "agency_plan"}.issubset(modes)
-    assert {"free", "agency", "edge", "hotel", "budget"}.issubset(tags)
+    assert {"free", "agency", "edge", "hotel", "budget", "transport", "risk"}.issubset(tags)
 
 
 def test_get_scenario_returns_catalog_entry():
@@ -25,6 +32,44 @@ def test_get_scenario_returns_catalog_entry():
     assert scenario.min_score >= 80
     assert "agency" in scenario.tags
     assert scenario.prompt
+
+
+def test_load_rag_quality_scenarios_has_business_coverage():
+    scenarios = load_rag_quality_scenarios()
+    scenario_ids = {scenario.id for scenario in scenarios}
+    required_categories = {
+        category
+        for scenario in scenarios
+        for category in scenario.required_categories
+    }
+    modes = {scenario.expected_mode for scenario in scenarios}
+
+    assert len(scenarios) >= 6
+    assert len(scenario_ids) == len(scenarios)
+    assert {"agency_plan", "free_planning"}.issubset(modes)
+    assert {"products", "sop", "pricing", "risk", "report"}.issubset(required_categories)
+
+
+def test_load_tool_call_scenarios_has_tool_governance_coverage():
+    scenarios = load_tool_call_scenarios()
+    scenario_ids = {scenario.id for scenario in scenarios}
+    expected_tools = {tool for scenario in scenarios for tool in scenario.expected_tools}
+    tags = {tag for scenario in scenarios for tag in scenario.tags}
+
+    assert len(scenarios) >= 6
+    assert len(scenario_ids) == len(scenarios)
+    assert {"query_transport_options", "query_hotel_options", "query_destination_info"}.issubset(expected_tools)
+    assert {"fallback", "redundancy", "budget"}.issubset(tags)
+
+
+def test_get_specialized_scenarios_return_catalog_entries():
+    rag_scenario = get_rag_quality_scenario("rag_agency_quote_policy")
+    tool_scenario = get_tool_call_scenario("tool_transport_train_lookup")
+
+    assert rag_scenario.expected_mode == "agency_plan"
+    assert "pricing" in rag_scenario.required_categories
+    assert tool_scenario.expected_tools == ["query_transport_options"]
+    assert "query_hotel_options" in tool_scenario.forbidden_tools
 
 
 def test_load_scenarios_rejects_duplicate_ids(tmp_path: Path):
