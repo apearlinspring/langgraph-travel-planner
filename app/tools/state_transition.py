@@ -4,7 +4,7 @@ State transition tools for the travel-planning workflow.
 from datetime import datetime
 from functools import lru_cache
 from math import ceil
-from typing import Optional
+from typing import Any, Optional
 from uuid import uuid4
 
 from langchain.tools import ToolRuntime, tool
@@ -92,6 +92,29 @@ FOOD_ALIASES = {
     "连锁/商场": "chain",
     "商场": "chain",
     "省心": "chain",
+}
+
+PLANNING_MODE_LABELS = {
+    "free_planning": "自由规划",
+    "agency_plan": "旅行社顾问方案",
+}
+
+PLANNING_MODE_ALIASES = {
+    "free_planning": "free_planning",
+    "free": "free_planning",
+    "自由规划": "free_planning",
+    "自由行": "free_planning",
+    "自助游": "free_planning",
+    "自己订": "free_planning",
+    "agency_plan": "agency_plan",
+    "agency": "agency_plan",
+    "旅行社": "agency_plan",
+    "旅行社方案": "agency_plan",
+    "旅行社顾问方案": "agency_plan",
+    "省心方案": "agency_plan",
+    "定制游": "agency_plan",
+    "小包团": "agency_plan",
+    "私家团": "agency_plan",
 }
 
 TRANSPORT_BASE_COST_PER_PERSON = {
@@ -443,6 +466,108 @@ def _runtime_state(runtime: Optional[ToolRuntime]) -> TravelState:
     if runtime and runtime.state:
         return runtime.state
     return TravelState(messages=[])
+
+
+def _planning_mode_state_update(
+    state: TravelState,
+    *,
+    planning_mode: str,
+    planning_mode_reason: str,
+    planning_mode_confirmed: bool,
+) -> dict:
+    update = {
+        "planning_mode": planning_mode,
+        "planning_mode_reason": planning_mode_reason,
+        "planning_mode_confirmed": planning_mode_confirmed,
+    }
+    requirement = state.get("user_requirement")
+    if isinstance(requirement, dict) and requirement:
+        update["user_requirement"] = {
+            **requirement,
+            "planning_mode": planning_mode,
+            "planning_mode_reason": planning_mode_reason,
+            "planning_mode_confirmed": planning_mode_confirmed,
+        }
+    return update
+
+
+def _set_planning_mode_command(
+    *,
+    mode: str,
+    reason: str,
+    confirmed: bool,
+    runtime: Optional[ToolRuntime],
+) -> Command:
+    normalized_mode = _normalize_planning_mode(mode)
+    if not normalized_mode:
+        return _command_with_message(
+            "规划模式只能是 free_planning（自由规划）或 agency_plan（旅行社顾问方案）。",
+            runtime,
+        )
+
+    state = _runtime_state(runtime)
+    label = PLANNING_MODE_LABELS[normalized_mode]
+    mode_reason = reason or f"用户选择{label}"
+    state_update = _planning_mode_state_update(
+        state,
+        planning_mode=normalized_mode,
+        planning_mode_reason=mode_reason,
+        planning_mode_confirmed=confirmed,
+    )
+    status_text = "已确认" if confirmed else "已记录为倾向"
+    return _command_with_message(
+        f"规划模式{status_text}：{label}。后续会按这个模式组织方案表达。",
+        runtime,
+        **state_update,
+    )
+
+
+@tool
+def set_planning_mode_tool(
+    mode: str,
+    reason: str = "",
+    runtime: ToolRuntime[None, TravelState] = None,
+) -> Command:
+    """Record the user's current planning-mode preference without treating it as final confirmation."""
+
+    return _set_planning_mode_command(
+        mode=mode,
+        reason=reason,
+        confirmed=False,
+        runtime=runtime,
+    )
+
+
+@tool
+def confirm_planning_mode_tool(
+    mode: str,
+    reason: str = "",
+    runtime: ToolRuntime[None, TravelState] = None,
+) -> Command:
+    """Persist the confirmed planning mode: free planning or agency consultant plan."""
+
+    return _set_planning_mode_command(
+        mode=mode,
+        reason=reason,
+        confirmed=True,
+        runtime=runtime,
+    )
+
+
+@tool
+def record_evidence_bundle_tool(
+    evidence_bundle: dict[str, Any],
+    runtime: ToolRuntime[None, TravelState] = None,
+) -> Command:
+    """Persist structured evidence used by planning, pricing, risk, or report generation."""
+
+    if not isinstance(evidence_bundle, dict) or not evidence_bundle:
+        return _command_with_message("证据包为空，未写入状态。", runtime)
+    return _command_with_message(
+        "证据包已记录，后续方案会优先引用这些依据。",
+        runtime,
+        evidence_bundle=evidence_bundle,
+    )
 
 
 def _budget_level_from_range(budget_min: float, budget_max: float) -> str:
@@ -2021,7 +2146,31 @@ def _state_human_text_for_report(state: TravelState | None) -> str:
     return "\n".join(texts)
 
 
+def _normalize_planning_mode(value: Optional[str]) -> str | None:
+    if value is None:
+        return None
+    return PLANNING_MODE_ALIASES.get(str(value).strip())
+
+
+def _state_planning_mode(state: TravelState | None) -> str | None:
+    if not state:
+        return None
+
+    state_mode = _normalize_planning_mode(state.get("planning_mode"))
+    if state_mode:
+        return state_mode
+
+    requirement = state.get("user_requirement") or {}
+    if isinstance(requirement, dict):
+        return _normalize_planning_mode(requirement.get("planning_mode"))
+    return None
+
+
 def _infer_planning_mode(requirement: dict, state: TravelState | None = None) -> str:
+    explicit_mode = _normalize_planning_mode(requirement.get("planning_mode")) or _state_planning_mode(state)
+    if explicit_mode:
+        return explicit_mode
+
     text = " ".join(
         [
             str(requirement.get("special_needs") or ""),
@@ -2029,8 +2178,8 @@ def _infer_planning_mode(requirement: dict, state: TravelState | None = None) ->
             _state_human_text_for_report(state),
         ]
     )
-    agency_keywords = ("省心", "旅行社", "成熟路线", "定制游", "跟团", "团建", "亲子", "银发")
-    free_keywords = ("自由行", "自己玩", "不跟团", "自己订")
+    agency_keywords = ("省心", "旅行社", "成熟路线", "定制游", "跟团游", "小包团", "私家团", "团建", "亲子", "银发")
+    free_keywords = ("自由行", "自由规划", "自助游", "自己玩", "不跟团", "自己订", "只要攻略")
     if any(keyword in text for keyword in agency_keywords):
         return "agency_plan"
     if any(keyword in text for keyword in free_keywords):
@@ -2049,6 +2198,15 @@ def _pick_highlight(lines: list[str], keywords: tuple[str, ...], fallback_index:
 
 def _build_agency_context(requirement: dict, state: TravelState | None = None) -> dict:
     mode = _infer_planning_mode(requirement, state)
+    mode_reason = (
+        requirement.get("planning_mode_reason")
+        or (state.get("planning_mode_reason") if state else None)
+        or "根据已记录需求与对话上下文识别规划模式"
+    )
+    mode_confirmed = bool(
+        requirement.get("planning_mode_confirmed")
+        or (state.get("planning_mode_confirmed") if state else False)
+    )
     product_lines = list(_internal_doc_highlights("products", 2))
     service_lines = list(_internal_doc_highlights("sop", 2))
     pricing_lines = list(_internal_doc_highlights("pricing", 2))
@@ -2088,6 +2246,8 @@ def _build_agency_context(requirement: dict, state: TravelState | None = None) -
     return {
         "source_type": "agency_internal",
         "mode": mode,
+        "mode_reason": str(mode_reason),
+        "mode_confirmed": mode_confirmed,
         "summary": summary,
         "highlights": selected_lines,
         "categories": {
@@ -2293,6 +2453,9 @@ def record_requirement_tool(
     adult_count: Optional[int] = 1,
     children_count: Optional[int] = 0,
     destination: Optional[str] = None,
+    planning_mode: Optional[str] = None,
+    planning_mode_reason: str = "",
+    planning_mode_confirmed: bool = True,
     runtime: ToolRuntime[None, TravelState] = None,
 ) -> Command:
     """Persist the confirmed requirement summary and move to destination selection."""
@@ -2311,6 +2474,31 @@ def record_requirement_tool(
 
     budget_level = _budget_level_from_range(budget_min, budget_max)
     total_people = (adult_count or 0) + (children_count or 0)
+    mode_seed = {
+        "special_needs": special_needs or "",
+        "travel_styles": travel_styles,
+    }
+    mode_seed_text = " ".join(
+        [str(mode_seed["special_needs"]), " ".join(str(item) for item in travel_styles)]
+    )
+    inferred_text_mode = None
+    if any(
+        keyword in mode_seed_text
+        for keyword in ("省心", "旅行社", "成熟路线", "定制游", "跟团", "小包团", "私家团", "团建", "亲子", "银发", "自由行", "自由规划", "自助游", "自己玩", "不跟团", "自己订")
+    ):
+        inferred_text_mode = _infer_planning_mode(mode_seed)
+    state_mode = _state_planning_mode(runtime.state if runtime else None)
+    normalized_planning_mode = (
+        _normalize_planning_mode(planning_mode)
+        or inferred_text_mode
+        or state_mode
+        or "free_planning"
+    )
+    normalized_reason = (
+        planning_mode_reason
+        or (runtime.state.get("planning_mode_reason") if runtime and runtime.state else "")
+        or f"根据已确认需求识别为{PLANNING_MODE_LABELS[normalized_planning_mode]}"
+    )
     requirement = UserRequirement(
         departure_city=departure_city,
         destination=destination,
@@ -2323,6 +2511,9 @@ def record_requirement_tool(
         budget_level=budget_level,
         travel_styles=travel_styles,
         special_needs=special_needs or None,
+        planning_mode=normalized_planning_mode,
+        planning_mode_reason=normalized_reason,
+        planning_mode_confirmed=planning_mode_confirmed,
     )
 
     summary_lines = [
@@ -2338,6 +2529,7 @@ def record_requirement_tool(
             f"- 出行人数：{total_people} 人",
             f"- 预算区间：{budget_min}-{budget_max} 元/人（{budget_level}）",
             f"- 旅行风格：{', '.join(travel_styles)}",
+            f"- 规划模式：{PLANNING_MODE_LABELS[normalized_planning_mode]}",
         ]
     )
     if special_needs:
@@ -2347,6 +2539,9 @@ def record_requirement_tool(
         "\n".join(summary_lines),
         runtime,
         user_requirement=requirement,
+        planning_mode=normalized_planning_mode,
+        planning_mode_reason=normalized_reason,
+        planning_mode_confirmed=planning_mode_confirmed,
         current_step="destination_recommendation",
     )
 

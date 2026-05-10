@@ -16,12 +16,16 @@ from app.core.workflow import (
 )
 from app.tools.state_transition import (
     check_current_progress,
+    confirm_planning_mode_tool,
     generate_itinerary_tool,
     generate_order_tool,
     go_back_to_step,
+    record_evidence_bundle_tool,
+    record_requirement_tool,
     select_accommodation_tool,
     select_food_tool,
     select_transport_tool,
+    set_planning_mode_tool,
     summarize_budget_tool,
 )
 
@@ -133,6 +137,11 @@ async def test_step_config_covers_all_planning_steps(monkeypatch):
     assert "以工具返回的 report 作为最终报告正文" in config["order_generation"]["prompt"]
     assert "不要输出" in config["order_generation"]["prompt"]
     assert "[根据之前的对话填写]" in config["order_generation"]["prompt"]
+    assert "用一句话确认" in config["requirement_collection"]["prompt"]
+    requirement_tool_names = {tool.name for tool in config["requirement_collection"]["tools"]}
+    assert "set_planning_mode_tool" in requirement_tool_names
+    assert "confirm_planning_mode_tool" in requirement_tool_names
+    assert "record_evidence_bundle_tool" in requirement_tool_names
     assert all(tool.name != "add_travel_record_tool" for tool in config["order_generation"]["tools"])
 
 
@@ -205,6 +214,76 @@ def test_go_back_to_step_clears_fields_from_shared_workflow_metadata():
     assert command.update["order_id"] is None
     assert command.update["report"] is None
     assert "交通规划" in command.update["messages"][0].content
+
+
+def test_planning_mode_tools_persist_mode_reason_and_confirmation():
+    state = create_initial_state(user_id="user-1", session_id="session-1")
+
+    command = set_planning_mode_tool.invoke(
+        {
+            "mode": "自由行",
+            "reason": "用户想自己订酒店机票，只需要攻略建议",
+            "runtime": _build_runtime(state),
+        }
+    )
+    state.update(command.update)
+
+    assert command.update["planning_mode"] == "free_planning"
+    assert command.update["planning_mode_confirmed"] is False
+    assert "自由规划" in command.update["messages"][0].content
+
+    command = confirm_planning_mode_tool.invoke(
+        {
+            "mode": "旅行社顾问方案",
+            "reason": "用户改为希望省心安排",
+            "runtime": _build_runtime(state),
+        }
+    )
+
+    assert command.update["planning_mode"] == "agency_plan"
+    assert command.update["planning_mode_confirmed"] is True
+    assert command.update["planning_mode_reason"] == "用户改为希望省心安排"
+
+
+def test_record_evidence_bundle_tool_persists_structured_bundle():
+    state = create_initial_state(user_id="user-1", session_id="session-1")
+
+    command = record_evidence_bundle_tool.invoke(
+        {
+            "evidence_bundle": {
+                "pricing": [{"source": "pricing_rules", "summary": "预算需区分估算和待核验"}],
+            },
+            "runtime": _build_runtime(state),
+        }
+    )
+
+    assert command.update["evidence_bundle"]["pricing"][0]["source"] == "pricing_rules"
+
+
+def test_record_requirement_persists_planning_mode():
+    state = create_initial_state(user_id="user-1", session_id="session-1")
+
+    command = record_requirement_tool.invoke(
+        {
+            "departure_city": "上海",
+            "destination": "成都",
+            "departure_date": "2026-06-01",
+            "travel_days": 4,
+            "adult_count": 2,
+            "children_count": 0,
+            "budget_min": 3000.0,
+            "budget_max": 6000.0,
+            "travel_styles": ["culture", "food"],
+            "special_needs": "想要省心一点，按旅行社成熟路线走",
+            "runtime": _build_runtime(state),
+        }
+    )
+
+    assert command.update["planning_mode"] == "agency_plan"
+    assert command.update["planning_mode_confirmed"] is True
+    assert command.update["user_requirement"]["planning_mode"] == "agency_plan"
+    assert command.update["user_requirement"]["planning_mode_reason"]
+    assert "规划模式：旅行社顾问方案" in command.update["messages"][0].content
 
 
 def test_select_transport_tool_can_persist_concrete_transport_option():
@@ -919,6 +998,42 @@ def test_final_report_infers_agency_mode_from_recent_human_messages():
 
     assert report_data["agency_context"]["mode"] == "agency_plan"
     assert "\u65c5\u884c\u793e\u987e\u95ee\u65b9\u6848" in report_data["agency_context"]["summary"]
+
+
+def test_final_report_prefers_persisted_planning_mode_over_recent_messages():
+    state = create_initial_state(user_id="user-1", session_id="session-1")
+    state.update(
+        {
+            "current_step": "destination_recommendation",
+            "planning_mode": "agency_plan",
+            "planning_mode_reason": "用户已确认按旅行社顾问方案交付",
+            "planning_mode_confirmed": True,
+            "user_requirement": {
+                "departure_city": "\u5317\u4eac",
+                "destination": "\u4e0a\u6d77",
+                "travel_days": 3,
+                "adult_count": 2,
+                "children_count": 0,
+                "budget_max": 8000,
+                "travel_styles": ["\u6587\u5316\u63a2\u7d22"],
+                "special_needs": "\u4ea4\u901a\u4f18\u5148\u9ad8\u94c1",
+                "planning_mode": "agency_plan",
+                "planning_mode_reason": "用户已确认按旅行社顾问方案交付",
+                "planning_mode_confirmed": True,
+            },
+            "selected_destination": "\u4e0a\u6d77",
+            "messages": [
+                HumanMessage(content="\u53ea\u8981\u81ea\u7531\u884c\u653b\u7565\uff0c\u6211\u81ea\u5df1\u8ba2\u3002")
+            ],
+        }
+    )
+
+    order_command = generate_order_tool.invoke({"runtime": _build_runtime(state)})
+    report_data = order_command.update["report_data"]
+
+    assert report_data["agency_context"]["mode"] == "agency_plan"
+    assert report_data["agency_context"]["mode_reason"] == "用户已确认按旅行社顾问方案交付"
+    assert report_data["agency_context"]["mode_confirmed"] is True
 
 
 def test_final_report_keeps_budget_confidence_contract_when_prices_are_missing():
