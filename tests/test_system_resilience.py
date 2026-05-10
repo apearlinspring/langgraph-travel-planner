@@ -1,8 +1,16 @@
 import asyncio
+import os
 
 import pytest
 
+os.environ.setdefault("DASHSCOPE_API_KEY", "test-dashscope-key")
+os.environ.setdefault("LANGSMITH_API_KEY", "test-langsmith-key")
+os.environ.setdefault("POSTGRES_DB", "test_db")
+os.environ.setdefault("POSTGRES_USER", "test_user")
+os.environ.setdefault("POSTGRES_PASSWORD", "test_password")
+
 from app.core.checkpointer import CheckpointerManager
+from app.core.session_lock import SessionLockBusy, SessionLockManager
 from app.core.store import StoreManager
 from app.main import build_readiness_payload
 from app.mcp_core.client import MCPClientManager
@@ -46,6 +54,11 @@ class FakeHangingMCPClient:
     async def get_tools(self):
         await asyncio.sleep(3600)
         return []
+
+
+class FakeUnavailableRedis:
+    async def set(self, *args, **kwargs):
+        raise ConnectionError("redis is unavailable")
 
 
 @pytest.fixture(autouse=True)
@@ -110,12 +123,15 @@ async def test_optional_server_times_out_without_blocking_other_servers(monkeypa
     monkeypatch.setattr("app.mcp_core.client.asyncio.wait_for", fake_wait_for)
 
     manager = await MCPClientManager.get_instance()
-    tools = await manager.get_tools(servers=["aigohotel-mcp"])
+    tools = await manager.get_tools(
+        servers=["weather"],
+        timeout_overrides={"weather": 0.01},
+    )
     snapshot = MCPClientManager.get_status_snapshot()
 
     assert tools == []
     assert snapshot["status"] == "unavailable"
-    assert snapshot["servers"]["aigohotel-mcp"]["status"] == "unavailable"
+    assert snapshot["servers"]["weather"]["status"] == "unavailable"
 
 
 def test_build_readiness_payload_reports_degraded_when_mcp_is_degraded(monkeypatch):
@@ -183,3 +199,18 @@ def test_build_readiness_payload_reports_not_ready_when_core_is_missing(monkeypa
 
     assert status_code == 503
     assert payload["status"] == "not_ready"
+
+
+@pytest.mark.asyncio
+async def test_session_lock_manager_degrades_to_local_when_redis_is_unavailable():
+    manager = SessionLockManager(backend="auto", redis_client=FakeUnavailableRedis())
+    lease = await manager.acquire("conversation-1")
+
+    try:
+        assert lease.snapshot.backend == "local"
+        with pytest.raises(SessionLockBusy):
+            await manager.acquire("conversation-1")
+    finally:
+        await lease.release()
+
+    assert manager.is_locked("conversation-1") is False
