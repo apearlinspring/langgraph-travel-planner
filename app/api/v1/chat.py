@@ -17,6 +17,12 @@ from app.schemas.message import MessageCreate
 from app.api.dependencies import get_current_user
 from app.agents.handoffs.travel_agent import create_travel_agent
 from app.config import settings
+from app.tools.audit import (
+    build_tool_audit_event,
+    start_tool_audit,
+    summarize_tool_input,
+    summarize_tool_output,
+)
 from app.utils.logger import app_logger
 
 router = APIRouter(prefix="/chat", tags=["对话"])
@@ -106,7 +112,10 @@ async def generate_sse_stream(
     request_started_at = time.perf_counter()
     first_token_elapsed = None
     tool_started_at = {}
+    tool_audit_context_by_run = {}
+    tool_input_by_run = {}
     tool_name_by_run = {}
+    tool_audit_events = []
     assistant_extra_info = {}
     fallback_assistant_message = ""
 
@@ -166,6 +175,10 @@ async def generate_sse_stream(
                 run_id = event.get("run_id", "")
                 if run_id:
                     tool_started_at[run_id] = time.perf_counter()
+                    tool_audit_context_by_run[run_id] = start_tool_audit(tool_name)
+                    tool_input_by_run[run_id] = summarize_tool_input(
+                        event.get("data", {}).get("input") or {}
+                    )
                     tool_name_by_run[run_id] = tool_name
                 app_logger.info(
                     "SSE tool started: "
@@ -179,9 +192,11 @@ async def generate_sse_stream(
                 run_id = event.get("run_id", "")
                 tool_name = event.get("name", "") or tool_name_by_run.get(run_id, "")
                 started_at = tool_started_at.pop(run_id, None)
+                audit_context = tool_audit_context_by_run.pop(run_id, None)
+                input_summary = tool_input_by_run.pop(run_id, {})
                 tool_name_by_run.pop(run_id, None)
+                tool_output = event.get("data", {}).get("output")
                 if tool_name == "generate_order_tool":
-                    tool_output = event.get("data", {}).get("output")
                     report_extra_info = _report_extra_info_from_tool_output(
                         tool_output
                     )
@@ -209,12 +224,49 @@ async def generate_sse_stream(
                         f"conversation_id={conversation_id}, user_id={user.id}, "
                         f"tool={tool_name}, elapsed_seconds={elapsed:.2f}"
                     )
+                if audit_context is not None:
+                    audit_event = build_tool_audit_event(
+                        audit_context,
+                        status="success",
+                        input_summary=input_summary,
+                        output_summary=summarize_tool_output(tool_output),
+                        evidence_type="mcp_live_query",
+                    )
+                    tool_audit_events.append(audit_event)
+                    yield sse({
+                        "type": "tool_audit",
+                        "event": audit_event,
+                    })
+            elif kind == "on_tool_error":
+                run_id = event.get("run_id", "")
+                tool_name = event.get("name", "") or tool_name_by_run.pop(run_id, "")
+                tool_started_at.pop(run_id, None)
+                audit_context = tool_audit_context_by_run.pop(run_id, None)
+                input_summary = tool_input_by_run.pop(run_id, {})
+                error = event.get("data", {}).get("error")
+                error_type = getattr(error, "__class__", type(error)).__name__ if error else "ToolError"
+                if audit_context is not None:
+                    audit_event = build_tool_audit_event(
+                        audit_context,
+                        status="failed",
+                        input_summary=input_summary,
+                        output_summary={"message": str(error)[:180] if error else ""},
+                        error_type=error_type,
+                        evidence_type="mcp_live_query",
+                    )
+                    tool_audit_events.append(audit_event)
+                    yield sse({
+                        "type": "tool_audit",
+                        "event": audit_event,
+                    })
 
             await asyncio.sleep(0)
 
         # 5. 保存 AI 回复
         if not assistant_message.strip() and fallback_assistant_message:
             assistant_message = fallback_assistant_message
+        if tool_audit_events:
+            assistant_extra_info["tool_audit_events"] = tool_audit_events
         if assistant_message.strip():
             await save_message(
                 db,

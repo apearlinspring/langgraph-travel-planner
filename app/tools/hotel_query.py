@@ -16,6 +16,14 @@ from langgraph.types import Command
 
 from app.core.state import TravelState
 from app.mcp_core.client import get_mcp_client
+from app.tools.audit import (
+    append_tool_audit_event,
+    build_tool_audit_event,
+    start_tool_audit,
+    summarize_tool_input,
+)
+from app.tools.guardrails import validate_hotel_query_args
+from app.tools.result_validation import classify_exception, validate_hotel_search_result
 from app.utils.logger import app_logger
 
 
@@ -635,6 +643,15 @@ def _tool_message(content: str, runtime: Optional[ToolRuntime]) -> ToolMessage:
     )
 
 
+def _audited_command(
+    update: dict[str, Any],
+    runtime: Optional[ToolRuntime],
+    event: dict[str, Any],
+) -> Command:
+    state = runtime.state if runtime and runtime.state else {}
+    return Command(update=append_tool_audit_event(state, update, event))
+
+
 def _is_placeholder(value: object, placeholders: set[str]) -> bool:
     text = str(value or "").strip()
     return not text or text in placeholders
@@ -821,7 +838,8 @@ async def query_hotel_options(
     用更稳定的高层参数搜索真实酒店候选，自动处理预算、偏好和地点别名兜底。
     """
 
-    started_at = time.perf_counter()
+    audit_context = start_tool_audit("query_hotel_options")
+    started_at = audit_context.perf_counter_started_at
     normalized_args = _normalize_query_args_from_state(
         destination=destination,
         check_in_date=check_in_date,
@@ -841,6 +859,28 @@ async def query_hotel_options(
     budget_level = normalized_args["budget_level"]
     preferences = normalized_args["preferences"]
     place_type = normalized_args["place_type"]
+    normalized_input = {
+        **normalized_args,
+        "size": size,
+        "max_price_per_night": max_price_per_night,
+    }
+    input_summary = summarize_tool_input(normalized_input)
+    validation = validate_hotel_query_args(normalized_input)
+    if not validation.ok:
+        message = f"酒店真实查询参数不完整：{validation.message}。请先补齐后再查，我不会编造酒店候选。"
+        event = build_tool_audit_event(
+            audit_context,
+            status="skipped",
+            input_summary=input_summary,
+            output_summary={"message": validation.message},
+            error_type=validation.error_type,
+            evidence_type="live_hotel_search",
+        )
+        return _audited_command(
+            {"messages": [_tool_message(message, runtime)]},
+            runtime,
+            event,
+        )
 
     try:
         search_tool = await asyncio.wait_for(
@@ -849,20 +889,31 @@ async def query_hotel_options(
         )
     except Exception as exc:
         elapsed = time.perf_counter() - started_at
+        status, error_type = classify_exception(exc)
         app_logger.warning(
             "Hotel query unavailable while preparing MCP tool: "
             f"destination={destination}, elapsed_seconds={elapsed:.2f}, "
             f"error={exc.__class__.__name__}"
         )
-        return Command(
-            update={
+        event = build_tool_audit_event(
+            audit_context,
+            status=status,
+            input_summary=input_summary,
+            output_summary={"message": "hotel MCP tool preparation failed"},
+            error_type=error_type,
+            evidence_type="live_hotel_search",
+        )
+        return _audited_command(
+            {
                 "messages": [
                     _tool_message(
                         "酒店搜索服务这次没有及时准备好，我不会编造酒店候选；可以稍后重试真实酒店查询。",
                         runtime,
                     )
                 ]
-            }
+            },
+            runtime,
+            event,
         )
     if search_tool is None:
         elapsed = time.perf_counter() - started_at
@@ -870,10 +921,20 @@ async def query_hotel_options(
             "Hotel query unavailable: "
             f"destination={destination}, elapsed_seconds={elapsed:.2f}"
         )
-        return Command(
-            update={
+        event = build_tool_audit_event(
+            audit_context,
+            status="failed",
+            input_summary=input_summary,
+            output_summary={"message": "hotel MCP server is unavailable"},
+            error_type="hotel_mcp_unavailable",
+            evidence_type="live_hotel_search",
+        )
+        return _audited_command(
+            {
                 "messages": [_tool_message("酒店搜索服务当前不可用，我不会编造酒店候选；请稍后再试。", runtime)]
-            }
+            },
+            runtime,
+            event,
         )
 
     budget_key = budget_level if budget_level in STAR_RATING_BY_BUDGET else "comfort"
@@ -954,20 +1015,32 @@ async def query_hotel_options(
     except Exception as exc:
         total_elapsed = time.perf_counter() - started_at
         message = str(exc).strip() or exc.__class__.__name__
+        status, error_type = classify_exception(exc)
         app_logger.warning(
             "Hotel query failed without crashing workflow: "
             f"destination={destination}, elapsed_seconds={total_elapsed:.2f}, "
             f"error={message}"
         )
-        return Command(
-            update={
+        event = build_tool_audit_event(
+            audit_context,
+            status=status,
+            input_summary=input_summary,
+            output_summary={"message": message},
+            error_type=error_type,
+            retry_count=max(len(tried_places) - 1, 0),
+            evidence_type="live_hotel_search",
+        )
+        return _audited_command(
+            {
                 "messages": [
                     _tool_message(
                         f"酒店搜索服务这次调用失败：{message}。我不会编造酒店候选；可以稍后重试真实酒店查询。",
                         runtime,
                     )
                 ]
-            }
+            },
+            runtime,
+            event,
         )
 
     if matched_hotels:
@@ -984,13 +1057,28 @@ async def query_hotel_options(
             f"destination={destination}, place={matched_place}, "
             f"elapsed_seconds={total_elapsed:.2f}, hotel_count={len(limited_hotels)}"
         )
-        return Command(
-            update={
+        result_validation = validate_hotel_search_result(limited_hotels, last_message)
+        event = build_tool_audit_event(
+            audit_context,
+            status=result_validation.status,
+            input_summary=input_summary,
+            output_summary={
+                **result_validation.output_summary,
+                "actual_place": matched_place,
+            },
+            error_type=result_validation.error_type,
+            retry_count=max(len(tried_places) - 1, 0),
+            evidence_type="live_hotel_search",
+        )
+        return _audited_command(
+            {
                 "messages": [_tool_message(formatted_hotels, runtime)],
                 "accommodation_options": [
                     _normalize_hotel_option(hotel) for hotel in limited_hotels
                 ],
-            }
+            },
+            runtime,
+            event,
         )
 
     tried_text = " / ".join(tried_places)
@@ -1006,7 +1094,20 @@ async def query_hotel_options(
             f"上游返回：{last_message}\n"
             "建议下一步放宽预算、缩短偏好条件，或者告诉我更具体的区域再查一次。"
         )
-        return Command(update={"messages": [_tool_message(message, runtime)]})
+        result_validation = validate_hotel_search_result([], last_message)
+        event = build_tool_audit_event(
+            audit_context,
+            status=result_validation.status,
+            input_summary=input_summary,
+            output_summary={
+                **result_validation.output_summary,
+                "tried_places": tried_places,
+            },
+            error_type=result_validation.error_type,
+            retry_count=max(len(tried_places) - 1, 0),
+            evidence_type="live_hotel_search",
+        )
+        return _audited_command({"messages": [_tool_message(message, runtime)]}, runtime, event)
 
     total_elapsed = time.perf_counter() - started_at
     app_logger.warning(
@@ -1018,4 +1119,17 @@ async def query_hotel_options(
         f"这次暂时没有查到符合条件的酒店。已尝试检索地：{tried_text}。\n"
         "建议下一步放宽预算、缩短偏好条件，或者告诉我更具体的区域再查一次。"
     )
-    return Command(update={"messages": [_tool_message(message, runtime)]})
+    result_validation = validate_hotel_search_result([], last_message)
+    event = build_tool_audit_event(
+        audit_context,
+        status=result_validation.status,
+        input_summary=input_summary,
+        output_summary={
+            **result_validation.output_summary,
+            "tried_places": tried_places,
+        },
+        error_type=result_validation.error_type,
+        retry_count=max(len(tried_places) - 1, 0),
+        evidence_type="live_hotel_search",
+    )
+    return _audited_command({"messages": [_tool_message(message, runtime)]}, runtime, event)
