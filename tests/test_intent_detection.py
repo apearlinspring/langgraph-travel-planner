@@ -3,7 +3,7 @@ from langchain_core.messages import HumanMessage
 
 from app.core.intent import detect_travel_intent, resolve_planning_mode
 from app.core.middleware import StepConfigMiddleware
-from app.utils.llm_factory import get_model_compatibility
+from app.utils.llm_factory import ModelCompatibility, get_model_compatibility
 
 
 class DummyRequest:
@@ -411,7 +411,59 @@ async def test_middleware_asks_to_confirm_ambiguous_planning_mode():
     )
 
     assert "confirm_planning_mode_tool" in captured["tools"]
+    assert "record_requirement_tool" not in captured["tools"]
     assert "search_agency_product_templates" not in captured["tools"]
+    assert "规划模式表达不够明确" in captured["system_prompt"]
+
+
+@pytest.mark.asyncio
+async def test_middleware_does_not_record_requirement_before_mode_confirmation(monkeypatch):
+    monkeypatch.setattr(
+        "app.core.middleware.get_model_compatibility",
+        lambda **_: ModelCompatibility(supports_forced_tool_choice=True),
+    )
+    captured = {}
+    middleware = StepConfigMiddleware(
+        {
+            "requirement_collection": {
+                "prompt": "collect",
+                "tools": [
+                    "record_requirement_tool",
+                    "set_planning_mode_tool",
+                    "confirm_planning_mode_tool",
+                    "search_agency_product_templates",
+                ],
+                "requires": [],
+            },
+        }
+    )
+    state = {"current_step": "requirement_collection"}
+
+    async def handler(request):
+        captured["tools"] = request.tools
+        captured["tool_choice"] = getattr(request, "tool_choice", None)
+        captured["system_prompt"] = getattr(request, "system_prompt", "")
+        return "ok"
+
+    await middleware.awrap_model_call(
+        DummyRequest(
+            state,
+            [
+                HumanMessage(
+                    content=(
+                        "从上海到成都，2026-06-01 出发，玩4天，2个成人，"
+                        "预算每人6000，喜欢美食文化。我想省心一点，"
+                        "但也想自己订酒店机票，不确定要不要旅行社方案，开始规划。"
+                    )
+                )
+            ],
+        ),
+        handler,
+    )
+
+    assert "confirm_planning_mode_tool" in captured["tools"]
+    assert "record_requirement_tool" not in captured["tools"]
+    assert captured["tool_choice"] is None
     assert "规划模式表达不够明确" in captured["system_prompt"]
 
 

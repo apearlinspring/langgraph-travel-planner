@@ -960,6 +960,16 @@ class StepConfigMiddleware(AgentMiddleware):
                 app_logger.info(
                     "自由规划或待确认模式：本轮移除不相关旅行社内部 RAG 工具"
                 )
+        if planning_mode.needs_confirmation:
+            filtered_tools = _exclude_tools_by_name(
+                override_kwargs["tools"],
+                {"record_requirement_tool"},
+            )
+            if len(filtered_tools) != len(override_kwargs["tools"]):
+                override_kwargs["tools"] = filtered_tools
+                app_logger.info(
+                    "规划模式待确认：本轮暂缓记录需求，优先确认自由规划或旅行社顾问方案"
+                )
 
         cross_step_tool_names = _cross_step_verification_tools(latest_human_text)
         if cross_step_tool_names:
@@ -987,6 +997,11 @@ class StepConfigMiddleware(AgentMiddleware):
 
         available_tool_names = _tool_names(override_kwargs["tools"])
         intent_preferred_tool = _preferred_tool_for_intent(travel_intent, state_dict)
+        if (
+            planning_mode.needs_confirmation
+            and intent_preferred_tool == "record_requirement_tool"
+        ):
+            intent_preferred_tool = None
         if intent_preferred_tool and intent_preferred_tool not in available_tool_names:
             extra_tool = _find_tool_by_name(self._step_config, intent_preferred_tool)
             if extra_tool is not None:
