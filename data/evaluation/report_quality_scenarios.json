@@ -81,6 +81,62 @@
       "min_score": 82,
       "focus": ["hotel preference parsing", "fuzzy matching", "tool failure fallback", "clear verification"],
       "tags": ["edge", "hotel", "fallback"]
+    },
+    {
+      "id": "agency_team_building",
+      "name": "Agency plan: team building route",
+      "category": "agency_plan",
+      "prompt": "公司团建，12个人，从深圳出发去广州或周边2天1晚，希望交通省心、预算透明、活动不要太累，按旅行社顾问方案给我。",
+      "expected_mode": "agency_plan",
+      "min_score": 86,
+      "focus": ["group suitability", "service nodes", "budget basis", "risk fallback"],
+      "tags": ["agency", "team", "budget"]
+    },
+    {
+      "id": "pricing_agency_quote_explanation",
+      "name": "Pricing: agency quote explanation",
+      "category": "pricing",
+      "prompt": "我们4个大人想从成都去重庆3天2晚，想要省心方案。请重点说明费用包含、不包含、哪些价格是估算，哪些需要二次核验。",
+      "expected_mode": "agency_plan",
+      "min_score": 86,
+      "focus": ["price evidence", "included and excluded costs", "verification items", "agency quote policy"],
+      "tags": ["agency", "pricing", "budget"]
+    },
+    {
+      "id": "risk_weather_disruption",
+      "name": "Risk: weather disruption fallback",
+      "category": "risk",
+      "prompt": "我计划7月带父母去桂林4天3晚，担心下雨和老人走不动，请给省心安排并把天气、交通、酒店和Plan B风险写清楚。",
+      "expected_mode": "agency_plan",
+      "min_score": 84,
+      "focus": ["weather fallback", "senior-friendly route", "risk checklist", "verification items"],
+      "tags": ["agency", "risk", "weather", "senior"]
+    },
+    {
+      "id": "edge_transport_tool_fallback",
+      "name": "Edge case: transport tool fallback",
+      "category": "edge_case",
+      "prompt": "我想从武汉去张家界玩4天3晚，优先高铁，如果查不到合适车次也请明确待核验并给出可执行交通兜底。",
+      "expected_mode": "free_planning",
+      "min_score": 82,
+      "focus": ["transport lookup intent", "tool failure fallback", "verification", "route feasibility"],
+      "tags": ["edge", "transport", "fallback"]
+    },
+    {
+      "id": "long_context_revision",
+      "name": "Long context: revised family agency plan",
+      "category": "long_conversation",
+      "prompt": "先帮我记一下：我们一家三口暑假想从杭州出发，原本想去厦门5天4晚，但孩子怕热、老人同行、预算9000。后面如果我改目的地，请保留亲子和老人友好要求，最终按省心旅行社方案输出。",
+      "expected_mode": "agency_plan",
+      "min_score": 84,
+      "focus": ["long context", "preference carryover", "mode stability", "final report readiness"],
+      "tags": ["agency", "long-context", "family", "risk"],
+      "followups": [
+        "目的地改成青岛，还是5天4晚，预算维持9000，孩子喜欢海边但老人不能走太多路。",
+        "请按旅行社顾问方案推进，交通住宿如果没有真实价格就标注待核验。",
+        "餐饮以清淡和当地特色结合，海鲜注意老人肠胃。",
+        "请生成最终报告，重点保留预算置信度、待核验项和天气Plan B。"
+      ]
     }
   ]
 }
