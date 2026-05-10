@@ -100,6 +100,29 @@ def _valid_report_data(mode="agency_plan"):
             "Use Plan B if it rains.",
         ],
         "adjustment_options": ["Upgrade hotel", "Reduce food budget"],
+        "evidence_bundle": {
+            "source_type": "structured_state",
+            "agency_categories": {
+                "products": 1,
+                "sop": 1,
+                "pricing": 1,
+                "risk": 1,
+                "report": 1,
+            },
+            "price_evidence": {
+                "confirmed": [],
+                "estimated": ["transport and hotel are estimates"],
+                "verification": ["verify ticket price, hotel, booking, and weather"],
+            },
+            "tool_sources": {"transport": "fixture", "accommodation": "fixture"},
+            "route_evidence": [route],
+        },
+        "tool_audit_summary": {
+            "readiness": "ready for client review",
+            "used_sources": ["fixture report_data"],
+            "pending_checks": ["verify ticket price, hotel, booking, and weather"],
+            "unsupported_actions": ["no real payment link"],
+        },
         "sections": [
             {"id": "overview", "title": "Overview"},
             {"id": "transport_accommodation", "title": "Transport and accommodation"},
@@ -110,6 +133,7 @@ def _valid_report_data(mode="agency_plan"):
             {"id": "budget_confidence", "title": "Budget confidence"},
             {"id": "risk", "title": "Risks"},
             {"id": "adjustments", "title": "Adjustments"},
+            {"id": "tool_audit_summary", "title": "Consultant handoff"},
         ],
     }
 

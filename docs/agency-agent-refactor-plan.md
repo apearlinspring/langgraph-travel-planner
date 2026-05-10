@@ -320,6 +320,14 @@ tool_audit_events: NotRequired[list[dict]]
 - 让 `report_data` 成为稳定契约，而不是工具函数内部临时拼装结果。
 - 支持自由行和旅行社省心方案两套语气和章节重点，但保持同一结构契约。
 
+当前落地状态：
+
+- 已新增 `app/reports/` 契约、校验、Markdown（标记文本）渲染和 bundle（交付包）构建入口。
+- `generate_order_tool` 生成最终报告时先构造 `report_data`，再由报告模块校验并渲染 Markdown。
+- `report_data` 已包含 `evidence_bundle` 和 `tool_audit_summary`，用于承载证据、待核验项和不支持承诺。
+- 前端已优先消费结构化 `report_data.tool_audit_summary` 展示顾问交付清单。
+- `_format_report_*`、`_format_budget_*` 等低层格式化函数仍在 `state_transition.py`，后续可继续细拆。
+
 建议新增文件：
 
 - `app/reports/__init__.py`

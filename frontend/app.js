@@ -3238,6 +3238,9 @@
         if (contains("概览", "总览", "旅行计划", "方案", "行程摘要")) {
           return { tone: "overview", icon: "fa-passport", label: "行程概览" };
         }
+        if (contains("交付", "核验清单", "用户下一步", "下一步")) {
+          return { tone: "handoff", icon: "fa-list-check", label: "交付清单" };
+        }
         if (contains("置信度", "待核验", "可追溯", "兜底估算")) {
           return { tone: "budget-confidence", icon: "fa-clipboard-check", label: "预算核验" };
         }
@@ -3808,6 +3811,25 @@
                 body: renderReportDataList([
                   reportData.agency_context?.summary || "",
                   ...(reportData.agency_context?.highlights || []),
+                ]),
+              })}
+              ${renderReportDataCard({
+                tone: "handoff",
+                icon: "fa-list-check",
+                label: "交付清单",
+                title: "顾问核验与下一步",
+                body: renderReportDataList([
+                  reportData.tool_audit_summary?.readiness
+                    ? `交付状态：${reportData.tool_audit_summary.readiness}`
+                    : "",
+                  ...(Array.isArray(reportData.tool_audit_summary?.pending_checks)
+                    ? reportData.tool_audit_summary.pending_checks.map(
+                        (item) => `待核验：${item}`
+                      )
+                    : []),
+                  ...(Array.isArray(reportData.tool_audit_summary?.unsupported_actions)
+                    ? reportData.tool_audit_summary.unsupported_actions
+                    : []),
                 ]),
               })}
             </div>

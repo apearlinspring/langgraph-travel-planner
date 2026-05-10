@@ -25,6 +25,7 @@ from app.core.workflow import (
     STEP_STATE_FIELDS as WORKFLOW_STEP_STATE_FIELDS,
 )
 from app.rag.agency_retrieval import documents_to_evidence
+from app.reports import build_report_bundle, report_sections
 from app.rag.document_loader import DocumentManager
 from app.utils.logger import app_logger
 
@@ -2285,6 +2286,77 @@ def _clean_report_line(line: str) -> str:
     return str(line).strip().lstrip("-").strip()
 
 
+def _build_report_evidence_bundle(
+    agency_context: dict,
+    budget: dict,
+    route_summaries: list[dict],
+    selected_transport_option: dict,
+    selected_accommodation: dict,
+) -> dict:
+    categories = agency_context.get("categories") or {}
+    transport_source = selected_transport_option.get("source") or "user_or_rule"
+    accommodation_source = selected_accommodation.get("source") or "user_or_rule"
+    return {
+        "source_type": "structured_state",
+        "agency_categories": {
+            category: len(lines) if isinstance(lines, list) else 0
+            for category, lines in categories.items()
+        },
+        "price_evidence": {
+            "confirmed": list(budget.get("confirmed_items") or []),
+            "estimated": list(budget.get("estimated_items") or []),
+            "verification": list(budget.get("verification_items") or []),
+        },
+        "tool_sources": {
+            "transport": transport_source,
+            "accommodation": accommodation_source,
+        },
+        "route_evidence": [
+            {
+                "day_number": route.get("day_number"),
+                "route_points": list(route.get("route_points") or []),
+                "summary": route.get("summary") or "",
+            }
+            for route in route_summaries
+        ],
+    }
+
+
+def _build_report_tool_audit_summary(
+    budget: dict,
+    route_summaries: list[dict],
+    selected_transport_option: dict,
+    selected_accommodation: dict,
+) -> dict:
+    pending_checks = _dedupe_report_points(
+        [
+            *[_clean_report_line(item) for item in budget.get("estimated_items") or []],
+            *[_clean_report_line(item) for item in budget.get("verification_items") or []],
+        ],
+        max_items=6,
+    )
+    if not pending_checks:
+        pending_checks = [
+            "正式预订或出发前复核交通票价、酒店政策、景点开放和天气变化。"
+        ]
+
+    used_sources = [
+        f"交通：{selected_transport_option.get('source') or '用户选择/规则估算'}",
+        f"住宿：{selected_accommodation.get('source') or '用户选择/规则估算'}",
+        f"地图路线：已生成 {len(route_summaries)} 条分日路线节点",
+        "预算：已拆分为已确认、估算和待核验项目",
+    ]
+    return {
+        "readiness": "可交付，预订前需核验",
+        "used_sources": used_sources,
+        "pending_checks": pending_checks,
+        "unsupported_actions": [
+            "当前项目未接入真实支付服务，不生成支付链接。",
+            "不承诺真实库存、真实锁价或真实预订成功。",
+        ],
+    }
+
+
 def _build_report_data(
     state: TravelState,
     requirement: dict,
@@ -2340,6 +2412,30 @@ def _build_report_data(
         quote_policy,
         agency_context.get("categories") or {},
     )
+    evidence_bundle = _build_report_evidence_bundle(
+        agency_context,
+        budget,
+        route_summaries,
+        selected_transport_option,
+        selected_accommodation,
+    )
+    tool_audit_summary = _build_report_tool_audit_summary(
+        budget,
+        route_summaries,
+        selected_transport_option,
+        selected_accommodation,
+    )
+    sections = report_sections()
+    if not any(section.get("id") == "product_quote" for section in sections):
+        insert_at = next(
+            (
+                index + 1
+                for index, section in enumerate(sections)
+                if section.get("id") == "agency_context"
+            ),
+            len(sections),
+        )
+        sections.insert(insert_at, {"id": "product_quote", "title": "产品与报价规则"})
 
     return {
         "version": "travel_report.v1",
@@ -2391,18 +2487,9 @@ def _build_report_data(
         "quote_policy": quote_policy,
         "risks": risks,
         "adjustment_options": adjustment_options,
-        "sections": [
-            {"id": "overview", "title": "行程概览"},
-            {"id": "transport_accommodation", "title": "交通与住宿"},
-            {"id": "itinerary", "title": "每日行程"},
-            {"id": "map_routes", "title": "景点地图"},
-            {"id": "agency_context", "title": "方案依据"},
-            {"id": "product_quote", "title": "产品与报价规则"},
-            {"id": "budget", "title": "预算明细"},
-            {"id": "budget_confidence", "title": "预算置信度与待核验项"},
-            {"id": "risk", "title": "天气与风险提醒"},
-            {"id": "adjustments", "title": "后续可调整"},
-        ],
+        "evidence_bundle": evidence_bundle,
+        "tool_audit_summary": tool_audit_summary,
+        "sections": sections,
     }
 
 
@@ -2416,70 +2503,19 @@ def _build_final_report(
     selected_food_types: list[str],
 ) -> str:
     itinerary = _ensure_itinerary_day_count(itinerary, state, requirement)
-    route_label = _format_report_route_label(state, requirement)
-    duration = _format_report_duration(requirement)
-    people = _format_report_people(requirement)
-    travel_styles = "、".join(requirement.get("travel_styles") or []) or "待确认"
-    special_needs = requirement.get("special_needs") or "无特别备注"
-    transport_label = TRANSPORT_LABELS.get(
-        state.get("selected_transport"),
-        state.get("selected_transport", "未确认"),
-    )
-    agency_context = _build_agency_context(requirement, state)
-    light_product = agency_context.get("light_product") or build_light_product(requirement, state)
-    quote_policy = budget.get("quote_policy") or build_quote_policy(
+    report_data = _build_report_data(
+        state,
         requirement,
         budget,
-        product=light_product,
-        state=state,
+        itinerary,
+        selected_transport_option,
+        selected_accommodation,
+        selected_food_types,
     )
-
-    return "\n".join(
-        [
-            "# 个性化旅游规划报告",
-            "最终旅行方案报告",
-            "",
-            f"行程概览：{route_label}，{duration}，{people}，主题偏好：{travel_styles}。整体节奏以顺路、留白和可执行为主，特殊需求：{special_needs}。",
-            "",
-            "交通与住宿：",
-            f"- 交通：{transport_label}；{_format_transport_option(selected_transport_option)}",
-            f"- 住宿：{_format_accommodation_option(selected_accommodation)}",
-            f"- 餐饮偏好：{_format_food_preferences(selected_food_types)}",
-            "",
-            "行程亮点：",
-            *_format_itinerary_highlights(itinerary),
-            "",
-            "每日行程：",
-            *_format_report_daily_itinerary(itinerary, state, requirement),
-            "",
-            "景点地图：",
-            *_format_report_map_lines(itinerary, state, requirement),
-            "",
-            "方案依据：",
-            *_format_agency_context_lines(agency_context),
-            "",
-            "产品与报价规则：",
-            *format_light_product_lines(light_product),
-            *format_quote_policy_lines(quote_policy),
-            "",
-            "预算明细：",
-            *_format_budget_breakdown(budget),
-            f"- {_format_budget_fit(requirement, budget)}",
-            "",
-            "费用依据：",
-            *_format_budget_assumptions(budget),
-            "",
-            "预算置信度与待核验项：",
-            *_format_budget_confidence(budget),
-            *_format_budget_verification_items(budget),
-            "",
-            "天气与风险提醒：",
-            *_format_report_risk_lines(itinerary, budget, state, requirement),
-            "",
-            "后续可调整：",
-            *_format_adjustment_options(state, budget),
-        ]
-    )
+    bundle = build_report_bundle(report_data)
+    if not bundle.validation.ok:
+        return bundle.validation.to_user_message()
+    return bundle.markdown
 
 
 @tool
@@ -3151,15 +3187,6 @@ def generate_order_tool(
         itinerary,
     )
     selected_food_types = state.get("selected_food_types") or []
-    report = _build_final_report(
-        report_state,
-        requirement,
-        budget,
-        itinerary,
-        selected_transport_option,
-        selected_accommodation,
-        selected_food_types,
-    )
     report_data = _build_report_data(
         report_state,
         requirement,
@@ -3169,6 +3196,13 @@ def generate_order_tool(
         selected_accommodation,
         selected_food_types,
     )
+    report_bundle = build_report_bundle(report_data)
+    if not report_bundle.validation.ok:
+        return _command_with_message(
+            report_bundle.validation.to_user_message(),
+            runtime,
+        )
+    report = report_bundle.markdown
     message = "\n".join(
         [
             report,
