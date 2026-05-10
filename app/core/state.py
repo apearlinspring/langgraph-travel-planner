@@ -6,6 +6,7 @@ from typing import Literal, Optional
 from langchain.agents import AgentState
 from typing_extensions import NotRequired, TypedDict
 
+from app.agency.models import AgencyProductData, QuotePolicyData
 from app.core.workflow import INITIAL_PLANNING_STEP, PlanningStep
 
 TravelStyle = Literal["relaxation", "culture", "adventure", "food"]
@@ -134,6 +135,7 @@ class BudgetBreakdown(TypedDict):
     estimated_items: NotRequired[list[str]]
     verification_items: NotRequired[list[str]]
     budget_confidence: NotRequired["BudgetConfidenceData"]
+    quote_policy: NotRequired[QuotePolicyData]
 
 
 class BudgetConfidenceData(TypedDict):
@@ -152,8 +154,10 @@ class ReportData(TypedDict, total=False):
     accommodation: dict
     itinerary: list[dict]
     map_routes: list[dict]
+    agency_product: AgencyProductData
     budget: dict
     budget_confidence: BudgetConfidenceData
+    quote_policy: QuotePolicyData
     risks: list[str]
     adjustment_options: list[str]
     sections: list[dict]
