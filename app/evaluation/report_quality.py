@@ -5,35 +5,14 @@ import re
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from app.reports.contracts import (
+    REPORT_VERSION,
+    REQUIRED_REPORT_SECTION_IDS,
+    REQUIRED_REPORT_TOP_LEVEL_KEYS,
+)
 
-REPORT_VERSION = "travel_report.v1"
-
-REQUIRED_TOP_LEVEL_KEYS = {
-    "version",
-    "overview",
-    "transport",
-    "accommodation",
-    "itinerary",
-    "map_routes",
-    "agency_context",
-    "budget",
-    "budget_confidence",
-    "risks",
-    "adjustment_options",
-    "sections",
-}
-
-REQUIRED_SECTION_IDS = {
-    "overview",
-    "transport_accommodation",
-    "itinerary",
-    "map_routes",
-    "agency_context",
-    "budget",
-    "budget_confidence",
-    "risk",
-    "adjustments",
-}
+REQUIRED_TOP_LEVEL_KEYS = REQUIRED_REPORT_TOP_LEVEL_KEYS
+REQUIRED_SECTION_IDS = REQUIRED_REPORT_SECTION_IDS
 
 REQUIRED_BUDGET_GROUPS = {
     "transport",

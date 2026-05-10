@@ -156,6 +156,8 @@ class ReportData(TypedDict, total=False):
     budget_confidence: BudgetConfidenceData
     risks: list[str]
     adjustment_options: list[str]
+    evidence_bundle: dict
+    tool_audit_summary: dict
     sections: list[dict]
 
 
