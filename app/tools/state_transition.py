@@ -27,6 +27,7 @@ from app.core.workflow import (
 from app.rag.agency_retrieval import documents_to_evidence
 from app.reports import build_report_bundle, report_sections
 from app.rag.document_loader import DocumentManager
+from app.tools.audit import pending_checks_from_audit_events, summarize_audit_events_for_report
 from app.utils.logger import app_logger
 
 
@@ -932,6 +933,9 @@ def _build_budget_quality_notes(
 
     estimated_items.append("其他：市内交通、寄存、临时休息和小额杂费按 100 元/人/天估算。")
     verification_items.append("天气/体力：如切换 Plan B，预算可能随室内场馆、打车或休息安排变化。")
+    for audit_check in pending_checks_from_audit_events(state.get("tool_audit_events")):
+        if audit_check not in verification_items:
+            verification_items.append(audit_check)
 
     if len(confirmed_items) >= 2 and len(matched_food_names) >= 1 and destination_pois:
         confidence_level = "中高"
@@ -2292,6 +2296,7 @@ def _build_report_evidence_bundle(
     route_summaries: list[dict],
     selected_transport_option: dict,
     selected_accommodation: dict,
+    tool_audit_events: list[dict] | None = None,
 ) -> dict:
     categories = agency_context.get("categories") or {}
     transport_source = selected_transport_option.get("source") or "user_or_rule"
@@ -2311,6 +2316,7 @@ def _build_report_evidence_bundle(
             "transport": transport_source,
             "accommodation": accommodation_source,
         },
+        "tool_audit_events": summarize_audit_events_for_report(tool_audit_events),
         "route_evidence": [
             {
                 "day_number": route.get("day_number"),
@@ -2327,11 +2333,14 @@ def _build_report_tool_audit_summary(
     route_summaries: list[dict],
     selected_transport_option: dict,
     selected_accommodation: dict,
+    tool_audit_events: list[dict] | None = None,
 ) -> dict:
+    audit_pending_checks = pending_checks_from_audit_events(tool_audit_events)
     pending_checks = _dedupe_report_points(
         [
             *[_clean_report_line(item) for item in budget.get("estimated_items") or []],
             *[_clean_report_line(item) for item in budget.get("verification_items") or []],
+            *[_clean_report_line(item) for item in audit_pending_checks],
         ],
         max_items=6,
     )
@@ -2350,6 +2359,7 @@ def _build_report_tool_audit_summary(
         "readiness": "可交付，预订前需核验",
         "used_sources": used_sources,
         "pending_checks": pending_checks,
+        "events": summarize_audit_events_for_report(tool_audit_events),
         "unsupported_actions": [
             "当前项目未接入真实支付服务，不生成支付链接。",
             "不承诺真实库存、真实锁价或真实预订成功。",
@@ -2418,12 +2428,14 @@ def _build_report_data(
         route_summaries,
         selected_transport_option,
         selected_accommodation,
+        state.get("tool_audit_events"),
     )
     tool_audit_summary = _build_report_tool_audit_summary(
         budget,
         route_summaries,
         selected_transport_option,
         selected_accommodation,
+        state.get("tool_audit_events"),
     )
     sections = report_sections()
     if not any(section.get("id") == "product_quote" for section in sections):

@@ -193,6 +193,10 @@ async def test_query_hotel_options_falls_back_to_english_alias(monkeypatch):
     assert "酒店ID：43615" in result
     assert command.update["accommodation_options"][0]["hotel_id"] == 43615
     assert command.update["accommodation_options"][0]["price_per_night"] == 1740.0
+    audit_event = command.update["tool_audit_events"][0]
+    assert audit_event["name"] == "query_hotel_options"
+    assert audit_event["status"] == "success"
+    assert audit_event["evidence_type"] == "live_hotel_search"
 
 
 @pytest.mark.asyncio
@@ -349,3 +353,32 @@ async def test_query_hotel_options_times_out_with_honest_fallback(monkeypatch):
     assert "暂时没有查到符合条件的酒店" in result
     assert "酒店搜索上游响应超时" in result
     assert "accommodation_options" not in command.update
+    audit_event = command.update["tool_audit_events"][0]
+    assert audit_event["status"] == "timeout"
+    assert audit_event["error_type"] == "upstream_timeout"
+
+
+@pytest.mark.asyncio
+async def test_query_hotel_options_skips_invalid_args_before_mcp(monkeypatch):
+    async def fail_get_hotel_tool(tool_name: str):
+        raise AssertionError("MCP should not be touched for invalid args")
+
+    monkeypatch.setattr(hotel_query, "_get_hotel_tool", fail_get_hotel_tool)
+
+    command = await hotel_query.query_hotel_options.ainvoke(
+        {
+            "destination": "目的地",
+            "check_in_date": "入住日期",
+            "stay_nights": 0,
+            "adult_count": 0,
+            "children_count": -1,
+            "budget_level": "vip",
+            "preferences": "",
+        }
+    )
+
+    result = command.update["messages"][0].content
+    audit_event = command.update["tool_audit_events"][0]
+    assert "酒店真实查询参数不完整" in result
+    assert audit_event["status"] == "skipped"
+    assert audit_event["error_type"] == "invalid_hotel_query_args"

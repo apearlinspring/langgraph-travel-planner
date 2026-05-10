@@ -39,6 +39,13 @@ def validate_hotel_search_result(
     }
     if hotel_count > 0:
         return ToolResultValidation(status="success", output_summary=output_summary)
+    if "超时" in message or "timeout" in message.lower():
+        return ToolResultValidation(
+            status="timeout",
+            output_summary=output_summary,
+            error_type="upstream_timeout",
+            message=message,
+        )
     if message:
         return ToolResultValidation(
             status="degraded",
@@ -73,4 +80,3 @@ def validate_transport_result(content: Any) -> ToolResultValidation:
             message="交通工具返回内容包含失败或待核验信号",
         )
     return ToolResultValidation(status="success", output_summary=output_summary)
-
