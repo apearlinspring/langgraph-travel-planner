@@ -17,6 +17,7 @@ from app.schemas.message import MessageCreate
 from app.api.dependencies import get_current_user
 from app.agents.handoffs.travel_agent import create_travel_agent
 from app.config import settings
+from app.core.session_lock import SessionLockBusy, acquire_session_lock
 from app.tools.audit import (
     build_tool_audit_event,
     start_tool_audit,
@@ -26,6 +27,9 @@ from app.tools.audit import (
 from app.utils.logger import app_logger
 
 router = APIRouter(prefix="/chat", tags=["对话"])
+
+SESSION_BUSY_RETRY_AFTER_SECONDS = 3
+SESSION_BUSY_MESSAGE = "当前会话正在处理上一轮消息，请稍后再试。"
 
 
 async def save_message(
@@ -56,6 +60,15 @@ def sse(data: dict) -> str:
     SSE 标准 data 帧
     """
     return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def _session_busy_payload(conversation_id: str) -> dict:
+    return {
+        "type": "session_busy",
+        "content": SESSION_BUSY_MESSAGE,
+        "conversation_id": conversation_id,
+        "retry_after_seconds": SESSION_BUSY_RETRY_AFTER_SECONDS,
+    }
 
 
 def _extract_command_update(output) -> dict:
@@ -118,8 +131,27 @@ async def generate_sse_stream(
     tool_audit_events = []
     assistant_extra_info = {}
     fallback_assistant_message = ""
+    session_lock = None
 
     try:
+        try:
+            session_lock = await acquire_session_lock(conversation_id)
+        except SessionLockBusy as lock_error:
+            active_lock = lock_error.active_lock
+            active_since = (
+                round(time.time() - active_lock.acquired_at, 2)
+                if active_lock is not None
+                else None
+            )
+            app_logger.warning(
+                "SSE chat rejected because conversation is busy: "
+                f"conversation_id={conversation_id}, user_id={user.id}, "
+                f"active_seconds={active_since}"
+            )
+            yield sse(_session_busy_payload(conversation_id))
+            yield sse({"type": "done"})
+            return
+
         app_logger.info(
             "SSE chat started: "
             f"conversation_id={conversation_id}, user_id={user.id}, "
@@ -286,6 +318,12 @@ async def generate_sse_stream(
         )
         yield sse({"type": "done"})
 
+    except asyncio.CancelledError:
+        app_logger.info(
+            "SSE chat stream cancelled: "
+            f"conversation_id={conversation_id}, user_id={user.id}"
+        )
+        raise
     except Exception as e:
         total_elapsed = time.perf_counter() - request_started_at
         app_logger.exception(
@@ -298,6 +336,13 @@ async def generate_sse_stream(
             "type": "error",
             "message": str(e),
         })
+    finally:
+        if session_lock is not None:
+            await session_lock.release()
+            app_logger.info(
+                "SSE chat session lock released: "
+                f"conversation_id={conversation_id}, user_id={user.id}"
+            )
 
 
 
