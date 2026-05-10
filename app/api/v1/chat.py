@@ -80,6 +80,22 @@ def _report_extra_info_from_tool_output(output) -> dict:
     return extra_info
 
 
+def _report_content_from_tool_output(output) -> str:
+    """Extract a user-visible report string from generate_order_tool output."""
+    update = _extract_command_update(output)
+    report = update.get("report")
+    if isinstance(report, str) and report.strip():
+        return report
+
+    messages = update.get("messages")
+    if isinstance(messages, list):
+        for message in messages:
+            content = getattr(message, "content", None)
+            if isinstance(content, str) and content.strip():
+                return content
+    return ""
+
+
 async def generate_sse_stream(
         conversation_id: str,
         user_message: str,
@@ -92,6 +108,7 @@ async def generate_sse_stream(
     tool_started_at = {}
     tool_name_by_run = {}
     assistant_extra_info = {}
+    fallback_assistant_message = ""
 
     try:
         app_logger.info(
@@ -164,10 +181,15 @@ async def generate_sse_stream(
                 started_at = tool_started_at.pop(run_id, None)
                 tool_name_by_run.pop(run_id, None)
                 if tool_name == "generate_order_tool":
+                    tool_output = event.get("data", {}).get("output")
                     report_extra_info = _report_extra_info_from_tool_output(
-                        event.get("data", {}).get("output")
+                        tool_output
                     )
                     if report_extra_info:
+                        if not fallback_assistant_message:
+                            fallback_assistant_message = _report_content_from_tool_output(
+                                tool_output
+                            )
                         assistant_extra_info.update(report_extra_info)
                         yield sse(
                             {
@@ -191,6 +213,8 @@ async def generate_sse_stream(
             await asyncio.sleep(0)
 
         # 5. 保存 AI 回复
+        if not assistant_message.strip() and fallback_assistant_message:
+            assistant_message = fallback_assistant_message
         if assistant_message.strip():
             await save_message(
                 db,

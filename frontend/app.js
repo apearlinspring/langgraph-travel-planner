@@ -5412,7 +5412,14 @@
             if (!streamingMessageId) {
               streamingMessageId = convertLoadingToAssistant(
                 loadingId,
-                "这次没有拿到可展示的内容，你可以再试一次，或者换个问法继续。"
+                streamingReportData
+                  ? "结构化旅游规划报告已生成。"
+                  : "这次没有拿到可展示的内容，你可以再试一次，或者换个问法继续。",
+                {
+                  suppressJourneyPreview: false,
+                  pinToTop: true,
+                  reportData: streamingReportData,
+                }
               );
             } else {
               updateMessage(streamingMessageId, streamingFullText, {
