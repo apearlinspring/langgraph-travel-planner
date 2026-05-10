@@ -3,6 +3,21 @@ import pytest
 from app.evaluation.report_quality import evaluate_report_quality
 
 
+def _agency_evidence(category: str):
+    return {
+        "source": f"internal/{category}/sample.md",
+        "source_type": "agency_internal",
+        "category": category,
+        "visibility": "internal",
+        "title": f"{category} evidence",
+        "snippet": f"{category} structured travel agency evidence",
+        "relevance_score": 0.9,
+        "evidence_level": "rule",
+        "applicable_modes": ["agency_plan", "free_planning"],
+        "constraints": ["do not promise inventory", "mark live data for verification"],
+    }
+
+
 def _valid_report_data(mode="agency_plan"):
     route = {
         "day_number": 1,
@@ -52,6 +67,13 @@ def _valid_report_data(mode="agency_plan"):
                 "risk": ["risk reminder"],
                 "report": ["delivery standard"],
             },
+            "evidence": [
+                _agency_evidence("products"),
+                _agency_evidence("sop"),
+                _agency_evidence("pricing"),
+                _agency_evidence("risk"),
+                _agency_evidence("report"),
+            ],
         },
         "budget": {
             "currency": "CNY",
@@ -124,6 +146,21 @@ def test_evaluate_report_quality_checks_expected_planning_mode():
 
     assert result.passed is False
     assert any("agency_context.mode" in item for item in result.summary)
+
+
+def test_evaluate_report_quality_checks_agency_evidence_contract():
+    report_data = _valid_report_data()
+    report_data["agency_context"]["evidence"] = [
+        {
+            "source": "internal/products/sample.md",
+            "category": "products",
+        }
+    ]
+
+    result = evaluate_report_quality(report_data, expected_mode="agency_plan")
+
+    assert result.passed is False
+    assert any("agency_context.evidence" in item for item in result.summary)
 
 
 def test_evaluate_report_quality_rejects_non_dict_report_data():

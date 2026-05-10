@@ -377,29 +377,35 @@ def _criterion_agency_alignment(
     categories = _as_dict(agency_context.get("categories"))
     category_keys = set(categories)
     highlights = _as_list(agency_context.get("highlights"))
+    evidence = [_as_dict(item) for item in _as_list(agency_context.get("evidence"))]
+    evidence_categories = {
+        str(item.get("category"))
+        for item in evidence
+        if _has_text(item.get("category"))
+    }
     mode = agency_context.get("mode")
 
     score += _score(
         agency_context.get("source_type") == "agency_internal",
-        3,
+        2,
         findings,
         "agency_context.source_type must be agency_internal",
     )
     score += _score(
         mode in {"agency_plan", "free_planning"},
-        3,
+        2,
         findings,
         "agency_context.mode must be agency_plan or free_planning",
     )
     if expected_mode:
         score += _score(
             mode == expected_mode,
-            4,
+            3,
             findings,
             f"agency_context.mode={mode!r} does not match expected {expected_mode!r}",
         )
     else:
-        score += 4 if mode else 0
+        score += 3 if mode else 0
     score += _score(
         len(highlights) >= 3,
         2,
@@ -411,6 +417,25 @@ def _criterion_agency_alignment(
         3,
         findings,
         f"Missing agency categories: {', '.join(sorted(REQUIRED_AGENCY_CATEGORIES - category_keys))}",
+    )
+    score += _score(
+        len(evidence_categories & REQUIRED_AGENCY_CATEGORIES) >= 3
+        and all(
+            _has_text(item.get("source"))
+            and _has_text(item.get("source_type"))
+            and _has_text(item.get("category"))
+            and _has_text(item.get("visibility"))
+            and _has_text(item.get("title"))
+            and _has_text(item.get("snippet"))
+            and isinstance(item.get("relevance_score"), (int, float))
+            and _has_text(item.get("evidence_level"))
+            and _as_list(item.get("applicable_modes"))
+            and _as_list(item.get("constraints"))
+            for item in evidence
+        ),
+        3,
+        findings,
+        "agency_context.evidence should include structured evidence for at least 3 agency categories",
     )
     return CriterionResult("agency_business_alignment", score, 15, findings)
 

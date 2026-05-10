@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import List
 from langchain_community.document_loaders import DirectoryLoader, TextLoader
 from langchain_core.documents import Document
+from app.rag.contracts import metadata_for_document
 from app.utils.logger import app_logger
 
 
@@ -55,11 +56,11 @@ class DocumentManager:
                 category = default_category
 
             doc.metadata.update(
-                {
-                    "source_type": source_type,
-                    "category": category,
-                    "visibility": visibility,
-                }
+                metadata_for_document(
+                    source_type=source_type,
+                    category=category,
+                    visibility=visibility,
+                )
             )
 
         app_logger.info(

@@ -20,6 +20,7 @@ from app.core.workflow import (
     STEP_LABELS as WORKFLOW_STEP_LABELS,
     STEP_STATE_FIELDS as WORKFLOW_STEP_STATE_FIELDS,
 )
+from app.rag.agency_retrieval import documents_to_evidence
 from app.rag.document_loader import DocumentManager
 from app.utils.logger import app_logger
 
@@ -1987,6 +1988,20 @@ def _internal_doc_highlights(category: str, limit: int = 2) -> tuple[str, ...]:
     return tuple(highlights)
 
 
+@lru_cache(maxsize=16)
+def _internal_doc_evidence(category: str, limit: int = 2) -> tuple[dict, ...]:
+    """提取内部知识库证据，供 report_data 和评估稳定检查。"""
+
+    try:
+        documents = DocumentManager().load_internal_documents(category=category)
+    except Exception as exc:
+        app_logger.warning(f"加载内部知识库证据失败: category={category}, error={exc}")
+        return ()
+
+    evidence = documents_to_evidence(documents[:limit], visibility="internal")
+    return tuple(dict(item) for item in evidence)
+
+
 def _state_human_text_for_report(state: TravelState | None) -> str:
     if not state:
         return ""
@@ -2039,6 +2054,11 @@ def _build_agency_context(requirement: dict, state: TravelState | None = None) -
     pricing_lines = list(_internal_doc_highlights("pricing", 2))
     risk_lines = list(_internal_doc_highlights("risk", 2))
     report_lines = list(_internal_doc_highlights("report", 2))
+    evidence = [
+        item
+        for category in ("products", "sop", "pricing", "risk", "report")
+        for item in _internal_doc_evidence(category, 1)
+    ]
 
     if mode == "agency_plan":
         summary = "本报告按旅行社顾问方案交付：优先使用成熟路线结构、透明预算依据和可执行风险预案。"
@@ -2077,6 +2097,7 @@ def _build_agency_context(requirement: dict, state: TravelState | None = None) -
             "risk": risk_lines,
             "report": report_lines,
         },
+        "evidence": evidence,
     }
 
 

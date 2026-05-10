@@ -587,6 +587,13 @@ def test_itinerary_budget_and_order_report_use_selected_real_options():
     assert len(report_data["map_routes"]) == 3
     assert report_data["agency_context"]["source_type"] == "agency_internal"
     assert report_data["agency_context"]["highlights"]
+    assert len(report_data["agency_context"]["evidence"]) >= 3
+    assert {
+        item["category"] for item in report_data["agency_context"]["evidence"]
+    }.issuperset({"products", "pricing", "risk"})
+    assert all(
+        item["constraints"] for item in report_data["agency_context"]["evidence"]
+    )
     assert report_data["budget"]["items"]
     assert [
         day["route"]["summary"] for day in report_data["itinerary"]
