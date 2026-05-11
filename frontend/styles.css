@@ -4136,6 +4136,11 @@ html {
           height: auto;
           padding: 14px;
           border-radius: 22px;
+          flex: 0 0 auto;
+        }
+        .chat-main {
+          flex: 0 0 auto;
+          min-height: min(760px, calc(100vh - 20px));
         }
         .governance-console {
           order: 3;

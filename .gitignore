@@ -24,12 +24,14 @@ wheels/
 
 # Local runtime state
 logs/
+.runtime/
 .tmp/
 .fastmcp/
 .uv-cache/
 .uv-wheel-cache/
 .uv-python/
 .uv-tools/
+node_modules/
 
 # Generated data
 data/vectorstore/
