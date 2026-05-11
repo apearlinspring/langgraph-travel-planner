@@ -35,6 +35,7 @@ from app.tools.result_validation import (
     validate_tool_output_for_audit,
 )
 from app.utils.logger import app_logger
+from app.utils.security import redact_sensitive_data, redact_sensitive_text
 
 router = APIRouter(prefix="/chat", tags=["对话"])
 
@@ -68,7 +69,8 @@ def sse(data: dict) -> str:
     """
     SSE 标准 data 帧
     """
-    return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+    safe_data = redact_sensitive_data(data)
+    return f"data: {json.dumps(safe_data, ensure_ascii=False)}\n\n"
 
 
 def _session_busy_payload(
@@ -112,6 +114,7 @@ def _report_extra_info_from_tool_output(output) -> dict:
     report_data = update.get("report_data")
     if not isinstance(report_data, dict):
         return {}
+    report_data = redact_sensitive_data(report_data)
 
     extra_info = {
         "message_type": "travel_report",
@@ -127,14 +130,14 @@ def _report_content_from_tool_output(output) -> str:
     update = _extract_command_update(output)
     report = update.get("report")
     if isinstance(report, str) and report.strip():
-        return report
+        return redact_sensitive_text(report)
 
     messages = update.get("messages")
     if isinstance(messages, list):
         for message in messages:
             content = getattr(message, "content", None)
             if isinstance(content, str) and content.strip():
-                return content
+                return redact_sensitive_text(content)
     return ""
 
 
@@ -176,7 +179,7 @@ def _extract_embedded_tool_audit_events(output) -> list[dict]:
             if key in seen_keys:
                 continue
             seen_keys.add(key)
-            events.append(event)
+            events.append(redact_sensitive_data(event))
     return events
 
 
@@ -228,7 +231,7 @@ def _safe_stream_error_payload(
     return {
         "type": "error",
         "turn_id": turn_id,
-        "error_type": error_type,
+        "error_type": redact_sensitive_text(error_type),
         "message": "本轮对话处理失败，已记录内部观测信息；请稍后重试或继续下一步。",
     }
 
@@ -248,6 +251,7 @@ async def _persist_tool_audit_events_safely(
 ) -> dict:
     if not events:
         return {"status": "skipped", "reason": "no_events"}
+    events = redact_sensitive_data(events)
     if not callable(getattr(db, "add", None)):
         return {
             "status": "skipped",
@@ -376,7 +380,7 @@ async def generate_sse_stream(
             if kind == "on_chat_model_stream":
                 chunk = event.get("data", {}).get("chunk")
                 if chunk and hasattr(chunk, "content") and chunk.content:
-                    token = chunk.content
+                    token = redact_sensitive_text(chunk.content)
                     assistant_message += token
                     turn_observation.record_token(token)
                     if first_token_elapsed is None:
@@ -724,6 +728,6 @@ async def get_chat_history(
     messages = result.scalars().all()
 
     return {
-        "conversation": conversation.to_dict(),
-        "messages": [m.to_dict() for m in messages]
+        "conversation": redact_sensitive_data(conversation.to_dict()),
+        "messages": redact_sensitive_data([m.to_dict() for m in messages]),
     }

@@ -5,6 +5,12 @@ from dataclasses import asdict, dataclass
 from typing import Any, Literal
 
 from app.tools.contracts import ToolPermissionDecision, ToolRiskLevel
+from app.utils.security import (
+    REDACTED_VALUE,
+    is_sensitive_key,
+    redact_sensitive_data,
+    redact_sensitive_text,
+)
 
 ApprovalStatus = Literal["none", "pending", "approved", "rejected", "expired"]
 ApprovalAction = Literal[
@@ -15,6 +21,28 @@ ApprovalAction = Literal[
     "send_sms",
     "export_customer_profile",
 ]
+UserRole = Literal["user", "approver", "admin"]
+
+
+ROLE_ALIASES: dict[str, UserRole] = {
+    "user": "user",
+    "member": "user",
+    "traveler": "user",
+    "customer": "user",
+    "普通用户": "user",
+    "approver": "approver",
+    "approval_operator": "approver",
+    "operator": "approver",
+    "reviewer": "approver",
+    "审批员": "approver",
+    "审批操作者": "approver",
+    "admin": "admin",
+    "administrator": "admin",
+    "owner": "admin",
+    "管理员": "admin",
+}
+
+APPROVAL_OPERATOR_ROLES: set[UserRole] = {"approver", "admin"}
 
 
 @dataclass(frozen=True)
@@ -42,6 +70,52 @@ class SensitiveActionPolicy:
             self.unsupported_without_integration
         )
         return payload
+
+
+def normalize_user_role(role: Any) -> UserRole:
+    """Normalize lightweight user roles without introducing a full RBAC service."""
+
+    normalized = str(role or "").strip()
+    if not normalized:
+        return "user"
+    return ROLE_ALIASES.get(normalized.lower(), "user")
+
+
+def get_user_role(user: Any) -> UserRole:
+    """Return a user's lightweight role from an attribute or preferences JSON."""
+
+    direct_role = getattr(user, "role", None)
+    if direct_role:
+        return normalize_user_role(direct_role)
+
+    preferences = getattr(user, "preferences", None)
+    if isinstance(preferences, dict):
+        return normalize_user_role(
+            preferences.get("role")
+            or preferences.get("user_role")
+            or preferences.get("permission_role")
+        )
+    return "user"
+
+
+def is_approval_operator(user: Any) -> bool:
+    return get_user_role(user) in APPROVAL_OPERATOR_ROLES
+
+
+def can_view_approval_record(user: Any, record_user_id: str | None) -> bool:
+    if is_approval_operator(user):
+        return True
+    return str(getattr(user, "id", "")) == str(record_user_id)
+
+
+def can_decide_approval_record(user: Any, record_user_id: str | None) -> bool:
+    """Only approval operators and admins can decide sensitive-action records."""
+
+    return is_approval_operator(user)
+
+
+def can_list_all_approval_records(user: Any) -> bool:
+    return is_approval_operator(user)
 
 
 SENSITIVE_ACTION_POLICIES: dict[ApprovalAction, SensitiveActionPolicy] = {
@@ -171,21 +245,6 @@ ACTION_ALIASES: dict[str, ApprovalAction] = {
     "导出客户资料": "export_customer_profile",
 }
 
-SENSITIVE_METADATA_KEYS = {
-    "api_key",
-    "apikey",
-    "authorization",
-    "cookie",
-    "id_card",
-    "identity",
-    "mobile",
-    "password",
-    "phone",
-    "secret",
-    "token",
-}
-
-
 def normalize_approval_action(action: str) -> ApprovalAction:
     """Normalize user-facing action names to the canonical policy key."""
 
@@ -222,22 +281,27 @@ def sanitize_approval_metadata(metadata: dict[str, Any] | None) -> dict[str, Any
     sanitized: dict[str, Any] = {}
     for key, value in metadata.items():
         key_text = str(key)
-        key_lookup = key_text.lower()
-        if any(sensitive_key in key_lookup for sensitive_key in SENSITIVE_METADATA_KEYS):
-            sanitized[key_text] = "[REDACTED]"
+        if is_sensitive_key(key_text):
+            sanitized[key_text] = REDACTED_VALUE
             continue
         if isinstance(value, (str, int, float, bool)) or value is None:
             text_value = value
-            if isinstance(value, str) and len(value) > 300:
-                text_value = value[:300] + "..."
+            if isinstance(value, str):
+                text_value = redact_sensitive_text(value)
+                if len(text_value) > 300:
+                    text_value = text_value[:300] + "..."
             sanitized[key_text] = text_value
         elif isinstance(value, (list, tuple)):
             sanitized[key_text] = [
-                item if isinstance(item, (str, int, float, bool)) or item is None else str(item)
+                redact_sensitive_data(item)
+                if isinstance(item, (str, int, float, bool, dict, list, tuple)) or item is None
+                else redact_sensitive_text(str(item))
                 for item in value[:20]
             ]
+        elif isinstance(value, dict):
+            sanitized[key_text] = redact_sensitive_data(value)
         else:
-            sanitized[key_text] = str(value)[:300]
+            sanitized[key_text] = redact_sensitive_text(str(value))[:300]
     return sanitized
 
 
@@ -394,7 +458,8 @@ TOOL_EXECUTION_POLICIES: dict[str, ToolExecutionPolicy] = {
         tool_name="send_sms",
         category="future_sensitive_action",
         risk_level="critical",
-        description="短信发送占位能力，当前必须先完成人工审批且项目未接入真实短信通道。",
+        description="短信发送占位能力，当前未接入短信服务，不会发送真实短信；未来接入前必须先完成人工审批。",
+        enabled=False,
         requires_approval=True,
         approval_action="send_sms",
         default_timeout_seconds=10.0,
@@ -403,7 +468,8 @@ TOOL_EXECUTION_POLICIES: dict[str, ToolExecutionPolicy] = {
         tool_name="export_customer_profile",
         category="future_sensitive_action",
         risk_level="critical",
-        description="客户资料导出占位能力，当前必须先完成人工审批且必须最小化导出字段。",
+        description="客户资料导出占位能力，当前不得导出真实客户画像文件；未来导出必须先完成人工审批且最小化字段。",
+        enabled=False,
         requires_approval=True,
         approval_action="export_customer_profile",
         default_timeout_seconds=10.0,
@@ -456,7 +522,7 @@ def decide_tool_execution_permission(
     if not policy.enabled:
         return ToolPermissionDecision(
             allowed=False,
-            reason=f"工具 {tool_name} 当前被治理策略禁用。",
+            reason=policy.description or f"工具 {tool_name} 当前被治理策略禁用。",
             error_type="tool_disabled",
         )
 

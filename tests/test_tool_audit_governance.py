@@ -70,7 +70,7 @@ def test_tool_guardrails_reject_placeholder_transport_and_hotel_args():
 
 
 def test_tool_input_summary_accepts_non_dict_and_masks_secret_key_parts():
-    plain = summarize_tool_input("直接查询南京酒店")
+    plain = summarize_tool_input("直接查询南京酒店，联系 test@example.com")
     masked = summarize_tool_input(
         {
             "destination": "南京",
@@ -79,7 +79,7 @@ def test_tool_input_summary_accepts_non_dict_and_masks_secret_key_parts():
         }
     )
 
-    assert plain == {"input": "直接查询南京酒店"}
+    assert plain == {"input": "直接查询南京酒店，联系 [REDACTED]"}
     assert "aigohotel_api_key" not in masked
     assert "access_token" not in masked["nested"]
     assert masked["nested"]["safe"] == "ok"
@@ -123,16 +123,53 @@ def test_failed_tool_audit_events_feed_budget_and_report_pending_checks():
     assert any("住宿" in item and "超时" in item for item in summary["pending_checks"])
 
 
+def test_tool_audit_event_redacts_sensitive_output_summary():
+    context = start_tool_audit("query_transport_options")
+    event = build_tool_audit_event(
+        context,
+        status="failed",
+        input_summary={"query": "手机号 13800138000"},
+        output_summary={
+            "message": "邮箱 test@example.com，身份证 110101199001011234",
+            "nested": {"api_key": "sk-testvalue123456789"},
+        },
+        error_type="upstream_error",
+        evidence_type="live_transport_query",
+    )
+    serialized = str(event)
+
+    assert "13800138000" not in serialized
+    assert "test@example.com" not in serialized
+    assert "110101199001011234" not in serialized
+    assert "sk-testvalue123456789" not in serialized
+
+
 def test_tool_execution_policy_classifies_high_value_tools():
     hotel_policy = get_tool_execution_policy("query_hotel_options")
     rag_policy = get_tool_execution_policy("search_agency_pricing_rules")
     mcp_policy = get_tool_execution_policy("maps_geo")
+    profile_export_policy = get_tool_execution_policy("export_customer_profile")
 
     assert hotel_policy.risk_level == "high"
     assert hotel_policy.category == "live_hotel_search"
     assert rag_policy.category == "internal_rag"
     assert mcp_policy.category == "mcp_external_query"
+    assert profile_export_policy.enabled is False
+    assert profile_export_policy.requires_approval is True
     assert decide_tool_execution_permission("query_hotel_options").allowed is True
+
+
+def test_execution_guard_blocks_customer_profile_export_placeholder():
+    attempt = begin_tool_execution(
+        "export_customer_profile",
+        {"fields": ["phone", "id_card", "preferences"]},
+        runtime=None,
+    )
+
+    assert attempt.ok is False
+    assert attempt.blocked_event["status"] == "skipped"
+    assert attempt.blocked_event["error_type"] == "tool_disabled"
+    assert "客户资料导出" in attempt.blocked_message
 
 
 def test_execution_guard_blocks_sensitive_action_before_real_call():

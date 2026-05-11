@@ -10,25 +10,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.approval import ToolAuditEvent as ToolAuditEventModel
 from app.tools.contracts import ToolAuditEvent, ToolAuditStatus, ToolEvidenceType
+from app.utils.security import (
+    is_sensitive_key,
+    redact_sensitive_data,
+    redact_sensitive_text,
+)
 
-
-SENSITIVE_INPUT_KEYS = {
-    "api_key",
-    "authorization",
-    "cookie",
-    "email",
-    "id_card",
-    "mobile",
-    "password",
-    "passport",
-    "phone",
-    "secret",
-    "token",
-    "身份证",
-    "手机号",
-    "护照",
-}
-SENSITIVE_INPUT_KEY_PARTS = tuple(SENSITIVE_INPUT_KEYS)
 
 TOOL_LABELS = {
     "query_hotel_options": "住宿",
@@ -58,8 +45,7 @@ def start_tool_audit(name: str) -> ToolAuditContext:
 
 
 def _is_sensitive_key(key: Any) -> bool:
-    normalized = str(key or "").lower()
-    return any(part in normalized for part in SENSITIVE_INPUT_KEY_PARTS)
+    return is_sensitive_key(key)
 
 
 def _summarize_value(value: Any, *, max_list_items: int = 5, max_text_length: int = 160) -> Any:
@@ -75,7 +61,7 @@ def _summarize_value(value: Any, *, max_list_items: int = 5, max_text_length: in
             summarized.append(f"...(+{len(value) - max_list_items})")
         return summarized
     if isinstance(value, str):
-        compact = " ".join(value.split())
+        compact = redact_sensitive_text(" ".join(value.split()))
         return compact[:max_text_length] + ("..." if len(compact) > max_text_length else "")
     return value
 
@@ -96,7 +82,7 @@ def summarize_tool_output(output: Any) -> dict[str, Any]:
         if isinstance(summary, dict):
             return summary
     if isinstance(output, str):
-        compact = " ".join(output.split())
+        compact = redact_sensitive_text(" ".join(output.split()))
         return {
             "content_chars": len(output),
             "preview": compact[:180] + ("..." if len(compact) > 180 else ""),
@@ -121,9 +107,9 @@ def build_tool_audit_event(
         "started_at": context.started_at,
         "elapsed_seconds": round(time.perf_counter() - context.perf_counter_started_at, 3),
         "status": status,
-        "input_summary": input_summary,
-        "output_summary": output_summary or {},
-        "error_type": error_type,
+        "input_summary": redact_sensitive_data(input_summary),
+        "output_summary": redact_sensitive_data(output_summary or {}),
+        "error_type": redact_sensitive_text(error_type) if error_type else None,
         "retry_count": max(int(retry_count or 0), 0),
         "evidence_type": evidence_type,
     }
@@ -157,10 +143,10 @@ async def persist_tool_audit_events(
             started_at=_datetime_from_timestamp(event.get("started_at")),
             elapsed_seconds=float(event.get("elapsed_seconds") or 0.0),
             status=str(event.get("status") or "failed"),
-            input_summary=dict(event.get("input_summary") or {}),
-            output_summary=dict(event.get("output_summary") or {}),
+            input_summary=dict(redact_sensitive_data(event.get("input_summary") or {})),
+            output_summary=dict(redact_sensitive_data(event.get("output_summary") or {})),
             error_type=(
-                str(event.get("error_type"))
+                redact_sensitive_text(str(event.get("error_type")))
                 if event.get("error_type") is not None
                 else None
             ),
@@ -189,6 +175,7 @@ def _audit_event_message(event: dict[str, Any]) -> str:
     label = TOOL_LABELS.get(str(event.get("name") or ""), str(event.get("name") or "工具"))
     status = event.get("status") or "failed"
     error_type = event.get("error_type") or "unknown_error"
+    error_type = redact_sensitive_text(str(error_type))
     if status == "timeout":
         return f"{label}：真实查询超时（{error_type}），出发前需要重新查询并二次核验。"
     if status == "skipped":

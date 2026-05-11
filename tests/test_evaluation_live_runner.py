@@ -84,22 +84,26 @@ def test_build_snapshot_payload_contains_report_and_evaluation_summary():
     scenario = _scenario("agency_couple")
     payload = build_snapshot_payload(
         scenario=scenario,
-        conversation={"id": "conversation-id"},
+        conversation={"id": "conversation-id", "email": "test@example.com"},
         events=[
-            {"type": "token", "content": "hello"},
+            {"type": "token", "content": "hello 13800138000"},
             {
                 "type": "turn_observability",
-                "observability": {"degradation_status": "ok"},
+                "observability": {
+                    "degradation_status": "ok",
+                    "last_error": "联系 test@example.com",
+                },
             },
         ],
-        assistant_text="hello",
-        report_data={"version": "travel_report.v1"},
+        assistant_text="hello 13800138000",
+        report_data={"version": "travel_report.v1", "api_key": "sk-testvalue123456789"},
         evaluation={"normalized_score": 90, "passed": True},
         elapsed_seconds=12.345,
         base_url="http://127.0.0.1:8000",
-        turns=[{"turn_index": 1, "produced_report_data": True}],
+        turns=[{"turn_index": 1, "produced_report_data": True, "error": "test@example.com"}],
         quality_summary={"aggregate": {"normalized_score": 90}},
     )
+    serialized = str(payload)
 
     assert payload["version"] == "evaluation_live_snapshot.v1"
     assert payload["scenario"]["id"] == "agency_couple"
@@ -110,9 +114,14 @@ def test_build_snapshot_payload_contains_report_and_evaluation_summary():
     assert payload["summary"]["has_quality_summary"] is True
     assert payload["summary"]["has_turn_observability"] is True
     assert payload["quality_summary"]["aggregate"]["normalized_score"] == 90
-    assert payload["turn_observability"] == [{"degradation_status": "ok"}]
+    assert payload["turn_observability"] == [
+        {"degradation_status": "ok", "last_error": "联系 [REDACTED]"}
+    ]
     assert payload["tool_events"] == []
     assert payload["turns"][0]["produced_report_data"] is True
+    assert "test@example.com" not in serialized
+    assert "13800138000" not in serialized
+    assert "sk-testvalue123456789" not in serialized
 
 
 def test_build_snapshot_payload_preserves_turn_error():

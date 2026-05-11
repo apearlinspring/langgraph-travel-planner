@@ -1,13 +1,133 @@
-"""
-Security helpers for password hashing and JWT handling.
-"""
+"""Security helpers for password hashing, JWT handling and redaction."""
+from __future__ import annotations
+
 from datetime import datetime, timedelta
+import re
 from typing import Optional
 
 import bcrypt
 import jwt
 
 from app.config import settings
+
+
+REDACTED_VALUE = "[REDACTED]"
+
+SENSITIVE_KEY_PARTS = (
+    "api_key",
+    "apikey",
+    "authorization",
+    "cookie",
+    "email",
+    "id_card",
+    "identity",
+    "mobile",
+    "passport",
+    "password",
+    "phone",
+    "secret",
+    "token",
+    "身份证",
+    "手机号",
+    "护照",
+    "邮箱",
+    "电话",
+)
+
+EMAIL_PATTERN = re.compile(
+    r"(?<![\w.+-])[\w.+-]+@[\w-]+(?:\.[\w-]+)+(?![\w.+-])",
+    re.IGNORECASE,
+)
+PHONE_PATTERN = re.compile(r"(?<!\d)(?:\+?86[-\s]?)?1[3-9]\d{9}(?!\d)")
+ID_CARD_PATTERN = re.compile(
+    r"(?<![0-9A-Za-z])\d{6}(?:18|19|20)\d{2}"
+    r"(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])\d{3}[0-9Xx]"
+    r"(?![0-9A-Za-z])"
+)
+JWT_PATTERN = re.compile(
+    r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b"
+)
+BEARER_PATTERN = re.compile(
+    r"(?i)\b(?:bearer|token)\s+[A-Za-z0-9._~+/=-]{8,}"
+)
+SECRET_ASSIGNMENT_PATTERN = re.compile(
+    r"(?i)\b(api[_-]?key|apikey|access[_-]?token|refresh[_-]?token|"
+    r"authorization|secret|password)\s*[:=]\s*['\"]?[^'\"\s,;]+"
+)
+API_KEY_PATTERN = re.compile(
+    r"\b(?:sk|rk|pk|ak|dashscope|amap|tavily)[-_][A-Za-z0-9][A-Za-z0-9_-]{10,}\b",
+    re.IGNORECASE,
+)
+
+
+def is_sensitive_key(key: object) -> bool:
+    """Return True when a field name should never expose its raw value."""
+
+    normalized = str(key or "").lower()
+    return any(part in normalized for part in SENSITIVE_KEY_PARTS)
+
+
+def redact_sensitive_text(text: str) -> str:
+    """Redact common PII and credential-shaped substrings from text."""
+
+    if not text:
+        return text
+    redacted = str(text)
+    redacted = SECRET_ASSIGNMENT_PATTERN.sub(
+        lambda match: f"{match.group(1)}={REDACTED_VALUE}",
+        redacted,
+    )
+    for pattern in (
+        BEARER_PATTERN,
+        JWT_PATTERN,
+        API_KEY_PATTERN,
+        EMAIL_PATTERN,
+        PHONE_PATTERN,
+        ID_CARD_PATTERN,
+    ):
+        redacted = pattern.sub(REDACTED_VALUE, redacted)
+    return redacted
+
+
+def redact_sensitive_data(
+    value,
+    *,
+    max_depth: int = 8,
+):
+    """Recursively redact sensitive values while preserving response shape."""
+
+    if max_depth < 0:
+        return REDACTED_VALUE
+    if isinstance(value, dict):
+        redacted = {}
+        for key, item in value.items():
+            text_key = str(key)
+            if is_sensitive_key(text_key):
+                redacted[text_key] = REDACTED_VALUE
+            else:
+                redacted[text_key] = redact_sensitive_data(
+                    item,
+                    max_depth=max_depth - 1,
+                )
+        return redacted
+    if isinstance(value, list):
+        return [
+            redact_sensitive_data(item, max_depth=max_depth - 1)
+            for item in value
+        ]
+    if isinstance(value, tuple):
+        return tuple(
+            redact_sensitive_data(item, max_depth=max_depth - 1)
+            for item in value
+        )
+    if isinstance(value, set):
+        return {
+            redact_sensitive_data(item, max_depth=max_depth - 1)
+            for item in value
+        }
+    if isinstance(value, str):
+        return redact_sensitive_text(value)
+    return value
 
 
 def hash_password(password: str) -> str:

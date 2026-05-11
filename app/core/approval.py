@@ -22,6 +22,7 @@ from app.models.approval import (
     ApprovalRequest,
     ToolAuditEvent as ToolAuditEventModel,
 )
+from app.utils.security import redact_sensitive_text
 
 
 class ApprovalError(ValueError):
@@ -95,6 +96,11 @@ def _approval_id() -> str:
 
 def _next_status_for_policy(requires_approval: bool) -> ApprovalStatus:
     return "pending" if requires_approval else "none"
+
+
+def _safe_reason(reason: str | None, fallback: str | None = None) -> str:
+    text = (reason or "").strip() or (fallback or "")
+    return redact_sensitive_text(text)
 
 
 def _datetime_from_timestamp(timestamp: float | None) -> datetime | None:
@@ -277,7 +283,7 @@ class ApprovalStore:
             action=policy.action,
             label=policy.label,
             status=_next_status_for_policy(policy.requires_approval),
-            reason=reason.strip() or policy.description,
+            reason=_safe_reason(reason, policy.description),
             user_id=str(user_id),
             conversation_id=str(conversation_id) if conversation_id else None,
             created_at=timestamp,
@@ -435,6 +441,8 @@ class ApprovalStore:
             record.decided_at = timestamp
             record.decided_by = str(decided_by)
             record.decision_reason = (decision_reason or "").strip() or None
+            if record.decision_reason:
+                record.decision_reason = redact_sensitive_text(record.decision_reason)
             self._append_event(
                 record,
                 event_type=status,
@@ -489,7 +497,7 @@ class ApprovalStore:
                 from_status=from_status,
                 to_status=to_status,
                 actor_id=actor_id,
-                reason=reason,
+                reason=redact_sensitive_text(reason) if reason else None,
                 metadata=sanitize_approval_metadata(metadata),
                 created_at=now,
             )
@@ -533,7 +541,7 @@ class DatabaseApprovalStore:
                 action=policy.action,
                 label=policy.label,
                 status=status,
-                reason=reason.strip() or policy.description,
+                reason=_safe_reason(reason, policy.description),
                 user_id=str(user_id),
                 conversation_id=str(conversation_id) if conversation_id else None,
                 requires_approval=policy.requires_approval,
@@ -770,6 +778,8 @@ class DatabaseApprovalStore:
         approval.decided_at = _datetime_from_timestamp(timestamp)
         approval.decided_by = actor_id
         approval.decision_reason = decision_reason
+        if approval.decision_reason:
+            approval.decision_reason = redact_sensitive_text(approval.decision_reason)
         self._append_event_model(
             approval,
             event_type=event_type,
@@ -801,7 +811,7 @@ class DatabaseApprovalStore:
                 from_status=from_status,
                 to_status=to_status,
                 actor_id=actor_id,
-                reason=reason,
+                reason=redact_sensitive_text(reason) if reason else None,
                 event_metadata=sanitize_approval_metadata(metadata),
                 created_at=created_at,
             )

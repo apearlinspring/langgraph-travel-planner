@@ -7,6 +7,7 @@
 当前实现提供：
 
 - 敏感动作权限策略。
+- 轻量角色边界：普通用户、审批操作者、管理员。
 - PostgreSQL（关系型数据库）持久化审批请求、审批事件和工具审计事件。
 - 审批事件采用 append-only（只追加）方式记录状态流转。
 - TravelState（旅行规划状态）审批字段。
@@ -65,6 +66,31 @@ approval_governance: dict
 - `POST /api/v1/approvals/{approval_id}/expire`：手动过期 `pending` 记录。
 - `GET /api/v1/approvals/{approval_id}/events`：查询单条审批记录的只追加事件。
 
+### 角色与权限
+
+当前不引入复杂 RBAC（基于角色的访问控制）系统，也不接外部权限服务。服务端从用户对象的 `role` 属性或 `preferences.role` 中解析轻量角色，缺省为 `user`。
+
+| 角色 | 能力边界 |
+|---|---|
+| `user` | 可创建敏感动作标记，可查询自己的审批记录和事件；不能批准、拒绝或手动过期审批。 |
+| `approver` | 审批操作者，可查看全部审批记录，可批准、拒绝或手动过期 `pending` 审批。 |
+| `admin` | 管理员，拥有审批操作者能力，预留给后续治理配置维护。 |
+
+`GET /api/v1/approvals` 默认只返回当前用户记录；审批操作者或管理员可以通过 `scope=all` 查看全部审批记录。无权限响应使用稳定错误契约：
+
+```json
+{
+  "detail": {
+    "code": "approval_decision_denied",
+    "message": "只有审批操作者或管理员可以批准、拒绝或手动过期审批记录",
+    "required_roles": ["approver", "admin"],
+    "current_role": "user"
+  }
+}
+```
+
+普通用户即使是审批发起人，也不能自审未来真实支付、真实预订、短信发送或客户资料导出这类敏感动作。
+
 审批 API 默认使用 `DatabaseApprovalStore` 写入数据库；测试可以注入同接口的 `ApprovalStore` 内存替身，以保持本地快速回归。这个替身不作为生产审计账本。
 
 生产环境必须使用 PostgreSQL 持久化审批请求、审批事件和工具审计事件，不允许回退到进程内内存存储。开发、测试和本地环境可以启用内存审批存储作为调试替身，但治理状态仍会标记为 `not_ready`，并且 `hitl_closed_loop=false`，表示不能宣称 HITL 闭环已经完成。
@@ -120,7 +146,15 @@ approval_governance: dict
 
 ## 数据与隐私边界
 
-审批 metadata（元数据）会做浅层脱敏：`token`、`secret`、`api_key`、`phone`、`id_card` 等疑似密钥或 PII（个人可识别信息）字段会被替换为 `[REDACTED]`。
+审批 metadata（元数据）、审批理由、审批决策备注、工具审计摘要、SSE（服务器发送事件）公开帧和验收快照统一使用 `app/utils/security.py` 中的脱敏工具处理。
+
+当前覆盖：
+
+- 字段名命中 `token`、`secret`、`api_key`、`authorization`、`password`、`phone`、`email`、`id_card`、`passport` 等敏感含义时，字段值替换为 `[REDACTED]`。
+- 文本中疑似手机号、邮箱、身份证号、JWT（JSON Web Token，令牌认证）、Bearer token（持有者令牌）和常见 API Key（应用程序接口密钥）形态时，替换为 `[REDACTED]`。
+- 工具审计只保存输入和输出摘要；即使上游错误消息携带敏感串，也会在写入审计事件前脱敏。
+- SSE 公开事件会在序列化前脱敏，`tool_audit` 事件仍只暴露工具名、状态、耗时、证据类型和错误类型。
+- 评估 live snapshot（真实链路快照）写盘前会递归脱敏，避免验收产物保留真实密钥或真实个人信息。
 
 当前文档、测试和提交说明不写入真实密钥、真实手机号、真实身份证号或真实客户资料。
 

@@ -52,12 +52,20 @@ def clear_global_approval_store():
     approval_store.clear()
 
 
-def _approval_client(user_id: str = "user-1") -> TestClient:
+def _approval_client(
+    user_id: str = "user-1",
+    *,
+    role: str = "user",
+    service: ApprovalStore | None = None,
+) -> TestClient:
     app = FastAPI()
-    service = ApprovalStore()
+    approval_service = service or ApprovalStore()
     app.include_router(approvals_router, prefix="/api/v1")
-    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id=user_id)
-    app.dependency_overrides[get_approval_service] = lambda: service
+    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(
+        id=user_id,
+        preferences={"role": role},
+    )
+    app.dependency_overrides[get_approval_service] = lambda: approval_service
     return TestClient(app)
 
 
@@ -171,9 +179,11 @@ def test_approval_store_supports_approve_reject_and_expire():
 
 
 def test_approval_api_marks_lists_approves_and_rejects_records():
-    client = _approval_client()
+    service = ApprovalStore()
+    user_client = _approval_client(service=service)
+    approver_client = _approval_client("approver-1", role="approver", service=service)
 
-    create_response = client.post(
+    create_response = user_client.post(
         "/api/v1/approvals",
         json={
             "action": "real_payment",
@@ -189,24 +199,32 @@ def test_approval_api_marks_lists_approves_and_rejects_records():
     assert created["requires_approval"] is True
     assert created["metadata"]["token"] == "[REDACTED]"
 
-    list_response = client.get("/api/v1/approvals", params={"status": "pending"})
+    list_response = user_client.get("/api/v1/approvals", params={"status": "pending"})
     assert list_response.status_code == 200
     assert list_response.json()["total"] == 1
 
-    approve_response = client.post(
+    denied_response = user_client.post(
+        f"/api/v1/approvals/{created['approval_id']}/approve",
+        json={"reason": "普通用户不能自审"},
+    )
+    assert denied_response.status_code == 403
+    assert denied_response.json()["detail"]["code"] == "approval_decision_denied"
+
+    approve_response = approver_client.post(
         f"/api/v1/approvals/{created['approval_id']}/approve",
         json={"reason": "测试通过"},
     )
     assert approve_response.status_code == 200
     assert approve_response.json()["status"] == "approved"
+    assert approve_response.json()["decided_by"] == "approver-1"
 
-    events_response = client.get(f"/api/v1/approvals/{created['approval_id']}/events")
+    events_response = approver_client.get(f"/api/v1/approvals/{created['approval_id']}/events")
     assert events_response.status_code == 200
     events = events_response.json()["events"]
     assert [event["event_type"] for event in events] == ["created", "approved"]
     assert events[0]["metadata"]["requires_approval"] is True
 
-    second_response = client.post(
+    second_response = user_client.post(
         "/api/v1/approvals",
         json={
             "action": "real_booking",
@@ -215,7 +233,7 @@ def test_approval_api_marks_lists_approves_and_rejects_records():
         },
     )
     second = second_response.json()
-    reject_response = client.post(
+    reject_response = approver_client.post(
         f"/api/v1/approvals/{second['approval_id']}/reject",
         json={"reason": "供应链未接入"},
     )
@@ -224,9 +242,11 @@ def test_approval_api_marks_lists_approves_and_rejects_records():
 
 
 def test_approval_api_can_query_policies_and_expire_pending_record():
-    client = _approval_client()
+    service = ApprovalStore()
+    user_client = _approval_client(service=service)
+    approver_client = _approval_client("approver-1", role="approver", service=service)
 
-    policies_response = client.get("/api/v1/approvals/policies")
+    policies_response = user_client.get("/api/v1/approvals/policies")
     assert policies_response.status_code == 200
     policy_actions = {policy["action"] for policy in policies_response.json()}
     assert {
@@ -237,7 +257,7 @@ def test_approval_api_can_query_policies_and_expire_pending_record():
         "export_customer_profile",
     }.issubset(policy_actions)
 
-    create_response = client.post(
+    create_response = user_client.post(
         "/api/v1/approvals",
         json={
             "action": "send_sms",
@@ -246,9 +266,38 @@ def test_approval_api_can_query_policies_and_expire_pending_record():
         },
     )
     approval_id = create_response.json()["approval_id"]
-    expire_response = client.post(f"/api/v1/approvals/{approval_id}/expire")
+    expire_response = approver_client.post(f"/api/v1/approvals/{approval_id}/expire")
     assert expire_response.status_code == 200
     assert expire_response.json()["status"] == "expired"
+
+
+def test_approval_api_limits_cross_user_visibility_and_list_scope():
+    service = ApprovalStore()
+    owner_client = _approval_client("user-1", service=service)
+    other_client = _approval_client("user-2", service=service)
+    approver_client = _approval_client("approver-1", role="approver", service=service)
+
+    create_response = owner_client.post(
+        "/api/v1/approvals",
+        json={
+            "action": "real_payment",
+            "reason": "未来真实支付占位审批",
+            "expires_in_seconds": 60,
+        },
+    )
+    approval_id = create_response.json()["approval_id"]
+
+    denied_get = other_client.get(f"/api/v1/approvals/{approval_id}")
+    assert denied_get.status_code == 403
+    assert denied_get.json()["detail"]["code"] == "approval_view_denied"
+
+    denied_list = owner_client.get("/api/v1/approvals", params={"scope": "all"})
+    assert denied_list.status_code == 403
+    assert denied_list.json()["detail"]["code"] == "approval_list_all_denied"
+
+    all_records = approver_client.get("/api/v1/approvals", params={"scope": "all"})
+    assert all_records.status_code == 200
+    assert all_records.json()["total"] == 1
 
 
 def test_generate_order_tool_records_non_blocking_governance_boundary():
@@ -324,9 +373,38 @@ def test_sanitize_approval_metadata_redacts_sensitive_keys():
             "api_key": "secret",
             "phone": "18800000000",
             "safe_note": "可公开测试说明",
+            "free_text": "邮箱 test@example.com，手机号 13800138000，身份证 110101199001011234",
+            "nested": {"contact": "test@example.com"},
         }
     )
 
     assert metadata["api_key"] == "[REDACTED]"
     assert metadata["phone"] == "[REDACTED]"
     assert metadata["safe_note"] == "可公开测试说明"
+    assert "test@example.com" not in metadata["free_text"]
+    assert "13800138000" not in metadata["free_text"]
+    assert "110101199001011234" not in metadata["free_text"]
+    assert "test@example.com" not in metadata["nested"]["contact"]
+
+
+def test_approval_store_redacts_reason_and_decision_reason():
+    store = ApprovalStore()
+
+    record = store.mark_sensitive_action(
+        action="real_payment",
+        reason="联系 test@example.com，手机号 13800138000",
+        user_id="user-1",
+        now=100.0,
+    )
+    decided = store.approve(
+        record.approval_id,
+        decided_by="approver-1",
+        decision_reason="批准备注 sk-testvalue123456789",
+        now=110.0,
+    )
+    events = store.list_events(record.approval_id)
+
+    serialized = str([record.to_dict(), decided.to_dict(), *[event.to_dict() for event in events]])
+    assert "test@example.com" not in serialized
+    assert "13800138000" not in serialized
+    assert "sk-testvalue123456789" not in serialized
