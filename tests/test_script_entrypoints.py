@@ -86,3 +86,20 @@ def test_container_files_keep_liveness_and_proxy_configurable():
     assert "{$ZHIXING_SITE_ADDRESS:travel.403edr.cn}" in caddyfile
     assert "/health/*" in caddyfile
     assert "reverse_proxy backend:8000" in caddyfile
+
+
+def test_readiness_docs_cover_ci_staging_and_production_layers():
+    deployment = Path("docs/deployment-readiness.md").read_text(encoding="utf-8")
+    runtime = Path("docs/runtime-environment.md").read_text(encoding="utf-8")
+    evaluation = Path("docs/evaluation-system.md").read_text(encoding="utf-8")
+
+    for content in [deployment, runtime, evaluation]:
+        assert "CI" in content
+        assert "workflow_dispatch" in content
+        assert "preflight" in content
+
+    assert "--target development --json" in deployment
+    assert "--target production --json" in deployment
+    assert "run_live_acceptance=true" in evaluation
+    assert "blocked（环境阻塞）" in runtime
+    assert "Docker" in deployment
