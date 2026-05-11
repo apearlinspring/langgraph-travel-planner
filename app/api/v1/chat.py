@@ -17,6 +17,10 @@ from app.schemas.message import MessageCreate
 from app.api.dependencies import get_current_user
 from app.agents.handoffs.travel_agent import create_travel_agent
 from app.config import settings
+from app.core.observability import (
+    TurnObservation,
+    public_tool_audit_event,
+)
 from app.core.session_lock import SessionLockBusy, acquire_session_lock
 from app.core.approval import ApprovalGovernanceManager
 from app.tools.audit import (
@@ -69,12 +73,14 @@ def sse(data: dict) -> str:
 
 def _session_busy_payload(
     conversation_id: str,
+    turn_id: str,
     active_lock=None,
 ) -> dict:
     payload = {
         "type": "session_busy",
         "content": SESSION_BUSY_MESSAGE,
         "conversation_id": conversation_id,
+        "turn_id": turn_id,
         "retry_after_seconds": settings.session_lock_busy_retry_after_seconds,
     }
     if active_lock is not None:
@@ -195,6 +201,44 @@ def _new_tool_audit_events(events: list[dict], existing_events: list[dict]) -> l
     return new_events
 
 
+def _update_observation_from_state_update(
+    observation: TurnObservation,
+    update: dict,
+) -> None:
+    if not isinstance(update, dict):
+        return
+    report_data = update.get("report_data")
+    report_mode = None
+    if isinstance(report_data, dict):
+        agency_context = report_data.get("agency_context")
+        if isinstance(agency_context, dict):
+            report_mode = agency_context.get("mode")
+    observation.update_context(
+        current_step=update.get("current_step"),
+        planning_mode=update.get("planning_mode") or report_mode,
+        planning_mode_source="state_update",
+    )
+
+
+def _safe_stream_error_payload(
+    *,
+    turn_id: str,
+    error_type: str,
+) -> dict:
+    return {
+        "type": "error",
+        "turn_id": turn_id,
+        "error_type": error_type,
+        "message": "本轮对话处理失败，已记录内部观测信息；请稍后重试或继续下一步。",
+    }
+
+
+def _turn_done_payload(observation: TurnObservation) -> dict:
+    payload = {"type": "done", "turn_id": observation.turn_id}
+    payload["degradation_status"] = observation.degradation_status
+    return payload
+
+
 async def _persist_tool_audit_events_safely(
         db: AsyncSession,
         *,
@@ -244,6 +288,11 @@ async def generate_sse_stream(
 ):
     assistant_message = ""
     request_started_at = time.perf_counter()
+    turn_observation = TurnObservation(
+        conversation_id=conversation_id,
+        user_id=str(user.id),
+        user_message=user_message,
+    )
     first_token_elapsed = None
     tool_started_at = {}
     tool_audit_context_by_run = {}
@@ -271,12 +320,16 @@ async def generate_sse_stream(
             )
             app_logger.warning(
                 "SSE chat rejected because conversation is busy: "
+                f"turn_id={turn_observation.turn_id}, "
                 f"conversation_id={conversation_id}, user_id={user.id}, "
                 f"active_seconds={active_since}, "
                 f"lock_backend={(active_lock.backend if active_lock else 'unknown')}"
             )
-            yield sse(_session_busy_payload(conversation_id, active_lock))
-            yield sse({"type": "done"})
+            turn_observation.mark_degraded("session_busy")
+            turn_observation.finish("busy")
+            yield sse(_session_busy_payload(conversation_id, turn_observation.turn_id, active_lock))
+            yield sse(turn_observation.to_sse_event())
+            yield sse(_turn_done_payload(turn_observation))
             return
 
         session_lock.start_auto_renew(
@@ -284,6 +337,7 @@ async def generate_sse_stream(
         )
         app_logger.info(
             "SSE chat started: "
+            f"turn_id={turn_observation.turn_id}, "
             f"conversation_id={conversation_id}, user_id={user.id}, "
             f"message_length={len(user_message)}, "
             f"lock_backend={session_lock.snapshot.backend}, "
@@ -301,6 +355,8 @@ async def generate_sse_stream(
         input_data = {
             "messages": [HumanMessage(content=user_message)],
             "user_id": str(user.id),
+            "session_id": conversation_id,
+            "turn_id": turn_observation.turn_id,
         }
 
         # 4. 使用 astream_events 获取更细粒度的流式输出
@@ -322,15 +378,18 @@ async def generate_sse_stream(
                 if chunk and hasattr(chunk, "content") and chunk.content:
                     token = chunk.content
                     assistant_message += token
+                    turn_observation.record_token(token)
                     if first_token_elapsed is None:
                         first_token_elapsed = time.perf_counter() - request_started_at
                         app_logger.info(
                             "SSE first token emitted: "
+                            f"turn_id={turn_observation.turn_id}, "
                             f"conversation_id={conversation_id}, user_id={user.id}, "
                             f"elapsed_seconds={first_token_elapsed:.2f}"
                         )
                     yield sse({
                         "type": "token",
+                        "turn_id": turn_observation.turn_id,
                         "content": token,
                     })
 
@@ -338,6 +397,7 @@ async def generate_sse_stream(
             elif kind == "on_tool_start":
                 tool_name = event.get("name", "")
                 run_id = event.get("run_id", "")
+                turn_observation.record_tool_start(tool_name)
                 if run_id:
                     tool_started_at[run_id] = time.perf_counter()
                     tool_audit_context_by_run[run_id] = start_tool_audit(tool_name)
@@ -347,6 +407,7 @@ async def generate_sse_stream(
                     tool_name_by_run[run_id] = tool_name
                 app_logger.info(
                     "SSE tool started: "
+                    f"turn_id={turn_observation.turn_id}, "
                     f"conversation_id={conversation_id}, user_id={user.id}, tool={tool_name}"
                 )
                 if tool_name and tool_name in emitted_tool_call_names:
@@ -359,6 +420,7 @@ async def generate_sse_stream(
                         emitted_tool_call_names.add(tool_name)
                     yield sse({
                         "type": "tool_call",
+                        "turn_id": turn_observation.turn_id,
                         "tool": tool_name,
                     })
             elif kind == "on_tool_end":
@@ -369,6 +431,10 @@ async def generate_sse_stream(
                 input_summary = tool_input_by_run.pop(run_id, {})
                 tool_name_by_run.pop(run_id, None)
                 tool_output = event.get("data", {}).get("output")
+                _update_observation_from_state_update(
+                    turn_observation,
+                    _extract_command_update(tool_output),
+                )
                 if tool_name == "generate_order_tool":
                     report_extra_info = _report_extra_info_from_tool_output(
                         tool_output
@@ -382,6 +448,7 @@ async def generate_sse_stream(
                         yield sse(
                             {
                                 "type": "report_data",
+                                "turn_id": turn_observation.turn_id,
                                 "report_data": report_extra_info["report_data"],
                                 "order_id": report_extra_info.get("order_id"),
                             }
@@ -395,6 +462,7 @@ async def generate_sse_stream(
                     elapsed = time.perf_counter() - started_at
                     app_logger.info(
                         "SSE tool finished: "
+                        f"turn_id={turn_observation.turn_id}, "
                         f"conversation_id={conversation_id}, user_id={user.id}, "
                         f"tool={tool_name}, elapsed_seconds={elapsed:.2f}"
                     )
@@ -406,10 +474,8 @@ async def generate_sse_stream(
                     )
                     tool_audit_events.extend(new_audit_events)
                     for audit_event in new_audit_events:
-                        yield sse({
-                            "type": "tool_audit",
-                            "event": audit_event,
-                        })
+                        turn_observation.record_tool_audit_event(audit_event)
+                        yield sse(public_tool_audit_event(audit_event))
                 elif audit_context is not None:
                     result_validation = validate_tool_output_for_audit(
                         tool_name,
@@ -427,13 +493,12 @@ async def generate_sse_stream(
                         evidence_type=evidence_type_for_tool_name(tool_name),
                     )
                     tool_audit_events.append(audit_event)
-                    yield sse({
-                        "type": "tool_audit",
-                        "event": audit_event,
-                    })
+                    turn_observation.record_tool_audit_event(audit_event)
+                    yield sse(public_tool_audit_event(audit_event))
                 if final_report_emitted:
                     app_logger.info(
                         "SSE final report emitted; ending stream without model post-processing: "
+                        f"turn_id={turn_observation.turn_id}, "
                         f"conversation_id={conversation_id}, user_id={user.id}"
                     )
                     break
@@ -450,15 +515,13 @@ async def generate_sse_stream(
                         audit_context,
                         status="failed",
                         input_summary=input_summary,
-                        output_summary={"message": str(error)[:180] if error else ""},
+                        output_summary={"error_type": error_type},
                         error_type=error_type,
                         evidence_type="mcp_live_query",
                     )
                     tool_audit_events.append(audit_event)
-                    yield sse({
-                        "type": "tool_audit",
-                        "event": audit_event,
-                    })
+                    turn_observation.record_tool_audit_event(audit_event)
+                    yield sse(public_tool_audit_event(audit_event))
 
             await asyncio.sleep(0)
 
@@ -475,6 +538,10 @@ async def generate_sse_stream(
             )
             if audit_persistence.get("status") == "degraded":
                 assistant_extra_info["tool_audit_persistence"] = audit_persistence
+                turn_observation.mark_degraded("tool_audit_persistence_degraded")
+        turn_observation.ensure_assistant_text_observed(assistant_message)
+        observability_snapshot = turn_observation.finish("completed")
+        assistant_extra_info["observability"] = observability_snapshot
         if assistant_message.strip():
             await save_message(
                 db,
@@ -487,16 +554,23 @@ async def generate_sse_stream(
         total_elapsed = time.perf_counter() - request_started_at
         app_logger.info(
             "SSE chat completed: "
+            f"turn_id={turn_observation.turn_id}, "
             f"conversation_id={conversation_id}, user_id={user.id}, "
             f"elapsed_seconds={total_elapsed:.2f}, "
             f"first_token_seconds={(first_token_elapsed if first_token_elapsed is not None else -1):.2f}, "
-            f"assistant_chars={len(assistant_message)}"
+            f"assistant_chars={len(assistant_message)}, "
+            f"degradation_status={turn_observation.degradation_status}, "
+            f"estimated_total_tokens={turn_observation.estimated_total_tokens}"
         )
-        yield sse({"type": "done"})
+        yield sse(turn_observation.to_sse_event())
+        yield sse(_turn_done_payload(turn_observation))
 
     except asyncio.CancelledError:
+        turn_observation.mark_degraded("client_cancelled")
+        turn_observation.finish("cancelled")
         app_logger.info(
             "SSE chat stream cancelled: "
+            f"turn_id={turn_observation.turn_id}, "
             f"conversation_id={conversation_id}, user_id={user.id}"
         )
         raise
@@ -506,9 +580,11 @@ async def generate_sse_stream(
             app_logger.warning(
                 "SSE upstream stream disconnected after partial generation; "
                 "finishing turn without emitting user-facing error: "
+                f"turn_id={turn_observation.turn_id}, "
                 f"conversation_id={conversation_id}, user_id={user.id}, "
                 f"elapsed_seconds={total_elapsed:.2f}, assistant_chars={len(assistant_message)}"
             )
+            turn_observation.mark_fallback("transient_stream_disconnect")
             if not assistant_message.strip() and fallback_assistant_message:
                 assistant_message = fallback_assistant_message
             if not assistant_message.strip():
@@ -518,8 +594,10 @@ async def generate_sse_stream(
                 )
                 if first_token_elapsed is None:
                     first_token_elapsed = total_elapsed
+                    turn_observation.ensure_assistant_text_observed(assistant_message)
                     yield sse({
                         "type": "token",
+                        "turn_id": turn_observation.turn_id,
                         "content": assistant_message,
                     })
             if tool_audit_events:
@@ -532,6 +610,10 @@ async def generate_sse_stream(
                 )
                 if audit_persistence.get("status") == "degraded":
                     assistant_extra_info["tool_audit_persistence"] = audit_persistence
+                    turn_observation.mark_degraded("tool_audit_persistence_degraded")
+            turn_observation.ensure_assistant_text_observed(assistant_message)
+            observability_snapshot = turn_observation.finish("completed")
+            assistant_extra_info["observability"] = observability_snapshot
             if assistant_message.strip():
                 await save_message(
                     db,
@@ -540,18 +622,24 @@ async def generate_sse_stream(
                     assistant_message,
                     extra_info=assistant_extra_info,
                 )
-            yield sse({"type": "done"})
+            yield sse(turn_observation.to_sse_event())
+            yield sse(_turn_done_payload(turn_observation))
             return
+        error_type = e.__class__.__name__
+        turn_observation.mark_error(error_type)
+        turn_observation.finish("failed", error_type=error_type)
         app_logger.exception(
             "SSE chat failed: "
+            f"turn_id={turn_observation.turn_id}, "
             f"conversation_id={conversation_id}, user_id={user.id}, "
             f"elapsed_seconds={total_elapsed:.2f}"
         )
         app_logger.exception("❌ SSE 流式对话错误")
-        yield sse({
-            "type": "error",
-            "message": str(e),
-        })
+        yield sse(turn_observation.to_sse_event())
+        yield sse(_safe_stream_error_payload(
+            turn_id=turn_observation.turn_id,
+            error_type=error_type,
+        ))
     finally:
         if session_lock is not None:
             await session_lock.release()

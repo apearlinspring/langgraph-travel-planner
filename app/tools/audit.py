@@ -16,9 +16,17 @@ SENSITIVE_INPUT_KEYS = {
     "api_key",
     "authorization",
     "cookie",
+    "email",
+    "id_card",
+    "mobile",
     "password",
+    "passport",
+    "phone",
     "secret",
     "token",
+    "身份证",
+    "手机号",
+    "护照",
 }
 SENSITIVE_INPUT_KEY_PARTS = tuple(SENSITIVE_INPUT_KEYS)
 

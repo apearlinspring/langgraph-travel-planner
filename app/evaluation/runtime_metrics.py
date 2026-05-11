@@ -17,7 +17,11 @@ class RuntimeMetrics:
     turn_count: int
     event_count: int
     token_event_count: int
+    turn_observability_event_count: int
     tool_call_count: int
+    tool_failure_count: int
+    fallback_count: int
+    degraded_event_count: int
     report_event_count: int
     error_event_count: int
     session_busy_event_count: int
@@ -195,7 +199,40 @@ def _first_token_seconds(events: list[dict[str, Any]]) -> float | None:
         elapsed = event.get("elapsed_since_scenario_start")
         if isinstance(elapsed, (int, float)):
             return round(float(elapsed), 3)
+    observed = [
+        _as_observability(event).get("first_token_seconds")
+        for event in events
+        if isinstance(_as_observability(event).get("first_token_seconds"), (int, float))
+    ]
+    if observed:
+        return round(float(min(observed)), 3)
     return None
+
+
+def _as_observability(event: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(event, dict):
+        return {}
+    payload = event.get("observability")
+    return payload if isinstance(payload, dict) else {}
+
+
+def _sum_observed_metric(events: list[dict[str, Any]], key: str) -> int:
+    total = 0
+    for event in events:
+        value = _as_observability(event).get(key)
+        if isinstance(value, int) and value >= 0:
+            total += value
+    return total
+
+
+def _observed_degraded_event_count(events: list[dict[str, Any]]) -> int:
+    count = 0
+    for event in events:
+        payload = _as_observability(event)
+        status = str(payload.get("degradation_status") or "ok")
+        if payload and status != "ok":
+            count += 1
+    return count
 
 
 def _turn_user_chars(turns: list[dict[str, Any]]) -> int:
@@ -235,6 +272,9 @@ def collect_runtime_metrics(
         raise TypeError("turns must be a list")
 
     event_types = [_event_type(event) for event in events if isinstance(event, dict)]
+    turn_observability_event_count = sum(
+        1 for event_type in event_types if event_type == "turn_observability"
+    )
     user_chars = _turn_user_chars(turns)
     assistant_chars = len(assistant_text)
     input_tokens = estimate_token_count(
@@ -245,13 +285,44 @@ def collect_runtime_metrics(
         )
     )
     output_tokens = estimate_token_count(assistant_text)
+    observed_input_tokens = _sum_observed_metric(events, "estimated_input_tokens")
+    observed_output_tokens = _sum_observed_metric(events, "estimated_output_tokens")
+    observed_tool_calls = _sum_observed_metric(events, "tool_call_count")
+    observed_tool_failures = _sum_observed_metric(events, "tool_failure_count")
+    observed_fallbacks = _sum_observed_metric(events, "fallback_count")
+    event_tool_failures = sum(
+        1
+        for event in events
+        if isinstance(event, dict)
+        and str(event.get("status") or "").lower()
+        in {"failed", "failure", "timeout", "degraded", "error", "skipped"}
+    )
+    degraded_event_count = _observed_degraded_event_count(events) + sum(
+        1
+        for event in events
+        if isinstance(event, dict)
+        and (
+            _event_type(event) in {"error", "session_busy"}
+            or str(event.get("degradation_status") or "").lower()
+            in {"degraded", "failed"}
+        )
+    )
+    input_tokens = max(input_tokens, observed_input_tokens)
+    output_tokens = max(output_tokens, observed_output_tokens)
     return RuntimeMetrics(
         total_elapsed_seconds=round(float(elapsed_seconds), 3),
         first_token_seconds=_first_token_seconds(events),
         turn_count=len(turns),
         event_count=len(events),
         token_event_count=sum(1 for event_type in event_types if event_type == "token"),
-        tool_call_count=sum(1 for event_type in event_types if event_type == "tool_call"),
+        turn_observability_event_count=turn_observability_event_count,
+        tool_call_count=max(
+            sum(1 for event_type in event_types if event_type == "tool_call"),
+            observed_tool_calls,
+        ),
+        tool_failure_count=max(observed_tool_failures, event_tool_failures),
+        fallback_count=observed_fallbacks,
+        degraded_event_count=degraded_event_count,
         report_event_count=sum(1 for event_type in event_types if event_type == "report_data"),
         error_event_count=sum(1 for event_type in event_types if event_type == "error"),
         session_busy_event_count=sum(1 for event_type in event_types if event_type == "session_busy"),
@@ -457,10 +528,28 @@ def build_runtime_governance_summary(
         },
         "tool_usage": {
             "tool_call_count": metrics.tool_call_count,
+            "tool_failure_count": metrics.tool_failure_count,
             "tool_call_ratio": round(tool_ratio, 3) if tool_ratio is not None else None,
             "tool_counts": sorted_tool_counts,
             "redundant_calls": redundant_calls or [],
             "findings": tool_findings,
+        },
+        "fallbacks": {
+            "fallback_count": metrics.fallback_count,
+            "degraded_event_count": metrics.degraded_event_count,
+            "turn_observability_event_count": metrics.turn_observability_event_count,
+            "findings": [
+                *(
+                    [f"Fallback paths were observed {metrics.fallback_count} time(s)"]
+                    if metrics.fallback_count
+                    else []
+                ),
+                *(
+                    [f"Degraded turn observations were captured {metrics.degraded_event_count} time(s)"]
+                    if metrics.degraded_event_count
+                    else []
+                ),
+            ],
         },
         "errors": {
             "error_event_count": metrics.error_event_count,
@@ -510,13 +599,19 @@ def _criterion_latency(metrics: RuntimeMetrics, budget: RuntimeBudget) -> Criter
 def _criterion_observability(metrics: RuntimeMetrics) -> CriterionResult:
     findings: list[str] = []
     score = 0.0
-    score += _score(metrics.turn_count >= 1, 7, findings, "Snapshot must include turn summaries")
-    score += _score(metrics.event_count >= metrics.report_event_count, 7, findings, "Event count is inconsistent")
+    score += _score(metrics.turn_count >= 1, 5, findings, "Snapshot must include turn summaries")
+    score += _score(metrics.event_count >= metrics.report_event_count, 5, findings, "Event count is inconsistent")
     score += _score(
         metrics.assistant_chars > 0 or metrics.report_event_count > 0,
-        6,
+        5,
         findings,
         "Snapshot should contain assistant text or report_data",
+    )
+    score += _score(
+        metrics.turn_observability_event_count >= 1,
+        5,
+        findings,
+        "Snapshot must include turn_observability events",
     )
     return CriterionResult("runtime_observability", score, 20, findings)
 

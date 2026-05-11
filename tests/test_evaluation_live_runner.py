@@ -190,6 +190,18 @@ def test_build_quality_summary_contains_agent_scores():
         {"type": "tool_call", "tool": "query_transport_options", "turn_index": 1},
         {"type": "token", "content": "hello", "turn_index": 1, "elapsed_since_scenario_start": 0.5},
         {"type": "report_data", "turn_index": 1},
+        {
+            "type": "turn_observability",
+            "observability": {
+                "tool_call_count": 1,
+                "tool_failure_count": 0,
+                "fallback_count": 0,
+                "degradation_status": "ok",
+                "estimated_input_tokens": 3,
+                "estimated_output_tokens": 2,
+                "estimated_total_tokens": 5,
+            },
+        },
     ]
     turns = [
         {
@@ -247,6 +259,18 @@ def test_build_quality_summary_fails_aggregate_when_runtime_budget_fails():
         events=[
             {"type": "token", "content": "hello", "turn_index": 1, "elapsed_since_scenario_start": 10},
             {"type": "report_data", "turn_index": 1},
+            {
+                "type": "turn_observability",
+                "observability": {
+                    "tool_call_count": 0,
+                    "tool_failure_count": 0,
+                    "fallback_count": 0,
+                    "degradation_status": "ok",
+                    "estimated_input_tokens": 1,
+                    "estimated_output_tokens": 2,
+                    "estimated_total_tokens": 3,
+                },
+            },
         ],
         turns=[{"turn_index": 1, "user_message": "Plan", "elapsed_seconds": 10}],
         assistant_text="hello",
@@ -290,6 +314,18 @@ def test_acceptance_gate_passes_valid_quality_summary(tmp_path: Path):
         events=[
             {"type": "token", "content": "hello", "turn_index": 1, "elapsed_since_scenario_start": 0.5},
             {"type": "report_data", "turn_index": 1},
+            {
+                "type": "turn_observability",
+                "observability": {
+                    "tool_call_count": 0,
+                    "tool_failure_count": 0,
+                    "fallback_count": 0,
+                    "degradation_status": "ok",
+                    "estimated_input_tokens": 1,
+                    "estimated_output_tokens": 2,
+                    "estimated_total_tokens": 3,
+                },
+            },
         ],
         turns=[{"turn_index": 1, "user_message": "Plan", "elapsed_seconds": 1.0}],
         assistant_text="hello",
@@ -352,6 +388,18 @@ def test_acceptance_gate_flags_budget_confidence_gap():
         events=[
             {"type": "token", "content": "hello", "turn_index": 1, "elapsed_since_scenario_start": 0.5},
             {"type": "report_data", "turn_index": 1},
+            {
+                "type": "turn_observability",
+                "observability": {
+                    "tool_call_count": 0,
+                    "tool_failure_count": 0,
+                    "fallback_count": 0,
+                    "degradation_status": "ok",
+                    "estimated_input_tokens": 1,
+                    "estimated_output_tokens": 2,
+                    "estimated_total_tokens": 3,
+                },
+            },
         ],
         turns=[{"turn_index": 1, "user_message": "Plan", "elapsed_seconds": 1.0}],
         assistant_text="hello",

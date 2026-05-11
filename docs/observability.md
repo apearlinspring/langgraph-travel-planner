@@ -1,0 +1,91 @@
+# Production Observability（生产观测）说明
+
+## 目标
+
+本项目当前的 Production Observability（生产观测）是轻量雏形：不接 Prometheus（监控指标系统）或 OpenTelemetry（开放遥测标准），先用结构化日志、消息 `extra_info` 和内存最近快照追踪每轮 Agent（智能体）对话。
+
+它回答这些问题：
+
+- 本轮对话的 `turn_id`、`conversation_id`、`user_id`、阶段和规划模式是什么。
+- 首 token（文本令牌）等待了多久，总耗时多久。
+- 实际工具启动了几次，失败几次，是否触发 fallback（兜底）或 degraded（降级）状态。
+- 输入、输出和总 token 是否有稳定近似估算。
+- 这些指标能否被运行时评分和验收门禁消费。
+
+## 运行时契约
+
+核心代码在 `app/core/observability.py`：
+
+- `TurnObservation`：单轮对话观测收集器。
+- `turn_observability`：SSE（服务器发送事件）里对前端可见的安全摘要。
+- `public_tool_audit_event()`：工具审计的前端安全摘要，只暴露工具名、状态、耗时、重试次数和证据类型。
+- `list_recent_turn_observations()`：进程内最近快照，便于测试和本地排查。
+
+内部快照会保留：
+
+- `turn_id`
+- `conversation_id`
+- `user_id`
+- `current_step`
+- `planning_mode`
+- `first_token_seconds`
+- `total_elapsed_seconds`
+- `tool_call_count`
+- `tool_failure_count`
+- `fallback_count`
+- `degradation_status`
+- `estimated_input_tokens`
+- `estimated_output_tokens`
+- `estimated_total_tokens`
+
+## SSE 安全边界
+
+SSE 只返回安全摘要，不返回完整工具参数、工具输出、错误原文、真实密钥或个人隐私信息。
+
+允许返回：
+
+- `turn_id`
+- 工具名
+- 工具状态
+- 粗粒度耗时
+- 是否降级
+- token 估算
+- 规划阶段和规划模式
+
+不允许返回：
+
+- API（应用程序接口）密钥、token、cookie、密码等凭据。
+- 手机号、邮箱、身份证、护照等 PII（个人身份信息）。
+- 完整工具输入、完整工具输出或内部审计原文。
+- 未脱敏的异常字符串。
+
+用户侧错误事件使用通用文案；真实异常类型和堆栈只进入后端日志。
+
+## 聊天链路接入
+
+`app/api/v1/chat.py` 在每轮 `generate_sse_stream()` 开始时创建 `TurnObservation`：
+
+1. 生成 `turn_id`。
+2. 把 `turn_id` 写入 LangGraph（图式智能体编排框架）输入状态。
+3. 记录首 token、总耗时、工具启动、工具结束、工具失败、兜底和降级。
+4. 把内部快照写入助手消息 `extra_info.observability`。
+5. 在 `done` 前发送一次 `turn_observability` 安全摘要。
+
+`app/core/middleware.py` 会把 `observability_context` 写回状态，包含当前阶段、规划模式、模式来源和本轮可用工具数量。这个上下文不包含用户原文。
+
+## 评估与验收
+
+`app/evaluation/runtime_metrics.py` 会消费 `turn_observability`：
+
+- 如果 SSE 工具提示为了前端体验做了去重，运行时指标仍会使用观测摘要里的真实工具启动次数。
+- `tool_failure_count`、`fallback_count` 和 `degraded_event_count` 会进入 `runtime_governance`。
+- 缺少 `turn_observability` 会让运行时观测维度扣分，避免评估体系和真实链路脱节。
+
+`app/evaluation/acceptance_gate.py` 继续通过 `runtime_quality` 和 `runtime_budget` 消费运行时结果，不改变 `/health/ready` 的核心依赖判定。
+
+## 当前边界
+
+- token 使用量仍是字符近似估算，不等于供应商真实账单。
+- 内存快照只适合本地排查和单进程验证，重启后会丢失。
+- 还没有接入分布式 trace（链路追踪）或指标数据库。
+- 工具执行统一治理不在本分支实现，后续由 `codex/tool-execution-guard` 负责。
