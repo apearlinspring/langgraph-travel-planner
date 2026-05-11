@@ -53,6 +53,16 @@ from app.evaluation.scenarios import (
     load_tool_call_scenarios,
 )
 from app.evaluation.live_runner import LiveRunConfig, LiveScenarioResult, run_live_scenario
+from app.evaluation.llm_judge import (
+    DEFAULT_LLM_JUDGE_THRESHOLD,
+    LLM_JUDGE_VERSION,
+    LLMJudgeEvaluationResult,
+    ManualReviewRecord,
+    build_llm_judge_input,
+    build_manual_review_record,
+    evaluate_llm_judge,
+    llm_judge_skipped_result,
+)
 from app.evaluation.tool_quality import (
     ToolCallRecord,
     ToolQualityResult,
@@ -67,6 +77,8 @@ __all__ = [
     "EvaluationScenario",
     "LiveRunConfig",
     "LiveScenarioResult",
+    "LLMJudgeEvaluationResult",
+    "ManualReviewRecord",
     "RagQualityResult",
     "RagQualityScenario",
     "RuntimeBudget",
@@ -92,6 +104,10 @@ __all__ = [
     "build_error_acceptance_gate_result",
     "build_skipped_acceptance_gate_result",
     "DEFAULT_RUNTIME_BUDGET",
+    "DEFAULT_LLM_JUDGE_THRESHOLD",
+    "LLM_JUDGE_VERSION",
+    "build_llm_judge_input",
+    "build_manual_review_record",
     "build_runtime_governance_summary",
     "collect_runtime_metrics",
     "evaluate_rag_quality",
@@ -99,6 +115,7 @@ __all__ = [
     "evaluate_runtime_budget",
     "evaluate_runtime_metrics",
     "evaluate_tool_quality",
+    "evaluate_llm_judge",
     "extract_tool_events",
     "get_rag_quality_scenario",
     "get_scenario",
@@ -106,6 +123,7 @@ __all__ = [
     "load_rag_quality_scenarios",
     "load_scenarios",
     "load_tool_call_scenarios",
+    "llm_judge_skipped_result",
     "render_acceptance_markdown",
     "required_capabilities_for_scenarios",
     "runtime_budget_from_dict",
