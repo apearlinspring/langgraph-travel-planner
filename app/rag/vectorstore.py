@@ -15,11 +15,11 @@ class VectorStoreManager:
 
     def __init__(
             self,
-            persist_directory: str = "data/vectorstore",
-            collection_name: str = "travel_guides"
+            persist_directory: str | None = None,
+            collection_name: str | None = None,
     ):
-        self.persist_directory = Path(persist_directory)
-        self.collection_name = collection_name
+        self.persist_directory = Path(persist_directory or settings.rag_vectorstore_path)
+        self.collection_name = collection_name or settings.rag_collection_name
 
         # 创建目录
         self.persist_directory.mkdir(parents=True, exist_ok=True)

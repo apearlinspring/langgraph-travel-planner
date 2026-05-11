@@ -2,13 +2,465 @@
 配置管理模块
 使用 pydantic-settings 管理环境变量
 """
+from __future__ import annotations
+
 import os
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Any, Literal, Mapping
+
+from dotenv import dotenv_values
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field
 from functools import lru_cache
 
 # 获取当前文件的上级目录（即项目根目录）
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PROJECT_ROOT = Path(BASE_DIR)
+DEFAULT_DOTENV_PATH = PROJECT_ROOT / ".env"
+
+RuntimeEnvironment = Literal["development", "test", "staging", "production"]
+DependencyRequirement = Literal["required", "optional"]
+ValuePolicy = Literal["configured", "real"]
+EnvVarPolicy = Literal["all", "any"]
+
+RUNTIME_ENVIRONMENTS: tuple[RuntimeEnvironment, ...] = (
+    "development",
+    "test",
+    "staging",
+    "production",
+)
+RUNTIME_READINESS_VERSION = "runtime_readiness.v1"
+
+ENVIRONMENT_ALIASES: dict[str, RuntimeEnvironment] = {
+    "dev": "development",
+    "local": "development",
+    "testing": "test",
+    "tests": "test",
+    "stage": "staging",
+    "prod": "production",
+}
+
+PLACEHOLDER_MARKERS = (
+    "your-",
+    "change-me",
+    "placeholder",
+    "not-a-real",
+    "test-key",
+    "dummy",
+    "example",
+)
+
+
+@dataclass(frozen=True)
+class RuntimeDependencySpec:
+    """One runtime dependency in the environment readiness matrix."""
+
+    key: str
+    label: str
+    description: str
+    env_vars: tuple[str, ...]
+    requirements: dict[RuntimeEnvironment, DependencyRequirement]
+    category: str = "runtime"
+    check: str = "configuration"
+    env_var_policy: EnvVarPolicy = "all"
+    optional_reason: str = ""
+    mockable_in_test: bool = True
+
+    def requirement_for(self, app_env: str | None = None) -> DependencyRequirement:
+        return self.requirements[normalize_runtime_environment(app_env)]
+
+    def to_dict(self, app_env: str | None = None) -> dict[str, Any]:
+        payload = asdict(self)
+        payload["env_vars"] = list(self.env_vars)
+        payload["requirement"] = self.requirement_for(app_env)
+        return payload
+
+
+def _requirements(
+    *,
+    development: DependencyRequirement,
+    test: DependencyRequirement,
+    staging: DependencyRequirement,
+    production: DependencyRequirement,
+) -> dict[RuntimeEnvironment, DependencyRequirement]:
+    return {
+        "development": development,
+        "test": test,
+        "staging": staging,
+        "production": production,
+    }
+
+
+RUNTIME_DEPENDENCY_SPECS: tuple[RuntimeDependencySpec, ...] = (
+    RuntimeDependencySpec(
+        key="postgresql",
+        label="PostgreSQL（关系型数据库）",
+        description="业务表、LangGraph checkpoint（执行检查点）、长期记忆和审批审计持久化。",
+        env_vars=("POSTGRES_DB", "POSTGRES_USER", "POSTGRES_PASSWORD"),
+        requirements=_requirements(
+            development="required",
+            test="optional",
+            staging="required",
+            production="required",
+        ),
+        category="storage",
+        check="service",
+        mockable_in_test=False,
+    ),
+    RuntimeDependencySpec(
+        key="redis",
+        label="Redis（内存数据结构存储）",
+        description="多进程会话锁和未来横向扩展缓存；开发可降级为进程内本地锁。",
+        env_vars=("REDIS_HOST", "REDIS_PORT", "REDIS_DB"),
+        requirements=_requirements(
+            development="optional",
+            test="optional",
+            staging="required",
+            production="required",
+        ),
+        category="storage",
+        check="service",
+        optional_reason="development/test 可以使用本地会话锁替身。",
+    ),
+    RuntimeDependencySpec(
+        key="llm",
+        label="LLM（大语言模型）",
+        description="主控 Agent、Router、RAG query optimizer（查询优化器）和报告生成模型。",
+        env_vars=("DASHSCOPE_API_KEY",),
+        requirements=_requirements(
+            development="required",
+            test="optional",
+            staging="required",
+            production="required",
+        ),
+        category="model",
+        check="configuration",
+    ),
+    RuntimeDependencySpec(
+        key="rag_vector_store",
+        label="RAG（检索增强生成）向量库",
+        description="本地目的地知识与旅行社内部知识检索所需 Chroma 向量库。",
+        env_vars=(),
+        requirements=_requirements(
+            development="optional",
+            test="optional",
+            staging="required",
+            production="required",
+        ),
+        category="knowledge",
+        check="filesystem",
+        optional_reason="开发和单元测试可以用内存/fixture（夹具）替身。",
+    ),
+    RuntimeDependencySpec(
+        key="mcp",
+        label="MCP（模型上下文协议）服务池",
+        description="天气、搜索、地图、铁路、航班和酒店等外部能力的统一接入层。",
+        env_vars=(),
+        requirements=_requirements(
+            development="optional",
+            test="optional",
+            staging="optional",
+            production="optional",
+        ),
+        category="external_tooling",
+        check="service",
+        optional_reason="单个 MCP 服务不可用时应服务级降级，而不是拖垮核心会话。",
+    ),
+    RuntimeDependencySpec(
+        key="map",
+        label="地图 / 高德地图",
+        description="路线预览、地理编码和部分天气 MCP 服务的上游能力。",
+        env_vars=("AMAP_API_KEY",),
+        requirements=_requirements(
+            development="optional",
+            test="optional",
+            staging="required",
+            production="required",
+        ),
+        category="external_api",
+        check="configuration",
+        optional_reason="开发可跳过地图预览，验收场景需要时会单独阻塞。",
+    ),
+    RuntimeDependencySpec(
+        key="search",
+        label="搜索 / Tavily",
+        description="目的地补充搜索和公开信息补充能力。",
+        env_vars=("TAVILY_API_KEY",),
+        requirements=_requirements(
+            development="optional",
+            test="optional",
+            staging="optional",
+            production="optional",
+        ),
+        category="external_api",
+        check="configuration",
+        optional_reason="缺少时相关搜索能力降级，不能伪造搜索结果。",
+    ),
+    RuntimeDependencySpec(
+        key="hotel",
+        label="酒店 / aigohotel",
+        description="真实酒店候选查询能力。",
+        env_vars=("AIGOHOTEL_API_KEY", "AIGOHOTEL_MCP_API", "AIGOHOTEL_SECRET_KEY"),
+        requirements=_requirements(
+            development="optional",
+            test="optional",
+            staging="optional",
+            production="optional",
+        ),
+        category="external_api",
+        check="configuration",
+        env_var_policy="any",
+        optional_reason="缺少时酒店真实候选必须标记待二次核实。",
+    ),
+    RuntimeDependencySpec(
+        key="flight",
+        label="航班 / VariFlight",
+        description="真实航班候选查询能力。",
+        env_vars=("VARIFLIGHT_API_KEY",),
+        requirements=_requirements(
+            development="optional",
+            test="optional",
+            staging="optional",
+            production="optional",
+        ),
+        category="external_api",
+        check="configuration",
+        optional_reason="缺少时航班真实候选必须标记待二次核实。",
+    ),
+    RuntimeDependencySpec(
+        key="rail",
+        label="铁路 / 12306 MCP",
+        description="铁路候选查询能力。",
+        env_vars=(),
+        requirements=_requirements(
+            development="optional",
+            test="optional",
+            staging="optional",
+            production="optional",
+        ),
+        category="external_api",
+        check="service",
+        optional_reason="外部服务不可用时高铁候选必须标记待二次核实。",
+    ),
+    RuntimeDependencySpec(
+        key="langsmith",
+        label="LangSmith（LangChain 可观测平台）",
+        description="链路追踪和调试观测能力。",
+        env_vars=("LANGSMITH_API_KEY", "LANGSMITH_PROJECT", "LANGSMITH_TRACING"),
+        requirements=_requirements(
+            development="optional",
+            test="optional",
+            staging="optional",
+            production="optional",
+        ),
+        category="observability",
+        check="configuration",
+        optional_reason="缺少时不影响核心规划，但会降低排障可观测性。",
+    ),
+)
+
+
+def normalize_runtime_environment(app_env: str | None = None) -> RuntimeEnvironment:
+    """Normalize APP_ENV into one of the four supported runtime tiers."""
+
+    raw = str(app_env or os.getenv("APP_ENV") or "development").strip().lower()
+    normalized = ENVIRONMENT_ALIASES.get(raw, raw)
+    if normalized in RUNTIME_ENVIRONMENTS:
+        return normalized  # type: ignore[return-value]
+    return "development"
+
+
+def value_policy_for_environment(app_env: str | None = None) -> ValuePolicy:
+    """Return whether this environment accepts mock-like values or requires real ones."""
+
+    return "real" if normalize_runtime_environment(app_env) in {"staging", "production"} else "configured"
+
+
+def has_configured_value(value: str | None) -> bool:
+    return value is not None and bool(str(value).strip())
+
+
+def has_real_env_value(value: str | None) -> bool:
+    if not has_configured_value(value):
+        return False
+    normalized = str(value).strip().lower()
+    return not any(marker in normalized for marker in PLACEHOLDER_MARKERS)
+
+
+def env_value_satisfies_policy(value: str | None, *, policy: ValuePolicy) -> bool:
+    if policy == "real":
+        return has_real_env_value(value)
+    return has_configured_value(value)
+
+
+def load_effective_environment(
+    *,
+    environ: Mapping[str, str] | None = None,
+    dotenv_path: Path | None = None,
+) -> tuple[dict[str, str], bool]:
+    """Load process environment over an optional .env without exposing values."""
+
+    path = dotenv_path or DEFAULT_DOTENV_PATH
+    should_load_dotenv = environ is None or dotenv_path is not None
+    dotenv_map = (
+        {
+            key: value
+            for key, value in dotenv_values(path).items()
+            if isinstance(key, str) and isinstance(value, str)
+        }
+        if should_load_dotenv and path.exists()
+        else {}
+    )
+    effective = dict(dotenv_map)
+    effective.update(dict(os.environ if environ is None else environ))
+    return effective, path.exists()
+
+
+def dependency_specs_by_key() -> dict[str, RuntimeDependencySpec]:
+    return {spec.key: spec for spec in RUNTIME_DEPENDENCY_SPECS}
+
+
+def runtime_dependency_matrix(app_env: str | None = None) -> dict[str, dict[str, Any]]:
+    """Return the dependency matrix resolved for one runtime tier."""
+
+    env = normalize_runtime_environment(app_env)
+    return {spec.key: spec.to_dict(env) for spec in RUNTIME_DEPENDENCY_SPECS}
+
+
+def _status_for_env_group(
+    env: Mapping[str, str],
+    env_vars: tuple[str, ...],
+    *,
+    requirement: DependencyRequirement,
+    policy: ValuePolicy,
+    env_var_policy: EnvVarPolicy = "all",
+) -> tuple[str, list[str]]:
+    if not env_vars:
+        return "unknown", []
+    present = [name for name in env_vars if has_configured_value(env.get(name))]
+    valid = [name for name in env_vars if env_value_satisfies_policy(env.get(name), policy=policy)]
+    if (env_var_policy == "any" and valid) or (
+        env_var_policy == "all" and len(valid) == len(env_vars)
+    ):
+        return "configured", []
+
+    missing = [name for name in env_vars if name not in present]
+    placeholders = [name for name in present if name not in valid]
+    findings: list[str] = []
+    if missing:
+        findings.append("Missing environment variables: " + ", ".join(missing))
+    if placeholders:
+        findings.append("Placeholder or non-real values: " + ", ".join(placeholders))
+    if requirement == "required":
+        return "blocked", findings
+    return "not_configured", findings
+
+
+def _filesystem_dependency_status(
+    spec: RuntimeDependencySpec,
+    env: Mapping[str, str],
+    *,
+    requirement: DependencyRequirement,
+) -> tuple[str, list[str], dict[str, Any]]:
+    if spec.key != "rag_vector_store":
+        return "service_checked", [], {}
+
+    configured_path = env.get("RAG_VECTORSTORE_PATH") or "data/vectorstore"
+    vectorstore_path = Path(configured_path)
+    if not vectorstore_path.is_absolute():
+        vectorstore_path = PROJECT_ROOT / vectorstore_path
+    exists = vectorstore_path.exists() and any(vectorstore_path.iterdir())
+    if exists:
+        return "configured", [], {"path": str(vectorstore_path)}
+
+    status = "blocked" if requirement == "required" else "not_configured"
+    return status, ["RAG vector store has not been initialized."], {"path": str(vectorstore_path)}
+
+
+def runtime_configuration_snapshot(
+    *,
+    app_env: str | None = None,
+    environ: Mapping[str, str] | None = None,
+    dotenv_path: Path | None = None,
+    require_real_values: bool | None = None,
+) -> dict[str, Any]:
+    """Summarize runtime configuration without returning secret values."""
+
+    env, dotenv_present = load_effective_environment(environ=environ, dotenv_path=dotenv_path)
+    resolved_env = normalize_runtime_environment(app_env or env.get("APP_ENV"))
+    policy: ValuePolicy = "real" if require_real_values else value_policy_for_environment(resolved_env)
+    dependencies: dict[str, dict[str, Any]] = {}
+    missing_required: list[str] = []
+    degraded_optional: list[str] = []
+
+    for spec in RUNTIME_DEPENDENCY_SPECS:
+        requirement = spec.requirement_for(resolved_env)
+        details: dict[str, Any] = {}
+        if spec.check == "filesystem":
+            env_status, findings, details = _filesystem_dependency_status(
+                spec,
+                env,
+                requirement=requirement,
+            )
+            status = env_status
+        else:
+            env_status, findings = _status_for_env_group(
+                env,
+                spec.env_vars,
+                requirement=requirement,
+                policy=policy,
+                env_var_policy=spec.env_var_policy,
+            )
+            details = {}
+            if spec.env_vars:
+                if env_status == "configured":
+                    status = "configured"
+                elif requirement == "required":
+                    status = "blocked"
+                else:
+                    status = "not_configured"
+            else:
+                status = "service_checked" if spec.check == "service" else "not_configured"
+
+        if status == "blocked":
+            missing_required.append(spec.key)
+        elif status == "not_configured":
+            degraded_optional.append(spec.key)
+
+        dependencies[spec.key] = {
+            "key": spec.key,
+            "label": spec.label,
+            "description": spec.description,
+            "category": spec.category,
+            "check": spec.check,
+            "requirement": requirement,
+            "status": status,
+            "env_vars": list(spec.env_vars),
+            "value_policy": policy,
+            "mockable_in_test": spec.mockable_in_test,
+            "optional_reason": spec.optional_reason,
+            "findings": findings,
+            "details": details,
+        }
+
+    if missing_required:
+        status = "blocked"
+    elif degraded_optional:
+        status = "degraded"
+    else:
+        status = "passed"
+
+    return {
+        "version": RUNTIME_READINESS_VERSION,
+        "environment": resolved_env,
+        "value_policy": policy,
+        "dotenv_present": dotenv_present,
+        "status": status,
+        "dependencies": dependencies,
+        "missing_required": missing_required,
+        "degraded_optional": degraded_optional,
+    }
 
 class Settings(BaseSettings):
     """应用配置"""
@@ -21,7 +473,7 @@ class Settings(BaseSettings):
     sql_echo: bool = Field(default=False, alias="SQL_ECHO")
 
     # ============== LLM 配置 ==============
-    dashscope_api_key: str = Field(alias="DASHSCOPE_API_KEY")
+    dashscope_api_key: str = Field(default="", alias="DASHSCOPE_API_KEY")
     qwen_model_name: str = Field(default="qwen3.6-plus", alias="QWEN_MODEL_NAME")
     qwen_planner_model_name: str = Field(default="qwen3.6-plus", alias="QWEN_PLANNER_MODEL_NAME")
     qwen_router_model_name: str = Field(default="qwen3.6-flash", alias="QWEN_ROUTER_MODEL_NAME")
@@ -38,7 +490,7 @@ class Settings(BaseSettings):
     qwen_max_retries: int = Field(default=1, alias="QWEN_MAX_RETRIES")
 
     # ============== LangSmith 配置 ==============
-    langsmith_api_key: str = Field(alias="LANGSMITH_API_KEY")
+    langsmith_api_key: str = Field(default="", alias="LANGSMITH_API_KEY")
     langsmith_project: str = Field(default="travel-planner-dev", alias="LANGSMITH_PROJECT")
     langsmith_tracing: bool = Field(default=True, alias="LANGSMITH_TRACING")
     langsmith_endpoint: str = Field(
@@ -49,14 +501,17 @@ class Settings(BaseSettings):
     # ============== 数据库配置 ==============
     postgres_host: str = Field(default="localhost", alias="POSTGRES_HOST")
     postgres_port: int = Field(default=5432, alias="POSTGRES_PORT")
-    postgres_db: str = Field(alias="POSTGRES_DB")
-    postgres_user: str = Field(alias="POSTGRES_USER")
-    postgres_password: str = Field(alias="POSTGRES_PASSWORD")
+    postgres_db: str = Field(default="travel_planner_db", alias="POSTGRES_DB")
+    postgres_user: str = Field(default="travel_user", alias="POSTGRES_USER")
+    postgres_password: str = Field(default="change-me", alias="POSTGRES_PASSWORD")
 
     redis_host: str = Field(default="localhost", alias="REDIS_HOST")
     redis_port: int = Field(default=6379, alias="REDIS_PORT")
     redis_db: int = Field(default=0, alias="REDIS_DB")
     redis_password: str = Field(default="", alias="REDIS_PASSWORD")
+
+    rag_vectorstore_path: str = Field(default="data/vectorstore", alias="RAG_VECTORSTORE_PATH")
+    rag_collection_name: str = Field(default="travel_guides", alias="RAG_COLLECTION_NAME")
 
     # ============== 会话一致性配置 ==============
     session_lock_backend: str = Field(default="auto", alias="SESSION_LOCK_BACKEND")
@@ -99,6 +554,10 @@ class Settings(BaseSettings):
     # ============== MCP 服务配置 ==============
     amap_api_key: str = Field(default="", alias="AMAP_API_KEY")
     tavily_api_key: str = Field(default="", alias="TAVILY_API_KEY")
+    variflight_api_key: str = Field(default="", alias="VARIFLIGHT_API_KEY")
+    aigohotel_api_key: str = Field(default="", alias="AIGOHOTEL_API_KEY")
+    aigohotel_mcp_api: str = Field(default="", alias="AIGOHOTEL_MCP_API")
+    aigohotel_secret_key: str = Field(default="", alias="AIGOHOTEL_SECRET_KEY")
     jwt_secret_key: str = Field(default="dev-only-jwt-secret-change-me", alias="JWT_SECRET_KEY")
     jwt_algorithm: str = Field(default="HS256", alias="JWT_ALGORITHM")
     access_token_expire_minutes: int = Field(default=60 * 24 * 7, alias="ACCESS_TOKEN_EXPIRE_MINUTES")
@@ -124,6 +583,11 @@ class Settings(BaseSettings):
         if self.redis_password:
             return f"redis://:{self.redis_password}@{self.redis_host}:{self.redis_port}/{self.redis_db}"
         return f"redis://{self.redis_host}:{self.redis_port}/{self.redis_db}"
+
+    @property
+    def runtime_environment(self) -> RuntimeEnvironment:
+        """当前运行环境档位。"""
+        return normalize_runtime_environment(self.app_env)
 
 
 @lru_cache
