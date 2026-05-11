@@ -12,9 +12,12 @@ ToolEvidenceType = Literal[
     "live_transport_query",
     "live_hotel_search",
     "mcp_live_query",
+    "internal_rag_evidence",
+    "public_rag_evidence",
     "internal_state_update",
     "unknown",
 ]
+ToolRiskLevel = Literal["low", "medium", "high", "critical"]
 
 
 class ToolAuditEvent(TypedDict):
@@ -44,3 +47,21 @@ class ToolResultValidation:
     output_summary: dict[str, Any] = field(default_factory=dict)
     error_type: str | None = None
     message: str = ""
+
+
+@dataclass(frozen=True)
+class ToolPermissionDecision:
+    allowed: bool
+    reason: str = ""
+    error_type: str | None = None
+
+
+@dataclass(frozen=True)
+class ToolExecutionGuardResult:
+    status: ToolAuditStatus
+    event: ToolAuditEvent
+    output: Any = None
+    message: str = ""
+    error_type: str | None = None
+    update: dict[str, Any] = field(default_factory=dict)
+    approval_update: dict[str, Any] = field(default_factory=dict)
