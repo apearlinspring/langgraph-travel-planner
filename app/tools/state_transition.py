@@ -50,6 +50,21 @@ from app.reports import (
     format_report_people,
     format_report_route_label,
 )
+from app.reports.route_builder import (
+    RouteBuilderServices,
+    build_day_route_summary,
+    build_placeholder_itinerary_day,
+    build_route_summaries,
+    collect_report_route_candidates,
+    dedupe_route_points,
+    ensure_itinerary_day_count,
+    enrich_itinerary_day_for_report,
+    fallback_report_route_points_for_day,
+    format_report_route_points,
+    get_expected_travel_days,
+    is_pending_route_point,
+    route_points_have_specific_visual_node,
+)
 from app.utils.logger import app_logger
 
 
@@ -1433,54 +1448,34 @@ def _format_report_route_label(state: TravelState, requirement: dict) -> str:
     return format_report_route_label(state, requirement)
 
 
+def _route_builder_services() -> RouteBuilderServices:
+    return RouteBuilderServices(
+        recommended_accommodation_area=_recommended_accommodation_area,
+        destination_pois_for_report=_destination_pois_for_report,
+        pick_report_pois_for_day=_pick_report_pois_for_day,
+        poi_names=_poi_names,
+        format_poi_activity=_format_poi_activity,
+        format_reservation_note=_format_reservation_note,
+        format_indoor_backup=_format_indoor_backup,
+        get_destination_context=_get_destination_context,
+        get_food_pois=_get_food_pois,
+        pick_food_poi=_pick_food_poi,
+        format_food_poi_summary=_format_food_poi_summary,
+        format_weather_plan_b=_format_weather_plan_b,
+        build_fallback_accommodation_option=_build_fallback_accommodation_option,
+    )
+
+
 def _dedupe_report_points(points: list[str], max_items: int = 6) -> list[str]:
-    picked = []
-    for point in points:
-        normalized = str(point or "").strip()
-        if not normalized or normalized in picked:
-            continue
-        picked.append(normalized)
-        if len(picked) >= max_items:
-            break
-    return picked
+    return dedupe_route_points(points, max_items)
 
 
 def _is_pending_route_point(point: str) -> bool:
-    pending_tokens = (
-        "\u5f85",
-        "\u5f85\u786e\u8ba4",
-        "\u5f85\u6838\u9a8c",
-        "\u5f85\u7ed3\u5408",
-    )
-    return any(token in point for token in pending_tokens)
+    return is_pending_route_point(point)
 
 
 def _collect_report_route_candidates(state: TravelState) -> list[str]:
-    candidates = []
-    destination = state.get("selected_destination")
-    if destination:
-        candidates.append(str(destination))
-
-    accommodation = state.get("selected_accommodation_option") or {}
-    for key in ["location", "name"]:
-        if accommodation.get(key):
-            candidates.append(str(accommodation[key]))
-
-    for option in state.get("destination_options") or []:
-        candidates.extend(str(name) for name in option.get("attractions", []) if name)
-        for poi in option.get("attraction_pois", []) or []:
-            if poi.get("area"):
-                candidates.append(str(poi["area"]))
-            if poi.get("name"):
-                candidates.append(str(poi["name"]))
-
-    for food_poi in state.get("selected_food_pois") or []:
-        if food_poi.get("area"):
-            candidates.append(str(food_poi["area"]))
-        if food_poi.get("name"):
-            candidates.append(str(food_poi["name"]))
-
-    return _dedupe_report_points(candidates, max_items=40)
+    return collect_report_route_candidates(state)
 
 
 def _route_points_have_specific_visual_node(
@@ -1490,20 +1485,11 @@ def _route_points_have_specific_visual_node(
     departure_city: str,
     accommodation_points: Optional[list[str]] = None,
 ) -> bool:
-    generic_points = {
-        str(destination or "").strip(),
-        str(departure_city or "").strip(),
-        "返程交通",
-        "返程缓冲",
-    }
-    for accommodation_point in accommodation_points or []:
-        normalized = str(accommodation_point or "").strip()
-        if normalized:
-            generic_points.add(normalized)
-    generic_points.discard("")
-    return any(
-        point not in generic_points and not _is_pending_route_point(point)
-        for point in points
+    return route_points_have_specific_visual_node(
+        points,
+        destination=destination,
+        departure_city=departure_city,
+        accommodation_points=accommodation_points,
     )
 
 
@@ -1513,24 +1499,13 @@ def _fallback_report_route_points_for_day(
     state: TravelState,
     requirement: dict,
 ) -> list[str]:
-    destination = state.get("selected_destination") or requirement.get("destination") or ""
-    departure_city = requirement.get("departure_city") or ""
-    selected_accommodation = state.get("selected_accommodation_option") or {}
-    accommodation = selected_accommodation.get("location") or selected_accommodation.get("name")
-    if not accommodation or _is_pending_route_point(str(accommodation)):
-        accommodation = _recommended_accommodation_area(str(destination))
-
-    destination_pois = _destination_pois_for_report(state, requirement)
-    day_pois = _pick_report_pois_for_day(destination_pois, day_number, expected_days)
-    day_poi_names = _poi_names(day_pois)
-
-    if day_number == 1:
-        points = [departure_city, destination, accommodation, *day_poi_names[:1]]
-    elif day_number == expected_days:
-        points = [accommodation, *day_poi_names[:1], "返程交通"]
-    else:
-        points = [accommodation, *day_poi_names]
-    return _dedupe_report_points([str(point) for point in points if point])
+    return fallback_report_route_points_for_day(
+        day_number,
+        expected_days,
+        state,
+        requirement,
+        _route_builder_services(),
+    )
 
 
 def _format_report_route_points(
@@ -1538,96 +1513,16 @@ def _format_report_route_points(
     state: TravelState,
     requirement: dict,
 ) -> list[str]:
-    day_number = day.get("day_number") or 0
-    destination = state.get("selected_destination") or requirement.get("destination") or ""
-    departure_city = requirement.get("departure_city") or ""
-    expected_days = _get_expected_travel_days(requirement, 0)
-    selected_accommodation = state.get("selected_accommodation_option") or {}
-    accommodation_candidates = [
-        day.get("accommodation"),
-        selected_accommodation.get("location"),
-        selected_accommodation.get("name"),
-    ]
-    explicit_points = day.get("route_points")
-    if isinstance(explicit_points, list) and explicit_points:
-        explicit = _dedupe_report_points([str(point) for point in explicit_points])
-        explicit_visual_points = [
-            point for point in explicit if not _is_pending_route_point(point)
-        ]
-        if len(explicit_visual_points) >= 2 and _route_points_have_specific_visual_node(
-            explicit_visual_points,
-            destination=str(destination),
-            departure_city=str(departure_city),
-            accommodation_points=[str(point) for point in accommodation_candidates if point],
-        ):
-            return explicit
-    else:
-        explicit = []
-
-    accommodation = day.get("accommodation") or selected_accommodation.get("name")
-    text = "\n".join(
-        str(item)
-        for item in [
-            day.get("theme"),
-            *(day.get("activities") or []),
-            *(day.get("time_blocks") or []),
-            *(day.get("meals") or []),
-            day.get("route_note"),
-            day.get("transport_note"),
-        ]
-        if item
+    return format_report_route_points(
+        day,
+        state,
+        requirement,
+        _route_builder_services(),
     )
-
-    points = [point for point in explicit if not _is_pending_route_point(point)]
-    if day_number == 1 and departure_city:
-        points.append(str(departure_city))
-    if day_number == 1 and destination:
-        points.append(str(destination))
-
-    matches = []
-    for candidate in _collect_report_route_candidates(state):
-        if candidate and candidate in text:
-            matches.append((text.index(candidate), candidate))
-    points.extend(candidate for _, candidate in sorted(matches, key=lambda item: item[0]))
-
-    if accommodation and not _is_pending_route_point(str(accommodation)):
-        points.append(str(accommodation))
-    if day_number == expected_days:
-        points.append("\u8fd4\u7a0b\u4ea4\u901a")
-    if len(_dedupe_report_points(points)) < 2 or not _route_points_have_specific_visual_node(
-        _dedupe_report_points(points),
-        destination=str(destination),
-        departure_city=str(departure_city),
-        accommodation_points=[str(point) for point in accommodation_candidates if point],
-    ):
-        points.extend(
-            _fallback_report_route_points_for_day(
-                int(day_number or 0),
-                expected_days,
-                state,
-                requirement,
-            )
-        )
-    if len(_dedupe_report_points(points)) < 2 and destination:
-        points.append(str(destination))
-    if len(_dedupe_report_points(points)) < 2 and day_number == expected_days:
-        points.append("\u8fd4\u7a0b\u7f13\u51b2")
-
-    return _dedupe_report_points(points)
 
 
 def _get_expected_travel_days(requirement: dict, fallback: int = 0) -> int:
-    travel_days = requirement.get("travel_days")
-    if isinstance(travel_days, int) and travel_days > 0:
-        return travel_days
-    if isinstance(travel_days, str):
-        try:
-            parsed_days = int(travel_days)
-        except ValueError:
-            parsed_days = 0
-        if parsed_days > 0:
-            return parsed_days
-    return max(fallback, 0)
+    return get_expected_travel_days(requirement, fallback)
 
 
 def _build_placeholder_itinerary_day(
@@ -1636,126 +1531,17 @@ def _build_placeholder_itinerary_day(
     state: TravelState,
     requirement: dict,
 ) -> dict:
-    destination = state.get("selected_destination") or requirement.get("destination") or "目的地"
-    selected_accommodation = state.get("selected_accommodation_option") or {}
-    if not selected_accommodation.get("name"):
-        selected_accommodation = _build_fallback_accommodation_option(state, requirement)
-    accommodation = selected_accommodation.get("name") or f"{destination}交通便利区域住宿"
-    destination_context = _get_destination_context(state, destination)
-    destination_pois = _destination_pois_for_report(state, requirement)
-    day_pois = _pick_report_pois_for_day(destination_pois, day_number, expected_days)
-    day_poi_names = _poi_names(day_pois)
-    primary_poi = day_poi_names[0] if day_poi_names else f"{destination}核心街区"
-    lunch_food = _pick_food_poi(
-        _get_food_pois(state),
-        day_number * 2 - 2,
-        target_area=day_pois[0].get("area") if day_pois else None,
-        meal_keyword="午餐",
+    return build_placeholder_itinerary_day(
+        day_number,
+        expected_days,
+        state,
+        requirement,
+        _route_builder_services(),
     )
-    dinner_food = _pick_food_poi(
-        _get_food_pois(state),
-        day_number * 2 - 1,
-        target_area=day_pois[-1].get("area") if day_pois else None,
-        meal_keyword="晚餐",
-        exclude_names={str(lunch_food["name"])} if lunch_food and lunch_food.get("name") else None,
-    )
-    plan_b = _format_weather_plan_b(destination_context.get("weather_info"))
-
-    if day_number == 1:
-        theme = f"抵达与{primary_poi}轻松适应"
-        time_blocks = [
-            "上午/出发：按已确认交通方案执行，预留到站/到机场缓冲。",
-            f"下午/抵达：前往 {accommodation}，办理入住或寄存行李。",
-            f"晚上/适应：安排 {primary_poi} 轻量游览和就近晚餐。",
-        ]
-        activities = [
-            f"抵达 {destination}",
-            f"入住/寄存：{accommodation}",
-            _format_poi_activity(day_pois, f"{destination}住宿周边轻松活动"),
-        ]
-        route_note = "动线原则：抵达日只安排住宿区域和一个低强度夜间/傍晚体验，避免刚到就跨区奔波。"
-        route_points = _dedupe_report_points(
-            [
-                requirement.get("departure_city") or "",
-                destination,
-                accommodation,
-                *day_poi_names,
-            ]
-        )
-    elif day_number == expected_days:
-        theme = f"{primary_poi}补漏与返程缓冲"
-        time_blocks = [
-            f"上午/补漏：安排 {primary_poi} 或同区域低强度体验，避免跨区奔波。",
-            "下午/收尾：退房、寄存或取行李，预留前往车站/机场的缓冲时间。",
-            "晚上/返程：按实时交通情况出发，再次核对票务、证件和行李。",
-        ]
-        activities = [
-            _format_poi_activity(day_pois, f"{destination}低强度补漏体验"),
-            "退房/寄存/取行李",
-            "返程交通缓冲",
-        ]
-        route_note = "动线原则：返程日优先保证稳定，只保留一个顺路体验和充分交通缓冲。"
-        route_points = _dedupe_report_points([accommodation, *day_poi_names, "返程交通"])
-    else:
-        theme = " + ".join(day_poi_names) if day_poi_names else f"{destination}顺路体验"
-        time_blocks = [
-            f"上午/核心体验：{_format_poi_activity(day_pois[:1], f'{destination}核心景点或街区')}",
-            f"下午/顺路延展：{_format_poi_activity(day_pois[1:], '同区域景点、商圈或室内场馆')}，减少折返。",
-            "晚上/餐饮放松：结合已确认餐饮偏好就近用餐，保留休息时间。",
-        ]
-        activities = [
-            *_poi_names(day_pois),
-            "就近餐饮与休息",
-        ]
-        route_note = "动线原则：当天围绕同一区域或相邻街区展开，优先减少折返、保留休息。"
-        route_points = _dedupe_report_points([accommodation, *day_poi_names])
-
-    reservation_note = _format_reservation_note(day_pois)
-    if reservation_note:
-        time_blocks.append(f"预约/费用提醒：{reservation_note}")
-    indoor_backup = _format_indoor_backup(day_pois)
-    if indoor_backup:
-        time_blocks.append(indoor_backup)
-
-    return {
-        "day_number": day_number,
-        "theme": theme,
-        "activities": activities,
-        "route_points": route_points,
-        "time_blocks": time_blocks,
-        "meals": [
-            "早餐：以酒店/周边省心用餐为主",
-            f"午餐：{_format_food_poi_summary(lunch_food, '结合当日动线就近安排')}",
-            f"晚餐：{_format_food_poi_summary(dinner_food, '优先匹配已确认餐饮偏好')}",
-        ],
-        "accommodation": accommodation,
-        "transport_note": "当天交通以同区域步行、地铁或短途打车为主；跨区安排需二次核实。",
-        "plan_b": plan_b,
-        "route_note": route_note,
-        "risk_notes": [
-            "具体开放时间、预约和票价需在出发前二次核实。",
-            "如遇天气、排队或体力变化，优先执行 Plan B 并保留休息时间。",
-        ],
-    }
 
 
 def _build_day_route_summary(day: dict, state: TravelState, requirement: dict) -> dict:
-    day_number = day.get("day_number", 0)
-    route_points = _format_report_route_points(day, state, requirement)
-    theme = day.get("theme") or "当天安排"
-    if route_points:
-        summary = " → ".join(route_points)
-        if len(route_points) == 1 and theme not in summary:
-            summary = f"{summary}｜{theme}"
-    else:
-        summary = theme
-    return {
-        "day_number": day_number,
-        "route_points": route_points,
-        "summary": summary,
-        "map_label": f"Day {day_number}：{summary}",
-        "route_note": day.get("route_note") or day.get("transport_note") or "",
-    }
+    return build_day_route_summary(day, state, requirement, _route_builder_services())
 
 
 def _enrich_itinerary_day_for_report(
@@ -1763,12 +1549,12 @@ def _enrich_itinerary_day_for_report(
     state: TravelState,
     requirement: dict,
 ) -> dict:
-    enriched = dict(day)
-    route_summary = _build_day_route_summary(enriched, state, requirement)
-    enriched["route_points"] = route_summary["route_points"]
-    enriched["route_summary"] = route_summary["summary"]
-    enriched["map_route"] = route_summary["map_label"]
-    return enriched
+    return enrich_itinerary_day_for_report(
+        day,
+        state,
+        requirement,
+        _route_builder_services(),
+    )
 
 
 def _ensure_itinerary_day_count(
@@ -1776,40 +1562,12 @@ def _ensure_itinerary_day_count(
     state: TravelState,
     requirement: dict,
 ) -> list[dict]:
-    source_days = [dict(day) for day in itinerary or [] if isinstance(day, dict)]
-    expected_days = _get_expected_travel_days(requirement, len(source_days))
-    if expected_days <= 0:
-        return [
-            _enrich_itinerary_day_for_report(day, state, requirement)
-            for day in source_days
-        ]
-
-    by_day: dict[int, dict] = {}
-    next_fallback_day = 1
-    for index, day in enumerate(source_days, start=1):
-        raw_day_number = day.get("day_number")
-        if isinstance(raw_day_number, int) and raw_day_number > 0:
-            day_number = raw_day_number
-        else:
-            while next_fallback_day in by_day:
-                next_fallback_day += 1
-            day_number = next_fallback_day or index
-        if day_number > expected_days or day_number in by_day:
-            continue
-        day["day_number"] = day_number
-        by_day[day_number] = day
-
-    normalized = []
-    for day_number in range(1, expected_days + 1):
-        day = by_day.get(day_number) or _build_placeholder_itinerary_day(
-            day_number,
-            expected_days,
-            state,
-            requirement,
-        )
-        day["day_number"] = day_number
-        normalized.append(_enrich_itinerary_day_for_report(day, state, requirement))
-    return normalized
+    return ensure_itinerary_day_count(
+        itinerary,
+        state,
+        requirement,
+        _route_builder_services(),
+    )
 
 
 def _format_report_risk_lines(
@@ -1940,10 +1698,12 @@ def _build_report_data(
     selected_accommodation: dict,
     selected_food_types: list[str],
 ) -> dict:
-    route_summaries = [
-        _build_day_route_summary(day, state, requirement)
-        for day in itinerary
-    ]
+    route_summaries = build_route_summaries(
+        itinerary,
+        state,
+        requirement,
+        _route_builder_services(),
+    )
     destination = state.get("selected_destination") or requirement.get("destination") or ""
     weather_info = _get_destination_context(state, destination).get("weather_info")
     return build_travel_report_data(
