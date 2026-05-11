@@ -13,7 +13,6 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from app.config import (  # noqa: E402
     DEFAULT_DOTENV_PATH,
-    PROJECT_ROOT as APP_PROJECT_ROOT,
     RuntimeEnvironment,
     dependency_specs_by_key,
     runtime_configuration_snapshot,
@@ -44,35 +43,6 @@ def _resolve_target_status(snapshot: dict[str, Any]) -> str:
     return "passed"
 
 
-def _apply_filesystem_readiness(snapshot: dict[str, Any]) -> dict[str, Any]:
-    dependencies = snapshot.get("dependencies") or {}
-    rag = dependencies.get("rag_vector_store")
-    if not isinstance(rag, dict):
-        return snapshot
-
-    path = Path(settings.rag_vectorstore_path)
-    if not path.is_absolute():
-        path = APP_PROJECT_ROOT / path
-    exists = path.exists() and any(path.iterdir())
-    if exists:
-        rag["status"] = "configured"
-        rag["details"] = {"path": str(path)}
-        return snapshot
-
-    rag["status"] = "blocked" if rag.get("requirement") == "required" else "not_configured"
-    finding = "RAG vector store has not been initialized."
-    findings = rag.setdefault("findings", [])
-    if finding not in findings:
-        findings.append(finding)
-    rag["details"] = {"path": str(path)}
-
-    if rag["status"] == "blocked" and "rag_vector_store" not in snapshot["missing_required"]:
-        snapshot["missing_required"].append("rag_vector_store")
-    elif rag["status"] == "not_configured" and "rag_vector_store" not in snapshot["degraded_optional"]:
-        snapshot["degraded_optional"].append("rag_vector_store")
-    return snapshot
-
-
 def _configuration_target(
     *,
     target: RuntimeEnvironment,
@@ -86,7 +56,6 @@ def _configuration_target(
         dotenv_path=dotenv_path,
         require_real_values=require_real_values,
     )
-    snapshot = _apply_filesystem_readiness(snapshot)
     snapshot["target"] = target
     snapshot["status"] = _resolve_target_status(snapshot)
     snapshot["status_counts"] = _dependency_status_counts(snapshot["dependencies"])

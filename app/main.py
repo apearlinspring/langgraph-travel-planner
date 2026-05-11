@@ -5,7 +5,6 @@ import asyncio
 import sys
 from contextlib import asynccontextmanager
 from copy import deepcopy
-from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,7 +12,6 @@ from fastapi.responses import JSONResponse
 
 from app.api.v1 import approvals, chat, conversations, maps, users
 from app.config import (
-    PROJECT_ROOT,
     RUNTIME_READINESS_VERSION,
     runtime_configuration_snapshot,
     settings,
@@ -53,10 +51,6 @@ def _set_dependency_status(
         _append_finding(dependency, finding)
     if details:
         dependency.setdefault("details", {}).update(details)
-
-
-def _has_vectorstore_files(path: Path) -> bool:
-    return path.exists() and any(path.iterdir())
 
 
 def _dependency_missing_required(dependency: dict) -> bool:
@@ -142,24 +136,19 @@ def build_runtime_dependency_payload(
     else:
         _set_dependency_status(dependencies, "llm", "not_configured")
 
-    vectorstore_path = Path(settings.rag_vectorstore_path)
-    if not vectorstore_path.is_absolute():
-        vectorstore_path = PROJECT_ROOT / vectorstore_path
-    if _has_vectorstore_files(vectorstore_path):
+    rag_dependency = dependencies.get("rag_vector_store", {})
+    if rag_dependency.get("status") == "configured":
         _set_dependency_status(
             dependencies,
             "rag_vector_store",
             "ready",
-            details={"path": str(vectorstore_path)},
         )
     else:
-        rag_requirement = dependencies.get("rag_vector_store", {}).get("requirement")
+        rag_requirement = rag_dependency.get("requirement")
         _set_dependency_status(
             dependencies,
             "rag_vector_store",
             "not_ready" if rag_requirement == "required" else "not_configured",
-            finding="RAG vector store has not been initialized.",
-            details={"path": str(vectorstore_path)},
         )
 
     mcp_raw_status = mcp_status.get("status")

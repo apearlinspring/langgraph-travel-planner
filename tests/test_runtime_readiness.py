@@ -1,4 +1,5 @@
 from pathlib import Path
+import sqlite3
 
 import pytest
 
@@ -30,6 +31,34 @@ def _scenario() -> EvaluationScenario:
             "external_apis": ["amap", "variflight", "aigohotel"],
         },
     )
+
+
+def _required_runtime_env(vectorstore_path: Path | None = None) -> dict[str, str]:
+    env = {
+        "DASHSCOPE_API_KEY": "real-ish-dashscope",
+        "POSTGRES_DB": "travel_planner_db",
+        "POSTGRES_USER": "travel_user",
+        "POSTGRES_PASSWORD": "real-ish-password",
+        "REDIS_HOST": "localhost",
+        "REDIS_PORT": "6379",
+        "REDIS_DB": "0",
+        "AMAP_API_KEY": "real-ish-amap",
+        "JWT_SECRET_KEY": "real-ish-jwt-secret-with-enough-entropy",
+        "JWT_ALGORITHM": "HS256",
+    }
+    if vectorstore_path is not None:
+        env["RAG_VECTORSTORE_PATH"] = str(vectorstore_path)
+    return env
+
+
+def _write_minimal_chroma_metadata(path: Path, collection_name: str = "travel_guides") -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(path / "chroma.sqlite3") as connection:
+        connection.execute("CREATE TABLE collections (id TEXT PRIMARY KEY, name TEXT NOT NULL)")
+        connection.execute(
+            "INSERT INTO collections (id, name) VALUES (?, ?)",
+            ("collection-id", collection_name),
+        )
 
 
 def test_runtime_environment_aliases_resolve_to_four_tiers():
@@ -93,18 +122,8 @@ def test_runtime_configuration_allows_test_mocks_but_blocks_production_placehold
 
 
 def test_staging_and_production_block_empty_or_placeholder_jwt_secret(tmp_path: Path):
-    env = {
-        "DASHSCOPE_API_KEY": "real-ish-dashscope",
-        "POSTGRES_DB": "travel_planner_db",
-        "POSTGRES_USER": "travel_user",
-        "POSTGRES_PASSWORD": "real-ish-password",
-        "REDIS_HOST": "localhost",
-        "REDIS_PORT": "6379",
-        "REDIS_DB": "0",
-        "AMAP_API_KEY": "real-ish-amap",
-        "JWT_SECRET_KEY": "",
-        "JWT_ALGORITHM": "HS256",
-    }
+    env = _required_runtime_env()
+    env["JWT_SECRET_KEY"] = ""
 
     empty_secret = runtime_configuration_snapshot(
         app_env="staging",
@@ -125,21 +144,49 @@ def test_staging_and_production_block_empty_or_placeholder_jwt_secret(tmp_path: 
     assert empty_secret["dependencies"]["auth_jwt"]["status"] == "blocked"
 
 
+def test_rag_vectorstore_requires_readable_chroma_collection(tmp_path: Path):
+    broken_vectorstore = tmp_path / "broken-vectorstore"
+    broken_vectorstore.mkdir()
+    env = _required_runtime_env(broken_vectorstore)
+
+    broken_snapshot = runtime_configuration_snapshot(
+        app_env="production",
+        environ=env,
+        dotenv_path=tmp_path / "missing.env",
+        require_real_values=True,
+    )
+
+    assert "rag_vector_store" in broken_snapshot["missing_required"]
+    assert broken_snapshot["dependencies"]["rag_vector_store"]["status"] == "blocked"
+    assert "metadata file chroma.sqlite3 is missing" in (
+        broken_snapshot["dependencies"]["rag_vector_store"]["findings"][0]
+    )
+
+    valid_vectorstore = tmp_path / "valid-vectorstore"
+    _write_minimal_chroma_metadata(valid_vectorstore)
+    env["RAG_VECTORSTORE_PATH"] = str(valid_vectorstore)
+    valid_snapshot = runtime_configuration_snapshot(
+        app_env="production",
+        environ=env,
+        dotenv_path=tmp_path / "missing.env",
+        require_real_values=True,
+    )
+
+    assert "rag_vector_store" not in valid_snapshot["missing_required"]
+    assert valid_snapshot["dependencies"]["rag_vector_store"]["status"] == "configured"
+    assert (
+        valid_snapshot["dependencies"]["rag_vector_store"]["details"]["collection_name"]
+        == "travel_guides"
+    )
+
+
 def test_acceptance_preflight_blocks_missing_real_external_credentials(tmp_path: Path):
+    env = _required_runtime_env()
+    env.pop("AMAP_API_KEY")
     preflight = run_acceptance_preflight(
         [_scenario()],
         base_url="http://127.0.0.1:8000",
-        environ={
-            "DASHSCOPE_API_KEY": "real-ish-dashscope",
-            "POSTGRES_DB": "travel_planner_db",
-            "POSTGRES_USER": "travel_user",
-            "POSTGRES_PASSWORD": "real-ish-password",
-            "REDIS_HOST": "localhost",
-            "REDIS_PORT": "6379",
-            "REDIS_DB": "0",
-            "JWT_SECRET_KEY": "real-ish-jwt-secret-with-enough-entropy",
-            "JWT_ALGORITHM": "HS256",
-        },
+        environ=env,
         dotenv_path=tmp_path / "missing.env",
         check_backend=False,
     )

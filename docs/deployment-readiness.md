@@ -9,7 +9,7 @@
 3. Redis（内存数据结构存储）可连接，`SESSION_LOCK_BACKEND=auto` 或 `redis` 时不能降级为本地锁。
 4. LLM（大语言模型）密钥是真实值，模型 profile（用途档位）仍统一通过 `app/utils/llm_factory.py` 创建。
 5. Auth（认证）/ JWT（JSON Web Token，令牌认证）必须设置真实 `JWT_SECRET_KEY`，不能使用默认开发密钥、空值或 placeholder（占位）值。
-6. RAG（检索增强生成）向量库已初始化，默认路径为 `data/vectorstore`。
+6. RAG（检索增强生成）向量库已初始化，默认路径为 `data/vectorstore`，并且能只读打开 `chroma.sqlite3` 元数据和 `RAG_COLLECTION_NAME` 对应 collection（集合）。
 7. 地图能力的 `AMAP_API_KEY` 是真实值；酒店、航班、搜索等可选能力如果缺失，用户侧必须保留“待二次核实”边界。
 8. `/health/ready` 返回 `ready` 或经确认可接受的 `degraded`；生产发布不接受 `not_ready`。
 

@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Literal, Mapping
@@ -385,15 +386,50 @@ def _filesystem_dependency_status(
         return "service_checked", [], {}
 
     configured_path = env.get("RAG_VECTORSTORE_PATH") or "data/vectorstore"
+    collection_name = env.get("RAG_COLLECTION_NAME") or "travel_guides"
     vectorstore_path = Path(configured_path)
     if not vectorstore_path.is_absolute():
         vectorstore_path = PROJECT_ROOT / vectorstore_path
-    exists = vectorstore_path.exists() and any(vectorstore_path.iterdir())
-    if exists:
-        return "configured", [], {"path": str(vectorstore_path)}
+    details = {
+        "path": str(vectorstore_path),
+        "collection_name": collection_name,
+    }
 
-    status = "blocked" if requirement == "required" else "not_configured"
-    return status, ["RAG vector store has not been initialized."], {"path": str(vectorstore_path)}
+    def unavailable(finding: str) -> tuple[str, list[str], dict[str, Any]]:
+        status = "blocked" if requirement == "required" else "not_configured"
+        return status, [finding], details
+
+    if not vectorstore_path.exists():
+        return unavailable("RAG vector store directory does not exist.")
+    if not vectorstore_path.is_dir():
+        return unavailable("RAG vector store path is not a directory.")
+
+    metadata_path = vectorstore_path / "chroma.sqlite3"
+    details["metadata_path"] = str(metadata_path)
+    if not metadata_path.exists():
+        return unavailable("RAG vector store metadata file chroma.sqlite3 is missing.")
+
+    try:
+        uri = metadata_path.as_posix()
+        with sqlite3.connect(f"file:{uri}?mode=ro", uri=True) as connection:
+            table = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'collections'"
+            ).fetchone()
+            if table is None:
+                return unavailable("RAG vector store metadata has no collections table.")
+            collection = connection.execute(
+                "SELECT 1 FROM collections WHERE name = ? LIMIT 1",
+                (collection_name,),
+            ).fetchone()
+            if collection is None:
+                return unavailable(
+                    f"RAG vector store collection {collection_name!r} is missing."
+                )
+    except sqlite3.Error as exc:
+        details["error_type"] = exc.__class__.__name__
+        return unavailable(f"RAG vector store metadata is not readable: {exc}")
+
+    return "configured", [], details
 
 
 def runtime_configuration_snapshot(
