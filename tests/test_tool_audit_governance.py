@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 from langchain_core.tools import StructuredTool
 from langgraph.types import Command
@@ -17,6 +19,7 @@ from app.tools.audit import (
 from app.tools.execution_guard import begin_tool_execution, execute_guarded_call
 from app.tools.guardrails import validate_hotel_query_args, validate_transport_query_args
 from app.models.approval import ToolAuditEvent
+from app.tools import mcp_tools
 from app.tools.mcp_tools import guard_mcp_tool
 from app.tools.state_transition import (
     _build_budget_quality_notes,
@@ -175,8 +178,45 @@ async def test_execute_guarded_call_times_out_and_writes_audit_event():
 
 
 @pytest.mark.asyncio
-async def test_guard_mcp_tool_blocks_placeholder_args_with_visible_fallback():
+async def test_guard_mcp_tool_emits_success_event_in_artifact_for_content_and_artifact_tool():
     async def raw_tool(city: str):
+        return f"{city}天气晴朗", {"source": "raw-weather"}
+
+    raw = StructuredTool.from_function(
+        coroutine=raw_tool,
+        name="get_weather_forecast",
+        description="天气查询",
+        response_format="content_and_artifact",
+    )
+    guarded = guard_mcp_tool(raw)
+
+    direct_result = await guarded.ainvoke({"city": "南京"})
+    tool_message = await guarded.ainvoke(
+        {
+            "type": "tool_call",
+            "id": "call-success",
+            "name": "get_weather_forecast",
+            "args": {"city": "南京"},
+        }
+    )
+    events = _extract_embedded_tool_audit_events(tool_message)
+
+    assert direct_result == "南京天气晴朗"
+    assert guarded.response_format == "content_and_artifact"
+    assert guarded.metadata["original_response_format"] == "content_and_artifact"
+    assert tool_message.content == "南京天气晴朗"
+    assert tool_message.artifact["tool_guard_status"] == "success"
+    assert events[0]["name"] == "get_weather_forecast"
+    assert events[0]["status"] == "success"
+    assert events[0]["evidence_type"] == "mcp_live_query"
+
+
+@pytest.mark.asyncio
+async def test_guard_mcp_tool_blocks_placeholder_args_with_visible_fallback_and_skipped_event():
+    calls = []
+
+    async def raw_tool(city: str):
+        calls.append(city)
         raise AssertionError("raw MCP tool should not run with placeholder args")
 
     raw = StructuredTool.from_function(
@@ -186,11 +226,83 @@ async def test_guard_mcp_tool_blocks_placeholder_args_with_visible_fallback():
     )
     guarded = guard_mcp_tool(raw)
 
-    result = await guarded.ainvoke({"city": "城市"})
+    direct_result = await guarded.ainvoke({"city": "城市"})
+    tool_message = await guarded.ainvoke(
+        {
+            "type": "tool_call",
+            "id": "call-skipped",
+            "name": "get_weather_forecast",
+            "args": {"city": "城市"},
+        }
+    )
+    events = _extract_embedded_tool_audit_events(tool_message)
 
     assert guarded.metadata["execution_guard"] == "tool_execution_guard"
-    assert "未得到可靠结果" in result
-    assert "tool_guard_failed" not in result
+    assert guarded.metadata["original_response_format"] == "content"
+    assert "未得到可靠结果" in direct_result
+    assert "tool_guard_failed" not in direct_result
+    assert calls == []
+    assert tool_message.artifact["tool_guard_status"] == "skipped"
+    assert events[0]["status"] == "skipped"
+    assert events[0]["error_type"] == "invalid_mcp_tool_args"
+
+
+@pytest.mark.asyncio
+async def test_guard_mcp_tool_emits_timeout_event(monkeypatch):
+    async def raw_tool(city: str):
+        await asyncio.sleep(0.05)
+        return f"{city}天气晴朗"
+
+    raw = StructuredTool.from_function(
+        coroutine=raw_tool,
+        name="get_weather_forecast",
+        description="天气查询",
+    )
+    guarded = guard_mcp_tool(raw)
+    monkeypatch.setattr(mcp_tools, "MCP_TOOL_TIMEOUT_SECONDS", 0.001)
+
+    tool_message = await guarded.ainvoke(
+        {
+            "type": "tool_call",
+            "id": "call-timeout",
+            "name": "get_weather_forecast",
+            "args": {"city": "南京"},
+        }
+    )
+    events = _extract_embedded_tool_audit_events(tool_message)
+
+    assert "未得到可靠结果" in tool_message.content
+    assert tool_message.artifact["tool_guard_status"] == "timeout"
+    assert events[0]["status"] == "timeout"
+    assert events[0]["error_type"] == "upstream_timeout"
+
+
+@pytest.mark.asyncio
+async def test_guard_mcp_tool_emits_degraded_event_for_unreliable_content():
+    async def raw_tool(city: str):
+        return f"{city}天气结果待核验"
+
+    raw = StructuredTool.from_function(
+        coroutine=raw_tool,
+        name="get_weather_forecast",
+        description="天气查询",
+    )
+    guarded = guard_mcp_tool(raw)
+
+    tool_message = await guarded.ainvoke(
+        {
+            "type": "tool_call",
+            "id": "call-degraded",
+            "name": "get_weather_forecast",
+            "args": {"city": "南京"},
+        }
+    )
+    events = _extract_embedded_tool_audit_events(tool_message)
+
+    assert tool_message.content == "南京天气结果待核验"
+    assert tool_message.artifact["tool_guard_status"] == "degraded"
+    assert events[0]["status"] == "degraded"
+    assert events[0]["error_type"] == "mcp_result_requires_verification"
 
 
 def test_chat_stream_prefers_embedded_tool_audit_event_from_command():
