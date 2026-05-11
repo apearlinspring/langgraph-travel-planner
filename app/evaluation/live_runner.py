@@ -96,6 +96,8 @@ class LiveScenarioResult:
     agent_score: float | None = None
     runtime_budget_passed: bool | None = None
     runtime_findings: list[str] | None = None
+    runtime_metrics: dict[str, Any] | None = None
+    tool_counts: dict[str, int] | None = None
     acceptance_gate: dict[str, Any] | None = None
     error: str | None = None
 
@@ -611,6 +613,8 @@ def run_live_scenario(
                 *quality_summary["runtime_quality"]["budget_gate"]["violations"],
                 *quality_summary["runtime_quality"]["budget_gate"]["warnings"],
             ][:5],
+            runtime_metrics=quality_summary["runtime_metrics"],
+            tool_counts=quality_summary["tool_quality"]["tool_counts"],
             acceptance_gate=acceptance_gate,
         )
     except (urllib.error.URLError, OSError, RuntimeError, ValueError) as exc:
