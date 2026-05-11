@@ -103,7 +103,17 @@
 .\.venv\Scripts\python.exe scripts\check_runtime_readiness.py --target acceptance --json
 ```
 
-在 CI/CD（持续集成/持续交付）中，默认 GitHub Actions（GitHub 自动化流水线）不会运行本节的真实链路跑批。`.github/workflows/ci.yml` 的 push（推送）和 pull request（合并请求）门禁只执行单元测试、测试收集、Python 编译、前端报告渲染验证和 development（开发）运行配置预检。
+在 CI/CD（持续集成/持续交付）中，默认 GitHub Actions（GitHub 自动化流水线）不会运行本节的真实链路跑批。`.github/workflows/ci.yml` 的 push（推送）和 pull request（合并请求）门禁执行单元测试、测试收集、Python 编译、内部 RAG 知识库治理校验、前端报告渲染验证和 development（开发）运行配置预检。
+
+默认 CI 现在还会运行内部 RAG（检索增强生成）知识库治理校验：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\validate_rag_knowledge.py
+```
+
+该脚本只读取 `data/documents/internal/` 的 Markdown（标记文本）文档头部 metadata（元数据），不会读取 `.env` 密钥，也不会输出真实合同、价格表或客户资料。它会在以下情况失败：缺少 `source_type`、`category`、`visibility`、`applicable_modes`、`evidence_level`、`last_reviewed`，目录分类和 metadata 分类不一致，内部知识被标成 `public`，或文档超过复审期限。低置信证据允许存在，但检索证据必须携带 `requires_verification` 和 `prohibited_commitments`，最终报告质量评分会阻止它支撑锁价、库存、支付或预订承诺。
+
+GraphRAG（图检索增强生成）不作为当前门禁的必选实现。后续只有在内部知识需要稳定维护“产品、供应商、城市、季节、人群、风险”这类实体关系时，再评估把图谱作为可选增强层；当前阶段仍以可校验 metadata、可追溯证据和确定性质量门禁为主。
 
 真实验收通过 `workflow_dispatch`（手动触发）保留两个层级：
 
