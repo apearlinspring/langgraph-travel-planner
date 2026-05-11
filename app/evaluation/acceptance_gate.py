@@ -160,6 +160,18 @@ def _as_list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
 
 
+def _as_number(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    return float(value) if isinstance(value, (int, float)) else None
+
+
+def _as_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    return int(value) if isinstance(value, int) else None
+
+
 def _has_text(value: Any) -> bool:
     return isinstance(value, str) and bool(value.strip())
 
@@ -691,6 +703,82 @@ def _preflight_records(
     return records
 
 
+def _safe_tool_counts(value: Any) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for tool, count in _as_dict(value).items():
+        if not isinstance(tool, str) or not tool.strip():
+            continue
+        numeric_count = _as_int(count)
+        if numeric_count is None or numeric_count < 0:
+            continue
+        counts[tool.strip()] = numeric_count
+    return counts
+
+
+def _result_runtime_metrics(result: dict[str, Any]) -> dict[str, Any]:
+    return _as_dict(result.get("runtime_metrics"))
+
+
+def _acceptance_runtime_totals(results: list[dict[str, Any]]) -> dict[str, Any]:
+    total_elapsed = 0.0
+    elapsed_count = 0
+    total_tool_calls = 0
+    total_tool_failures = 0
+    total_fallbacks = 0
+    total_input_tokens = 0
+    total_output_tokens = 0
+    total_tokens = 0
+    token_count = 0
+    tool_counts: dict[str, int] = {}
+
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        metrics = _result_runtime_metrics(result)
+        elapsed = _as_number(metrics.get("total_elapsed_seconds"))
+        if elapsed is None:
+            elapsed = _as_number(result.get("elapsed_seconds"))
+        if elapsed is not None:
+            total_elapsed += elapsed
+            elapsed_count += 1
+
+        tool_call_count = _as_int(metrics.get("tool_call_count"))
+        if tool_call_count is not None:
+            total_tool_calls += tool_call_count
+        else:
+            total_tool_calls += sum(_safe_tool_counts(result.get("tool_counts")).values())
+
+        total_tool_failures += _as_int(metrics.get("tool_failure_count")) or 0
+        total_fallbacks += _as_int(metrics.get("fallback_count")) or 0
+
+        input_tokens = _as_int(metrics.get("estimated_input_tokens"))
+        output_tokens = _as_int(metrics.get("estimated_output_tokens"))
+        estimated_tokens = _as_int(metrics.get("estimated_total_tokens"))
+        if input_tokens is not None:
+            total_input_tokens += input_tokens
+        if output_tokens is not None:
+            total_output_tokens += output_tokens
+        if estimated_tokens is not None:
+            total_tokens += estimated_tokens
+            token_count += 1
+
+        for tool, count in _safe_tool_counts(result.get("tool_counts")).items():
+            tool_counts[tool] = tool_counts.get(tool, 0) + count
+
+    return {
+        "elapsed_seconds": round(total_elapsed, 3),
+        "average_elapsed_seconds": round(total_elapsed / elapsed_count, 3) if elapsed_count else None,
+        "tool_call_count": total_tool_calls,
+        "tool_failure_count": total_tool_failures,
+        "fallback_count": total_fallbacks,
+        "estimated_input_tokens": total_input_tokens,
+        "estimated_output_tokens": total_output_tokens,
+        "estimated_total_tokens": total_tokens,
+        "average_estimated_total_tokens": round(total_tokens / token_count, 2) if token_count else None,
+        "tool_counts": dict(sorted(tool_counts.items(), key=lambda item: (-item[1], item[0]))),
+    }
+
+
 def build_acceptance_run_summary(
     *,
     results: list[dict[str, Any]],
@@ -762,6 +850,7 @@ def build_acceptance_run_summary(
         for gate in gates
         if isinstance(_as_dict(gate.get("dimensions")).get("agent_quality", {}).get("score"), (int, float))
     ]
+    runtime_totals = _acceptance_runtime_totals(results)
     preflight_status = _as_dict(preflight).get("status")
     if preflight_status == "blocked":
         run_status = "blocked"
@@ -801,6 +890,8 @@ def build_acceptance_run_summary(
         "skipped_count": status_counts.get("skipped", 0),
         "passed": run_status == "passed",
         "average_agent_score": round(sum(scores) / len(scores), 2) if scores else None,
+        "runtime_totals": runtime_totals,
+        "tool_counts": runtime_totals["tool_counts"],
         "results": results,
         "failures": failures,
         "degradations": degradations,
@@ -826,6 +917,9 @@ def render_acceptance_markdown(summary: dict[str, Any]) -> str:
         f"- 状态统计: {summary.get('status_counts')}",
         f"- LLM-as-Judge（大模型评审）补充统计: {summary.get('llm_judge_status_counts')}",
         f"- 平均 Agent（智能体）综合分: {summary.get('average_agent_score')}",
+        f"- 总耗时: {_as_dict(summary.get('runtime_totals')).get('elapsed_seconds')} 秒",
+        f"- 工具调用: {_as_dict(summary.get('runtime_totals')).get('tool_call_count')} 次",
+        f"- 估算 token（文本令牌）: {_as_dict(summary.get('runtime_totals')).get('estimated_total_tokens')}",
         f"- 生成时间: {summary.get('created_at')}",
         f"- 后端地址: {summary.get('base_url')}",
         "",
