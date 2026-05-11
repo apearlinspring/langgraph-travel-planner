@@ -13,15 +13,13 @@ from langgraph.types import Command
 from app.config import settings
 from app.agents.subagents.transport_coordinator import create_transport_coordinator
 from app.core.state import TravelState
-from app.tools.audit import (
-    append_tool_audit_event,
-    build_tool_audit_event,
-    start_tool_audit,
-    summarize_tool_input,
-)
+from app.tools.execution_guard import audited_command, execute_guarded_call
 from app.tools.guardrails import validate_transport_query_args
-from app.tools.result_validation import classify_exception, validate_transport_result
+from app.tools.result_validation import validate_transport_result
 from app.utils.logger import app_logger
+
+
+TRANSPORT_QUERY_TIMEOUT_SECONDS = 60.0
 
 
 def _tool_message(content: str, runtime: Optional[ToolRuntime]) -> ToolMessage:
@@ -87,7 +85,6 @@ async def query_transport_options(
     - 格式化的交通选项信息
     """
 
-    audit_context = start_tool_audit("query_transport_options")
     normalized_args = _normalize_args_from_state(
         origin_city=origin_city,
         destination_city=destination_city,
@@ -95,60 +92,39 @@ async def query_transport_options(
         transport_type=transport_type,
         runtime=runtime,
     )
-    input_summary = summarize_tool_input(normalized_args)
-    validation = validate_transport_query_args(normalized_args)
-    if not validation.ok:
-        message = f"交通真实查询参数不完整：{validation.message}。请先补齐后再查，我不会编造车次、航班或价格。"
-        event = build_tool_audit_event(
-            audit_context,
-            status="skipped",
-            input_summary=input_summary,
-            output_summary={"message": validation.message},
-            error_type=validation.error_type,
-            evidence_type="live_transport_query",
+
+    async def _call_transport(guarded_args: dict) -> str:
+        guarded_origin = str(guarded_args["origin_city"])
+        guarded_destination = str(guarded_args["destination_city"])
+        guarded_date = str(guarded_args["departure_date"])
+        guarded_type = guarded_args["transport_type"]
+        app_logger.info(
+            "Transport query started: "
+            f"origin={guarded_origin}, destination={guarded_destination}, "
+            f"departure_date={guarded_date}, transport_type={guarded_type or 'auto'}"
         )
-        state = runtime.state if runtime and runtime.state else {}
-        return Command(
-            update=append_tool_audit_event(
-                state,
-                {"messages": [_tool_message(message, runtime)]},
-                event,
+
+        if guarded_type:
+            type_labels = {
+                "flight": "航班",
+                "train": "高铁",
+                "driving": "自驾",
+            }
+            user_query = (
+                f"我想从 {guarded_origin} 去 {guarded_destination}，"
+                f"出发日期是 {guarded_date}，"
+                f"我当前更偏向 {type_labels.get(guarded_type, guarded_type)}，"
+                f"请优先给我这种方式的真实方案；"
+                f"如果同一天还有明显更省时、更省心或更省钱的替代方式，也请顺带对比 1-2 个，"
+                f"不要因为我提到了 {type_labels.get(guarded_type, guarded_type)} 就默认排除其他交通方式。"
             )
-        )
+        else:
+            user_query = (
+                f"我想从 {guarded_origin} 去 {guarded_destination}，"
+                f"出发日期是 {guarded_date}，"
+                f"请推荐合适的交通方式并提供详细信息。"
+            )
 
-    origin_city = str(normalized_args["origin_city"])
-    destination_city = str(normalized_args["destination_city"])
-    departure_date = str(normalized_args["departure_date"])
-    transport_type = normalized_args["transport_type"]
-    app_logger.info(
-        "Transport query started: "
-        f"origin={origin_city}, destination={destination_city}, "
-        f"departure_date={departure_date}, transport_type={transport_type or 'auto'}"
-    )
-
-    # 构建用户查询
-    if transport_type:
-        type_labels = {
-            "flight": "航班",
-            "train": "高铁",
-            "driving": "自驾"
-        }
-        user_query = (
-            f"我想从 {origin_city} 去 {destination_city}，"
-            f"出发日期是 {departure_date}，"
-            f"我当前更偏向 {type_labels.get(transport_type, transport_type)}，"
-            f"请优先给我这种方式的真实方案；"
-            f"如果同一天还有明显更省时、更省心或更省钱的替代方式，也请顺带对比 1-2 个，"
-            f"不要因为我提到了 {type_labels.get(transport_type, transport_type)} 就默认排除其他交通方式。"
-        )
-    else:
-        user_query = (
-            f"我想从 {origin_city} 去 {destination_city}，"
-            f"出发日期是 {departure_date}，"
-            f"请推荐合适的交通方式并提供详细信息。"
-        )
-
-    try:
         coordinator = await create_transport_coordinator()
         result = await coordinator.ainvoke(
             {
@@ -158,57 +134,53 @@ async def query_transport_options(
             },
             config={"recursion_limit": settings.langgraph_recursion_limit},
         )
-        content = result["messages"][-1].content
-    except Exception as exc:
-        status, error_type = classify_exception(exc)
-        message = str(exc).strip() or exc.__class__.__name__
+        return result["messages"][-1].content
+
+    guarded = await execute_guarded_call(
+        "query_transport_options",
+        normalized_args,
+        _call_transport,
+        runtime=runtime,
+        input_validator=validate_transport_query_args,
+        result_validator=validate_transport_result,
+        evidence_type="live_transport_query",
+        timeout_seconds=TRANSPORT_QUERY_TIMEOUT_SECONDS,
+    )
+    if guarded.status == "skipped":
+        message = f"交通真实查询参数不完整：{guarded.message}。请先补齐后再查，我不会编造车次、航班或价格。"
+        return audited_command(
+            {"messages": [_tool_message(message, runtime)]},
+            runtime,
+            guarded.event,
+            approval_update=guarded.approval_update,
+        )
+    if guarded.output is None:
+        message = guarded.message or guarded.error_type or "交通工具调用失败"
         app_logger.warning(
             "Transport query failed without crashing workflow: "
-            f"origin={origin_city}, destination={destination_city}, error={message}"
+            f"origin={normalized_args.get('origin_city')}, "
+            f"destination={normalized_args.get('destination_city')}, error={message}"
         )
-        audit_event = build_tool_audit_event(
-            audit_context,
-            status=status,
-            input_summary=input_summary,
-            output_summary={"message": message},
-            error_type=error_type,
-            evidence_type="live_transport_query",
-        )
-        state = runtime.state if runtime and runtime.state else {}
-        return Command(
-            update=append_tool_audit_event(
-                state,
-                {
-                    "messages": [
-                        _tool_message(
-                            f"交通查询这次调用失败：{message}。我不会编造车次、航班或价格；可以稍后重试真实交通查询。",
-                            runtime,
-                        )
-                    ]
-                },
-                audit_event,
-            )
+        return audited_command(
+            {
+                "messages": [
+                    _tool_message(
+                        f"交通查询这次调用失败：{message}。我不会编造车次、航班或价格；可以稍后重试真实交通查询。",
+                        runtime,
+                    )
+                ]
+            },
+            runtime,
+            guarded.event,
         )
 
-    result_validation = validate_transport_result(content)
-    audit_event = build_tool_audit_event(
-        audit_context,
-        status=result_validation.status,
-        input_summary=input_summary,
-        output_summary=result_validation.output_summary,
-        error_type=result_validation.error_type,
-        evidence_type="live_transport_query",
-    )
     app_logger.info(
         "Transport query completed: "
-        f"origin={origin_city}, destination={destination_city}, "
-        f"elapsed_seconds={audit_event['elapsed_seconds']:.2f}"
+        f"origin={normalized_args.get('origin_city')}, destination={normalized_args.get('destination_city')}, "
+        f"elapsed_seconds={guarded.event['elapsed_seconds']:.2f}"
     )
-    state = runtime.state if runtime and runtime.state else {}
-    return Command(
-        update=append_tool_audit_event(
-            state,
-            {"messages": [_tool_message(content, runtime)]},
-            audit_event,
-        )
+    return audited_command(
+        {"messages": [_tool_message(str(guarded.output), runtime)]},
+        runtime,
+        guarded.event,
     )

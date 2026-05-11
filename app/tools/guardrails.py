@@ -108,3 +108,32 @@ def validate_transport_query_args(args: dict[str, Any]) -> ToolValidationResult:
     if messages:
         return _invalid_result("invalid_transport_query_args", messages, args)
     return ToolValidationResult(ok=True, normalized_args=args)
+
+
+def validate_rag_query_args(args: dict[str, Any]) -> ToolValidationResult:
+    query = str((args or {}).get("query") or "").strip()
+    if _is_placeholder(query):
+        return _invalid_result(
+            "invalid_rag_query_args",
+            ["检索问题缺失"],
+            {**(args or {}), "query": query},
+        )
+    if len(query) > 500:
+        return _invalid_result(
+            "invalid_rag_query_args",
+            ["检索问题过长，请压缩到 500 字以内"],
+            {**(args or {}), "query": query[:500]},
+        )
+    return ToolValidationResult(ok=True, normalized_args={**(args or {}), "query": query})
+
+
+def validate_mcp_tool_args(args: dict[str, Any]) -> ToolValidationResult:
+    if not isinstance(args, dict):
+        return _invalid_result("invalid_mcp_tool_args", ["工具参数必须是对象"], {})
+    if any(_is_placeholder(value) for value in args.values() if isinstance(value, str)):
+        return _invalid_result(
+            "invalid_mcp_tool_args",
+            ["工具参数包含未确认占位符"],
+            args,
+        )
+    return ToolValidationResult(ok=True, normalized_args=args)

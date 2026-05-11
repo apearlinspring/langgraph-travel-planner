@@ -26,6 +26,10 @@ from app.tools.audit import (
     summarize_tool_input,
     summarize_tool_output,
 )
+from app.tools.result_validation import (
+    evidence_type_for_tool_name,
+    validate_tool_output_for_audit,
+)
 from app.utils.logger import app_logger
 
 router = APIRouter(prefix="/chat", tags=["对话"])
@@ -134,6 +138,61 @@ def _is_transient_stream_disconnect(exc: Exception) -> bool:
         "peer closed connection without sending complete message body" in message
         or "incomplete chunked read" in message
     )
+
+
+def _extract_embedded_tool_audit_events(output) -> list[dict]:
+    containers: list[dict] = []
+    update = getattr(output, "update", None)
+    if isinstance(update, dict):
+        containers.append(update)
+    artifact = getattr(output, "artifact", None)
+    if isinstance(artifact, dict):
+        containers.append(artifact)
+    if isinstance(output, dict):
+        if isinstance(output.get("update"), dict):
+            containers.append(output["update"])
+        if isinstance(output.get("artifact"), dict):
+            containers.append(output["artifact"])
+        containers.append(output)
+    if isinstance(output, (tuple, list)) and len(output) == 2 and isinstance(output[1], dict):
+        containers.append(output[1])
+
+    events: list[dict] = []
+    seen_keys: set[tuple] = set()
+    for container in containers:
+        container_events = container.get("tool_audit_events") or []
+        if not isinstance(container_events, list):
+            continue
+        for event in container_events:
+            if not isinstance(event, dict):
+                continue
+            key = _audit_event_key(event)
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            events.append(event)
+    return events
+
+
+def _audit_event_key(event: dict) -> tuple:
+    return (
+        event.get("name"),
+        event.get("started_at"),
+        event.get("status"),
+        event.get("error_type"),
+    )
+
+
+def _new_tool_audit_events(events: list[dict], existing_events: list[dict]) -> list[dict]:
+    existing_keys = {_audit_event_key(event) for event in existing_events}
+    new_events: list[dict] = []
+    for event in events:
+        key = _audit_event_key(event)
+        if key in existing_keys:
+            continue
+        existing_keys.add(key)
+        new_events.append(event)
+    return new_events
 
 
 async def _persist_tool_audit_events_safely(
@@ -339,13 +398,33 @@ async def generate_sse_stream(
                         f"conversation_id={conversation_id}, user_id={user.id}, "
                         f"tool={tool_name}, elapsed_seconds={elapsed:.2f}"
                     )
-                if audit_context is not None:
+                embedded_audit_events = _extract_embedded_tool_audit_events(tool_output)
+                if embedded_audit_events:
+                    new_audit_events = _new_tool_audit_events(
+                        embedded_audit_events,
+                        tool_audit_events,
+                    )
+                    tool_audit_events.extend(new_audit_events)
+                    for audit_event in new_audit_events:
+                        yield sse({
+                            "type": "tool_audit",
+                            "event": audit_event,
+                        })
+                elif audit_context is not None:
+                    result_validation = validate_tool_output_for_audit(
+                        tool_name,
+                        tool_output,
+                    )
                     audit_event = build_tool_audit_event(
                         audit_context,
-                        status="success",
+                        status=result_validation.status,
                         input_summary=input_summary,
-                        output_summary=summarize_tool_output(tool_output),
-                        evidence_type="mcp_live_query",
+                        output_summary=(
+                            result_validation.output_summary
+                            or summarize_tool_output(tool_output)
+                        ),
+                        error_type=result_validation.error_type,
+                        evidence_type=evidence_type_for_tool_name(tool_name),
                     )
                     tool_audit_events.append(audit_event)
                     yield sse({

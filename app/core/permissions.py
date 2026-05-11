@@ -4,6 +4,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any, Literal
 
+from app.tools.contracts import ToolPermissionDecision, ToolRiskLevel
+
 ApprovalStatus = Literal["none", "pending", "approved", "rejected", "expired"]
 ApprovalAction = Literal[
     "generate_order_id",
@@ -237,3 +239,157 @@ def sanitize_approval_metadata(metadata: dict[str, Any] | None) -> dict[str, Any
         else:
             sanitized[key_text] = str(value)[:300]
     return sanitized
+
+
+@dataclass(frozen=True)
+class ToolExecutionPolicy:
+    """Governance policy for a tool call before it reaches external effects."""
+
+    tool_name: str
+    category: str
+    risk_level: ToolRiskLevel
+    description: str
+    enabled: bool = True
+    requires_approval: bool = False
+    approval_action: ApprovalAction | None = None
+    default_timeout_seconds: float | None = None
+    allowed_steps: tuple[str, ...] = ()
+    audit_required: bool = True
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "tool_name": self.tool_name,
+            "category": self.category,
+            "risk_level": self.risk_level,
+            "description": self.description,
+            "enabled": self.enabled,
+            "requires_approval": self.requires_approval,
+            "approval_action": self.approval_action,
+            "default_timeout_seconds": self.default_timeout_seconds,
+            "allowed_steps": list(self.allowed_steps),
+            "audit_required": self.audit_required,
+        }
+
+
+DEFAULT_TOOL_EXECUTION_POLICY = ToolExecutionPolicy(
+    tool_name="*",
+    category="general_tool",
+    risk_level="low",
+    description="默认工具策略：允许执行，但仍可由调用方记录审计摘要。",
+    default_timeout_seconds=None,
+)
+
+MCP_EXTERNAL_QUERY_POLICY = ToolExecutionPolicy(
+    tool_name="mcp_external_query",
+    category="mcp_external_query",
+    risk_level="high",
+    description="第三方 MCP 外部查询工具，必须有超时和审计摘要。",
+    default_timeout_seconds=20.0,
+)
+
+INTERNAL_RAG_POLICY = ToolExecutionPolicy(
+    tool_name="internal_rag_query",
+    category="internal_rag",
+    risk_level="medium",
+    description="旅行社内部知识检索，只可返回证据摘要，不得承诺真实履约。",
+    default_timeout_seconds=20.0,
+)
+
+PUBLIC_RAG_POLICY = ToolExecutionPolicy(
+    tool_name="public_rag_query",
+    category="public_rag",
+    risk_level="low",
+    description="公开目的地知识检索，命中不足时必须明确待二次核实。",
+    default_timeout_seconds=20.0,
+)
+
+TOOL_EXECUTION_POLICIES: dict[str, ToolExecutionPolicy] = {
+    "query_hotel_options": ToolExecutionPolicy(
+        tool_name="query_hotel_options",
+        category="live_hotel_search",
+        risk_level="high",
+        description="真实酒店候选查询，失败时不得编造酒店、库存或价格。",
+        default_timeout_seconds=45.0,
+    ),
+    "query_transport_options": ToolExecutionPolicy(
+        tool_name="query_transport_options",
+        category="live_transport_query",
+        risk_level="high",
+        description="真实交通方案查询，失败时不得编造车次、航班或价格。",
+        default_timeout_seconds=60.0,
+    ),
+    "real_booking": ToolExecutionPolicy(
+        tool_name="real_booking",
+        category="future_sensitive_action",
+        risk_level="critical",
+        description="真实预订占位能力，当前必须先完成人工审批且项目未接入真实执行。",
+        requires_approval=True,
+        approval_action="real_booking",
+        default_timeout_seconds=10.0,
+    ),
+    "real_payment": ToolExecutionPolicy(
+        tool_name="real_payment",
+        category="future_sensitive_action",
+        risk_level="critical",
+        description="真实支付占位能力，当前必须先完成人工审批且项目未接入真实执行。",
+        requires_approval=True,
+        approval_action="real_payment",
+        default_timeout_seconds=10.0,
+    ),
+}
+
+
+def get_tool_execution_policy(tool_name: str) -> ToolExecutionPolicy:
+    normalized = str(tool_name or "").strip()
+    if normalized in TOOL_EXECUTION_POLICIES:
+        return TOOL_EXECUTION_POLICIES[normalized]
+    if normalized.startswith("search_agency_"):
+        return ToolExecutionPolicy(
+            **{**INTERNAL_RAG_POLICY.to_dict(), "tool_name": normalized}
+        )
+    if normalized.startswith("search_") and normalized in {
+        "search_destination_guide",
+        "search_food_recommendations",
+        "search_accommodation_info",
+        "search_travel_tips",
+    }:
+        return ToolExecutionPolicy(
+            **{**PUBLIC_RAG_POLICY.to_dict(), "tool_name": normalized}
+        )
+    if normalized in {
+        "getHotelDetail",
+        "getHotelSearchTags",
+        "maps_geo",
+        "maps_direction_driving",
+        "get_weather_forecast",
+        "search_travel_info",
+    } or normalized.startswith(("maps_", "get", "search")):
+        return ToolExecutionPolicy(
+            **{**MCP_EXTERNAL_QUERY_POLICY.to_dict(), "tool_name": normalized}
+        )
+    return ToolExecutionPolicy(
+        **{**DEFAULT_TOOL_EXECUTION_POLICY.to_dict(), "tool_name": normalized or "unknown_tool"}
+    )
+
+
+def decide_tool_execution_permission(
+    tool_name: str,
+    state: dict[str, Any] | None = None,
+) -> ToolPermissionDecision:
+    policy = get_tool_execution_policy(tool_name)
+    if not policy.enabled:
+        return ToolPermissionDecision(
+            allowed=False,
+            reason=f"工具 {tool_name} 当前被治理策略禁用。",
+            error_type="tool_disabled",
+        )
+
+    current_step = str((state or {}).get("current_step") or "")
+    if policy.allowed_steps and current_step and current_step not in policy.allowed_steps:
+        return ToolPermissionDecision(
+            allowed=False,
+            reason=f"工具 {tool_name} 不允许在当前阶段 {current_step} 执行。",
+            error_type="tool_not_allowed_for_step",
+        )
+
+    return ToolPermissionDecision(allowed=True)
