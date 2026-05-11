@@ -13,6 +13,9 @@ from app.rag.pipeline import AdvancedRAGPipeline
 from app.rag.document_loader import DocumentManager
 from app.rag.text_splitter import AdvancedParentDocumentSplitter
 from app.rag.vectorstore import VectorStoreManager
+from app.tools.execution_guard import execute_guarded_call
+from app.tools.guardrails import validate_rag_query_args
+from app.tools.result_validation import validate_rag_result
 from app.utils.logger import app_logger
 
 
@@ -66,6 +69,7 @@ _DESTINATION_ALIASES = {
     "眉县": ("眉县", "meixian"),
     "马尔代夫": ("马尔代夫", "maldives"),
 }
+RAG_TOOL_TIMEOUT_SECONDS = 20.0
 
 
 def _has_existing_vectorstore(persist_directory: str) -> bool:
@@ -249,6 +253,47 @@ def _format_retrieval_failure(
     )
 
 
+async def _guarded_rag_retrieval(
+    *,
+    tool_name: str,
+    query: str,
+    label: str,
+    visibility: str,
+    retrieve_call,
+    expected_category: str | None = None,
+) -> str:
+    evidence_type = (
+        "internal_rag_evidence" if visibility == "internal" else "public_rag_evidence"
+    )
+
+    async def _call(_: dict) -> str:
+        return await retrieve_call()
+
+    guarded = await execute_guarded_call(
+        tool_name,
+        {"query": query, "expected_category": expected_category},
+        _call,
+        input_validator=validate_rag_query_args,
+        result_validator=validate_rag_result,
+        evidence_type=evidence_type,
+        timeout_seconds=RAG_TOOL_TIMEOUT_SECONDS,
+    )
+    app_logger.info(
+        "RAG tool guarded execution: "
+        f"tool={tool_name}, status={guarded.status}, error={guarded.error_type}"
+    )
+    if guarded.output is not None:
+        return str(guarded.output)
+
+    return _format_retrieval_failure(
+        query,
+        label=label,
+        visibility=visibility,
+        exc=RuntimeError(guarded.message or guarded.error_type or "rag_guard_failed"),
+        expected_category=expected_category,
+    )
+
+
 async def _retrieve_public(query: str, enhanced_query: str | None = None) -> str:
     pipeline = await _get_rag_pipeline()
     requested_destinations = _extract_requested_destinations(query)
@@ -314,16 +359,13 @@ async def search_destination_guide(query: str) -> str:
     """
     app_logger.info(f"RAG 工具被调用: {query}")
 
-    try:
-        return await _retrieve_public(query)
-    except Exception as e:
-        app_logger.exception(f"❌ RAG 检索失败，已降级为空证据: {e}")
-        return _format_retrieval_failure(
-            query,
-            label="公开攻略知识库",
-            visibility="public",
-            exc=e,
-        )
+    return await _guarded_rag_retrieval(
+        tool_name="search_destination_guide",
+        query=query,
+        label="公开攻略知识库",
+        visibility="public",
+        retrieve_call=lambda: _retrieve_public(query),
+    )
 
 
 @tool
@@ -344,16 +386,13 @@ async def search_food_recommendations(query: str) -> str:
     """
     app_logger.info(f"美食检索工具被调用: {query}")
 
-    try:
-        return await _retrieve_public(query, f"{query} 美食 餐厅 小吃")
-    except Exception as e:
-        app_logger.exception(f"❌ 美食检索失败，已降级为空证据: {e}")
-        return _format_retrieval_failure(
-            query,
-            label="美食知识库",
-            visibility="public",
-            exc=e,
-        )
+    return await _guarded_rag_retrieval(
+        tool_name="search_food_recommendations",
+        query=query,
+        label="美食知识库",
+        visibility="public",
+        retrieve_call=lambda: _retrieve_public(query, f"{query} 美食 餐厅 小吃"),
+    )
 
 
 @tool
@@ -374,16 +413,13 @@ async def search_accommodation_info(query: str) -> str:
     """
     app_logger.info(f"住宿检索工具被调用: {query}")
 
-    try:
-        return await _retrieve_public(query, f"{query} 住宿 酒店 民宿")
-    except Exception as e:
-        app_logger.exception(f"❌ 住宿检索失败，已降级为空证据: {e}")
-        return _format_retrieval_failure(
-            query,
-            label="住宿知识库",
-            visibility="public",
-            exc=e,
-        )
+    return await _guarded_rag_retrieval(
+        tool_name="search_accommodation_info",
+        query=query,
+        label="住宿知识库",
+        visibility="public",
+        retrieve_call=lambda: _retrieve_public(query, f"{query} 住宿 酒店 民宿"),
+    )
 
 
 @tool
@@ -404,16 +440,13 @@ async def search_travel_tips(query: str) -> str:
     """
     app_logger.info(f"旅行贴士检索工具被调用: {query}")
 
-    try:
-        return await _retrieve_public(query, f"{query} 注意事项 建议 提示")
-    except Exception as e:
-        app_logger.exception(f"❌ 旅行贴士检索失败，已降级为空证据: {e}")
-        return _format_retrieval_failure(
-            query,
-            label="旅行贴士知识库",
-            visibility="public",
-            exc=e,
-        )
+    return await _guarded_rag_retrieval(
+        tool_name="search_travel_tips",
+        query=query,
+        label="旅行贴士知识库",
+        visibility="public",
+        retrieve_call=lambda: _retrieve_public(query, f"{query} 注意事项 建议 提示"),
+    )
 
 
 @tool
@@ -423,21 +456,18 @@ async def search_agency_product_templates(query: str) -> str:
 
     当用户希望省心安排、旅行社方案、亲子/情侣/银发/团建等产品化路线时使用。
     """
-    try:
-        return await _retrieve_internal(
+    return await _guarded_rag_retrieval(
+        tool_name="search_agency_product_templates",
+        query=query,
+        label="旅行社内部知识库",
+        visibility="internal",
+        expected_category="products",
+        retrieve_call=lambda: _retrieve_internal(
             query,
             f"{query} 产品 路线 模板 适合人群 成熟路线",
             expected_category="products",
-        )
-    except Exception as e:
-        app_logger.exception(f"❌ 内部产品模板检索失败，已降级为空证据: {e}")
-        return _format_retrieval_failure(
-            query,
-            label="旅行社内部知识库",
-            visibility="internal",
-            exc=e,
-            expected_category="products",
-        )
+        ),
+    )
 
 
 @tool
@@ -447,21 +477,18 @@ async def search_agency_service_sop(query: str) -> str:
 
     当需要让回复像真实旅行顾问、解释服务流程或整理交付逻辑时使用。
     """
-    try:
-        return await _retrieve_internal(
+    return await _guarded_rag_retrieval(
+        tool_name="search_agency_service_sop",
+        query=query,
+        label="旅行社内部知识库",
+        visibility="internal",
+        expected_category="sop",
+        retrieve_call=lambda: _retrieve_internal(
             query,
             f"{query} 服务 SOP 顾问 流程 交付",
             expected_category="sop",
-        )
-    except Exception as e:
-        app_logger.exception(f"❌ 内部服务 SOP 检索失败，已降级为空证据: {e}")
-        return _format_retrieval_failure(
-            query,
-            label="旅行社内部知识库",
-            visibility="internal",
-            exc=e,
-            expected_category="sop",
-        )
+        ),
+    )
 
 
 @tool
@@ -471,21 +498,18 @@ async def search_agency_pricing_rules(query: str) -> str:
 
     当用户询问预算、报价、费用包含/不包含或最终报告预算说明时使用。
     """
-    try:
-        return await _retrieve_internal(
+    return await _guarded_rag_retrieval(
+        tool_name="search_agency_pricing_rules",
+        query=query,
+        label="旅行社内部知识库",
+        visibility="internal",
+        expected_category="pricing",
+        retrieve_call=lambda: _retrieve_internal(
             query,
             f"{query} 报价 预算 费用 置信度 待核验",
             expected_category="pricing",
-        )
-    except Exception as e:
-        app_logger.exception(f"❌ 内部报价规则检索失败，已降级为空证据: {e}")
-        return _format_retrieval_failure(
-            query,
-            label="旅行社内部知识库",
-            visibility="internal",
-            exc=e,
-            expected_category="pricing",
-        )
+        ),
+    )
 
 
 @tool
@@ -495,21 +519,18 @@ async def search_agency_risk_playbook(query: str) -> str:
 
     当需要给出避坑提醒、Plan B、风险说明或出发前核验清单时使用。
     """
-    try:
-        return await _retrieve_internal(
+    return await _guarded_rag_retrieval(
+        tool_name="search_agency_risk_playbook",
+        query=query,
+        label="旅行社内部知识库",
+        visibility="internal",
+        expected_category="risk",
+        retrieve_call=lambda: _retrieve_internal(
             query,
             f"{query} 风险 避坑 天气 交通 酒店 景区 Plan B",
             expected_category="risk",
-        )
-    except Exception as e:
-        app_logger.exception(f"❌ 内部风险手册检索失败，已降级为空证据: {e}")
-        return _format_retrieval_failure(
-            query,
-            label="旅行社内部知识库",
-            visibility="internal",
-            exc=e,
-            expected_category="risk",
-        )
+        ),
+    )
 
 
 @tool
@@ -519,21 +540,18 @@ async def search_agency_report_standards(query: str) -> str:
 
     当用户要求生成最终报告、导出报告或调整报告结构时使用。
     """
-    try:
-        return await _retrieve_internal(
+    return await _guarded_rag_retrieval(
+        tool_name="search_agency_report_standards",
+        query=query,
+        label="旅行社内部知识库",
+        visibility="internal",
+        expected_category="report",
+        retrieve_call=lambda: _retrieve_internal(
             query,
             f"{query} 最终报告 章节 结构 导出 禁止内容",
             expected_category="report",
-        )
-    except Exception as e:
-        app_logger.exception(f"❌ 内部报告标准检索失败，已降级为空证据: {e}")
-        return _format_retrieval_failure(
-            query,
-            label="旅行社内部知识库",
-            visibility="internal",
-            exc=e,
-            expected_category="report",
-        )
+        ),
+    )
 
 
 # ============== 工具集合 ==============

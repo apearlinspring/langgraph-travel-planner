@@ -357,6 +357,8 @@ def _criterion_agency_alignment(
     category_keys = set(categories)
     highlights = _as_list(agency_context.get("highlights"))
     evidence = [_as_dict(item) for item in _as_list(agency_context.get("evidence"))]
+    agency_product = _as_dict(report_data.get("agency_product"))
+    quote_policy = _as_dict(report_data.get("quote_policy") or _as_dict(report_data.get("budget")).get("quote_policy"))
     evidence_categories = {
         str(item.get("category"))
         for item in evidence
@@ -416,7 +418,26 @@ def _criterion_agency_alignment(
         findings,
         "agency_context.evidence should include structured evidence for at least 3 agency categories",
     )
-    return CriterionResult("agency_business_alignment", score, 15, findings)
+    score += _score(
+        _has_text(agency_product.get("code"))
+        and _has_text(agency_product.get("name"))
+        and _as_list(agency_product.get("deliverables"))
+        and _as_list(agency_product.get("non_commitments")),
+        2,
+        findings,
+        "agency_product should include code, name, deliverables, and non-commitment boundaries",
+    )
+    score += _score(
+        quote_policy.get("pricing_status") == "estimate_only"
+        and quote_policy.get("locked_price") is False
+        and _has_text(quote_policy.get("disclaimer"))
+        and _as_list(quote_policy.get("excluded"))
+        and _as_list(quote_policy.get("verification_required")),
+        3,
+        findings,
+        "quote_policy should state estimate-only pricing, no locked price, exclusions, and verification requirements",
+    )
+    return CriterionResult("agency_business_alignment", score, 20, findings)
 
 
 def _criterion_frontend_export(report_data: dict[str, Any]) -> CriterionResult:

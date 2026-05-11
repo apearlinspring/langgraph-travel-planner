@@ -185,6 +185,8 @@ class TravelState(AgentState):
     context_pack_metadata: NotRequired[dict]
     context_layer_boundaries: NotRequired[dict]
     context_summary_updated_at: NotRequired[float]
+    turn_id: NotRequired[str]
+    observability_context: NotRequired[dict]
 
     user_requirement: NotRequired[UserRequirement]
 
@@ -246,6 +248,8 @@ def create_initial_state(user_id: str, session_id: str) -> TravelState:
         context_last_step=INITIAL_PLANNING_STEP,
         context_pack_metadata={},
         context_layer_boundaries={},
+        turn_id="",
+        observability_context={},
         user_id=user_id,
         session_id=session_id,
         created_at=time.time(),

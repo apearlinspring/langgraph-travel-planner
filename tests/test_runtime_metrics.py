@@ -22,6 +22,18 @@ def test_collect_runtime_metrics_counts_events_and_tokens():
         {"type": "tool_call", "tool": "query_transport_options", "elapsed_since_scenario_start": 0.2},
         {"type": "token", "content": "hello", "elapsed_since_scenario_start": 0.8},
         {"type": "report_data", "elapsed_since_scenario_start": 1.8},
+        {
+            "type": "turn_observability",
+            "observability": {
+                "tool_call_count": 1,
+                "tool_failure_count": 0,
+                "fallback_count": 0,
+                "degradation_status": "ok",
+                "estimated_input_tokens": 3,
+                "estimated_output_tokens": 2,
+                "estimated_total_tokens": 5,
+            },
+        },
     ]
     turns = [
         {
@@ -41,6 +53,7 @@ def test_collect_runtime_metrics_counts_events_and_tokens():
 
     assert metrics.first_token_seconds == 0.8
     assert metrics.tool_call_count == 1
+    assert metrics.turn_observability_event_count == 1
     assert metrics.report_event_count == 1
     assert metrics.estimated_total_tokens > 0
     assert metrics.tool_turn_elapsed_seconds == 1.8
@@ -51,6 +64,18 @@ def test_evaluate_runtime_metrics_passes_observable_snapshot():
         events=[
             {"type": "token", "content": "hello", "elapsed_since_scenario_start": 0.5},
             {"type": "report_data", "elapsed_since_scenario_start": 1.0},
+            {
+                "type": "turn_observability",
+                "observability": {
+                    "tool_call_count": 0,
+                    "tool_failure_count": 0,
+                    "fallback_count": 0,
+                    "degradation_status": "ok",
+                    "estimated_input_tokens": 1,
+                    "estimated_output_tokens": 2,
+                    "estimated_total_tokens": 3,
+                },
+            },
         ],
         turns=[{"turn_index": 1, "user_message": "Plan", "elapsed_seconds": 1.0}],
         assistant_text="hello",
@@ -102,8 +127,21 @@ def test_evaluate_runtime_budget_flags_threshold_violations():
         events=[
             {"type": "tool_call", "tool": "query_transport_options"},
             {"type": "tool_call", "tool": "query_hotel_options"},
+            {"type": "tool_audit", "tool": "query_hotel_options", "status": "failed"},
             {"type": "error", "message": "timeout"},
             {"type": "report_data"},
+            {
+                "type": "turn_observability",
+                "observability": {
+                    "tool_call_count": 2,
+                    "tool_failure_count": 1,
+                    "fallback_count": 1,
+                    "degradation_status": "failed",
+                    "estimated_input_tokens": 1,
+                    "estimated_output_tokens": 100,
+                    "estimated_total_tokens": 101,
+                },
+            },
         ],
         turns=[{"turn_index": 1, "user_message": "Plan", "elapsed_seconds": 10, "tool_call_count": 2}],
         assistant_text="x" * 200,
@@ -135,6 +173,18 @@ def test_runtime_governance_summary_explains_latency_cost_and_tools():
             {"type": "tool_call", "tool": "query_transport_options", "turn_index": 1},
             {"type": "token", "content": "hello", "elapsed_since_scenario_start": 8},
             {"type": "report_data"},
+            {
+                "type": "turn_observability",
+                "observability": {
+                    "tool_call_count": 2,
+                    "tool_failure_count": 0,
+                    "fallback_count": 0,
+                    "degradation_status": "ok",
+                    "estimated_input_tokens": 6,
+                    "estimated_output_tokens": 150,
+                    "estimated_total_tokens": 156,
+                },
+            },
         ],
         turns=[
             {
@@ -168,6 +218,41 @@ def test_runtime_governance_summary_explains_latency_cost_and_tools():
     assert summary["tool_usage"]["redundant_calls"] == [
         "turn-1:query_transport_options called 2 times"
     ]
+
+
+def test_collect_runtime_metrics_uses_turn_observability_for_hidden_tool_pressure():
+    metrics = collect_runtime_metrics(
+        events=[
+            {"type": "tool_call", "tool": "query_hotel_options"},
+            {
+                "type": "tool_audit",
+                "tool": "query_hotel_options",
+                "status": "degraded",
+                "degraded": True,
+            },
+            {
+                "type": "turn_observability",
+                "observability": {
+                    "tool_call_count": 3,
+                    "tool_failure_count": 1,
+                    "fallback_count": 1,
+                    "degradation_status": "degraded",
+                    "estimated_input_tokens": 10,
+                    "estimated_output_tokens": 20,
+                    "estimated_total_tokens": 30,
+                },
+            },
+            {"type": "report_data"},
+        ],
+        turns=[{"turn_index": 1, "user_message": "Plan", "elapsed_seconds": 1.0}],
+        assistant_text="ok",
+        elapsed_seconds=1.0,
+    )
+
+    assert metrics.tool_call_count == 3
+    assert metrics.tool_failure_count == 1
+    assert metrics.fallback_count == 1
+    assert metrics.degraded_event_count == 1
 
 
 def test_collect_runtime_metrics_rejects_invalid_inputs():

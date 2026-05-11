@@ -114,7 +114,7 @@ def _timestamp_from_datetime(value: datetime | None) -> float | None:
 class ApprovalGovernanceManager:
     """Track whether HITL governance is backed by durable storage."""
 
-    MEMORY_ALLOWED_ENVS = {"development", "dev", "local", "test", "testing"}
+    MEMORY_ALLOWED_ENVS = {"development", "test"}
     _lock = RLock()
     _snapshot: dict[str, Any] = {
         "status": "uninitialized",
@@ -134,7 +134,9 @@ class ApprovalGovernanceManager:
             from app.config import settings
 
             app_env = settings.app_env
-        return str(app_env or "").lower() in cls.MEMORY_ALLOWED_ENVS
+        from app.config import normalize_runtime_environment
+
+        return normalize_runtime_environment(app_env) in cls.MEMORY_ALLOWED_ENVS
 
     @classmethod
     def configure_uninitialized(cls, app_env: str | None = None) -> None:

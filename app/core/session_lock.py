@@ -12,7 +12,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from app.config import settings
+from app.config import normalize_runtime_environment, settings
 from app.utils.logger import app_logger
 
 
@@ -522,7 +522,7 @@ class SessionLockManager:
         self._configured_backend = _normalize_backend(
             backend or settings.session_lock_backend
         )
-        self._app_env = (app_env or settings.app_env).strip().lower()
+        self._app_env = normalize_runtime_environment(app_env or settings.app_env)
         self._redis_url = settings.redis_url
         self._key_prefix = settings.session_lock_key_prefix
         self._ttl_seconds = settings.session_lock_ttl_seconds

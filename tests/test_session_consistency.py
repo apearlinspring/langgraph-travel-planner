@@ -153,12 +153,26 @@ async def test_local_session_lock_expires_and_allows_new_owner():
 
 @pytest.mark.asyncio
 async def test_local_session_lock_auto_renew_keeps_lease_active():
-    manager = LocalSessionLockManager(ttl_seconds=0.05)
+    manager = LocalSessionLockManager(ttl_seconds=0.2)
     lease = await manager.acquire("conversation-1")
-    lease.start_auto_renew(0.02)
+    initial_expires_at = lease.snapshot.expires_at
+    lease.start_auto_renew(0.03)
 
     try:
-        await asyncio.sleep(0.09)
+        renewed_snapshot = None
+        for _ in range(20):
+            await asyncio.sleep(0.03)
+            snapshot = manager.active_snapshot("conversation-1")
+            if (
+                snapshot is not None
+                and initial_expires_at is not None
+                and snapshot.expires_at is not None
+                and snapshot.expires_at > initial_expires_at + 0.05
+            ):
+                renewed_snapshot = snapshot
+                break
+
+        assert renewed_snapshot is not None
         with pytest.raises(SessionLockBusy):
             await manager.acquire("conversation-1")
     finally:
@@ -254,21 +268,27 @@ async def test_chat_stream_returns_busy_event_without_saving_user_message(monkey
         )
 
         busy_event = _decode_sse_frame(await anext(stream))
+        observability_event = _decode_sse_frame(await anext(stream))
         done_event = _decode_sse_frame(await anext(stream))
 
         assert busy_event["type"] == "session_busy"
         assert "当前会话正在处理" in busy_event["content"]
         assert busy_event["lock_backend"] == "local"
-        assert done_event == {"type": "done"}
+        assert busy_event["turn_id"]
+        assert observability_event["type"] == "turn_observability"
+        assert observability_event["observability"]["degradation_status"] == "degraded"
+        assert done_event["type"] == "done"
+        assert done_event["turn_id"] == busy_event["turn_id"]
         assert saved_messages == []
 
         metrics = collect_runtime_metrics(
-            events=[busy_event, done_event],
+            events=[busy_event, observability_event, done_event],
             turns=[{"turn_index": 1, "user_message": "继续规划", "elapsed_seconds": 0.1}],
             assistant_text=busy_event["content"],
             elapsed_seconds=0.1,
         )
         assert metrics.session_busy_event_count == 1
+        assert metrics.turn_observability_event_count == 1
     finally:
         await stream.aclose()
         await lease.release()
@@ -303,7 +323,9 @@ async def test_chat_stream_releases_session_lock_when_generator_closes(monkeypat
     )
 
     token_event = _decode_sse_frame(await anext(stream))
-    assert token_event == {"type": "token", "content": "你好"}
+    assert token_event["type"] == "token"
+    assert token_event["content"] == "你好"
+    assert token_event["turn_id"]
     assert session_lock_manager.is_locked("conversation-1") is True
 
     await stream.aclose()

@@ -2,40 +2,29 @@
 from __future__ import annotations
 
 import os
+import json
 import urllib.error
 import urllib.request
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
 
-from dotenv import dotenv_values
-
+from app.config import (
+    DEFAULT_DOTENV_PATH,
+    PROJECT_ROOT,
+    dependency_specs_by_key,
+    has_real_env_value,
+    load_effective_environment,
+    runtime_configuration_snapshot,
+)
 from app.evaluation.scenarios import EvaluationScenario
 
 
 PREFLIGHT_VERSION = "acceptance_preflight.v1"
 ACCEPTANCE_STATUSES = {"passed", "failed", "degraded", "blocked", "skipped"}
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_DOTENV_PATH = PROJECT_ROOT / ".env"
-
-PLACEHOLDER_MARKERS = (
-    "your-",
-    "change-me",
-    "placeholder",
-    "not-a-real",
-    "test-key",
-    "dummy",
-    "example",
-)
 
 LLM_ENV_VARS = ("DASHSCOPE_API_KEY",)
-STARTUP_REQUIRED_ENV_VARS = (
-    "DASHSCOPE_API_KEY",
-    "LANGSMITH_API_KEY",
-    "POSTGRES_DB",
-    "POSTGRES_USER",
-    "POSTGRES_PASSWORD",
-)
+ACCEPTANCE_RUNTIME_ENV = "staging"
 EXTERNAL_API_ENV_VARS: dict[str, tuple[str, ...]] = {
     "amap": ("AMAP_API_KEY",),
     "tavily": ("TAVILY_API_KEY",),
@@ -105,10 +94,7 @@ class PreflightResult:
 
 
 def _has_real_value(value: str | None) -> bool:
-    if value is None or not value.strip():
-        return False
-    normalized = value.strip().lower()
-    return not any(marker in normalized for marker in PLACEHOLDER_MARKERS)
+    return has_real_env_value(value)
 
 
 def _load_effective_env(
@@ -116,16 +102,7 @@ def _load_effective_env(
     environ: Mapping[str, str] | None = None,
     dotenv_path: Path | None = None,
 ) -> tuple[dict[str, str], bool]:
-    path = dotenv_path or DEFAULT_DOTENV_PATH
-    should_load_dotenv = environ is None or dotenv_path is not None
-    dotenv_values_map = {
-        key: value
-        for key, value in dotenv_values(path).items()
-        if isinstance(key, str) and isinstance(value, str)
-    } if should_load_dotenv and path.exists() else {}
-    effective = dict(dotenv_values_map)
-    effective.update(dict(os.environ if environ is None else environ))
-    return effective, path.exists()
+    return load_effective_environment(environ=environ, dotenv_path=dotenv_path)
 
 
 def _any_real_env(env: Mapping[str, str], names: tuple[str, ...]) -> bool:
@@ -212,6 +189,120 @@ def _check_backend(base_url: str, *, required: bool = True, timeout_seconds: flo
     )
 
 
+def _parse_json_response(response: Any) -> dict[str, Any]:
+    raw = response.read()
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8", errors="replace")
+    try:
+        payload = json.loads(raw or "{}")
+    except json.JSONDecodeError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _check_backend_ready(
+    base_url: str,
+    *,
+    required: bool = True,
+    timeout_seconds: float = 5.0,
+) -> PreflightCheck:
+    url = f"{base_url.rstrip('/')}/health/ready"
+    payload: dict[str, Any] = {}
+    try:
+        with urllib.request.urlopen(url, timeout=timeout_seconds) as response:
+            payload = _parse_json_response(response)
+            http_status = response.status
+    except urllib.error.HTTPError as exc:
+        http_status = exc.code
+        payload = _parse_json_response(exc)
+    except (urllib.error.URLError, OSError) as exc:
+        return PreflightCheck(
+            key="backend_ready",
+            label="Backend ready health endpoint",
+            status="blocked" if required else "degraded",
+            required=required,
+            findings=[str(exc)],
+            suggestion="Start the backend and confirm GET /health/ready before running live acceptance.",
+        )
+
+    ready_status = str(payload.get("status") or "")
+    if 200 <= http_status < 300 and ready_status == "ready":
+        return PreflightCheck(
+            key="backend_ready",
+            label="Backend ready health endpoint",
+            status="passed",
+            required=required,
+        )
+    if 200 <= http_status < 300 and ready_status == "degraded":
+        return PreflightCheck(
+            key="backend_ready",
+            label="Backend ready health endpoint",
+            status="degraded",
+            required=False,
+            findings=[
+                "Backend readiness is degraded: "
+                + ", ".join(str(item) for item in payload.get("degraded_optional", [])[:8])
+            ],
+            suggestion="Review optional dependency degradation before treating this run as production-like.",
+        )
+
+    findings = [f"Backend readiness returned HTTP {http_status} with status {ready_status or 'unknown'}"]
+    missing = payload.get("missing_required") if isinstance(payload, dict) else None
+    if isinstance(missing, list) and missing:
+        findings.append("Missing required dependencies: " + ", ".join(str(item) for item in missing[:8]))
+    return PreflightCheck(
+        key="backend_ready",
+        label="Backend ready health endpoint",
+        status="blocked" if required else "degraded",
+        required=required,
+        findings=findings,
+        suggestion="Inspect /health/ready dependencies and resolve required blockers before live acceptance.",
+    )
+
+
+def _check_runtime_config_matrix(
+    *,
+    env: Mapping[str, str],
+    dotenv_path: Path | None,
+) -> PreflightCheck:
+    snapshot = runtime_configuration_snapshot(
+        app_env=ACCEPTANCE_RUNTIME_ENV,
+        environ=env,
+        dotenv_path=dotenv_path,
+        require_real_values=True,
+    )
+    if not snapshot["missing_required"]:
+        return PreflightCheck(
+            key="runtime_config",
+            label="Runtime config readiness matrix",
+            status="passed",
+            required=True,
+            findings=[],
+            suggestion="",
+        )
+
+    specs = dependency_specs_by_key()
+    env_vars: list[str] = []
+    findings: list[str] = []
+    for key in snapshot["missing_required"]:
+        dependency = snapshot["dependencies"].get(key) or {}
+        spec = specs.get(str(key))
+        env_vars.extend(str(item) for item in dependency.get("env_vars") or [])
+        label = spec.label if spec else str(key)
+        detail = "; ".join(str(item) for item in dependency.get("findings") or [])
+        findings.append(f"{label}: {detail or 'required dependency is not configured'}")
+
+    return PreflightCheck(
+        key="runtime_config",
+        label="Runtime config readiness matrix",
+        status="blocked",
+        required=True,
+        findings=findings,
+        env_vars=sorted(set(env_vars)),
+        suggestion="Fill required runtime configuration for staging-like acceptance; tests may mock, acceptance may not.",
+    )
+
+
 def run_acceptance_preflight(
     scenarios: list[EvaluationScenario],
     *,
@@ -238,19 +329,7 @@ def run_acceptance_preflight(
             )
         )
 
-    startup_missing = [name for name in STARTUP_REQUIRED_ENV_VARS if not env.get(name)]
-    if startup_missing:
-        checks.append(
-            PreflightCheck(
-                key="startup_required_env",
-                label="Backend startup required environment",
-                status="blocked",
-                required=True,
-                findings=["Missing required startup environment variables: " + ", ".join(startup_missing)],
-                env_vars=startup_missing,
-                suggestion="Provide startup configuration through process environment or .env; do not commit secrets.",
-            )
-        )
+    checks.append(_check_runtime_config_matrix(env=env, dotenv_path=dotenv_path))
 
     if capabilities["real_llm"]:
         checks.append(
@@ -311,6 +390,7 @@ def run_acceptance_preflight(
 
     if check_backend:
         checks.append(_check_backend(base_url))
+        checks.append(_check_backend_ready(base_url))
 
     blocked = [check.key for check in checks if check.status == "blocked"]
     degraded = [check.key for check in checks if check.status == "degraded"]

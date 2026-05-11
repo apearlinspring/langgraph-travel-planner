@@ -8,6 +8,7 @@ from langchain_core.messages import HumanMessage, ToolMessage
 
 from app.core.context_pack import abuild_context_pack
 from app.core.intent import PlanningModeDecision, TravelIntent, detect_travel_intent, resolve_planning_mode
+from app.core.observability import build_observability_context
 from app.core.state import TravelState
 from app.core.store import get_user_memory_service
 from app.core.workflow import INITIAL_PLANNING_STEP
@@ -1223,6 +1224,20 @@ class StepConfigMiddleware(AgentMiddleware):
                     f"{override_kwargs['system_prompt']}\n\n{tool_instruction}"
                 )
                 app_logger.info(f"模型不支持强制 tool_choice，改为提示词引导: {forced_tool}")
+
+        state["observability_context"] = build_observability_context(
+            turn_id=state.get("turn_id"),
+            current_step=current_step,
+            planning_mode=planning_mode.mode,
+            planning_mode_source=planning_mode.source,
+            planning_mode_confirmed=planning_mode.confirmed,
+            available_tool_count=len(override_kwargs["tools"]),
+        )
+        app_logger.info(
+            "观测上下文已更新: "
+            f"turn_id={state.get('turn_id')}, step={current_step}, "
+            f"planning_mode={planning_mode.mode}, tools={len(override_kwargs['tools'])}"
+        )
 
         modified_request = request.override(**override_kwargs)
         app_logger.info(f"已注入步骤配置，工具数量: {len(override_kwargs['tools'])}")

@@ -30,6 +30,7 @@ class AcceptanceThresholds:
     require_runtime_budget_pass: bool = True
     require_internal_evidence_for_agency: bool = True
     require_tool_audit_surface: bool = True
+    require_turn_observability: bool = True
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -45,6 +46,7 @@ DIMENSION_LABELS = {
     "tool_quality": "Tool governance quality",
     "runtime_quality": "Runtime metrics quality",
     "runtime_budget": "Runtime budget gate",
+    "runtime_observability": "Production observability surface",
     "budget_confidence": "Budget confidence contract",
     "internal_evidence": "Internal evidence references",
     "tool_audit": "Tool audit surface",
@@ -77,6 +79,10 @@ DIMENSION_SUGGESTIONS = {
     "runtime_budget": (
         "Inspect runtime_budget violations; slow or repeated external tools usually "
         "need either a code fix or a scenario-specific budget override."
+    ),
+    "runtime_observability": (
+        "Inspect SSE turn_observability events and app/core/observability.py; every "
+        "live turn should expose a safe turn-level metrics summary."
     ),
     "budget_confidence": (
         "Inspect budget_confidence; it must expose a level, confirmed or estimated "
@@ -366,6 +372,34 @@ def _runtime_budget_dimension(
     )
 
 
+def _runtime_observability_dimension(
+    quality_summary: dict[str, Any],
+    thresholds: AcceptanceThresholds,
+) -> dict[str, Any]:
+    if not thresholds.require_turn_observability:
+        return _dimension_result(
+            key="runtime_observability",
+            score=100.0,
+            threshold=None,
+            passed=True,
+            findings=[],
+        )
+
+    runtime_metrics = _as_dict(quality_summary.get("runtime_metrics"))
+    event_count = runtime_metrics.get("turn_observability_event_count")
+    count = int(event_count) if isinstance(event_count, int) else 0
+    findings = []
+    if count < 1:
+        findings.append("runtime_metrics.turn_observability_event_count is missing or zero")
+    return _dimension_result(
+        key="runtime_observability",
+        score=100.0 if count >= 1 else 0.0,
+        threshold=100.0,
+        passed=count >= 1,
+        findings=findings,
+    )
+
+
 def _agent_quality_dimension(
     scenario: EvaluationScenario,
     quality_summary: dict[str, Any],
@@ -453,6 +487,10 @@ def build_acceptance_gate_result(
             gate_thresholds.min_runtime_score,
         ),
         "runtime_budget": _runtime_budget_dimension(quality_summary, gate_thresholds),
+        "runtime_observability": _runtime_observability_dimension(
+            quality_summary,
+            gate_thresholds,
+        ),
         "budget_confidence": _budget_confidence_dimension(report_data, gate_thresholds),
         "internal_evidence": _internal_evidence_dimension(scenario, report_data, gate_thresholds),
         "tool_audit": _tool_audit_dimension(report_data, gate_thresholds),
@@ -647,6 +685,7 @@ def render_acceptance_markdown(summary: dict[str, Any]) -> str:
             f"- RAG（检索增强生成）质量: >= {thresholds.get('min_rag_score')}",
             f"- 工具治理质量: >= {thresholds.get('min_tool_score')}",
             f"- 运行时质量: >= {thresholds.get('min_runtime_score')}",
+            f"- 生产观测摘要: {'required（必需）' if thresholds.get('require_turn_observability') else 'optional（可选）'}",
             f"- 预算置信度契约: >= {thresholds.get('min_budget_confidence_score')}",
             f"- 旅行社内部证据类别: >= {thresholds.get('min_internal_evidence_categories')}",
         ]
