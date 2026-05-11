@@ -103,6 +103,15 @@
 .\.venv\Scripts\python.exe scripts\check_runtime_readiness.py --target acceptance --json
 ```
 
+在 CI/CD（持续集成/持续交付）中，默认 GitHub Actions（GitHub 自动化流水线）不会运行本节的真实链路跑批。`.github/workflows/ci.yml` 的 push（推送）和 pull request（合并请求）门禁只执行单元测试、测试收集、Python 编译、前端报告渲染验证和 development（开发）运行配置预检。
+
+真实验收通过 `workflow_dispatch`（手动触发）保留两个层级：
+
+- `Manual Acceptance Preflight`：默认执行，只跑 `--acceptance-core --preflight-only`，缺真实密钥、后端健康检查失败或 RAG（检索增强生成）向量库不可用时返回 blocked（环境阻塞）。
+- `Manual Live Acceptance`：只有 `run_live_acceptance=true` 时执行，会对 `acceptance_base_url` 发起真实 SSE（服务器发送事件）对话并消耗真实 LLM（大语言模型）和外部 API（应用程序接口）配额。
+
+这意味着没有真实密钥时，验收入口应失败为 blocked（环境阻塞），而不是用 mock（模拟）数据假通过；默认 CI（持续集成）也不会意外消耗真实 API（应用程序接口）额度。
+
 默认会在 `.runtime/evaluations/` 下生成两类整批摘要：
 
 - JSON（JavaScript 对象表示法）：机器可读，包含每个场景的报告质量、RAG（检索增强生成）质量、工具治理质量、运行时指标、阈值和失败维度。

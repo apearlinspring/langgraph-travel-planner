@@ -7,17 +7,51 @@ services:
     container_name: zhixing-backend
     restart: unless-stopped
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
-      APP_ENV: production
-      APP_HOST: 0.0.0.0
-      APP_PORT: 8000
-      DEBUG: "false"
+      APP_ENV: ${APP_ENV:-production}
+      APP_HOST: ${APP_HOST:-0.0.0.0}
+      APP_PORT: ${APP_PORT:-8000}
+      DEBUG: ${DEBUG:-false}
+      SQL_ECHO: ${SQL_ECHO:-false}
+      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
+      QWEN_MODEL_NAME: ${QWEN_MODEL_NAME:-qwen3.6-plus}
+      QWEN_PLANNER_MODEL_NAME: ${QWEN_PLANNER_MODEL_NAME:-qwen3.6-plus}
+      QWEN_ROUTER_MODEL_NAME: ${QWEN_ROUTER_MODEL_NAME:-qwen3.6-flash}
+      QWEN_RAG_MODEL_NAME: ${QWEN_RAG_MODEL_NAME:-qwen3.6-flash}
+      QWEN_VISION_MODEL_NAME: ${QWEN_VISION_MODEL_NAME:-qwen3.6-plus}
+      QWEN_REPORT_MODEL_NAME: ${QWEN_REPORT_MODEL_NAME:-qwen3.6-plus}
+      QWEN_BASE_URL: ${QWEN_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+      QWEN_REQUEST_TIMEOUT_SECONDS: ${QWEN_REQUEST_TIMEOUT_SECONDS:-180}
+      QWEN_MAX_RETRIES: ${QWEN_MAX_RETRIES:-1}
       POSTGRES_HOST: postgres
-      POSTGRES_PORT: 5432
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      POSTGRES_DB: ${POSTGRES_DB:-travel_planner_db}
+      POSTGRES_USER: ${POSTGRES_USER:-travel_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
       REDIS_HOST: redis
-      REDIS_PORT: 6379
-      REDIS_DB: 0
+      REDIS_PORT: ${REDIS_PORT:-6379}
+      REDIS_DB: ${REDIS_DB:-0}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      SESSION_LOCK_BACKEND: ${SESSION_LOCK_BACKEND:-redis}
+      SESSION_LOCK_REDIS_FALLBACK_TO_LOCAL: ${SESSION_LOCK_REDIS_FALLBACK_TO_LOCAL:-false}
+      RAG_VECTORSTORE_PATH: ${RAG_VECTORSTORE_PATH:-data/vectorstore}
+      RAG_COLLECTION_NAME: ${RAG_COLLECTION_NAME:-travel_guides}
+      AMAP_API_KEY: ${AMAP_API_KEY:-}
+      TAVILY_API_KEY: ${TAVILY_API_KEY:-}
+      VARIFLIGHT_API_KEY: ${VARIFLIGHT_API_KEY:-}
+      AIGOHOTEL_API_KEY: ${AIGOHOTEL_API_KEY:-}
+      AIGOHOTEL_MCP_API: ${AIGOHOTEL_MCP_API:-}
+      AIGOHOTEL_SECRET_KEY: ${AIGOHOTEL_SECRET_KEY:-}
+      LANGSMITH_API_KEY: ${LANGSMITH_API_KEY:-}
+      LANGSMITH_PROJECT: ${LANGSMITH_PROJECT:-zhixing-travel-planner-prod}
+      LANGSMITH_TRACING: ${LANGSMITH_TRACING:-false}
+      LANGSMITH_ENDPOINT: ${LANGSMITH_ENDPOINT:-https://api.smith.langchain.com}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-me-to-a-long-random-secret}
+      JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-10080}
+      LANGGRAPH_RECURSION_LIMIT: ${LANGGRAPH_RECURSION_LIMIT:-60}
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
@@ -27,23 +61,24 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health/live"]
+      test: ["CMD-SHELL", "curl -fsS http://localhost:$${APP_PORT:-8000}/health/ready >/dev/null"]
       interval: 30s
       timeout: 10s
-      retries: 3
+      retries: 5
+      start_period: 30s
 
   postgres:
     image: pgvector/pgvector:pg17
     container_name: zhixing-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-travel_planner_db}
+      POSTGRES_USER: ${POSTGRES_USER:-travel_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -52,11 +87,21 @@ services:
     image: redis:7-alpine
     container_name: zhixing-redis
     restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes"]
+    command:
+      - sh
+      - -c
+      - |
+        if [ -n "$$REDIS_PASSWORD" ]; then
+          redis-server --appendonly yes --requirepass "$$REDIS_PASSWORD"
+        else
+          redis-server --appendonly yes
+        fi
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "if [ -n \"$${REDIS_PASSWORD}\" ]; then redis-cli -a \"$${REDIS_PASSWORD}\" ping; else redis-cli ping; fi"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -71,6 +116,8 @@ services:
     ports:
       - "80:80"
       - "443:443"
+    environment:
+      ZHIXING_SITE_ADDRESS: ${ZHIXING_SITE_ADDRESS:-:80}
     volumes:
       - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
       - ./frontend:/srv/frontend:ro

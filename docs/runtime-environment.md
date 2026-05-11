@@ -58,3 +58,15 @@
 ```
 
 `check_runtime_readiness.py` 不输出密钥值，只输出变量名、状态和修复方向。
+
+## CI/CD 与环境命令分层
+
+| 场景 | 命令 | 真实密钥策略 | 预期用途 |
+|---|---|---|---|
+| 本地 development（开发） | `scripts\check_runtime_readiness.py --target development --json` | 可使用占位值或本地 `.env`，但必需变量名要配置 | 开发机快速发现缺核心配置 |
+| CI（持续集成） | `python scripts/check_runtime_readiness.py --target development --json` | 只使用测试占位值，不读取真实密钥 | 合并前证明配置契约和脚本入口可重复运行 |
+| acceptance（验收）preflight（预检） | `scripts\run_evaluation_scenarios.py --acceptance-core --preflight-only --json` | 必需项必须是真实值；缺失返回 blocked（环境阻塞） | 不消耗真实对话配额地检查验收条件 |
+| staging（预生产）live acceptance（在线验收） | `scripts\run_evaluation_scenarios.py --acceptance-core --base-url <staging-url>` | 真实密钥通过部署环境注入 | 手动触发真实链路验收 |
+| production（生产）readiness（就绪） | `scripts\check_runtime_readiness.py --target production --json` | 必需项必须是真实值，不允许 placeholder（占位） | 发布前检查配置、RAG（检索增强生成）向量库和安全边界 |
+
+GitHub Actions（GitHub 自动化流水线）的默认 CI（持续集成）门禁只覆盖 development（开发）级配置预检。`workflow_dispatch`（手动触发）入口会先运行 acceptance（验收）preflight（预检）；只有显式设置 `run_live_acceptance=true` 才运行真实 live acceptance（在线验收）场景。
