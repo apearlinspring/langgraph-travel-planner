@@ -25,16 +25,18 @@
 默认策略是确定性摘要，测试和本地回归不需要真实 LLM 调用。需要在线上或联调环境试用 LLM 摘要时，通过环境变量开启：
 
 ```powershell
-$env:ZHIXING_CONTEXT_SUMMARY_MODE='llm'
+$env:CONVERSATION_SUMMARY_BACKEND='llm'
 $env:ZHIXING_CONTEXT_SUMMARY_PROFILE='rag'
 $env:ZHIXING_CONTEXT_SUMMARY_MAX_TOKENS='700'
-$env:ZHIXING_CONTEXT_SUMMARY_FALLBACK='true'
+$env:CONVERSATION_SUMMARY_FALLBACK='true'
 ```
 
 说明：
 
 - `deterministic`：默认值，只使用本地规则，稳定、便宜、适合测试。
 - `llm`：调用 `build_chat_model(profile=...)` 生成摘要；失败时默认回退确定性摘要。
+- 当 `CONVERSATION_SUMMARY_BACKEND=llm` 但没有 `DASHSCOPE_API_KEY` 时，不允许无声回退：默认会显式降级到确定性摘要，并把原因写入 `summary_fallback_reason`；如果设置 `CONVERSATION_SUMMARY_FALLBACK=false`，则直接配置失败。
+- 兼容旧变量 `ZHIXING_CONTEXT_SUMMARY_MODE` 和 `ZHIXING_CONTEXT_SUMMARY_FALLBACK`，但新文档优先使用 `CONVERSATION_SUMMARY_BACKEND`。
 - `ZHIXING_CONTEXT_SUMMARY_PROFILE` 默认使用 `rag`，避免占用主规划模型档位。
 
 ## 上下文边界
@@ -66,6 +68,7 @@ $env:ZHIXING_CONTEXT_SUMMARY_FALLBACK='true'
 长期记忆写入现在有可解释字段：
 
 - `source`：来源，例如 `memory_tool:update_food_preference_tool`。
+- `extraction_method`：抽取方式，区分 `rule_extraction`（规则抽取）、`llm_extraction`（LLM 抽取）和 `human_confirmed`（人工确认）。
 - `reason`：为什么接受或拒绝写入。
 - `confidence`：0 到 1 的置信度。
 - `scope`：`stable` 或 `temporary`。
@@ -102,6 +105,8 @@ uv run python -m pytest tests\test_context_engineering.py tests\test_step_prompt
 
 结果：`55 passed`。
 
+注意：无模型密钥环境下通过的是确定性摘要路径，只说明上下文预算、规则摘要、关键历史轮次和记忆审计契约可用；不代表线上 LLM 摘要质量已经通过评估。线上启用 `CONVERSATION_SUMMARY_BACKEND=llm` 后，还需要用真实长对话样例单独验收摘要准确性、遗漏率和成本。
+
 ## 自审
 
 - 未读取、写入或提交 `.env` 真实密钥。
@@ -109,7 +114,7 @@ uv run python -m pytest tests\test_context_engineering.py tests\test_step_prompt
 - 工具失败兜底原则未改变；本模块只管理上下文注入和记忆边界。
 - 新增测试均为本地确定性测试，没有真实网络、真实 LLM 或真实外部 API 依赖。
 - 已避免把临时同行人要求、单次住宿偏好、单次预算写入长期用户画像。
-- 长期记忆写入有来源、原因和置信度；拒绝写入临时条件时也返回可解释原因。
+- 长期记忆写入有来源、抽取方式、原因和置信度；拒绝写入临时条件时也返回可解释原因。
 
 ## 剩余风险
 

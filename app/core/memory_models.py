@@ -2,7 +2,7 @@
 长期记忆数据模型
 使用 Pydantic BaseModel 定义结构化的用户记忆数据
 """
-from typing import Optional
+from typing import Literal, Optional
 from pydantic import BaseModel, Field
 from datetime import datetime, timezone
 
@@ -16,6 +16,11 @@ class MemoryAuditEntry(BaseModel):
     field: str = Field(..., description="被写入的长期记忆字段")
     value: str = Field(..., description="写入或评估的记忆值")
     source: str = Field(default="user_statement", description="记忆来源")
+    extraction_method: Literal[
+        "rule_extraction",
+        "llm_extraction",
+        "human_confirmed",
+    ] = Field(default="rule_extraction", description="记忆抽取方式")
     reason: str = Field(default="", description="接受或拒绝写入的原因")
     confidence: float = Field(default=0.75, ge=0.0, le=1.0, description="写入置信度")
     scope: str = Field(default="stable", description="stable 或 temporary")
@@ -155,6 +160,11 @@ class MemoryWriteCandidate(BaseModel):
     scope: str = Field(default="stable", description="stable 或 temporary")
     reason: str = Field(default="", description="接受或拒绝原因")
     source: str = Field(default="user_statement", description="记忆来源")
+    extraction_method: Literal[
+        "rule_extraction",
+        "llm_extraction",
+        "human_confirmed",
+    ] = Field(default="rule_extraction", description="记忆抽取方式")
     confidence: float = Field(default=0.75, ge=0.0, le=1.0, description="置信度")
     evidence: str = Field(default="", description="可解释依据或原始线索摘要")
 
@@ -210,8 +220,10 @@ def classify_memory_candidate(
     *,
     memory_scope: str | None = None,
     source: str = "user_statement",
+    extraction_method: str = "rule_extraction",
     evidence: str | None = None,
 ) -> MemoryWriteCandidate:
+    normalized_method = normalize_memory_extraction_method(extraction_method)
     text = str(value or "").strip()
     if not text:
         return MemoryWriteCandidate(
@@ -220,6 +232,7 @@ def classify_memory_candidate(
             scope="temporary",
             reason="空内容不写入长期记忆",
             source=source,
+            extraction_method=normalized_method,
             confidence=0.0,
             evidence=evidence or "",
         )
@@ -232,6 +245,7 @@ def classify_memory_candidate(
             scope=scope,
             reason="用户或模型标记为本次旅行临时条件",
             source=source,
+            extraction_method=normalized_method,
             confidence=0.3,
             evidence=evidence or text,
         )
@@ -245,6 +259,7 @@ def classify_memory_candidate(
             scope="temporary",
             reason="内容包含临时行程表达，未体现稳定偏好",
             source=source,
+            extraction_method=normalized_method,
             confidence=0.35,
             evidence=evidence or text,
         )
@@ -255,6 +270,7 @@ def classify_memory_candidate(
         scope="stable",
         reason="稳定偏好或历史事实，可写入长期记忆",
         source=source,
+        extraction_method=normalized_method,
         confidence=0.9 if has_stable_override else 0.75,
         evidence=evidence or text,
     )
@@ -265,9 +281,15 @@ def filter_stable_memory_values(
     *,
     memory_scope: str | None = None,
     source: str = "user_statement",
+    extraction_method: str = "rule_extraction",
 ) -> tuple[list[str], list[MemoryWriteCandidate]]:
     candidates = [
-        classify_memory_candidate(value, memory_scope=memory_scope, source=source)
+        classify_memory_candidate(
+            value,
+            memory_scope=memory_scope,
+            source=source,
+            extraction_method=extraction_method,
+        )
         for value in values or []
     ]
     accepted = [candidate.value for candidate in candidates if candidate.accepted]
@@ -281,6 +303,7 @@ def build_memory_audit_entries(
     *,
     memory_scope: str | None = None,
     source: str = "user_statement",
+    extraction_method: str = "rule_extraction",
     accepted_only: bool = True,
 ) -> list[MemoryAuditEntry]:
     entries: list[MemoryAuditEntry] = []
@@ -289,6 +312,7 @@ def build_memory_audit_entries(
             value,
             memory_scope=memory_scope,
             source=source,
+            extraction_method=extraction_method,
         )
         if accepted_only and not candidate.accepted:
             continue
@@ -297,6 +321,7 @@ def build_memory_audit_entries(
                 field=field,
                 value=candidate.value,
                 source=candidate.source,
+                extraction_method=candidate.extraction_method,
                 reason=candidate.reason,
                 confidence=candidate.confidence,
                 scope=candidate.scope,
@@ -305,3 +330,24 @@ def build_memory_audit_entries(
             )
         )
     return entries
+
+
+def normalize_memory_extraction_method(
+    extraction_method: str | None,
+) -> Literal["rule_extraction", "llm_extraction", "human_confirmed"]:
+    value = (extraction_method or "rule_extraction").strip().casefold()
+    aliases = {
+        "rule": "rule_extraction",
+        "rules": "rule_extraction",
+        "rule_extraction": "rule_extraction",
+        "规则抽取": "rule_extraction",
+        "llm": "llm_extraction",
+        "model": "llm_extraction",
+        "llm_extraction": "llm_extraction",
+        "模型抽取": "llm_extraction",
+        "human": "human_confirmed",
+        "manual": "human_confirmed",
+        "human_confirmed": "human_confirmed",
+        "人工确认": "human_confirmed",
+    }
+    return aliases.get(value, "rule_extraction")  # type: ignore[return-value]

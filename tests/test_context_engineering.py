@@ -55,6 +55,47 @@ def test_conversation_summary_keeps_planning_facts():
     assert summary.method == "deterministic"
 
 
+def test_summary_backend_defaults_to_deterministic_without_model_key(monkeypatch):
+    monkeypatch.delenv("CONVERSATION_SUMMARY_BACKEND", raising=False)
+    monkeypatch.delenv("ZHIXING_CONTEXT_SUMMARY_MODE", raising=False)
+    monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
+
+    config = ConversationSummaryConfig.from_environment()
+
+    assert config.mode == "deterministic"
+    assert config.requested_backend == "deterministic"
+    assert config.fallback_reason is None
+
+
+@pytest.mark.asyncio
+async def test_llm_summary_backend_without_key_explicitly_degrades(monkeypatch):
+    monkeypatch.setenv("CONVERSATION_SUMMARY_BACKEND", "llm")
+    monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
+
+    config = ConversationSummaryConfig.from_environment()
+    summary = await asummarize_conversation(
+        [HumanMessage(content="确认预算12000元。")],
+        current_step="transport_planning",
+        trigger_reason="测试缺少模型密钥",
+        config=config,
+    )
+
+    assert config.requested_backend == "llm"
+    assert config.mode == "deterministic"
+    assert "DASHSCOPE_API_KEY" in (config.fallback_reason or "")
+    assert summary.method == "deterministic"
+    assert "DASHSCOPE_API_KEY" in (summary.fallback_reason or "")
+
+
+def test_llm_summary_backend_without_key_can_fail_configuration(monkeypatch):
+    monkeypatch.setenv("CONVERSATION_SUMMARY_BACKEND", "llm")
+    monkeypatch.setenv("CONVERSATION_SUMMARY_FALLBACK", "false")
+    monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
+
+    with pytest.raises(RuntimeError, match="DASHSCOPE_API_KEY"):
+        ConversationSummaryConfig.from_environment()
+
+
 def test_key_history_turns_retain_original_evidence():
     messages = [
         HumanMessage(content="闲聊一句。"),
@@ -238,6 +279,7 @@ def test_memory_policy_rejects_temporary_trip_conditions():
     assert stable.accepted is True
     assert stable.scope == "stable"
     assert stable.source == "user_statement"
+    assert stable.extraction_method == "rule_extraction"
     assert stable.reason
     assert stable.confidence >= 0.75
     assert explicit_temporary.accepted is False
@@ -264,6 +306,25 @@ def test_memory_audit_entries_include_source_reason_and_confidence():
     accepted = [entry for entry in entries if entry.accepted]
     rejected = [entry for entry in entries if not entry.accepted]
     assert accepted[0].source == "memory_tool:update_travel_style_tool"
+    assert accepted[0].extraction_method == "rule_extraction"
     assert accepted[0].reason
     assert accepted[0].confidence >= 0.75
     assert rejected[0].scope == "temporary"
+
+
+def test_memory_audit_entries_distinguish_extraction_methods():
+    llm_entries = build_memory_audit_entries(
+        "profile.food_preferences",
+        ["我喜欢吃辣"],
+        source="memory_tool:update_food_preference_tool",
+        extraction_method="llm_extraction",
+    )
+    human_entries = build_memory_audit_entries(
+        "profile.dietary_restrictions",
+        ["请记住我海鲜过敏"],
+        source="memory_tool:update_dietary_restriction_tool",
+        extraction_method="human_confirmed",
+    )
+
+    assert llm_entries[0].extraction_method == "llm_extraction"
+    assert human_entries[0].extraction_method == "human_confirmed"

@@ -366,6 +366,7 @@ class UserMemoryService:
             confidence = f"{entry.confidence:.2f}"
             lines.append(
                 f"{entry.field}={entry.value}（来源：{entry.source}，"
+                f"抽取方式：{entry.extraction_method}，"
                 f"原因：{entry.reason}，置信度：{confidence}）"
             )
         return lines

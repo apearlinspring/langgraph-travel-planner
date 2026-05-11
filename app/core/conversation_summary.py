@@ -12,6 +12,7 @@ import os
 import re
 import logging
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Literal
 
 from app.core.context_budget import (
@@ -99,25 +100,47 @@ class ConversationSummaryConfig:
     llm_profile: str = "rag"
     llm_max_tokens: int = 700
     fallback_to_deterministic: bool = True
+    requested_backend: str = "deterministic"
+    fallback_reason: str | None = None
 
     @classmethod
     def from_environment(cls) -> "ConversationSummaryConfig":
         """Build config from environment variables without requiring tests to use LLM."""
 
-        mode = os.getenv("ZHIXING_CONTEXT_SUMMARY_MODE", "deterministic").strip().lower()
-        if mode not in {"deterministic", "llm"}:
-            mode = "deterministic"
+        requested_backend = (
+            os.getenv("CONVERSATION_SUMMARY_BACKEND")
+            or os.getenv("ZHIXING_CONTEXT_SUMMARY_MODE")
+            or "deterministic"
+        ).strip().lower()
+        mode = requested_backend if requested_backend in {"deterministic", "llm"} else "deterministic"
         profile = os.getenv("ZHIXING_CONTEXT_SUMMARY_PROFILE", "rag").strip() or "rag"
         max_tokens = _safe_int(
             os.getenv("ZHIXING_CONTEXT_SUMMARY_MAX_TOKENS"),
             default=700,
         )
-        fallback = os.getenv("ZHIXING_CONTEXT_SUMMARY_FALLBACK", "true").strip().lower()
+        fallback = (
+            os.getenv("CONVERSATION_SUMMARY_FALLBACK")
+            or os.getenv("ZHIXING_CONTEXT_SUMMARY_FALLBACK")
+            or "true"
+        ).strip().lower()
+        fallback_to_deterministic = fallback not in {"0", "false", "no"}
+        fallback_reason = None
+        if mode == "llm" and not _has_model_credentials():
+            fallback_reason = (
+                "CONVERSATION_SUMMARY_BACKEND=llm 但未检测到模型密钥 "
+                "DASHSCOPE_API_KEY"
+            )
+            if fallback_to_deterministic:
+                mode = "deterministic"
+            else:
+                raise RuntimeError(f"{fallback_reason}，且已关闭确定性摘要回退")
         return cls(
             mode=mode,  # type: ignore[arg-type]
             llm_profile=profile,
             llm_max_tokens=max(128, max_tokens),
-            fallback_to_deterministic=fallback not in {"0", "false", "no"},
+            fallback_to_deterministic=fallback_to_deterministic,
+            requested_backend=requested_backend,
+            fallback_reason=fallback_reason,
         )
 
 
@@ -235,6 +258,16 @@ async def asummarize_conversation(
         token_budget=token_budget,
     )
     if summary_config.mode != "llm":
+        if summary_config.fallback_reason:
+            return ConversationSummary(
+                text=deterministic.text,
+                source_message_count=deterministic.source_message_count,
+                retained_message_count=deterministic.retained_message_count,
+                trigger_reason=deterministic.trigger_reason,
+                highlights=deterministic.highlights,
+                method="deterministic",
+                fallback_reason=summary_config.fallback_reason,
+            )
         return deterministic
 
     summarizer = llm_summarizer or LLMConversationSummarizer(summary_config)
@@ -514,3 +547,18 @@ def _safe_int(value: str | None, *, default: int) -> int:
         return int(str(value or "").strip())
     except (TypeError, ValueError):
         return default
+
+
+def _has_model_credentials() -> bool:
+    if (os.getenv("DASHSCOPE_API_KEY") or "").strip():
+        return True
+
+    env_path = Path(__file__).resolve().parents[2] / ".env"
+    try:
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            key, separator, value = line.partition("=")
+            if separator and key.strip() == "DASHSCOPE_API_KEY":
+                return bool(value.strip().strip("'\""))
+    except OSError:
+        return False
+    return False
