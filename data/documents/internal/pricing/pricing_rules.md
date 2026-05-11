@@ -1,3 +1,14 @@
+---
+source_type: agency_internal
+category: pricing
+visibility: internal
+applicable_modes:
+  - agency_plan
+  - free_planning
+evidence_level: rule
+last_reviewed: "2026-05-11"
+---
+
 # 知行旅行方案报价规则
 
 > 示例内部文档，用于演示旅行社报价逻辑。文档内容为虚构业务资料。

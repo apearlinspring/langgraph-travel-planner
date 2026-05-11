@@ -46,6 +46,25 @@ def test_evaluate_rag_quality_checks_applicable_mode():
     assert any("applicable_modes" in item for item in result.summary)
 
 
+def test_evaluate_rag_quality_blocks_low_confidence_locked_commitments():
+    report_data = _valid_report_data()
+    report_data["agency_context"]["evidence"][0].update(
+        {
+            "evidence_level": "reference",
+            "requires_verification": True,
+            "freshness_status": "current",
+            "prohibited_commitments": [],
+        }
+    )
+    report_data["quote_policy"]["pricing_status"] = "locked"
+    report_data["quote_policy"]["locked_price"] = True
+
+    result = evaluate_rag_quality(report_data, expected_mode="agency_plan")
+
+    assert result.passed is False
+    assert any("Expired or low-confidence evidence" in item for item in result.summary)
+
+
 def test_evidence_category_coverage_uses_context_and_bundle_counts():
     report_data = _valid_report_data()
     report_data["agency_context"]["evidence"] = []

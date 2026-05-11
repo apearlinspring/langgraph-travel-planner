@@ -3,9 +3,12 @@
 """
 from pathlib import Path
 from typing import List
-from langchain_community.document_loaders import DirectoryLoader, TextLoader
 from langchain_core.documents import Document
-from app.rag.contracts import metadata_for_document
+from app.rag.contracts import (
+    metadata_for_document,
+    parse_markdown_metadata,
+    validate_internal_knowledge_base,
+)
 from app.utils.logger import app_logger
 
 
@@ -28,6 +31,7 @@ class DocumentManager:
         source_type: str,
         default_category: str,
         visibility: str,
+        validate_internal_metadata: bool = False,
     ) -> List[Document]:
         """加载指定目录下的 Markdown 文档，并补充统一元数据。"""
 
@@ -35,16 +39,31 @@ class DocumentManager:
             app_logger.warning(f"文档目录不存在: {directory}")
             return []
 
-        loader = DirectoryLoader(
-            str(directory),
-            glob="**/*.md",
-            loader_cls=TextLoader,
-            loader_kwargs={"encoding": "utf-8"},
-        )
-        documents = loader.load()
+        if validate_internal_metadata:
+            report = validate_internal_knowledge_base(directory)
+            if not report.passed:
+                summary = "；".join(
+                    f"{finding.path}:{finding.field}:{finding.message}"
+                    for finding in report.errors[:5]
+                )
+                raise ValueError(f"内部知识库 metadata 校验失败: {summary}")
+
+        documents: list[Document] = []
+        for path in sorted(directory.rglob("*.md")):
+            parsed = parse_markdown_metadata(path.read_text(encoding="utf-8"))
+            documents.append(
+                Document(
+                    page_content=parsed.body,
+                    metadata={
+                        "source": str(path),
+                        "declared_metadata": parsed.metadata,
+                    },
+                )
+            )
 
         for doc in documents:
             source = Path(doc.metadata.get("source", ""))
+            declared_metadata = doc.metadata.pop("declared_metadata", {}) or {}
             try:
                 relative_source = source.relative_to(directory)
                 category = (
@@ -54,12 +73,14 @@ class DocumentManager:
                 )
             except ValueError:
                 category = default_category
+            category = str(declared_metadata.get("category") or category)
 
             doc.metadata.update(
                 metadata_for_document(
                     source_type=source_type,
                     category=category,
                     visibility=visibility,
+                    declared_metadata=declared_metadata,
                 )
             )
 
@@ -85,6 +106,7 @@ class DocumentManager:
             source_type="agency_internal",
             default_category="general",
             visibility="internal",
+            validate_internal_metadata=True,
         )
         if category is None:
             return documents

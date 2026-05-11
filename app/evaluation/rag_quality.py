@@ -5,6 +5,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from app.evaluation.report_quality import CriterionResult, REQUIRED_AGENCY_CATEGORIES
+from app.rag.contracts import LOW_CONFIDENCE_EVIDENCE_LEVELS, PROHIBITED_DYNAMIC_COMMITMENTS
 
 
 REQUIRED_EVIDENCE_FIELDS = {
@@ -18,6 +19,10 @@ REQUIRED_EVIDENCE_FIELDS = {
     "evidence_level",
     "applicable_modes",
     "constraints",
+    "last_reviewed",
+    "freshness_status",
+    "requires_verification",
+    "prohibited_commitments",
 }
 
 
@@ -87,6 +92,15 @@ def _evidence_items(report_data: dict[str, Any]) -> list[dict[str, Any]]:
     return [_as_dict(item) for item in _as_list(context.get("evidence"))]
 
 
+def _needs_verification(item: dict[str, Any]) -> bool:
+    evidence_level = str(item.get("evidence_level") or "").strip().lower()
+    return (
+        item.get("requires_verification") is True
+        or str(item.get("freshness_status") or "").strip() != "current"
+        or evidence_level in LOW_CONFIDENCE_EVIDENCE_LEVELS
+    )
+
+
 def evidence_category_coverage(report_data: dict[str, Any]) -> dict[str, int]:
     """Return a stable count of evidence categories visible in report_data."""
 
@@ -144,12 +158,16 @@ def _criterion_evidence_contract(
             and 0 <= float(item.get("relevance_score")) <= 1
             and _as_list(item.get("applicable_modes"))
             and _as_list(item.get("constraints"))
+            and _has_text(item.get("last_reviewed"))
+            and item.get("freshness_status") in {"current", "expired", "unknown", "future"}
+            and isinstance(item.get("requires_verification"), bool)
+            and isinstance(item.get("prohibited_commitments"), list)
             for item in evidence
         )
         and bool(evidence),
         4,
         findings,
-        "Evidence items need bounded relevance_score, applicable_modes, and constraints",
+        "Evidence items need bounded scores, mode metadata, freshness, and verification flags",
     )
     return CriterionResult("rag_evidence_contract", score, 20, findings)
 
@@ -272,6 +290,50 @@ def _criterion_traceability(report_data: dict[str, Any]) -> CriterionResult:
     return CriterionResult("rag_traceability", score, 20, findings)
 
 
+def _criterion_evidence_governance(report_data: dict[str, Any]) -> CriterionResult:
+    findings: list[str] = []
+    score = 0.0
+    evidence = _evidence_items(report_data)
+    quote_policy = _as_dict(report_data.get("quote_policy"))
+
+    score += _score(
+        all(
+            item.get("visibility") == "internal"
+            for item in evidence
+            if item.get("source_type") == "agency_internal"
+        )
+        and bool(evidence),
+        3,
+        findings,
+        "agency_internal evidence must keep visibility=internal",
+    )
+    score += _score(
+        all(
+            item.get("source_type") in {"agency_internal", "destination_guide"}
+            for item in evidence
+        )
+        and bool(evidence),
+        3,
+        findings,
+        "Evidence source_type must stay within known RAG contracts",
+    )
+
+    verification_items = [item for item in evidence if _needs_verification(item)]
+    prohibited_terms = set(PROHIBITED_DYNAMIC_COMMITMENTS)
+    score += _score(
+        all(
+            prohibited_terms.intersection(set(_as_list(item.get("prohibited_commitments"))))
+            for item in verification_items
+        )
+        and not quote_policy.get("locked_price")
+        and str(quote_policy.get("pricing_status") or "") != "locked",
+        4,
+        findings,
+        "Expired or low-confidence evidence must prohibit dynamic commitments and cannot support locked pricing",
+    )
+    return CriterionResult("rag_evidence_governance", score, 10, findings)
+
+
 def _criterion_user_safe_delivery(report_data: dict[str, Any]) -> CriterionResult:
     findings: list[str] = []
     score = 0.0
@@ -325,6 +387,7 @@ def evaluate_rag_quality(
         _criterion_category_coverage(report_data, required_categories, mode if isinstance(mode, str) else None),
         _criterion_mode_alignment(report_data, expected_mode),
         _criterion_traceability(report_data),
+        _criterion_evidence_governance(report_data),
         _criterion_user_safe_delivery(report_data),
     ]
     total_score = round(sum(criterion.score for criterion in criteria), 2)

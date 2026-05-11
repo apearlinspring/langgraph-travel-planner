@@ -1,3 +1,14 @@
+---
+source_type: agency_internal
+category: pricing
+visibility: internal
+applicable_modes:
+  - agency_plan
+  - free_planning
+evidence_level: reference
+last_reviewed: "2026-05-11"
+---
+
 # 真实旅游报价与合同边界参考
 
 > 资料用途：把合同示范文本和在线旅游预订须知中的费用边界，抽象为知行预算说明规则。

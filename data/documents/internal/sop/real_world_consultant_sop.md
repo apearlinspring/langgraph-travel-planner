@@ -1,3 +1,14 @@
+---
+source_type: agency_internal
+category: sop
+visibility: internal
+applicable_modes:
+  - agency_plan
+  - free_planning
+evidence_level: reference
+last_reviewed: "2026-05-11"
+---
+
 # 真实定制游顾问服务流程参考
 
 > 资料用途：把公开定制游页面与职业技能标准中的工作流程，转成知行旅行顾问 Agent 的服务 SOP（标准作业流程）。

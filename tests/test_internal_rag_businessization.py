@@ -1,9 +1,16 @@
+from datetime import date
+
 from langchain_core.documents import Document
 import pytest
 
 from app.rag.document_loader import DocumentManager
-from app.rag.contracts import CONTRACT_VERSION, INTERNAL_KNOWLEDGE_BASE
-from app.rag.agency_retrieval import document_to_evidence
+from app.rag.contracts import (
+    CONTRACT_VERSION,
+    INTERNAL_KNOWLEDGE_BASE,
+    validate_internal_document_file,
+    validate_internal_knowledge_base,
+)
+from app.rag.agency_retrieval import document_to_evidence, format_evidence_response
 from app.rag.pipeline import AdvancedRAGPipeline
 from app.rag.query_optimizer import AdvancedQueryOptimizer
 from app.tools import rag_tools
@@ -21,7 +28,11 @@ def test_document_manager_loads_internal_documents_with_business_metadata():
     assert all(doc.metadata.get("knowledge_base") == INTERNAL_KNOWLEDGE_BASE for doc in documents)
     assert all(doc.metadata.get("evidence_level") for doc in documents)
     assert all(doc.metadata.get("applicable_modes") for doc in documents)
+    assert all(doc.metadata.get("last_reviewed") for doc in documents)
+    assert all(doc.metadata.get("freshness_status") == "current" for doc in documents)
+    assert all(doc.metadata.get("requires_verification") in {"true", "false"} for doc in documents)
     assert all(doc.metadata.get("constraints") for doc in documents)
+    assert all("source_type:" not in doc.page_content for doc in documents)
 
 
 def test_document_manager_filters_internal_documents_by_category():
@@ -53,6 +64,7 @@ def test_document_to_evidence_matches_refactor_plan_contract():
                 "category": "pricing",
                 "visibility": "internal",
                 "evidence_level": "rule",
+                "last_reviewed": "2026-05-11",
                 "applicable_modes": "agency_plan|free_planning",
                 "constraints": "不得承诺锁价|必须标记待核验",
             },
@@ -68,6 +80,115 @@ def test_document_to_evidence_matches_refactor_plan_contract():
     assert evidence["evidence_level"] == "rule"
     assert evidence["applicable_modes"] == ["agency_plan", "free_planning"]
     assert "不得承诺锁价" in evidence["constraints"]
+    assert evidence["freshness_status"] == "current"
+    assert evidence["requires_verification"] is False
+
+
+def test_low_confidence_evidence_requires_verification_and_blocks_commitments():
+    evidence = document_to_evidence(
+        Document(
+            page_content="# 公开规则抽象\n- 只能作为参考，不能承诺预订结果。",
+            metadata={
+                "source": "internal/pricing/reference.md",
+                "source_type": "agency_internal",
+                "category": "pricing",
+                "visibility": "internal",
+                "evidence_level": "reference",
+                "last_reviewed": "2026-05-11",
+                "applicable_modes": "agency_plan|free_planning",
+            },
+        )
+    )
+
+    assert evidence["requires_verification"] is True
+    assert "锁价" in evidence["prohibited_commitments"]
+
+    response = format_evidence_response(
+        query="报价边界",
+        documents=[
+            Document(
+                page_content="# 公开规则抽象\n- 只能作为参考，不能承诺预订结果。",
+                metadata={
+                    "source": "internal/pricing/reference.md",
+                    "source_type": "agency_internal",
+                    "category": "pricing",
+                    "visibility": "internal",
+                    "evidence_level": "reference",
+                    "last_reviewed": "2026-05-11",
+                    "applicable_modes": "agency_plan|free_planning",
+                },
+            )
+        ],
+        visibility="internal",
+    )
+
+    assert '"requires_verification": true' in response
+    assert "不得生成锁价、库存、支付、预订或客服承诺" in response
+    assert "禁止承诺：锁价" in response
+
+
+def test_validate_internal_knowledge_base_passes_current_corpus():
+    report = validate_internal_knowledge_base(
+        "data/documents/internal",
+        today=date(2026, 5, 11),
+    )
+
+    assert report.passed is True
+    assert report.checked_files >= 10
+    assert not report.errors
+
+
+def test_validate_internal_document_fails_missing_metadata(tmp_path):
+    path = tmp_path / "internal" / "pricing" / "missing.md"
+    path.parent.mkdir(parents=True)
+    path.write_text("# 缺少 metadata\n", encoding="utf-8")
+
+    findings = validate_internal_document_file(
+        path,
+        internal_root=tmp_path / "internal",
+        today=date(2026, 5, 11),
+    )
+
+    assert {finding.field for finding in findings} >= {
+        "source_type",
+        "category",
+        "visibility",
+        "applicable_modes",
+        "evidence_level",
+        "last_reviewed",
+    }
+
+
+def test_validate_internal_document_fails_expired_wrong_category_and_public_visibility(tmp_path):
+    path = tmp_path / "internal" / "pricing" / "bad.md"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        """---
+source_type: destination_guide
+category: products
+visibility: public
+applicable_modes:
+  - agency_plan
+evidence_level: locked
+last_reviewed: "2024-01-01"
+---
+# 错误分类
+""",
+        encoding="utf-8",
+    )
+
+    findings = validate_internal_document_file(
+        path,
+        internal_root=tmp_path / "internal",
+        today=date(2026, 5, 11),
+    )
+    messages = "\n".join(f"{item.field}:{item.message}" for item in findings)
+
+    assert "source_type" in messages
+    assert "visibility" in messages
+    assert "目录分类" in messages
+    assert "evidence_level" in messages
+    assert "超过 365 天" in messages
 
 
 def test_internal_rag_tools_are_separate_from_public_rag_tools():
@@ -167,6 +288,26 @@ def test_rag_pipeline_respects_disabled_llm_reranker(monkeypatch):
     )
 
     assert pipeline.reranker is None
+
+
+def test_rag_pipeline_marks_stale_internal_documents_for_verification():
+    pipeline = object.__new__(AdvancedRAGPipeline)
+    docs = [
+        Document(
+            page_content="过期报价规则",
+            metadata={
+                "visibility": "internal",
+                "evidence_level": "rule",
+                "last_reviewed": "2024-01-01",
+            },
+        )
+    ]
+
+    result = pipeline._annotate_governance_metadata(docs)
+
+    assert result[0].metadata["freshness_status"] == "expired"
+    assert result[0].metadata["requires_verification"] == "true"
+    assert "锁价" in result[0].metadata["prohibited_commitments"]
 
 
 def test_rag_pipeline_skips_llm_rerank_during_retrieve():

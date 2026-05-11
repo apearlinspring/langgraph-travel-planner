@@ -1,3 +1,14 @@
+---
+source_type: agency_internal
+category: risk
+visibility: internal
+applicable_modes:
+  - agency_plan
+  - free_planning
+evidence_level: reference
+last_reviewed: "2026-05-11"
+---
+
 # 真实旅游合规与风险提示参考
 
 > 资料用途：把监管规则和合同示范文本中的底线要求，转成知行 Agent 的风险表达标准。

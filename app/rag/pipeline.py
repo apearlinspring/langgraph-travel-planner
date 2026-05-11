@@ -12,6 +12,11 @@ from app.rag.reranker import LLMReranker, LongContextReorder
 from app.rag.text_splitter import AdvancedParentDocumentSplitter
 from app.utils.logger import app_logger
 from app.rag.cache import RAGCache
+from app.rag.contracts import (
+    evidence_requires_verification,
+    freshness_status,
+    prohibited_commitments_for_metadata,
+)
 
 load_dotenv()
 
@@ -73,6 +78,25 @@ class AdvancedRAGPipeline:
         # 6. 缓存层
         self.cache = RAGCache(enabled=enable_cache)
 
+    def _annotate_governance_metadata(self, documents: List[Document]) -> List[Document]:
+        """Add retrieval-time governance flags for old or low-confidence evidence."""
+
+        for doc in documents:
+            metadata = doc.metadata or {}
+            if metadata.get("visibility") != "internal":
+                continue
+            metadata["freshness_status"] = freshness_status(metadata.get("last_reviewed"))
+            requires_verification = evidence_requires_verification(metadata)
+            metadata["requires_verification"] = (
+                "true" if requires_verification else "false"
+            )
+            if requires_verification:
+                metadata["prohibited_commitments"] = "|".join(
+                    prohibited_commitments_for_metadata(metadata)
+                )
+            doc.metadata = metadata
+        return documents
+
     def retrieve(self, query: str) -> List[Document]:
         """
         完整检索流程
@@ -123,6 +147,7 @@ class AdvancedRAGPipeline:
 
         # 4.2 长上下文重排序
         final_docs = self.context_reorder.reorder(parent_docs[:self.top_k])
+        final_docs = self._annotate_governance_metadata(final_docs)
         app_logger.info(f"✅ RAG 检索完成，最终返回 {len(final_docs)} 个文档")
 
         # 缓存结果

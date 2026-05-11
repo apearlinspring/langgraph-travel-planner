@@ -1,3 +1,14 @@
+---
+source_type: agency_internal
+category: products
+visibility: internal
+applicable_modes:
+  - agency_plan
+  - free_planning
+evidence_level: reference
+last_reviewed: "2026-05-11"
+---
+
 # 真实旅行社产品结构参考
 
 > 资料用途：把公开旅行平台和旅行社的真实业务表达，抽象成知行内部产品设计规则。本文不是库存承诺，也不代表任何第三方产品价格。

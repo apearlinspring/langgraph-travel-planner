@@ -1,3 +1,14 @@
+---
+source_type: agency_internal
+category: products
+visibility: internal
+applicable_modes:
+  - agency_plan
+  - free_planning
+evidence_level: standard
+last_reviewed: "2026-05-11"
+---
+
 # 知行旅行社产品路线模板
 
 > 示例内部文档，用于演示旅行社智能顾问如何参考自家产品标准。文档内容为虚构业务资料，不代表真实库存或价格承诺。
