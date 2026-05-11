@@ -45,3 +45,44 @@ def test_ci_default_gate_uses_only_non_real_placeholder_values():
     assert "LANGSMITH_API_KEY: test-key-langsmith" in workflow
     assert "JWT_SECRET_KEY: dev-only-ci-jwt-secret-change-me" in workflow
     assert "your-" not in workflow
+
+
+def test_docker_compose_exposes_runtime_readiness_contract():
+    compose = Path("docker-compose.yml").read_text(encoding="utf-8")
+
+    for env_name in [
+        "DASHSCOPE_API_KEY",
+        "POSTGRES_DB",
+        "POSTGRES_USER",
+        "POSTGRES_PASSWORD",
+        "REDIS_HOST",
+        "REDIS_PORT",
+        "RAG_VECTORSTORE_PATH",
+        "RAG_COLLECTION_NAME",
+        "AMAP_API_KEY",
+        "VARIFLIGHT_API_KEY",
+        "AIGOHOTEL_API_KEY",
+        "JWT_SECRET_KEY",
+        "LANGGRAPH_RECURSION_LIMIT",
+    ]:
+        assert env_name in compose
+
+    assert "/health/ready" in compose
+    assert "SESSION_LOCK_BACKEND" in compose
+    assert "SESSION_LOCK_REDIS_FALLBACK_TO_LOCAL" in compose
+    assert "service_healthy" in compose
+
+
+def test_container_files_keep_liveness_and_proxy_configurable():
+    dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
+    runtime_dockerfile = Path("deploy/Dockerfile.runtime").read_text(encoding="utf-8")
+    caddyfile = Path("deploy/Caddyfile").read_text(encoding="utf-8")
+
+    for content in [dockerfile, runtime_dockerfile]:
+        assert "APP_ENV=production" in content
+        assert "/health/live" in content
+        assert "python\", \"-m\", \"app.run" in content
+
+    assert "{$ZHIXING_SITE_ADDRESS:travel.403edr.cn}" in caddyfile
+    assert "/health/*" in caddyfile
+    assert "reverse_proxy backend:8000" in caddyfile

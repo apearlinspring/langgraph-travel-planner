@@ -32,11 +32,13 @@ COPY frontend /app/frontend
 ENV PATH="/opt/venv/bin:$PATH"
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
+ENV APP_ENV=production
+ENV APP_HOST=0.0.0.0
 ENV APP_PORT=8000
 
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:${APP_PORT}/health/live || exit 1
+    CMD curl -fsS http://localhost:${APP_PORT}/health/live || exit 1
 
 CMD ["python", "-m", "app.run"]

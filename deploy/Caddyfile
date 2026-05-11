@@ -1,4 +1,4 @@
-travel.403edr.cn {
+{$ZHIXING_SITE_ADDRESS:travel.403edr.cn} {
     encode gzip zstd
 
     @backend path /api/* /docs* /redoc* /openapi.json /health/*
