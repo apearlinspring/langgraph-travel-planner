@@ -32,7 +32,9 @@ SESSION_LOCK_REDIS_RETRY_INTERVAL_SECONDS=5
 
 - 单进程本地开发可使用 `local` 或默认 `auto`。
 - 多 worker 或多实例部署应使用 `auto` 或 `redis`，并确保所有实例连接同一个 Redis。
-- 如果不能接受 Redis 故障时的多实例一致性风险，应设置 `SESSION_LOCK_REDIS_FALLBACK_TO_LOCAL=false`，让锁服务异常显式暴露。
+- `APP_ENV=development` 且 `SESSION_LOCK_BACKEND=auto` 时，Redis 故障可以降级为本地锁。
+- `APP_ENV=production` 或 `SESSION_LOCK_BACKEND=redis` 时，Redis 故障会让 `/health/ready` 返回 `not_ready`，不再静默降级。
+- 本地锁只适合单进程开发或单进程部署，不代表多 worker 或多实例一致性。
 
 ## Redis 锁契约
 
@@ -52,13 +54,52 @@ Redis 后端使用 `SET key value NX PX ttl` 原子获取锁：
 
 ## 降级策略
 
-`SESSION_LOCK_BACKEND=auto` 时，系统优先尝试 Redis。出现连接失败、超时或 Redis 操作异常，且 `SESSION_LOCK_REDIS_FALLBACK_TO_LOCAL=true` 时，会进入本地锁降级：
+`SESSION_LOCK_BACKEND=auto` 时，系统优先尝试 Redis。出现连接失败、超时或 Redis 操作异常，且同时满足以下条件时，才会进入本地锁降级：
+
+- `APP_ENV=development`。
+- `SESSION_LOCK_REDIS_FALLBACK_TO_LOCAL=true`。
+- `SESSION_LOCK_BACKEND=auto`。
+
+降级后：
 
 - 当前进程内仍会按 `conversation_id` 串行化。
 - 同一实例内的并发请求仍会收到 `session_busy`。
 - 多实例之间不共享本地锁，因此同一会话若被负载均衡到不同实例，仍可能发生并发写入。
 
 降级后会有短暂重试冷却时间，避免每次请求都阻塞在 Redis 连接失败上；冷却时间由 `SESSION_LOCK_REDIS_RETRY_INTERVAL_SECONDS` 控制。文档和部署配置需要明确：本地降级是可用性优先，不是强一致方案。
+
+## Ready Check
+
+`GET /health/ready` 会在 `services.session_lock` 中暴露当前锁后端：
+
+- `backend=redis`：当前可使用 Redis 锁，适合多 worker 或多实例。
+- `backend=local`：当前使用本地进程锁，只适合单进程。
+- `backend=degraded_local`：配置为 `auto`，但 Redis 不可用，development 环境临时降级到本地锁。
+
+示例：
+
+```json
+{
+  "status": "degraded",
+  "services": {
+    "session_lock": {
+      "status": "degraded",
+      "backend": "degraded_local",
+      "configured_backend": "auto",
+      "app_env": "development",
+      "redis_available": false,
+      "reason": "redis is unavailable"
+    }
+  }
+}
+```
+
+ready check 策略：
+
+- Redis 可用时，`backend=redis` 且锁服务 `status=ready`。
+- development + auto + Redis 不可用时，`backend=degraded_local` 且整体 readiness 可以是 `degraded`。
+- production + auto + Redis 不可用时，锁服务 `status=unavailable`，整体返回 HTTP 503。
+- 任意环境下 `SESSION_LOCK_BACKEND=redis` 且 Redis 不可用时，锁服务 `status=unavailable`，整体返回 HTTP 503。
 
 ## 忙碌响应契约
 

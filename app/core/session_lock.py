@@ -517,10 +517,12 @@ class SessionLockManager:
         *,
         backend: str | None = None,
         redis_client: Any | None = None,
+        app_env: str | None = None,
     ) -> None:
         self._configured_backend = _normalize_backend(
             backend or settings.session_lock_backend
         )
+        self._app_env = (app_env or settings.app_env).strip().lower()
         self._redis_url = settings.redis_url
         self._key_prefix = settings.session_lock_key_prefix
         self._ttl_seconds = settings.session_lock_ttl_seconds
@@ -561,7 +563,7 @@ class SessionLockManager:
             except ValueError:
                 raise
             except Exception as exc:
-                if not self._fallback_to_local:
+                if not self._can_degrade_to_local():
                     raise
                 self._redis_cooldown_until = (
                     time.monotonic() + self._redis_retry_interval_seconds
@@ -594,6 +596,48 @@ class SessionLockManager:
     def active_count(self) -> int:
         redis_count = self._redis.active_count() if self._redis is not None else 0
         return self._local.active_count() + redis_count
+
+    def get_status_snapshot(self) -> dict[str, Any]:
+        """Return readiness metadata for the configured lock backend."""
+
+        if self._configured_backend == "local":
+            if self._app_env == "production":
+                return self._status_snapshot(
+                    status="unavailable",
+                    backend="local",
+                    reason="production_requires_redis_session_lock",
+                    redis_available=False,
+                )
+            return self._status_snapshot(
+                status="ready",
+                backend="local",
+                reason=None,
+                redis_available=None,
+            )
+
+        redis_available, redis_error = self._probe_redis()
+        if redis_available:
+            return self._status_snapshot(
+                status="ready",
+                backend="redis",
+                reason=None,
+                redis_available=True,
+            )
+
+        if self._can_degrade_to_local():
+            return self._status_snapshot(
+                status="degraded",
+                backend="degraded_local",
+                reason=redis_error or "redis_unavailable",
+                redis_available=False,
+            )
+
+        return self._status_snapshot(
+            status="unavailable",
+            backend="redis",
+            reason=redis_error or "redis_unavailable",
+            redis_available=False,
+        )
 
     async def reset_for_tests(
         self,
@@ -634,6 +678,64 @@ class SessionLockManager:
         if self._local.active_count() > 0:
             return False
         return time.monotonic() >= self._redis_cooldown_until
+
+    def _can_degrade_to_local(self) -> bool:
+        return (
+            self._fallback_to_local
+            and self._configured_backend == "auto"
+            and self._app_env == "development"
+        )
+
+    def _probe_redis(self) -> tuple[bool, str | None]:
+        try:
+            if self._redis_client is not None:
+                ping = getattr(self._redis_client, "ping", None)
+                if ping is None:
+                    return True, None
+                result = ping()
+                if inspect.isawaitable(result):
+                    return True, None
+                return bool(result), None
+
+            import redis as redis_sync
+
+            client = redis_sync.Redis.from_url(
+                self._redis_url,
+                decode_responses=False,
+                socket_connect_timeout=self._operation_timeout_seconds,
+                socket_timeout=self._operation_timeout_seconds,
+            )
+            try:
+                return bool(client.ping()), None
+            finally:
+                client.close()
+        except Exception as exc:
+            return False, self._format_error(exc)
+
+    def _status_snapshot(
+        self,
+        *,
+        status: str,
+        backend: str,
+        reason: str | None,
+        redis_available: bool | None,
+    ) -> dict[str, Any]:
+        return {
+            "status": status,
+            "backend": backend,
+            "configured_backend": self._configured_backend,
+            "app_env": self._app_env,
+            "redis_available": redis_available,
+            "fallback_to_local": self._fallback_to_local,
+            "active_locks": self.active_count(),
+            "ttl_seconds": self._ttl_seconds,
+            "reason": reason,
+        }
+
+    @staticmethod
+    def _format_error(exc: Exception) -> str:
+        message = str(exc).strip()
+        return message or exc.__class__.__name__
 
 
 def _normalize_conversation_id(conversation_id: str) -> str:
