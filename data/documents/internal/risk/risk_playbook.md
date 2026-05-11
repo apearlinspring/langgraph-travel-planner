@@ -1,3 +1,14 @@
+---
+source_type: agency_internal
+category: risk
+visibility: internal
+applicable_modes:
+  - agency_plan
+  - free_planning
+evidence_level: warning
+last_reviewed: "2026-05-11"
+---
+
 # 知行旅行风险与避坑手册
 
 > 示例内部文档，用于演示旅行社内部避坑经验。文档内容为虚构业务资料。

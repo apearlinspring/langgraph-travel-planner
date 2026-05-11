@@ -12,6 +12,11 @@ def test_init_rag_script_imports_cleanly():
     assert hasattr(module, "main")
 
 
+def test_validate_rag_knowledge_script_imports_cleanly():
+    module = importlib.import_module("scripts.validate_rag_knowledge")
+    assert hasattr(module, "main")
+
+
 def test_runtime_readiness_script_imports_cleanly():
     module = importlib.import_module("scripts.check_runtime_readiness")
     assert hasattr(module, "build_runtime_readiness_report")
@@ -29,6 +34,7 @@ def test_ci_workflow_has_default_and_manual_gates():
     workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
 
     assert "python -m compileall app tests scripts" in workflow
+    assert "python scripts/validate_rag_knowledge.py" in workflow
     assert "python -m pytest --collect-only -q" in workflow
     assert "python -m pytest -q" in workflow
     assert "node scripts/verify_frontend_report_renderer.js" in workflow

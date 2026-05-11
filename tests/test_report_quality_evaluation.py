@@ -15,6 +15,10 @@ def _agency_evidence(category: str):
         "evidence_level": "rule",
         "applicable_modes": ["agency_plan", "free_planning"],
         "constraints": ["do not promise inventory", "mark live data for verification"],
+        "last_reviewed": "2026-05-11",
+        "freshness_status": "current",
+        "requires_verification": False,
+        "prohibited_commitments": [],
     }
 
 

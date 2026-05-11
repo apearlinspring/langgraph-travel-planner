@@ -69,4 +69,13 @@
 | staging（预生产）live acceptance（在线验收） | `scripts\run_evaluation_scenarios.py --acceptance-core --base-url <staging-url>` | 真实密钥通过部署环境注入 | 手动触发真实链路验收 |
 | production（生产）readiness（就绪） | `scripts\check_runtime_readiness.py --target production --json` | 必需项必须是真实值，不允许 placeholder（占位） | 发布前检查配置、RAG（检索增强生成）向量库和安全边界 |
 
-GitHub Actions（GitHub 自动化流水线）的默认 CI（持续集成）门禁只覆盖 development（开发）级配置预检。`workflow_dispatch`（手动触发）入口会先运行 acceptance（验收）preflight（预检）；只有显式设置 `run_live_acceptance=true` 才运行真实 live acceptance（在线验收）场景。
+内部 RAG（检索增强生成）知识库还有一个不依赖真实密钥的治理入口：
+
+```powershell
+.\.venv\Scripts\python scripts\validate_rag_knowledge.py
+.\.venv\Scripts\python scripts\validate_rag_knowledge.py --json
+```
+
+它适合放在默认 CI（持续集成）中，阻断缺 metadata（元数据）、过期 `last_reviewed`、错误分类、内部知识误标为 `public` 以及疑似密钥片段进入知识库。该脚本只校验知识治理契约，不初始化向量库、不调用 LLM（大语言模型）、不访问 MCP（模型上下文协议）或外部 API（应用程序接口）。
+
+GitHub Actions（GitHub 自动化流水线）的默认 CI（持续集成）门禁覆盖 development（开发）级配置预检和内部 RAG 知识库治理校验。`workflow_dispatch`（手动触发）入口会先运行 acceptance（验收）preflight（预检）；只有显式设置 `run_live_acceptance=true` 才运行真实 live acceptance（在线验收）场景。

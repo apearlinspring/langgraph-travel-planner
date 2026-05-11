@@ -1,3 +1,14 @@
+---
+source_type: agency_internal
+category: sop
+visibility: internal
+applicable_modes:
+  - agency_plan
+  - free_planning
+evidence_level: rule
+last_reviewed: "2026-05-11"
+---
+
 # 知行旅行顾问服务 SOP
 
 > 示例内部文档，用于演示旅行社服务标准。文档内容为虚构业务资料。

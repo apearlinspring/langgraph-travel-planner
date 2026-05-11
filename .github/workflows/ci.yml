@@ -60,6 +60,9 @@ jobs:
       - name: Compile Python Sources
         run: python -m compileall app tests scripts
 
+      - name: Validate Internal RAG Knowledge
+        run: python scripts/validate_rag_knowledge.py
+
       - name: Collect Pytest Suite
         run: python -m pytest --collect-only -q
 

@@ -1,3 +1,14 @@
+---
+source_type: agency_internal
+category: report
+visibility: internal
+applicable_modes:
+  - agency_plan
+  - free_planning
+evidence_level: standard
+last_reviewed: "2026-05-11"
+---
+
 # 知行最终旅游规划报告标准
 
 > 示例内部文档，用于演示旅行社报告交付规范。文档内容为虚构业务资料。

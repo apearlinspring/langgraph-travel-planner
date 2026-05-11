@@ -7,14 +7,49 @@ stable evidence shape that downstream prompts, tests, and evaluators can parse.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date, datetime
 from pathlib import Path
-from typing import NotRequired, TypedDict
+from typing import Any, Mapping, NotRequired, TypedDict
+
+try:  # PyYAML is present in requirements.txt, but keep a tiny fallback for scripts.
+    import yaml
+except Exception:  # pragma: no cover - exercised only in minimal dependency shells
+    yaml = None
 
 
 CONTRACT_VERSION = "rag.evidence.v1"
 
 PUBLIC_KNOWLEDGE_BASE = "public_destination_guides"
 INTERNAL_KNOWLEDGE_BASE = "agency_internal_knowledge"
+INTERNAL_REVIEW_MAX_AGE_DAYS = 365
+PLANNING_MODES = {"agency_plan", "free_planning"}
+LOW_CONFIDENCE_EVIDENCE_LEVELS = {"reference", "example", "low_confidence"}
+ALLOWED_INTERNAL_EVIDENCE_LEVELS = {
+    "standard",
+    "rule",
+    "warning",
+    "reference",
+    "example",
+    "low_confidence",
+}
+REQUIRED_INTERNAL_METADATA_FIELDS = {
+    "source_type",
+    "category",
+    "visibility",
+    "applicable_modes",
+    "evidence_level",
+    "last_reviewed",
+}
+PROHIBITED_DYNAMIC_COMMITMENTS = (
+    "锁价",
+    "库存",
+    "余票",
+    "房型",
+    "支付",
+    "预订承诺",
+    "成团状态",
+    "客服联系方式",
+)
 
 
 class RetrievedEvidence(TypedDict):
@@ -35,6 +70,9 @@ class RetrievedEvidence(TypedDict):
     travel_days_range: NotRequired[str]
     regions: NotRequired[list[str]]
     last_reviewed: NotRequired[str]
+    freshness_status: NotRequired[str]
+    requires_verification: NotRequired[bool]
+    prohibited_commitments: NotRequired[list[str]]
 
 
 @dataclass(frozen=True)
@@ -140,6 +178,66 @@ INTERNAL_CONTRACTS: dict[str, KnowledgeContract] = {
     ),
 }
 
+INTERNAL_CATEGORIES = set(INTERNAL_CONTRACTS)
+
+
+@dataclass(frozen=True)
+class MarkdownMetadata:
+    """Parsed Markdown body plus optional front matter metadata."""
+
+    metadata: dict[str, Any]
+    body: str
+
+
+@dataclass(frozen=True)
+class KnowledgeValidationFinding:
+    """One deterministic knowledge governance finding."""
+
+    severity: str
+    path: str
+    field: str
+    message: str
+
+    def to_dict(self) -> dict[str, str]:
+        return {
+            "severity": self.severity,
+            "path": self.path,
+            "field": self.field,
+            "message": self.message,
+        }
+
+
+@dataclass(frozen=True)
+class KnowledgeValidationReport:
+    """Validation result for an internal knowledge directory."""
+
+    checked_files: int
+    findings: tuple[KnowledgeValidationFinding, ...]
+    max_age_days: int = INTERNAL_REVIEW_MAX_AGE_DAYS
+
+    @property
+    def errors(self) -> tuple[KnowledgeValidationFinding, ...]:
+        return tuple(item for item in self.findings if item.severity == "error")
+
+    @property
+    def warnings(self) -> tuple[KnowledgeValidationFinding, ...]:
+        return tuple(item for item in self.findings if item.severity == "warning")
+
+    @property
+    def passed(self) -> bool:
+        return not self.errors
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "contract_version": CONTRACT_VERSION,
+            "checked_files": self.checked_files,
+            "passed": self.passed,
+            "error_count": len(self.errors),
+            "warning_count": len(self.warnings),
+            "max_age_days": self.max_age_days,
+            "findings": [item.to_dict() for item in self.findings],
+        }
+
 
 def _join(values: tuple[str, ...]) -> str:
     return "|".join(values)
@@ -151,6 +249,142 @@ def _split(value: object, fallback: tuple[str, ...] = ()) -> list[str]:
     if isinstance(value, (list, tuple)):
         return [str(item).strip() for item in value if str(item).strip()]
     return list(fallback)
+
+
+def _metadata_value(value: Any) -> str:
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (list, tuple, set)):
+        return _join(tuple(str(item).strip() for item in value if str(item).strip()))
+    return str(value).strip()
+
+
+def _fallback_front_matter_parser(raw: str) -> dict[str, Any]:
+    metadata: dict[str, Any] = {}
+    current_key: str | None = None
+    for raw_line in raw.splitlines():
+        if not raw_line.strip() or raw_line.lstrip().startswith("#"):
+            continue
+        if raw_line.startswith((" ", "\t")) and current_key:
+            item = raw_line.strip()
+            if item.startswith("- "):
+                existing = metadata.setdefault(current_key, [])
+                if isinstance(existing, list):
+                    existing.append(item[2:].strip().strip("'\""))
+            continue
+        if ":" not in raw_line:
+            current_key = None
+            continue
+        key, value = raw_line.split(":", 1)
+        current_key = key.strip()
+        stripped = value.strip()
+        if not stripped:
+            metadata[current_key] = []
+        elif stripped.startswith("[") and stripped.endswith("]"):
+            metadata[current_key] = [
+                item.strip().strip("'\"")
+                for item in stripped.strip("[]").split(",")
+                if item.strip()
+            ]
+        else:
+            metadata[current_key] = stripped.strip("'\"")
+    return metadata
+
+
+def parse_markdown_metadata(text: str) -> MarkdownMetadata:
+    """Parse YAML-style Markdown front matter and return a stripped body."""
+
+    normalized = text.lstrip("\ufeff")
+    if not normalized.startswith("---"):
+        return MarkdownMetadata(metadata={}, body=normalized)
+
+    lines = normalized.splitlines(keepends=True)
+    if not lines or lines[0].strip() != "---":
+        return MarkdownMetadata(metadata={}, body=normalized)
+
+    closing_index: int | None = None
+    for index, line in enumerate(lines[1:], start=1):
+        if line.strip() == "---":
+            closing_index = index
+            break
+
+    if closing_index is None:
+        return MarkdownMetadata(metadata={}, body=normalized)
+
+    raw_metadata = "".join(lines[1:closing_index])
+    body = "".join(lines[closing_index + 1 :]).lstrip()
+    if yaml is not None:
+        loaded = yaml.safe_load(raw_metadata) or {}
+        metadata = loaded if isinstance(loaded, dict) else {}
+    else:
+        metadata = _fallback_front_matter_parser(raw_metadata)
+    return MarkdownMetadata(metadata=dict(metadata), body=body)
+
+
+def parse_review_date(value: object) -> date | None:
+    """Parse a last_reviewed value as an ISO date."""
+
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        return date.fromisoformat(value.strip()[:10])
+    except ValueError:
+        return None
+
+
+def review_age_days(value: object, *, today: date | None = None) -> int | None:
+    reviewed_at = parse_review_date(value)
+    if reviewed_at is None:
+        return None
+    return ((today or date.today()) - reviewed_at).days
+
+
+def freshness_status(
+    last_reviewed: object,
+    *,
+    today: date | None = None,
+    max_age_days: int = INTERNAL_REVIEW_MAX_AGE_DAYS,
+) -> str:
+    age = review_age_days(last_reviewed, today=today)
+    if age is None:
+        return "unknown"
+    if age < 0:
+        return "future"
+    if age > max_age_days:
+        return "expired"
+    return "current"
+
+
+def evidence_requires_verification(
+    metadata: Mapping[str, Any],
+    *,
+    today: date | None = None,
+    max_age_days: int = INTERNAL_REVIEW_MAX_AGE_DAYS,
+) -> bool:
+    """Return True when evidence must stay in a pending-verification lane."""
+
+    evidence_level = str(metadata.get("evidence_level") or "").strip().lower()
+    if evidence_level in LOW_CONFIDENCE_EVIDENCE_LEVELS:
+        return True
+    return freshness_status(
+        metadata.get("last_reviewed"),
+        today=today,
+        max_age_days=max_age_days,
+    ) in {"expired", "unknown", "future"}
+
+
+def prohibited_commitments_for_metadata(metadata: Mapping[str, Any]) -> list[str]:
+    """Return commitments that stale or low-confidence evidence must not support."""
+
+    if evidence_requires_verification(metadata):
+        return list(PROHIBITED_DYNAMIC_COMMITMENTS)
+    return []
 
 
 def get_contract(category: str | None, visibility: str | None = None) -> KnowledgeContract:
@@ -202,28 +436,60 @@ def metadata_for_document(
     source_type: str,
     category: str,
     visibility: str,
+    declared_metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, str]:
     """Build Chroma-safe document metadata for the RAG contract."""
 
+    declared_metadata = declared_metadata or {}
     contract = get_contract(category, visibility)
-    knowledge_base = (
-        PUBLIC_KNOWLEDGE_BASE if visibility == "public" else INTERNAL_KNOWLEDGE_BASE
+    effective_category = str(declared_metadata.get("category") or category).strip()
+    effective_visibility = str(declared_metadata.get("visibility") or visibility).strip()
+    effective_source_type = str(
+        declared_metadata.get("source_type") or source_type
+    ).strip()
+    effective_evidence_level = str(
+        declared_metadata.get("evidence_level") or contract.evidence_level
+    ).strip()
+    effective_applicable_modes = _split(
+        declared_metadata.get("applicable_modes"),
+        contract.applicable_modes,
     )
-    return {
+    effective_last_reviewed = _metadata_value(
+        declared_metadata.get("last_reviewed") or contract.last_reviewed
+    )
+    knowledge_base = (
+        PUBLIC_KNOWLEDGE_BASE
+        if effective_visibility == "public"
+        else INTERNAL_KNOWLEDGE_BASE
+    )
+    metadata: dict[str, str] = {
         "contract_version": CONTRACT_VERSION,
         "knowledge_base": knowledge_base,
-        "source_type": source_type,
-        "category": category,
-        "visibility": visibility,
-        "evidence_level": contract.evidence_level,
-        "applicable_modes": _join(contract.applicable_modes),
-        "constraints": _join(contract.constraints),
+        "source_type": effective_source_type,
+        "category": effective_category,
+        "visibility": effective_visibility,
+        "evidence_level": effective_evidence_level,
+        "applicable_modes": _join(tuple(effective_applicable_modes)),
+        "constraints": _join(
+            tuple(_split(declared_metadata.get("constraints"), contract.constraints))
+        ),
         "user_segments": _join(contract.user_segments),
         "budget_levels": _join(contract.budget_levels),
         "travel_days_range": contract.travel_days_range,
         "regions": _join(contract.regions),
-        "last_reviewed": contract.last_reviewed,
+        "last_reviewed": effective_last_reviewed,
     }
+    if "title" in declared_metadata:
+        metadata["title"] = _metadata_value(declared_metadata["title"])
+
+    metadata["freshness_status"] = freshness_status(effective_last_reviewed)
+    metadata["requires_verification"] = _metadata_value(
+        evidence_requires_verification(metadata)
+    )
+    metadata["prohibited_commitments"] = _join(
+        tuple(prohibited_commitments_for_metadata(metadata))
+    )
+    return metadata
 
 
 def metadata_list(value: object, fallback: tuple[str, ...] = ()) -> list[str]:
@@ -240,3 +506,234 @@ def normalized_source(metadata: dict) -> str:
         return str(Path(str(source)))
     except (TypeError, ValueError):
         return str(source)
+
+
+def _relative_path(path: Path, root: Path | None = None) -> str:
+    try:
+        return str(path.relative_to(root)) if root else str(path)
+    except ValueError:
+        return str(path)
+
+
+def _finding(
+    *,
+    path: Path,
+    field: str,
+    message: str,
+    root: Path | None = None,
+    severity: str = "error",
+) -> KnowledgeValidationFinding:
+    return KnowledgeValidationFinding(
+        severity=severity,
+        path=_relative_path(path, root),
+        field=field,
+        message=message,
+    )
+
+
+def validate_internal_metadata(
+    metadata: Mapping[str, Any],
+    *,
+    path: Path,
+    internal_root: Path | None = None,
+    today: date | None = None,
+    max_age_days: int = INTERNAL_REVIEW_MAX_AGE_DAYS,
+) -> list[KnowledgeValidationFinding]:
+    """Validate internal knowledge metadata against the governance contract."""
+
+    findings: list[KnowledgeValidationFinding] = []
+    root = internal_root.resolve() if internal_root else None
+    missing = [
+        field
+        for field in sorted(REQUIRED_INTERNAL_METADATA_FIELDS)
+        if field not in metadata or metadata.get(field) in (None, "", [])
+    ]
+    for field in missing:
+        findings.append(
+            _finding(
+                path=path,
+                root=root,
+                field=field,
+                message=f"缺少内部知识 metadata 字段: {field}",
+            )
+        )
+
+    source_type = str(metadata.get("source_type") or "").strip()
+    if source_type and source_type != "agency_internal":
+        findings.append(
+            _finding(
+                path=path,
+                root=root,
+                field="source_type",
+                message="内部知识 source_type 必须是 agency_internal",
+            )
+        )
+
+    visibility = str(metadata.get("visibility") or "").strip()
+    if visibility and visibility != "internal":
+        findings.append(
+            _finding(
+                path=path,
+                root=root,
+                field="visibility",
+                message="内部知识 visibility 必须是 internal，不能误暴露为 public",
+            )
+        )
+
+    category = str(metadata.get("category") or "").strip()
+    if category and category not in INTERNAL_CATEGORIES:
+        findings.append(
+            _finding(
+                path=path,
+                root=root,
+                field="category",
+                message=f"内部知识 category 不在允许集合: {', '.join(sorted(INTERNAL_CATEGORIES))}",
+            )
+        )
+
+    if internal_root:
+        try:
+            path_category = path.resolve().relative_to(internal_root.resolve()).parts[0]
+        except (IndexError, ValueError):
+            path_category = None
+        if path_category and category and path_category != category:
+            findings.append(
+                _finding(
+                    path=path,
+                    root=root,
+                    field="category",
+                    message=f"category={category} 与目录分类 {path_category} 不一致",
+                )
+            )
+
+    applicable_modes = set(metadata_list(metadata.get("applicable_modes")))
+    invalid_modes = sorted(applicable_modes - PLANNING_MODES)
+    if applicable_modes and invalid_modes:
+        findings.append(
+            _finding(
+                path=path,
+                root=root,
+                field="applicable_modes",
+                message=f"applicable_modes 包含非法模式: {', '.join(invalid_modes)}",
+            )
+        )
+
+    evidence_level = str(metadata.get("evidence_level") or "").strip().lower()
+    if evidence_level and evidence_level not in ALLOWED_INTERNAL_EVIDENCE_LEVELS:
+        findings.append(
+            _finding(
+                path=path,
+                root=root,
+                field="evidence_level",
+                message=(
+                    "evidence_level 不在允许集合: "
+                    f"{', '.join(sorted(ALLOWED_INTERNAL_EVIDENCE_LEVELS))}"
+                ),
+            )
+        )
+
+    reviewed_at = parse_review_date(metadata.get("last_reviewed"))
+    if metadata.get("last_reviewed") and reviewed_at is None:
+        findings.append(
+            _finding(
+                path=path,
+                root=root,
+                field="last_reviewed",
+                message="last_reviewed 必须是 YYYY-MM-DD 格式",
+            )
+        )
+    elif reviewed_at:
+        status = freshness_status(
+            reviewed_at,
+            today=today,
+            max_age_days=max_age_days,
+        )
+        if status == "future":
+            findings.append(
+                _finding(
+                    path=path,
+                    root=root,
+                    field="last_reviewed",
+                    message="last_reviewed 不能晚于当前日期",
+                )
+            )
+        elif status == "expired":
+            findings.append(
+                _finding(
+                    path=path,
+                    root=root,
+                    field="last_reviewed",
+                    message=f"内部知识已超过 {max_age_days} 天未复审",
+                )
+            )
+
+    return findings
+
+
+def validate_internal_document_file(
+    path: Path,
+    *,
+    internal_root: Path | None = None,
+    today: date | None = None,
+    max_age_days: int = INTERNAL_REVIEW_MAX_AGE_DAYS,
+) -> list[KnowledgeValidationFinding]:
+    """Validate one internal Markdown knowledge document."""
+
+    text = path.read_text(encoding="utf-8")
+    parsed = parse_markdown_metadata(text)
+    findings = validate_internal_metadata(
+        parsed.metadata,
+        path=path,
+        internal_root=internal_root,
+        today=today,
+        max_age_days=max_age_days,
+    )
+
+    if "sk-" in text or "BEGIN PRIVATE KEY" in text:
+        findings.append(
+            _finding(
+                path=path,
+                root=internal_root,
+                field="content",
+                message="内部知识文档疑似包含真实密钥或私钥片段",
+            )
+        )
+    return findings
+
+
+def validate_internal_knowledge_base(
+    internal_dir: str | Path,
+    *,
+    today: date | None = None,
+    max_age_days: int = INTERNAL_REVIEW_MAX_AGE_DAYS,
+) -> KnowledgeValidationReport:
+    """Validate all internal Markdown knowledge files for CI and local preflight."""
+
+    root = Path(internal_dir)
+    findings: list[KnowledgeValidationFinding] = []
+    files = sorted(root.rglob("*.md")) if root.exists() else []
+    if not root.exists():
+        findings.append(
+            KnowledgeValidationFinding(
+                severity="error",
+                path=str(root),
+                field="path",
+                message="内部知识目录不存在",
+            )
+        )
+
+    for path in files:
+        findings.extend(
+            validate_internal_document_file(
+                path,
+                internal_root=root,
+                today=today,
+                max_age_days=max_age_days,
+            )
+        )
+
+    return KnowledgeValidationReport(
+        checked_files=len(files),
+        findings=tuple(findings),
+        max_age_days=max_age_days,
+    )

@@ -1,3 +1,14 @@
+---
+source_type: agency_internal
+category: report
+visibility: internal
+applicable_modes:
+  - agency_plan
+  - free_planning
+evidence_level: reference
+last_reviewed: "2026-05-11"
+---
+
 # 真实旅行方案交付物参考
 
 > 资料用途：把真实旅行规划产品、定制游标准和合同文件要求，转成知行最终报告的结构标准。
