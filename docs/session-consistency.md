@@ -98,8 +98,11 @@ ready check 策略：
 
 - Redis 可用时，`backend=redis` 且锁服务 `status=ready`。
 - development + auto + Redis 不可用时，`backend=degraded_local` 且整体 readiness 可以是 `degraded`。
-- production + auto + Redis 不可用时，锁服务 `status=unavailable`，整体返回 HTTP 503。
-- 任意环境下 `SESSION_LOCK_BACKEND=redis` 且 Redis 不可用时，锁服务 `status=unavailable`，整体返回 HTTP 503。
+- production + auto + Redis 不可用时，锁服务 `status=unavailable`，整体返回 HTTP（超文本传输协议）503。
+- 任意环境下 `SESSION_LOCK_BACKEND=redis` 且 Redis 不可用时，锁服务 `status=unavailable`，整体返回 HTTP（超文本传输协议）503。
+- 统一集成后，`/health/ready` 的 `services` 还必须同时暴露 `checkpointer`、`store`、`mcp` 和 `approval_governance`。
+- `core_ready` 只有在启动完成、Checkpointer（执行检查点）初始化、Store（长期存储）初始化、会话锁不是 `unavailable` 且审批治理 `ready=true` 时才成立。
+- 会话锁 `status=degraded` 属于允许降级能力，整体 readiness 返回 `degraded`；会话锁 `status=unavailable` 属于核心阻断，整体返回 `not_ready`。
 
 ## 忙碌响应契约
 

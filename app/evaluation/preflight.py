@@ -123,7 +123,7 @@ def _load_effective_env(
         if isinstance(key, str) and isinstance(value, str)
     } if path.exists() else {}
     effective = dict(dotenv_values_map)
-    effective.update(dict(environ or os.environ))
+    effective.update(dict(os.environ if environ is None else environ))
     return effective, path.exists()
 
 

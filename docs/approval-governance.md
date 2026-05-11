@@ -91,6 +91,13 @@ approval_governance: dict
 
 当审批治理不是 `ready` 时，整体 readiness 返回 `not_ready`，避免核心依赖已经启动但治理审计能力缺失时被误判为可生产使用。
 
+第 1.5 批统一集成后，审批治理与会话锁共同参与 `/health/ready` 核心契约：
+
+- `services` 必须同时暴露 `checkpointer`、`store`、`mcp`、`session_lock` 和 `approval_governance`。
+- `approval_governance.ready=true` 是 `core_ready` 成立条件；生产环境 PostgreSQL 不可持久化时，整体状态必须是 `not_ready`。
+- `session_lock.status="degraded"` 可以让整体状态变为 `degraded`，但不替代审批治理持久化要求。
+- MCP（模型上下文协议）为 `degraded` 或 `unavailable` 时，若核心依赖全部就绪，整体状态返回 `degraded` 而不是 `not_ready`。
+
 ## 订单号治理边界
 
 `generate_order_tool` 会继续生成 `ORDER-` 开头的项目内模拟订单号，不因为审批未完成而阻塞当前最终报告。但它会同步写入：

@@ -92,6 +92,8 @@
 
 没有真实密钥、后端健康检查不可达，或缺少所选场景声明的真实能力时，脚本不会运行真实场景，也不会给出“有效验收通过”的结论；它只会生成 blocked（环境阻塞）报告，并把场景标为 skipped（跳过）。此时报告质量、RAG（检索增强生成）质量、工具治理质量、运行时质量、预算置信度、内部证据和工具审计都标记为不可判定。
 
+运行时预检读取后端 `/health/ready` 时，统一按集成后的 ready check（就绪检查）契约判断：`services` 至少包含 `checkpointer`、`store`、`mcp`、`session_lock` 和 `approval_governance`。MCP（模型上下文协议）降级可以使验收摘要进入 `degraded`；但启动未完成、Checkpointer（执行检查点）或 Store（长期存储）未初始化、生产 Redis（内存数据结构存储）会话锁不可用、审批治理不能持久化到 PostgreSQL（关系型数据库）时，预检必须视为 blocked（环境阻塞）或不可继续运行。
+
 默认会在 `.runtime/evaluations/` 下生成两类整批摘要：
 
 - JSON（JavaScript 对象表示法）：机器可读，包含每个场景的报告质量、RAG（检索增强生成）质量、工具治理质量、运行时指标、阈值和失败维度。

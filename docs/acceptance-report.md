@@ -136,6 +136,13 @@ uv run --frozen python scripts\run_evaluation_scenarios.py --acceptance-core --d
 - 旅行社内部证据引用。
 - 工具审计表面。
 
+2026-05-11 追加第 1.5 批集成结论：
+
+- 已统一 `/health/ready` 运行时契约，`services` 同时包含 `checkpointer`、`store`、`mcp`、`session_lock` 和 `approval_governance`。
+- `core_ready` 同时要求启动完成、Checkpointer（执行检查点）初始化、Store（长期存储）初始化、会话锁不是 `unavailable`、审批治理 `ready=true`。
+- MCP（模型上下文协议）降级或开发环境会话锁降级会返回 `degraded`；生产 Redis（内存数据结构存储）会话锁不可用或审批治理不能持久化到 PostgreSQL（关系型数据库）会返回 `not_ready`。
+- `tests/test_system_resilience.py` 已覆盖 ready、MCP 降级、会话锁不可用、审批治理不可用，以及 payload（载荷）同时暴露会话锁和审批治理。
+
 ## 后续使用建议
 
 每次合并影响报告、RAG（检索增强生成）、工具治理或运行时行为的改动前，至少运行一次 `--acceptance-core`。如果失败，优先查看 Markdown（标记文本）摘要中的失败维度，再打开对应 JSON（JavaScript 对象表示法）快照复盘原始事件。
