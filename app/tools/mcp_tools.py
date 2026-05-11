@@ -14,6 +14,7 @@ from app.utils.logger import app_logger
 
 
 MCP_TOOL_TIMEOUT_SECONDS = 20.0
+TOOL_AUDIT_EVENTS_ARTIFACT_KEY = "tool_audit_events"
 
 
 def _server_is_healthy(server: str) -> bool:
@@ -27,7 +28,7 @@ def _tool_already_guarded(tool: BaseTool) -> bool:
 
 
 def guard_mcp_tool(tool: BaseTool) -> BaseTool:
-    """Wrap an MCP tool with timeout, argument guardrails and honest fallback text."""
+    """Wrap an MCP tool with timeout, argument guardrails and audit artifact output."""
 
     if _tool_already_guarded(tool):
         return tool
@@ -45,26 +46,30 @@ def guard_mcp_tool(tool: BaseTool) -> BaseTool:
             evidence_type="mcp_live_query",
             timeout_seconds=MCP_TOOL_TIMEOUT_SECONDS,
         )
+        artifact = {
+            TOOL_AUDIT_EVENTS_ARTIFACT_KEY: [guarded.event],
+            "tool_guard_status": guarded.status,
+            "tool_guard_error_type": guarded.error_type,
+        }
         if guarded.output is not None:
-            return guarded.output
+            return guarded.output, artifact
         fallback = (
             f"{getattr(tool, 'name', 'MCP 工具')} 本次调用未得到可靠结果"
             f"（{guarded.error_type or 'tool_guard_failed'}）。请标注为待二次核实，"
             "不要据此编造实时价格、库存、路线或开放状态。"
         )
-        if getattr(tool, "response_format", "content") == "content_and_artifact":
-            return fallback, {"tool_guard_status": guarded.status}
-        return fallback
+        return fallback, artifact
 
     metadata = dict(getattr(tool, "metadata", None) or {})
     metadata["execution_guard"] = "tool_execution_guard"
+    metadata["original_response_format"] = getattr(tool, "response_format", "content")
     return StructuredTool.from_function(
         coroutine=_guarded_tool,
         name=tool.name,
         description=tool.description or f"{tool.name} MCP 工具",
         args_schema=getattr(tool, "args_schema", None),
         return_direct=getattr(tool, "return_direct", False),
-        response_format=getattr(tool, "response_format", "content"),
+        response_format="content_and_artifact",
         metadata=metadata,
     )
 

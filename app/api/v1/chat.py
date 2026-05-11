@@ -141,15 +141,37 @@ def _is_transient_stream_disconnect(exc: Exception) -> bool:
 
 
 def _extract_embedded_tool_audit_events(output) -> list[dict]:
+    containers: list[dict] = []
     update = getattr(output, "update", None)
+    if isinstance(update, dict):
+        containers.append(update)
+    artifact = getattr(output, "artifact", None)
+    if isinstance(artifact, dict):
+        containers.append(artifact)
     if isinstance(output, dict):
-        update = output.get("update", update)
-    if not isinstance(update, dict):
-        return []
-    events = update.get("tool_audit_events") or []
-    if not isinstance(events, list):
-        return []
-    return [event for event in events if isinstance(event, dict)]
+        if isinstance(output.get("update"), dict):
+            containers.append(output["update"])
+        if isinstance(output.get("artifact"), dict):
+            containers.append(output["artifact"])
+        containers.append(output)
+    if isinstance(output, (tuple, list)) and len(output) == 2 and isinstance(output[1], dict):
+        containers.append(output[1])
+
+    events: list[dict] = []
+    seen_keys: set[tuple] = set()
+    for container in containers:
+        container_events = container.get("tool_audit_events") or []
+        if not isinstance(container_events, list):
+            continue
+        for event in container_events:
+            if not isinstance(event, dict):
+                continue
+            key = _audit_event_key(event)
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            events.append(event)
+    return events
 
 
 def _audit_event_key(event: dict) -> tuple:
