@@ -18,6 +18,7 @@ from app.config import (
     runtime_configuration_snapshot,
 )
 from app.evaluation.scenarios import EvaluationScenario
+from app.evaluation.llm_judge import LLM_JUDGE_ENV_VARS
 
 
 PREFLIGHT_VERSION = "acceptance_preflight.v1"
@@ -310,6 +311,7 @@ def run_acceptance_preflight(
     environ: Mapping[str, str] | None = None,
     dotenv_path: Path | None = None,
     check_backend: bool = True,
+    require_llm_judge: bool = False,
 ) -> PreflightResult:
     """Check whether selected scenarios can produce a valid live acceptance result."""
 
@@ -340,6 +342,18 @@ def run_acceptance_preflight(
                 env_vars=LLM_ENV_VARS,
                 required=True,
                 suggestion="Set a real DASHSCOPE_API_KEY before claiming live acceptance passed.",
+            )
+        )
+
+    if require_llm_judge:
+        checks.append(
+            _check_env_group(
+                key="llm_judge",
+                label="LLM judge provider",
+                env=env,
+                env_vars=LLM_JUDGE_ENV_VARS,
+                required=True,
+                suggestion="Set a real DASHSCOPE_API_KEY before enabling --llm-judge.",
             )
         )
 
@@ -413,10 +427,12 @@ def run_acceptance_preflight(
             "budget_confidence",
             "internal_evidence",
             "tool_audit",
+            "llm_judge" if require_llm_judge else "",
         ]
         if status in {"blocked", "skipped"}
         else []
     )
+    skipped_metrics = [item for item in skipped_metrics if item]
     return PreflightResult(
         version=PREFLIGHT_VERSION,
         status=status,

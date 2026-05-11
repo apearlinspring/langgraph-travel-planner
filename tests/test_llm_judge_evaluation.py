@@ -9,6 +9,7 @@ from app.evaluation.llm_judge import (
     build_manual_review_record,
     evaluate_llm_judge,
 )
+from app.evaluation.acceptance_gate import build_acceptance_gate_result
 from app.evaluation.scenarios import EvaluationScenario
 from tests.test_report_quality_evaluation import _valid_report_data
 
@@ -189,3 +190,48 @@ def test_manual_review_rejects_invalid_score():
     with pytest.raises(ValueError, match="overall_score"):
         build_manual_review_record({"overall_score": 101})
 
+
+def test_failed_llm_judge_does_not_override_deterministic_acceptance_gate():
+    scenario = EvaluationScenario(
+        id="agency",
+        name="Agency",
+        category="agency_plan",
+        prompt="Plan",
+        expected_mode="agency_plan",
+        min_score=80,
+        focus=["quality"],
+        tags=["agency"],
+    )
+    passed_quality = {
+        "aggregate": {"normalized_score": 100, "passed": True},
+        "report_quality": {"normalized_score": 100, "passed": True, "summary": [], "criteria": []},
+        "rag_quality": {"normalized_score": 100, "passed": True, "summary": [], "criteria": []},
+        "tool_quality": {"normalized_score": 100, "passed": True, "summary": [], "criteria": []},
+        "runtime_quality": {
+            "normalized_score": 100,
+            "passed": True,
+            "summary": [],
+            "criteria": [],
+            "budget_gate": {"passed": True, "violations": [], "warnings": []},
+        },
+        "runtime_metrics": {"turn_observability_event_count": 1},
+    }
+    llm_judge = {
+        "status": "failed",
+        "passed": False,
+        "normalized_score": 42,
+        "threshold": 80,
+        "findings": ["Tone is too generic."],
+    }
+
+    gate = build_acceptance_gate_result(
+        scenario=scenario,
+        quality_summary=passed_quality,
+        report_data=_valid_report_data(),
+        llm_judge_evaluation=llm_judge,
+    )
+
+    assert gate["passed"] is True
+    assert gate["status"] == "passed"
+    assert gate["supplemental_dimensions"]["llm_judge"]["status"] == "failed"
+    assert gate["failures"] == []
