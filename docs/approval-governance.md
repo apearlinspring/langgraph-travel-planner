@@ -7,6 +7,7 @@
 当前实现提供：
 
 - 敏感动作权限策略。
+- 轻量角色边界：普通用户、审批操作者、管理员。
 - PostgreSQL（关系型数据库）持久化审批请求、审批事件和工具审计事件。
 - 审批事件采用 append-only（只追加）方式记录状态流转。
 - TravelState（旅行规划状态）审批字段。
@@ -64,6 +65,31 @@ approval_governance: dict
 - `POST /api/v1/approvals/{approval_id}/reject`：拒绝 `pending` 记录。
 - `POST /api/v1/approvals/{approval_id}/expire`：手动过期 `pending` 记录。
 - `GET /api/v1/approvals/{approval_id}/events`：查询单条审批记录的只追加事件。
+
+### 角色与权限
+
+当前不引入复杂 RBAC（基于角色的访问控制）系统，也不接外部权限服务。服务端从用户对象的 `role` 属性或 `preferences.role` 中解析轻量角色，缺省为 `user`。
+
+| 角色 | 能力边界 |
+|---|---|
+| `user` | 可创建敏感动作标记，可查询自己的审批记录和事件；不能批准、拒绝或手动过期审批。 |
+| `approver` | 审批操作者，可查看全部审批记录，可批准、拒绝或手动过期 `pending` 审批。 |
+| `admin` | 管理员，拥有审批操作者能力，预留给后续治理配置维护。 |
+
+`GET /api/v1/approvals` 默认只返回当前用户记录；审批操作者或管理员可以通过 `scope=all` 查看全部审批记录。无权限响应使用稳定错误契约：
+
+```json
+{
+  "detail": {
+    "code": "approval_decision_denied",
+    "message": "只有审批操作者或管理员可以批准、拒绝或手动过期审批记录",
+    "required_roles": ["approver", "admin"],
+    "current_role": "user"
+  }
+}
+```
+
+普通用户即使是审批发起人，也不能自审未来真实支付、真实预订、短信发送或客户资料导出这类敏感动作。
 
 审批 API 默认使用 `DatabaseApprovalStore` 写入数据库；测试可以注入同接口的 `ApprovalStore` 内存替身，以保持本地快速回归。这个替身不作为生产审计账本。
 

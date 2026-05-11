@@ -5,7 +5,7 @@ import inspect
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from app.api.dependencies import get_current_user
+from app.api.dependencies import api_error, error_detail, get_current_user
 from app.core.approval import (
     ApprovalGovernanceManager,
     ApprovalNotFound,
@@ -15,7 +15,14 @@ from app.core.approval import (
     DatabaseApprovalStore,
     approval_store,
 )
-from app.core.permissions import get_sensitive_action_policy, list_sensitive_action_policies
+from app.core.permissions import (
+    can_decide_approval_record,
+    can_list_all_approval_records,
+    can_view_approval_record,
+    get_sensitive_action_policy,
+    get_user_role,
+    list_sensitive_action_policies,
+)
 from app.models.base import async_session_maker
 from app.models.user import User
 from app.schemas.approval import (
@@ -58,21 +65,58 @@ def _approval_error_to_http(error: Exception) -> HTTPException:
     if isinstance(error, ApprovalNotFound):
         return HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(error),
+            detail=error_detail("approval_not_found", str(error)),
         )
     if isinstance(error, ApprovalStateError):
         return HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=str(error),
+            detail=error_detail("approval_state_conflict", str(error)),
         )
     if isinstance(error, ApprovalPersistenceError):
         return HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=str(error),
+            detail=error_detail("approval_persistence_unavailable", str(error)),
         )
     return HTTPException(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        detail=str(error),
+        detail=error_detail("approval_validation_failed", str(error)),
+    )
+
+
+def _permission_denied(
+    user: User,
+    *,
+    code: str,
+    message: str,
+    required_roles: list[str] | None = None,
+) -> HTTPException:
+    return api_error(
+        status_code=status.HTTP_403_FORBIDDEN,
+        code=code,
+        message=message,
+        required_roles=required_roles,
+        current_role=get_user_role(user),
+    )
+
+
+def _ensure_can_view_approval(user: User, record) -> None:
+    if can_view_approval_record(user, record.user_id):
+        return
+    raise _permission_denied(
+        user,
+        code="approval_view_denied",
+        message="当前用户无权查看该审批记录",
+    )
+
+
+def _ensure_can_decide_approval(user: User, record) -> None:
+    if can_decide_approval_record(user, record.user_id):
+        return
+    raise _permission_denied(
+        user,
+        code="approval_decision_denied",
+        message="只有审批操作者或管理员可以批准、拒绝或手动过期审批记录",
+        required_roles=["approver", "admin"],
     )
 
 
@@ -119,19 +163,30 @@ async def list_approvals(
     status_filter: str | None = Query(default=None, alias="status"),
     action: str | None = None,
     conversation_id: str | None = None,
+    scope: str = Query(default="mine", pattern="^(mine|all)$"),
     user: User = Depends(get_current_user),
     approval_service: DatabaseApprovalStore | ApprovalStore = Depends(
         get_approval_service
     ),
 ):
-    """List the current user's approval records."""
+    """List approval records within the caller's permitted scope."""
 
     try:
         if action:
             get_sensitive_action_policy(action)
+        list_user_id = str(user.id)
+        if scope == "all":
+            if not can_list_all_approval_records(user):
+                raise _permission_denied(
+                    user,
+                    code="approval_list_all_denied",
+                    message="只有审批操作者或管理员可以查看全部审批记录",
+                    required_roles=["approver", "admin"],
+                )
+            list_user_id = None
         records = await _maybe_await(
             approval_service.list_records(
-                user_id=str(user.id),
+                user_id=list_user_id,
                 status=status_filter,
                 action=action,
                 conversation_id=conversation_id,
@@ -157,11 +212,7 @@ async def get_approval(
         record = await _maybe_await(approval_service.get(approval_id))
     except (ApprovalNotFound, ApprovalStateError, ApprovalPersistenceError) as error:
         raise _approval_error_to_http(error) from error
-    if record.user_id != str(user.id):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="审批记录不存在",
-        )
+    _ensure_can_view_approval(user, record)
     return _record_response(record)
 
 
@@ -178,8 +229,7 @@ async def approve_approval(
 
     try:
         record = await _maybe_await(approval_service.get(approval_id))
-        if record.user_id != str(user.id):
-            raise ApprovalNotFound(f"审批记录不存在：{approval_id}")
+        _ensure_can_decide_approval(user, record)
         record = await _maybe_await(
             approval_service.approve(
                 approval_id,
@@ -205,8 +255,7 @@ async def reject_approval(
 
     try:
         record = await _maybe_await(approval_service.get(approval_id))
-        if record.user_id != str(user.id):
-            raise ApprovalNotFound(f"审批记录不存在：{approval_id}")
+        _ensure_can_decide_approval(user, record)
         record = await _maybe_await(
             approval_service.reject(
                 approval_id,
@@ -231,8 +280,7 @@ async def expire_approval(
 
     try:
         record = await _maybe_await(approval_service.get(approval_id))
-        if record.user_id != str(user.id):
-            raise ApprovalNotFound(f"审批记录不存在：{approval_id}")
+        _ensure_can_decide_approval(user, record)
         record = await _maybe_await(approval_service.expire(approval_id))
     except (ApprovalNotFound, ApprovalStateError, ApprovalPersistenceError) as error:
         raise _approval_error_to_http(error) from error
@@ -251,8 +299,7 @@ async def list_approval_events(
 
     try:
         record = await _maybe_await(approval_service.get(approval_id))
-        if record.user_id != str(user.id):
-            raise ApprovalNotFound(f"审批记录不存在：{approval_id}")
+        _ensure_can_view_approval(user, record)
         events = await _maybe_await(approval_service.list_events(approval_id))
     except (ApprovalNotFound, ApprovalStateError, ApprovalPersistenceError) as error:
         raise _approval_error_to_http(error) from error

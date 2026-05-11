@@ -15,6 +15,28 @@ ApprovalAction = Literal[
     "send_sms",
     "export_customer_profile",
 ]
+UserRole = Literal["user", "approver", "admin"]
+
+
+ROLE_ALIASES: dict[str, UserRole] = {
+    "user": "user",
+    "member": "user",
+    "traveler": "user",
+    "customer": "user",
+    "普通用户": "user",
+    "approver": "approver",
+    "approval_operator": "approver",
+    "operator": "approver",
+    "reviewer": "approver",
+    "审批员": "approver",
+    "审批操作者": "approver",
+    "admin": "admin",
+    "administrator": "admin",
+    "owner": "admin",
+    "管理员": "admin",
+}
+
+APPROVAL_OPERATOR_ROLES: set[UserRole] = {"approver", "admin"}
 
 
 @dataclass(frozen=True)
@@ -42,6 +64,52 @@ class SensitiveActionPolicy:
             self.unsupported_without_integration
         )
         return payload
+
+
+def normalize_user_role(role: Any) -> UserRole:
+    """Normalize lightweight user roles without introducing a full RBAC service."""
+
+    normalized = str(role or "").strip()
+    if not normalized:
+        return "user"
+    return ROLE_ALIASES.get(normalized.lower(), "user")
+
+
+def get_user_role(user: Any) -> UserRole:
+    """Return a user's lightweight role from an attribute or preferences JSON."""
+
+    direct_role = getattr(user, "role", None)
+    if direct_role:
+        return normalize_user_role(direct_role)
+
+    preferences = getattr(user, "preferences", None)
+    if isinstance(preferences, dict):
+        return normalize_user_role(
+            preferences.get("role")
+            or preferences.get("user_role")
+            or preferences.get("permission_role")
+        )
+    return "user"
+
+
+def is_approval_operator(user: Any) -> bool:
+    return get_user_role(user) in APPROVAL_OPERATOR_ROLES
+
+
+def can_view_approval_record(user: Any, record_user_id: str | None) -> bool:
+    if is_approval_operator(user):
+        return True
+    return str(getattr(user, "id", "")) == str(record_user_id)
+
+
+def can_decide_approval_record(user: Any, record_user_id: str | None) -> bool:
+    """Only approval operators and admins can decide sensitive-action records."""
+
+    return is_approval_operator(user)
+
+
+def can_list_all_approval_records(user: Any) -> bool:
+    return is_approval_operator(user)
 
 
 SENSITIVE_ACTION_POLICIES: dict[ApprovalAction, SensitiveActionPolicy] = {
@@ -336,6 +404,26 @@ TOOL_EXECUTION_POLICIES: dict[str, ToolExecutionPolicy] = {
         approval_action="real_payment",
         default_timeout_seconds=10.0,
     ),
+    "send_sms": ToolExecutionPolicy(
+        tool_name="send_sms",
+        category="future_sensitive_action",
+        risk_level="critical",
+        description="短信发送占位能力，当前未接入短信服务，不会发送真实短信。",
+        enabled=False,
+        requires_approval=True,
+        approval_action="send_sms",
+        default_timeout_seconds=10.0,
+    ),
+    "export_customer_profile": ToolExecutionPolicy(
+        tool_name="export_customer_profile",
+        category="future_sensitive_action",
+        risk_level="critical",
+        description="客户资料导出占位能力，当前不得导出真实客户画像文件。",
+        enabled=False,
+        requires_approval=True,
+        approval_action="export_customer_profile",
+        default_timeout_seconds=10.0,
+    ),
 }
 
 
@@ -380,7 +468,7 @@ def decide_tool_execution_permission(
     if not policy.enabled:
         return ToolPermissionDecision(
             allowed=False,
-            reason=f"工具 {tool_name} 当前被治理策略禁用。",
+            reason=policy.description or f"工具 {tool_name} 当前被治理策略禁用。",
             error_type="tool_disabled",
         )
 

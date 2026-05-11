@@ -124,12 +124,28 @@ def test_tool_execution_policy_classifies_high_value_tools():
     hotel_policy = get_tool_execution_policy("query_hotel_options")
     rag_policy = get_tool_execution_policy("search_agency_pricing_rules")
     mcp_policy = get_tool_execution_policy("maps_geo")
+    profile_export_policy = get_tool_execution_policy("export_customer_profile")
 
     assert hotel_policy.risk_level == "high"
     assert hotel_policy.category == "live_hotel_search"
     assert rag_policy.category == "internal_rag"
     assert mcp_policy.category == "mcp_external_query"
+    assert profile_export_policy.enabled is False
+    assert profile_export_policy.requires_approval is True
     assert decide_tool_execution_permission("query_hotel_options").allowed is True
+
+
+def test_execution_guard_blocks_customer_profile_export_placeholder():
+    attempt = begin_tool_execution(
+        "export_customer_profile",
+        {"fields": ["phone", "id_card", "preferences"]},
+        runtime=None,
+    )
+
+    assert attempt.ok is False
+    assert attempt.blocked_event["status"] == "skipped"
+    assert attempt.blocked_event["error_type"] == "tool_disabled"
+    assert "客户资料导出" in attempt.blocked_message
 
 
 def test_execution_guard_blocks_sensitive_action_before_real_call():
