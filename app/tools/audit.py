@@ -193,6 +193,8 @@ def _audit_event_message(event: dict[str, Any]) -> str:
         return f"{label}：真实查询超时（{error_type}），出发前需要重新查询并二次核验。"
     if status == "skipped":
         return f"{label}：本轮查询因参数不完整被跳过（{error_type}），需要补齐信息后再核验。"
+    if status == "approval_required":
+        return f"{label}：本轮动作需要人工审批（{error_type}），审批完成前不得继续执行。"
     return f"{label}：真实查询未得到可靠结果（{error_type}），当前只能按兜底估算处理。"
 
 
@@ -200,7 +202,7 @@ def pending_checks_from_audit_events(events: list[dict[str, Any]] | None) -> lis
     checks: list[str] = []
     for event in events or []:
         status = event.get("status")
-        if status not in {"failed", "timeout", "degraded", "skipped"}:
+        if status not in {"failed", "timeout", "degraded", "skipped", "approval_required"}:
             continue
         message = _audit_event_message(event)
         if message not in checks:

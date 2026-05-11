@@ -11,6 +11,7 @@ from langchain.tools import tool
 from app.mcp_core.client import get_mcp_client
 from app.tools.driving_query import query_driving_route
 from app.tools.flight_query import query_flight_options
+from app.tools.mcp_tools import guard_mcp_tools
 from app.tools.train_query import query_train_options
 from app.utils.date_normalization import normalize_travel_date
 from app.utils.llm_factory import build_chat_model
@@ -28,8 +29,9 @@ async def _get_auxiliary_tools():
         for tool_item in all_tools
         if any(keyword in tool_item.name.lower() for keyword in keywords)
     ]
-    app_logger.info(f"Transport auxiliary tools: {[tool_item.name for tool_item in aux_tools]}")
-    return aux_tools
+    guarded_tools = guard_mcp_tools(aux_tools)
+    app_logger.info(f"Transport auxiliary tools: {[tool_item.name for tool_item in guarded_tools]}")
+    return guarded_tools
 
 
 async def _has_live_flight_capability() -> bool:

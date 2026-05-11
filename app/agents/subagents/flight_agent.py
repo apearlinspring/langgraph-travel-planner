@@ -7,6 +7,7 @@ import asyncio
 from langchain.agents import create_agent
 from app.mcp_core.client import get_mcp_client
 from app.tools.flight_query import query_flight_options
+from app.tools.mcp_tools import guard_mcp_tools
 from app.utils.llm_factory import build_chat_model
 from app.utils.logger import app_logger
 
@@ -28,8 +29,9 @@ async def _get_aviation_followup_tools():
         if tool.name in followup_tool_names
     ]
 
-    app_logger.info(f"航班补充工具: {[t.name for t in aviation_tools]}")
-    return aviation_tools
+    guarded_tools = guard_mcp_tools(aviation_tools)
+    app_logger.info(f"航班补充工具: {[t.name for t in guarded_tools]}")
+    return guarded_tools
 
 
 async def create_flight_subagent():

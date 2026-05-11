@@ -11,6 +11,14 @@ from langgraph.types import Command
 
 from app.agents.routers.destination_router import create_destination_router
 from app.core.state import TravelState
+from app.tools.execution_guard import (
+    audited_command,
+    begin_tool_execution,
+    fail_tool_execution,
+    finalize_tool_execution,
+)
+from app.tools.guardrails import validate_destination_query_args
+from app.tools.result_validation import validate_rag_result
 from app.utils.logger import app_logger
 
 
@@ -125,6 +133,26 @@ async def query_destination_info(
     - 综合的目的地信息（景点 + 天气）
     """
 
+    guard = begin_tool_execution(
+        "query_destination_info",
+        {"destination": destination, "query": query},
+        runtime=runtime,
+        input_validator=validate_destination_query_args,
+        evidence_type="destination_router_evidence",
+    )
+    if not guard.ok and guard.blocked_event is not None:
+        message = f"目的地信息查询参数不完整：{guard.blocked_message}。请先补齐目的地后再查。"
+        if runtime is None:
+            return message
+        return audited_command(
+            {"messages": [_tool_message(message, runtime)]},
+            runtime,
+            guard.blocked_event,
+            approval_update=guard.approval_update,
+        )
+
+    destination = str(guard.args["destination"])
+    query = str(guard.args.get("query") or "")
     started_at = time.perf_counter()
     app_logger.info(
         "Destination router query started: "
@@ -138,11 +166,28 @@ async def query_destination_info(
     if not query:
         query = f"推荐{destination}旅游"
 
-    # 调用 Router
-    result = await router.ainvoke({
-        "original_query": query,
-        "destination": destination
-    })
+    try:
+        result = await router.ainvoke({
+            "original_query": query,
+            "destination": destination
+        })
+    except Exception as exc:
+        event = fail_tool_execution(
+            guard,
+            exc,
+            output_summary={"message": "destination router failed"},
+        )
+        message = (
+            f"{destination}目的地信息查询暂时失败：{exc.__class__.__name__}。"
+            "请把实时天气、开放时间和预约信息标注为待二次核实。"
+        )
+        if runtime is None:
+            return message
+        return audited_command(
+            {"messages": [_tool_message(message, runtime)]},
+            runtime,
+            event,
+        )
     elapsed = time.perf_counter() - started_at
     app_logger.info(
         "Destination router query completed: "
@@ -151,6 +196,13 @@ async def query_destination_info(
 
     # 返回综合报告，并把可跨阶段复用的目的地上下文写入状态。
     final_report = result["final_report"]
+    validation = validate_rag_result(final_report)
+    event = finalize_tool_execution(
+        guard,
+        validation,
+        output_summary=validation.output_summary,
+    )
     if runtime is None:
         return final_report
-    return _command_with_destination_context(destination, final_report, runtime)
+    command = _command_with_destination_context(destination, final_report, runtime)
+    return audited_command(command.update, runtime, event)

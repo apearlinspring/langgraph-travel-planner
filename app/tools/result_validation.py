@@ -134,8 +134,18 @@ def validate_mcp_result(content: Any) -> ToolResultValidation:
 def evidence_type_for_tool_name(tool_name: str) -> ToolEvidenceType:
     if tool_name == "query_hotel_options":
         return "live_hotel_search"
-    if tool_name == "query_transport_options":
+    if tool_name in {
+        "query_transport_options",
+        "query_flight_options",
+        "query_train_options",
+        "query_driving_route",
+        "query_flights",
+        "query_trains",
+        "plan_driving_route",
+    }:
         return "live_transport_query"
+    if tool_name == "query_destination_info":
+        return "destination_router_evidence"
     if tool_name.startswith("search_agency_"):
         return "internal_rag_evidence"
     if tool_name in {
@@ -153,8 +163,18 @@ def evidence_type_for_tool_name(tool_name: str) -> ToolEvidenceType:
 def validate_tool_output_for_audit(tool_name: str, content: Any) -> ToolResultValidation:
     if tool_name == "query_hotel_options":
         return validate_mcp_result(content)
-    if tool_name == "query_transport_options":
+    if tool_name in {
+        "query_transport_options",
+        "query_flight_options",
+        "query_train_options",
+        "query_driving_route",
+        "query_flights",
+        "query_trains",
+        "plan_driving_route",
+    }:
         return validate_transport_result(content)
+    if tool_name == "query_destination_info":
+        return validate_rag_result(content)
     if tool_name.startswith("search_agency_") or tool_name in {
         "search_destination_guide",
         "search_food_recommendations",

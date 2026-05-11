@@ -110,6 +110,38 @@ def validate_transport_query_args(args: dict[str, Any]) -> ToolValidationResult:
     return ToolValidationResult(ok=True, normalized_args=args)
 
 
+def validate_driving_query_args(args: dict[str, Any]) -> ToolValidationResult:
+    messages: list[str] = []
+    if _is_placeholder(args.get("origin")):
+        messages.append("自驾出发地缺失")
+    if _is_placeholder(args.get("destination")):
+        messages.append("自驾目的地缺失")
+    if messages:
+        return _invalid_result("invalid_driving_query_args", messages, args)
+    return ToolValidationResult(ok=True, normalized_args=args)
+
+
+def validate_destination_query_args(args: dict[str, Any]) -> ToolValidationResult:
+    destination = str((args or {}).get("destination") or "").strip()
+    query = str((args or {}).get("query") or "").strip()
+    if _is_placeholder(destination):
+        return _invalid_result(
+            "invalid_destination_query_args",
+            ["目的地缺失"],
+            {**(args or {}), "destination": destination, "query": query},
+        )
+    if len(query) > 500:
+        return _invalid_result(
+            "invalid_destination_query_args",
+            ["目的地查询问题过长，请压缩到 500 字以内"],
+            {**(args or {}), "destination": destination, "query": query[:500]},
+        )
+    return ToolValidationResult(
+        ok=True,
+        normalized_args={**(args or {}), "destination": destination, "query": query},
+    )
+
+
 def validate_rag_query_args(args: dict[str, Any]) -> ToolValidationResult:
     query = str((args or {}).get("query") or "").strip()
     if _is_placeholder(query):
