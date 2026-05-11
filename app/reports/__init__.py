@@ -1,5 +1,14 @@
 """Report contract, validation, and rendering helpers."""
-from app.reports.builder import ReportBundle, build_report_bundle
+from app.reports.builder import (
+    ReportBundle,
+    build_report_bundle,
+    build_report_evidence_bundle,
+    build_report_tool_audit_summary,
+    build_travel_report_data,
+    format_report_duration,
+    format_report_people,
+    format_report_route_label,
+)
 from app.reports.contracts import (
     REPORT_SECTION_IDS,
     REPORT_SECTIONS,
@@ -19,7 +28,13 @@ __all__ = [
     "REQUIRED_REPORT_TOP_LEVEL_KEYS",
     "ReportBundle",
     "ReportValidationResult",
+    "build_report_evidence_bundle",
     "build_report_bundle",
+    "build_report_tool_audit_summary",
+    "build_travel_report_data",
+    "format_report_duration",
+    "format_report_people",
+    "format_report_route_label",
     "render_report_markdown",
     "report_sections",
     "validate_report_data",

@@ -1,6 +1,7 @@
 from app.reports import (
     REPORT_SECTION_IDS,
     build_report_bundle,
+    build_travel_report_data,
     report_sections,
     validate_report_data,
 )
@@ -23,6 +24,7 @@ def test_report_bundle_renders_markdown_from_valid_report_data():
     assert "# Personalized travel planning report" in bundle.markdown
     assert "顾问交付清单" in bundle.markdown
     assert "verify ticket price" in bundle.markdown
+    assert "产品与报价规则" in bundle.markdown
 
 
 def test_report_validator_blocks_pseudo_report_without_required_contract():
@@ -55,3 +57,64 @@ def test_report_validator_rejects_empty_itinerary_and_map_routes():
     assert validation.ok is False
     assert "每日行程不能为空。" in validation.route_mismatches
     assert "地图路线不能为空。" in validation.route_mismatches
+
+
+def test_report_builder_assembles_report_data_from_domain_inputs():
+    route = {
+        "day_number": 1,
+        "route_points": ["北京", "上海", "人民广场", "外滩"],
+        "summary": "北京 → 上海 → 人民广场 → 外滩",
+        "map_label": "Day 1：北京 → 上海 → 人民广场 → 外滩",
+    }
+    day = {
+        "day_number": 1,
+        "theme": "抵达与城市夜景",
+        "time_blocks": ["上午/出发：高铁抵达。", "晚上/游览：外滩夜景。"],
+        "activities": ["抵达上海", "外滩夜景"],
+        "risk_notes": ["出发前复核票价和天气。"],
+    }
+    budget = {
+        "currency": "CNY",
+        "total": 1000,
+        "per_person": 500,
+        "line_items": [
+            {"key": "transport", "label": "交通", "amount": 600, "basis": "高铁估算"},
+            {"key": "accommodation", "label": "住宿", "amount": 0, "basis": "当日往返"},
+            {"key": "food", "label": "餐饮", "amount": 200, "basis": "本地小吃"},
+            {"key": "attractions", "label": "景点/体验", "amount": 0, "basis": "免费街区"},
+            {"key": "misc", "label": "其他机动", "amount": 200, "basis": "市内交通"},
+        ],
+        "confidence_level": "中",
+        "estimated_items": ["交通：按高铁参考价估算。"],
+        "verification_items": ["交通：正式购票前复核实时票价。"],
+    }
+
+    report_data = build_travel_report_data(
+        state={"selected_destination": "上海", "selected_transport": "train"},
+        requirement={
+            "departure_city": "北京",
+            "destination": "上海",
+            "travel_days": 1,
+            "adult_count": 2,
+            "children_count": 0,
+            "budget_min": 400,
+            "budget_max": 800,
+            "travel_styles": ["城市漫步"],
+        },
+        budget=budget,
+        itinerary=[day],
+        route_summaries=[route],
+        selected_transport_option={"source": "fixture", "price": 300},
+        selected_accommodation={"source": "fixture"},
+        selected_food_types=["local"],
+        transport_label="高铁",
+        transport_summary="高铁参考价 300 元/人",
+        accommodation_summary="当日往返或住宿待确认",
+        food_preferences_summary="本地小吃",
+    )
+
+    assert report_data["version"] == "travel_report.v1"
+    assert report_data["quote_policy"]["locked_price"] is False
+    assert report_data["agency_product"]["non_commitments"]
+    assert any(section["id"] == "product_quote" for section in report_data["sections"])
+    assert validate_report_data(report_data).ok is True

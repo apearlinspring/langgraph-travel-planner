@@ -6,6 +6,7 @@ from langchain_core.messages import HumanMessage
 
 from app.agents.handoffs import step_config as step_config_module
 from app.agents.subagents.transport_coordinator import create_transport_coordinator
+from app.agency import product_rules as product_rules_module
 from app.core.state import create_initial_state
 from app.core.workflow import (
     FINAL_PLANNING_STEP,
@@ -46,14 +47,14 @@ def _build_runtime(state):
 
 
 def test_internal_doc_evidence_falls_back_when_documents_unavailable(monkeypatch):
-    state_transition_module._internal_doc_evidence.cache_clear()
+    product_rules_module.internal_doc_evidence.cache_clear()
     monkeypatch.setattr(
-        state_transition_module.DocumentManager,
+        product_rules_module.DocumentManager,
         "load_internal_documents",
         lambda self, category=None: [],
     )
 
-    evidence = state_transition_module._internal_doc_evidence("pricing", 1)
+    evidence = product_rules_module.internal_doc_evidence("pricing", 1)
 
     assert len(evidence) == 1
     item = evidence[0]
@@ -62,7 +63,7 @@ def test_internal_doc_evidence_falls_back_when_documents_unavailable(monkeypatch
     assert item["category"] == "pricing"
     assert "agency_plan" in item["applicable_modes"]
     assert item["constraints"]
-    state_transition_module._internal_doc_evidence.cache_clear()
+    product_rules_module.internal_doc_evidence.cache_clear()
 
 
 def test_workflow_metadata_covers_every_planning_step():

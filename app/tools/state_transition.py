@@ -2,7 +2,6 @@
 State transition tools for the travel-planning workflow.
 """
 from datetime import datetime
-from functools import lru_cache
 from math import ceil
 from typing import Any, Optional
 from uuid import uuid4
@@ -11,10 +10,27 @@ from langchain.tools import ToolRuntime, tool
 from langchain_core.messages import ToolMessage
 from langgraph.types import Command
 
-from app.agency.evidence import build_rule_evidence
-from app.agency.planning_mode import infer_planning_mode
-from app.agency.pricing_rules import build_quote_policy, format_quote_policy_lines
-from app.agency.product_rules import build_light_product, format_light_product_lines
+from app.agency import product_rules as agency_product_rules
+from app.agency.pricing_rules import (
+    budget_confidence_payload,
+    build_adjustment_options,
+    build_budget_line_item,
+    build_budget_quality_notes as build_agency_budget_quality_notes,
+    build_budget_summary_lines,
+    build_quote_policy,
+    format_budget_assumptions,
+    format_budget_breakdown,
+    format_budget_confidence,
+    format_budget_fit,
+    format_budget_verification_items,
+    safe_per_person,
+)
+from app.agency.product_rules import (
+    build_agency_context,
+    build_light_product,
+    format_agency_context_lines,
+)
+from app.agency.risk_rules import build_report_risk_lines
 from app.core.approval import approval_state_update, mark_sensitive_action
 from app.core.state import TravelState, UserRequirement
 from app.core.workflow import (
@@ -25,11 +41,15 @@ from app.core.workflow import (
     STEP_LABELS as WORKFLOW_STEP_LABELS,
     STEP_STATE_FIELDS as WORKFLOW_STEP_STATE_FIELDS,
 )
-from app.rag.agency_retrieval import documents_to_evidence
-from app.rag.contracts import get_contract
-from app.reports import build_report_bundle, report_sections
-from app.rag.document_loader import DocumentManager
-from app.tools.audit import pending_checks_from_audit_events, summarize_audit_events_for_report
+from app.reports import (
+    build_report_bundle,
+    build_report_evidence_bundle,
+    build_report_tool_audit_summary,
+    build_travel_report_data,
+    format_report_duration,
+    format_report_people,
+    format_report_route_label,
+)
 from app.utils.logger import app_logger
 
 
@@ -780,7 +800,7 @@ def _estimate_attractions_cost(
 
 
 def _safe_per_person(amount: float, total_people: int) -> float:
-    return amount / max(total_people, 1)
+    return safe_per_person(amount, total_people)
 
 
 def _budget_line_item(
@@ -791,14 +811,14 @@ def _budget_line_item(
     basis: str,
     confidence: str,
 ) -> dict:
-    return {
-        "key": key,
-        "label": label,
-        "amount": amount,
-        "per_person": _safe_per_person(amount, total_people),
-        "basis": basis,
-        "confidence": confidence,
-    }
+    return build_budget_line_item(
+        key,
+        label,
+        amount,
+        total_people,
+        basis,
+        confidence,
+    )
 
 
 def _build_budget_line_items(
@@ -870,97 +890,18 @@ def _build_budget_quality_notes(
     destination_context: dict,
     itinerary: list[dict],
 ) -> dict[str, list[str] | str]:
-    selected_transport_option = state.get("selected_transport_option") or {}
-    selected_accommodation = state.get("selected_accommodation_option") or {}
-    food_pois = _get_food_pois(state)
-    destination_pois = _get_destination_pois(destination_context)
-    itinerary_text = _itinerary_text(itinerary)
-
-    confirmed_items = []
-    estimated_items = []
-    verification_items = []
-
-    transport_price = selected_transport_option.get("price")
-    if isinstance(transport_price, (int, float)) and transport_price > 0:
-        confirmed_items.append(
-            f"交通：已记录具体交通方案参考价 {transport_price:.0f} 元/人。"
-        )
-    else:
-        estimated_items.append(
-            "交通：缺少具体票价，交通 API 未提供具体票价或查询失败，当前按交通方式基准价做兜底估算。"
-        )
-    verification_items.append("交通：正式购票前复核实时票价、余票、退改签规则和行李限制。")
-
-    hotel_price = selected_accommodation.get("price_per_night")
-    hotel_name = selected_accommodation.get("name", "已选酒店")
-    if isinstance(hotel_price, (int, float)) and hotel_price > 0:
-        confirmed_items.append(
-            f"住宿：{hotel_name} 已记录每间夜参考价 {hotel_price:.0f} 元。"
-        )
-    else:
-        estimated_items.append(
-            "住宿：缺少已选酒店价格，酒店 MCP 未提供可追溯价格或查询失败，当前按兜底每间夜价格估算。"
-        )
-    verification_items.append("住宿：入住前复核房型、税费、取消政策、押金和儿童/加床规则。")
-
-    matched_food_names = []
-    for food_poi in food_pois:
-        name = str(food_poi.get("name") or "").strip()
-        average_cost = food_poi.get("average_cost")
-        if name and name in itinerary_text and isinstance(average_cost, (int, float)) and average_cost > 0:
-            matched_food_names.append(f"{name} {average_cost:g} 元/人")
-    if matched_food_names:
-        estimated_items.append(
-            f"餐饮：按行程餐饮 POI 人均价估算（{'、'.join(matched_food_names)}）。"
-        )
-    else:
-        estimated_items.append("餐饮：缺少具体餐饮人均价，按餐饮偏好或兜底餐价估算。")
-    verification_items.append("餐饮：热门餐厅需复核营业时间、预约、排队风险和节假日价格。")
-
-    paid_attractions = []
-    for poi in destination_pois:
-        name = str(poi.get("name") or "").strip()
-        cost = poi.get("estimated_cost")
-        if name and name in itinerary_text and isinstance(cost, (int, float)) and cost > 0:
-            paid_attractions.append(f"{name} {cost:g} 元/人")
-    if paid_attractions:
-        estimated_items.append(
-            f"景点：按结构化 POI 参考门票估算（{'、'.join(paid_attractions)}）。"
-        )
-    elif destination_pois:
-        estimated_items.append("景点：当前行程未识别到付费 POI，暂按 0 元估算。")
-    else:
-        estimated_items.append("景点：缺少结构化 POI 费用，按兜底日均景点费用估算。")
-    verification_items.append("景点：出发前复核开放日、预约名额、临展收费和儿童/老人优惠。")
-
-    estimated_items.append("其他：市内交通、寄存、临时休息和小额杂费按 100 元/人/天估算。")
-    verification_items.append("天气/体力：如切换 Plan B，预算可能随室内场馆、打车或休息安排变化。")
-    for audit_check in pending_checks_from_audit_events(state.get("tool_audit_events")):
-        if audit_check not in verification_items:
-            verification_items.append(audit_check)
-
-    if len(confirmed_items) >= 2 and len(matched_food_names) >= 1 and destination_pois:
-        confidence_level = "中高"
-    elif confirmed_items:
-        confidence_level = "中"
-    else:
-        confidence_level = "偏低"
-
-    return {
-        "confidence_level": confidence_level,
-        "confirmed_items": confirmed_items,
-        "estimated_items": estimated_items,
-        "verification_items": verification_items,
-    }
+    return build_agency_budget_quality_notes(
+        selected_transport_option=state.get("selected_transport_option") or {},
+        selected_accommodation=state.get("selected_accommodation_option") or {},
+        food_pois=_get_food_pois(state),
+        destination_pois=_get_destination_pois(destination_context),
+        itinerary_text=_itinerary_text(itinerary),
+        tool_audit_events=state.get("tool_audit_events"),
+    )
 
 
 def _budget_confidence_payload(budget: dict) -> dict:
-    return {
-        "level": budget.get("confidence_level") or "待评估",
-        "confirmed_items": list(budget.get("confirmed_items") or []),
-        "estimated_items": list(budget.get("estimated_items") or []),
-        "verification_items": list(budget.get("verification_items") or []),
-    }
+    return budget_confidence_payload(budget)
 
 
 def _ensure_budget_quality_contract(
@@ -1450,178 +1391,46 @@ def _format_weather_plan_b(weather_info: object) -> str:
     return "如遇下雨、太热或体力不足，优先切换到室内展馆、商场或酒店周边轻松活动。"
 
 
-def _format_money(value: object) -> str:
-    if isinstance(value, (int, float)):
-        return f"{value:.2f} 元"
-    return "待确认"
-
-
 def _format_food_preferences(food_types: list[str]) -> str:
     labels = [FOOD_LABELS.get(food_type, food_type) for food_type in food_types]
     return "、".join(labels) if labels else "待确认"
 
 
-def _format_itinerary_highlights(itinerary: list[dict], max_days: int = 5) -> list[str]:
-    highlights = []
-    for day in itinerary[:max_days]:
-        day_number = day.get("day_number", len(highlights) + 1)
-        theme = day.get("theme") or "当日安排"
-        activities = [str(item) for item in day.get("activities", [])[:2]]
-        activity_text = "；".join(activities) if activities else "具体活动待确认"
-        highlights.append(f"- Day {day_number}｜{theme}：{activity_text}")
-    if len(itinerary) > max_days:
-        highlights.append(f"- 其余 {len(itinerary) - max_days} 天按已生成行程继续执行。")
-    return highlights or ["- 行程明细待确认。"]
-
-
-def _format_itinerary_details(itinerary: list[dict], max_days: int = 8) -> list[str]:
-    if not itinerary:
-        return ["- 行程明细待确认。"]
-
-    lines = []
-    for day in itinerary[:max_days]:
-        day_number = day.get("day_number", len(lines) + 1)
-        theme = day.get("theme") or "当日安排"
-        lines.append(f"- Day {day_number}｜{theme}")
-        time_blocks = day.get("time_blocks") or []
-        if time_blocks:
-            lines.extend(f"  {block}" for block in time_blocks)
-        else:
-            activities = day.get("activities") or []
-            for activity in activities[:3]:
-                lines.append(f"  - {activity}")
-        route_note = day.get("route_note") or day.get("transport_note")
-        if route_note:
-            lines.append(f"  动线/交通：{route_note}")
-        meals = day.get("meals") or []
-        if meals:
-            lines.append(f"  餐饮：{'；'.join(str(item) for item in meals[:3])}")
-        accommodation = day.get("accommodation")
-        if accommodation:
-            lines.append(f"  住宿：{accommodation}")
-        plan_b = day.get("plan_b")
-        if plan_b:
-            lines.append(f"  Plan B：{plan_b}")
-    if len(itinerary) > max_days:
-        lines.append(f"- 其余 {len(itinerary) - max_days} 天按已生成行程继续执行。")
-    return lines
-
-
 def _format_budget_breakdown(budget: dict) -> list[str]:
-    line_items = budget.get("line_items") or []
-    if line_items:
-        lines = []
-        for item in line_items:
-            lines.append(
-                "- {label}：{amount}（人均 {per_person}）｜{confidence}｜依据：{basis}".format(
-                    label=item.get("label", "费用"),
-                    amount=_format_money(item.get("amount")),
-                    per_person=_format_money(item.get("per_person")),
-                    confidence=item.get("confidence", "估算"),
-                    basis=item.get("basis", "依据待补充"),
-                )
-            )
-        lines.append(
-            f"- 合计：{_format_money(budget.get('total'))}，人均：{_format_money(budget.get('per_person'))}"
-        )
-        return lines
-
-    return [
-        f"- 交通：{_format_money(budget.get('transport'))}",
-        f"- 住宿：{_format_money(budget.get('accommodation'))}",
-        f"- 餐饮：{_format_money(budget.get('food'))}",
-        f"- 景点/体验：{_format_money(budget.get('attractions'))}",
-        f"- 其他机动：{_format_money(budget.get('misc'))}",
-        f"- 总计：{_format_money(budget.get('total'))}，人均：{_format_money(budget.get('per_person'))}",
-    ]
+    return format_budget_breakdown(budget)
 
 
 def _format_budget_assumptions(budget: dict) -> list[str]:
-    assumptions = budget.get("assumptions") or []
-    if not assumptions:
-        return ["- 费用依据待补充，建议以正式预订页面为准。"]
-    return [f"- {assumption}" for assumption in assumptions]
+    return format_budget_assumptions(budget)
 
 
 def _format_budget_confidence(budget: dict) -> list[str]:
-    confidence_level = budget.get("confidence_level") or "待评估"
-    confirmed_items = budget.get("confirmed_items") or []
-    estimated_items = budget.get("estimated_items") or []
-    lines = [f"- 预算置信度：{confidence_level}"]
-    lines.append("- 已确认/可追溯价格：")
-    if confirmed_items:
-        lines.extend(f"  - {item}" for item in confirmed_items)
-    else:
-        lines.append("  - 暂无已确认锁价；当前价格均需以正式预订页为准。")
-    lines.append("- 估算项：")
-    if estimated_items:
-        lines.extend(f"  - {item}" for item in estimated_items)
-    else:
-        lines.append("  - 暂无估算项。")
-    return lines
+    return format_budget_confidence(budget)
 
 
 def _format_budget_verification_items(budget: dict) -> list[str]:
-    verification_items = budget.get("verification_items") or []
-    lines = ["- 待核验项："]
-    if not verification_items:
-        lines.append("  - 正式预订或出发前复核票价、酒店、景点开放和天气。")
-        return lines
-    lines.extend(f"  - {item}" for item in verification_items)
-    return lines
+    return format_budget_verification_items(budget)
 
 
 def _format_budget_fit(requirement: dict, budget: dict) -> str:
-    per_person = budget.get("per_person")
-    budget_min = requirement.get("budget_min")
-    budget_max = requirement.get("budget_max")
-    if not isinstance(per_person, (int, float)) or not isinstance(budget_max, (int, float)):
-        return "预算匹配：缺少用户预算上限，建议人工复核。"
-    if per_person <= budget_max:
-        if isinstance(budget_min, (int, float)) and per_person < budget_min:
-            return "预算匹配：低于用户预算区间，可考虑升级住宿或增加体验项目。"
-        return "预算匹配：在人均预算上限内。"
-    return "预算匹配：超过用户预算上限，建议先调整住宿、交通或高票价体验。"
+    return format_budget_fit(requirement, budget)
 
 
 def _format_adjustment_options(state: TravelState, budget: dict) -> list[str]:
     requirement = state.get("user_requirement") or {}
-    budget_fit = _format_budget_fit(requirement, budget)
-    options = [
-        "- 想更省钱：优先调整住宿区域/档次，或减少高票价体验项目。",
-        "- 想更省心：保留当前交通和酒店，增加打车/预约/休息时间预算。",
-        "- 想更丰富：当前预算若低于区间，可增加一顿特色餐厅或一个付费体验。",
-    ]
-    if "超过" in budget_fit:
-        options.insert(0, "- 当前估算超过预算上限，建议先从住宿和景点/体验费用开始压缩。")
-    elif "低于" in budget_fit:
-        options.insert(0, "- 当前估算低于预算区间，可考虑升级住宿、增加特色体验或保留为机动金。")
-    return options
+    return build_adjustment_options(requirement, budget)
 
 
 def _format_report_people(requirement: dict) -> str:
-    adult_count = requirement.get("adult_count") or 0
-    children_count = requirement.get("children_count") or 0
-    parts = []
-    if adult_count:
-        parts.append(f"{adult_count} 位成人")
-    if children_count:
-        parts.append(f"{children_count} 位儿童")
-    return "、".join(parts) if parts else "人数待确认"
+    return format_report_people(requirement)
 
 
 def _format_report_duration(requirement: dict) -> str:
-    travel_days = requirement.get("travel_days")
-    if isinstance(travel_days, int) and travel_days > 0:
-        nights = max(travel_days - 1, 0)
-        return f"{travel_days}天{nights}晚"
-    return "天数待确认"
+    return format_report_duration(requirement)
 
 
 def _format_report_route_label(state: TravelState, requirement: dict) -> str:
-    departure_city = requirement.get("departure_city") or "出发地待确认"
-    destination = state.get("selected_destination") or requirement.get("destination") or "目的地待确认"
-    return f"{departure_city} → {destination}"
+    return format_report_route_label(state, requirement)
 
 
 def _dedupe_report_points(points: list[str], max_items: int = 6) -> list[str]:
@@ -2003,71 +1812,6 @@ def _ensure_itinerary_day_count(
     return normalized
 
 
-def _format_report_daily_itinerary(
-    itinerary: list[dict],
-    state: TravelState,
-    requirement: dict,
-    max_days: int = 8,
-) -> list[str]:
-    if not itinerary:
-        return ["- 行程明细待确认。"]
-
-    lines = []
-    for day in itinerary[:max_days]:
-        route_summary = _build_day_route_summary(day, state, requirement)
-        lines.append(route_summary["map_label"])
-        lines.append(f"- 地图路线：{route_summary['summary']}")
-
-        time_blocks = day.get("time_blocks") or []
-        if time_blocks:
-            lines.extend(f"- {block}" for block in time_blocks)
-        else:
-            activities = day.get("activities") or []
-            lines.extend(f"- {activity}" for activity in activities[:3])
-
-        route_note = day.get("route_note") or day.get("transport_note")
-        if route_note:
-            lines.append(f"- 动线/交通：{route_note}")
-        meals = day.get("meals") or []
-        if meals:
-            lines.append(f"- 餐饮：{'；'.join(str(item) for item in meals[:3])}")
-        accommodation = day.get("accommodation")
-        if accommodation:
-            lines.append(f"- 住宿/落脚：{accommodation}")
-        plan_b = day.get("plan_b")
-        if plan_b:
-            lines.append(f"- Plan B：{plan_b}")
-        risk_notes = day.get("risk_notes") or []
-        if risk_notes:
-            risk_text = "；".join(
-                str(item).strip().rstrip("。；;")
-                for item in risk_notes[:2]
-                if str(item).strip()
-            )
-            if risk_text:
-                lines.append(f"- 当天风险：{risk_text}。")
-
-    if len(itinerary) > max_days:
-        lines.append(f"- 其余 {len(itinerary) - max_days} 天按已生成行程继续执行。")
-    return lines
-
-
-def _format_report_map_lines(
-    itinerary: list[dict],
-    state: TravelState,
-    requirement: dict,
-) -> list[str]:
-    lines = []
-    for day in itinerary:
-        route_summary = _build_day_route_summary(day, state, requirement)
-        if route_summary["summary"]:
-            lines.append(route_summary["map_label"])
-    if not lines:
-        route_label = _format_report_route_label(state, requirement)
-        lines.append(f"总览：{route_label}")
-    return lines
-
-
 def _format_report_risk_lines(
     itinerary: list[dict],
     budget: dict,
@@ -2079,129 +1823,16 @@ def _format_report_risk_lines(
         current_requirement = requirement or {}
         destination = state.get("selected_destination") or current_requirement.get("destination") or ""
         weather_info = _get_destination_context(state, destination).get("weather_info")
-
-    risk_lines = [
-        "- 实时票价、酒店价格、余票和景点开放情况会变动，正式支付或出发前需要再次核实。",
-        "- 出发前 24-48 小时再次确认交通、酒店入住政策、天气和景点预约要求。",
-        (
-            f"- 天气风险：{weather_info}。优先保留 Plan B 和每日机动时间。"
-            if weather_info
-            else "- 天气风险：当前缺少可引用的实时天气，出发前 24-48 小时需再次复核并保留 Plan B。"
-        ),
-        "- 体力风险：每天保留机动时间，不建议把行程塞满；带娃或带老人时优先减少跨区。",
-    ]
-    for day in itinerary:
-        for note in day.get("risk_notes") or []:
-            line = f"- Day {day.get('day_number', '')}：{note}".replace("Day ：", "Day：")
-            if line not in risk_lines:
-                risk_lines.append(line)
-            if len(risk_lines) >= 6:
-                return risk_lines
-    for item in budget.get("verification_items") or []:
-        line = f"- 待核验：{item}"
-        if line not in risk_lines:
-            risk_lines.append(line)
-        if len(risk_lines) >= 6:
-            break
-    return risk_lines
+    return build_report_risk_lines(
+        itinerary,
+        budget,
+        weather_info=weather_info,
+    )
 
 
-@lru_cache(maxsize=16)
-def _internal_doc_highlights(category: str, limit: int = 2) -> tuple[str, ...]:
-    """提取内部知识库中某个类别的关键规则，供最终报告稳定引用。"""
-
-    try:
-        documents = DocumentManager().load_internal_documents(category=category)
-    except Exception as exc:
-        app_logger.warning(f"加载内部知识库失败: category={category}, error={exc}")
-        return ()
-
-    highlights: list[str] = []
-    for doc in documents:
-        for raw_line in doc.page_content.splitlines():
-            line = raw_line.strip()
-            if not line.startswith(("-", "1.", "2.", "3.", "4.", "5.")):
-                continue
-            line = line.lstrip("-").strip()
-            if not line or "示例内部文档" in line:
-                continue
-            if line not in highlights:
-                highlights.append(line)
-            if len(highlights) >= limit:
-                return tuple(highlights)
-    return tuple(highlights)
-
-
-@lru_cache(maxsize=16)
-def _internal_doc_evidence(category: str, limit: int = 2) -> tuple[dict, ...]:
-    """提取内部知识库证据，供 report_data 和评估稳定检查。"""
-
-    try:
-        documents = DocumentManager().load_internal_documents(category=category)
-    except Exception as exc:
-        app_logger.warning(f"加载内部知识库证据失败: category={category}, error={exc}")
-        return (_fallback_internal_evidence(category),)
-
-    evidence = documents_to_evidence(documents[:limit], visibility="internal")
-    if not evidence:
-        return (_fallback_internal_evidence(category),)
-    return tuple(dict(item) for item in evidence)
-
-
-def _fallback_internal_evidence(category: str) -> dict:
-    """Build a conservative evidence item when internal documents are unavailable."""
-
-    contract = get_contract(category, "internal")
-    title_by_category = {
-        "products": "轻量产品能力规则",
-        "sop": "顾问服务流程规则",
-        "pricing": "费用说明与报价边界规则",
-        "risk": "风险提醒与 Plan B 规则",
-        "report": "最终报告交付标准规则",
-    }
-    snippet_by_category = {
-        "products": "按用户人群、天数、预算和节奏选择轻量产品能力，只表达路线结构和服务节点，不承诺真实库存或成团。",
-        "sop": "交付前需要完成需求确认、路线初稿、交通住宿核验、预算说明和出发前提醒。",
-        "pricing": "费用需要区分已确认价格、工具返回价格、规则估算价格和待核验价格，不承诺锁价或支付。",
-        "risk": "报告需要保留天气、交通、酒店、预约和体力风险，并给出可执行 Plan B。",
-        "report": "最终报告需要包含行程概览、每日路线、地图节点、预算置信度、待核验项和不支持承诺。",
-    }
-    return {
-        "source": f"agency_rules/{category}",
-        "source_type": contract.source_type,
-        "category": category,
-        "visibility": contract.visibility,
-        "title": title_by_category.get(category, f"{category} 内部规则"),
-        "snippet": snippet_by_category.get(category, "内部知识不可用时采用保守规则证据，所有实时信息均需二次核验。"),
-        "relevance_score": 0.55,
-        "evidence_level": contract.evidence_level,
-        "applicable_modes": list(contract.applicable_modes),
-        "constraints": list(contract.constraints),
-        "user_segments": list(contract.user_segments),
-        "budget_levels": list(contract.budget_levels),
-        "travel_days_range": contract.travel_days_range,
-        "regions": list(contract.regions),
-        "last_reviewed": contract.last_reviewed,
-    }
-
-
-def _state_human_text_for_report(state: TravelState | None) -> str:
-    if not state:
-        return ""
-
-    texts: list[str] = []
-    for message in (state.get("messages") or [])[-8:]:
-        content = None
-        if isinstance(message, dict):
-            role = message.get("role") or message.get("type")
-            if role in {"user", "human"}:
-                content = message.get("content")
-        elif getattr(message, "type", None) == "human" or getattr(message, "role", None) == "user":
-            content = getattr(message, "content", None)
-
-        if content:
-            texts.append(content if isinstance(content, str) else str(content))
-    return "\n".join(texts)
+_internal_doc_highlights = agency_product_rules.internal_doc_highlights
+_internal_doc_evidence = agency_product_rules.internal_doc_evidence
+_fallback_internal_evidence = agency_product_rules.fallback_internal_evidence
 
 
 def _normalize_planning_mode(value: Optional[str]) -> str | None:
@@ -2228,103 +1859,19 @@ def _infer_planning_mode(requirement: dict, state: TravelState | None = None) ->
     explicit_mode = _normalize_planning_mode(requirement.get("planning_mode")) or _state_planning_mode(state)
     if explicit_mode:
         return explicit_mode
-    return infer_planning_mode(requirement, state)
+    return agency_product_rules.infer_report_planning_mode(requirement, state)
 
 
 def _pick_highlight(lines: list[str], keywords: tuple[str, ...], fallback_index: int = 0) -> str | None:
-    for line in lines:
-        if any(keyword in line for keyword in keywords):
-            return line
-    if 0 <= fallback_index < len(lines):
-        return lines[fallback_index]
-    return None
+    return agency_product_rules._pick_highlight(lines, keywords, fallback_index)
 
 
 def _build_agency_context(requirement: dict, state: TravelState | None = None) -> dict:
-    mode = _infer_planning_mode(requirement, state)
-    mode_reason = (
-        requirement.get("planning_mode_reason")
-        or (state.get("planning_mode_reason") if state else None)
-        or "根据已记录需求与对话上下文识别规划模式"
-    )
-    mode_confirmed = bool(
-        requirement.get("planning_mode_confirmed")
-        or (state.get("planning_mode_confirmed") if state else False)
-    )
-    light_product = build_light_product(requirement, state)
-    product_lines = list(_internal_doc_highlights("products", 2))
-    service_lines = list(_internal_doc_highlights("sop", 2))
-    pricing_lines = list(_internal_doc_highlights("pricing", 2))
-    risk_lines = list(_internal_doc_highlights("risk", 2))
-    report_lines = list(_internal_doc_highlights("report", 2))
-    evidence = [
-        item
-        for category in ("products", "sop", "pricing", "risk", "report")
-        for item in _internal_doc_evidence(category, 1)
-    ]
-
-    if mode == "agency_plan":
-        summary = "本报告按旅行社顾问方案交付：优先使用成熟路线结构、透明预算依据和可执行风险预案。"
-        selected_lines = [
-            item
-            for item in [
-                _pick_highlight(product_lines, ("省心", "成熟路线", "核心体验"), fallback_index=1),
-                _pick_highlight(service_lines, ("方案初稿", "关键确认", "交付"), fallback_index=1),
-                _pick_highlight(pricing_lines, ("预算置信度", "费用说明", "报价"), fallback_index=1),
-                _pick_highlight(risk_lines, ("Plan B", "风险", "复核"), fallback_index=0),
-            ]
-            if item
-        ]
-    else:
-        summary = "本报告按自由规划交付：保持中立实用，重点提供路线、预算、住宿区域和出发前核验建议。"
-        selected_lines = [
-            item
-            for item in [
-                _pick_highlight(product_lines, ("自由规划",), fallback_index=0),
-                _pick_highlight(report_lines, ("行程概览", "每日行程"), fallback_index=0),
-                _pick_highlight(pricing_lines, ("交通", "预算"), fallback_index=0),
-                _pick_highlight(risk_lines, ("天气", "复核"), fallback_index=0),
-            ]
-            if item
-        ]
-
-    context = {
-        "source_type": "agency_internal",
-        "mode": mode,
-        "mode_reason": str(mode_reason),
-        "mode_confirmed": mode_confirmed,
-        "summary": summary,
-        "highlights": selected_lines,
-        "categories": {
-            "products": product_lines,
-            "sop": service_lines,
-            "pricing": pricing_lines,
-            "risk": risk_lines,
-            "report": report_lines,
-        },
-        "evidence": evidence,
-    }
-    context["light_product"] = light_product
-    context["rule_evidence"] = build_rule_evidence(
-        light_product,
-        None,
-        context["categories"],
-    )
-    return context
+    return build_agency_context(requirement, state)
 
 
 def _format_agency_context_lines(agency_context: dict) -> list[str]:
-    lines = [f"- {agency_context['summary']}"]
-    light_product = agency_context.get("light_product") or {}
-    if light_product:
-        lines.append(
-            f"- 产品匹配：{light_product.get('name', '轻量产品')}｜{light_product.get('positioning', '定位待补充')}"
-        )
-        if light_product.get("service_nodes"):
-            lines.append(f"- 服务节点：{' → '.join(light_product['service_nodes'])}")
-    for item in agency_context.get("highlights") or []:
-        lines.append(f"- 方案标准：{item}")
-    return lines
+    return format_agency_context_lines(agency_context)
 
 
 def _clean_report_line(line: str) -> str:
@@ -2339,34 +1886,14 @@ def _build_report_evidence_bundle(
     selected_accommodation: dict,
     tool_audit_events: list[dict] | None = None,
 ) -> dict:
-    categories = agency_context.get("categories") or {}
-    transport_source = selected_transport_option.get("source") or "user_or_rule"
-    accommodation_source = selected_accommodation.get("source") or "user_or_rule"
-    return {
-        "source_type": "structured_state",
-        "agency_categories": {
-            category: len(lines) if isinstance(lines, list) else 0
-            for category, lines in categories.items()
-        },
-        "price_evidence": {
-            "confirmed": list(budget.get("confirmed_items") or []),
-            "estimated": list(budget.get("estimated_items") or []),
-            "verification": list(budget.get("verification_items") or []),
-        },
-        "tool_sources": {
-            "transport": transport_source,
-            "accommodation": accommodation_source,
-        },
-        "tool_audit_events": summarize_audit_events_for_report(tool_audit_events),
-        "route_evidence": [
-            {
-                "day_number": route.get("day_number"),
-                "route_points": list(route.get("route_points") or []),
-                "summary": route.get("summary") or "",
-            }
-            for route in route_summaries
-        ],
-    }
+    return build_report_evidence_bundle(
+        agency_context,
+        budget,
+        route_summaries,
+        selected_transport_option,
+        selected_accommodation,
+        tool_audit_events,
+    )
 
 
 def _build_report_tool_audit_summary(
@@ -2376,36 +1903,13 @@ def _build_report_tool_audit_summary(
     selected_accommodation: dict,
     tool_audit_events: list[dict] | None = None,
 ) -> dict:
-    audit_pending_checks = pending_checks_from_audit_events(tool_audit_events)
-    pending_checks = _dedupe_report_points(
-        [
-            *[_clean_report_line(item) for item in budget.get("estimated_items") or []],
-            *[_clean_report_line(item) for item in budget.get("verification_items") or []],
-            *[_clean_report_line(item) for item in audit_pending_checks],
-        ],
-        max_items=6,
+    return build_report_tool_audit_summary(
+        budget,
+        route_summaries,
+        selected_transport_option,
+        selected_accommodation,
+        tool_audit_events,
     )
-    if not pending_checks:
-        pending_checks = [
-            "正式预订或出发前复核交通票价、酒店政策、景点开放和天气变化。"
-        ]
-
-    used_sources = [
-        f"交通：{selected_transport_option.get('source') or '用户选择/规则估算'}",
-        f"住宿：{selected_accommodation.get('source') or '用户选择/规则估算'}",
-        f"地图路线：已生成 {len(route_summaries)} 条分日路线节点",
-        "预算：已拆分为已确认、估算和待核验项目",
-    ]
-    return {
-        "readiness": "可交付，预订前需核验",
-        "used_sources": used_sources,
-        "pending_checks": pending_checks,
-        "events": summarize_audit_events_for_report(tool_audit_events),
-        "unsupported_actions": [
-            "当前项目未接入真实支付服务，不生成支付链接。",
-            "不承诺真实库存、真实锁价或真实预订成功。",
-        ],
-    }
 
 
 def _approval_report_payload(approval_update: dict) -> dict:
@@ -2440,129 +1944,26 @@ def _build_report_data(
         _build_day_route_summary(day, state, requirement)
         for day in itinerary
     ]
-    itinerary_data = []
-    for day, route_summary in zip(itinerary, route_summaries):
-        itinerary_data.append(
-            {
-                "day_number": day.get("day_number"),
-                "title": day.get("theme") or "当天安排",
-                "route": route_summary,
-                "time_blocks": list(day.get("time_blocks") or []),
-                "activities": list(day.get("activities") or []),
-                "meals": list(day.get("meals") or []),
-                "accommodation": day.get("accommodation"),
-                "transport_note": day.get("transport_note"),
-                "route_note": day.get("route_note"),
-                "plan_b": day.get("plan_b"),
-                "risk_notes": list(day.get("risk_notes") or []),
-            }
-        )
-
-    budget_items = budget.get("line_items") or []
-    budget_confidence = _budget_confidence_payload(budget)
-    risks = [
-        _clean_report_line(line)
-        for line in _format_report_risk_lines(itinerary, budget, state, requirement)
-    ]
-    adjustment_options = [
-        _clean_report_line(line)
-        for line in _format_adjustment_options(state, budget)
-    ]
-    agency_context = _build_agency_context(requirement, state)
-    light_product = agency_context.get("light_product") or build_light_product(requirement, state)
-    quote_policy = budget.get("quote_policy") or build_quote_policy(
-        requirement,
-        budget,
-        product=light_product,
+    destination = state.get("selected_destination") or requirement.get("destination") or ""
+    weather_info = _get_destination_context(state, destination).get("weather_info")
+    return build_travel_report_data(
         state=state,
+        requirement=requirement,
+        budget=budget,
+        itinerary=itinerary,
+        route_summaries=route_summaries,
+        selected_transport_option=selected_transport_option,
+        selected_accommodation=selected_accommodation,
+        selected_food_types=selected_food_types,
+        transport_label=TRANSPORT_LABELS.get(
+            state.get("selected_transport"),
+            state.get("selected_transport", "未确认"),
+        ),
+        transport_summary=_format_transport_option(selected_transport_option),
+        accommodation_summary=_format_accommodation_option(selected_accommodation),
+        food_preferences_summary=_format_food_preferences(selected_food_types),
+        weather_info=weather_info,
     )
-    agency_context["quote_policy"] = quote_policy
-    agency_context["rule_evidence"] = build_rule_evidence(
-        light_product,
-        quote_policy,
-        agency_context.get("categories") or {},
-    )
-    evidence_bundle = _build_report_evidence_bundle(
-        agency_context,
-        budget,
-        route_summaries,
-        selected_transport_option,
-        selected_accommodation,
-        state.get("tool_audit_events"),
-    )
-    tool_audit_summary = _build_report_tool_audit_summary(
-        budget,
-        route_summaries,
-        selected_transport_option,
-        selected_accommodation,
-        state.get("tool_audit_events"),
-    )
-    sections = report_sections()
-    if not any(section.get("id") == "product_quote" for section in sections):
-        insert_at = next(
-            (
-                index + 1
-                for index, section in enumerate(sections)
-                if section.get("id") == "agency_context"
-            ),
-            len(sections),
-        )
-        sections.insert(insert_at, {"id": "product_quote", "title": "产品与报价规则"})
-
-    return {
-        "version": "travel_report.v1",
-        "title": "个性化旅游规划报告",
-        "subtitle": "最终旅行方案报告",
-        "overview": {
-            "route_label": _format_report_route_label(state, requirement),
-            "duration": _format_report_duration(requirement),
-            "people": _format_report_people(requirement),
-            "travel_styles": list(requirement.get("travel_styles") or []),
-            "special_needs": requirement.get("special_needs") or "无特别备注",
-        },
-        "transport": {
-            "type": state.get("selected_transport"),
-            "label": TRANSPORT_LABELS.get(
-                state.get("selected_transport"),
-                state.get("selected_transport", "未确认"),
-            ),
-            "summary": _format_transport_option(selected_transport_option),
-            "option": dict(selected_transport_option),
-        },
-        "accommodation": {
-            "summary": _format_accommodation_option(selected_accommodation),
-            "option": dict(selected_accommodation),
-        },
-        "food_preferences": {
-            "types": list(selected_food_types),
-            "summary": _format_food_preferences(selected_food_types),
-        },
-        "itinerary": itinerary_data,
-        "map_routes": route_summaries,
-        "agency_context": agency_context,
-        "agency_product": light_product,
-        "budget": {
-            "currency": budget.get("currency", "CNY"),
-            "total": budget.get("total"),
-            "per_person": budget.get("per_person"),
-            "items": budget_items,
-            "assumptions": list(budget.get("assumptions") or []),
-            "confidence_level": budget.get("confidence_level") or "待评估",
-            "confirmed_items": list(budget.get("confirmed_items") or []),
-            "estimated_items": list(budget.get("estimated_items") or []),
-            "verification_items": list(budget.get("verification_items") or []),
-            "confidence": budget_confidence,
-            "fit": _format_budget_fit(requirement, budget),
-            "quote_policy": quote_policy,
-        },
-        "budget_confidence": budget_confidence,
-        "quote_policy": quote_policy,
-        "risks": risks,
-        "adjustment_options": adjustment_options,
-        "evidence_bundle": evidence_bundle,
-        "tool_audit_summary": tool_audit_summary,
-        "sections": sections,
-    }
 
 
 def _build_final_report(
@@ -3164,33 +2565,12 @@ def summarize_budget_tool(
         product=light_product,
         state=state,
     )
-    budget_fit = _format_budget_fit(requirement, budget_breakdown)
-
     budget_summary = "\n".join(
-        [
-            "预算汇总完成：",
-            "",
-            "预算明细：",
-            *_format_budget_breakdown(budget_breakdown),
-            "",
-            budget_fit,
-            "",
-            "轻量产品与报价规则：",
-            *format_light_product_lines(light_product),
-            *format_quote_policy_lines(budget_breakdown["quote_policy"]),
-            "",
-            "费用依据：",
-            *_format_budget_assumptions(budget_breakdown),
-            "",
-            "关键假设：",
-            *[f"- {assumption}" for assumption in assumptions],
-            "",
-            "预算置信度：",
-            *_format_budget_confidence(budget_breakdown),
-            "",
-            "出发前待核验：",
-            *_format_budget_verification_items(budget_breakdown),
-        ]
+        build_budget_summary_lines(
+            requirement,
+            budget_breakdown,
+            product=light_product,
+        )
     )
 
     return _command_with_message(
