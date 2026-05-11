@@ -9,6 +9,7 @@ os.environ.setdefault("POSTGRES_DB", "test_db")
 os.environ.setdefault("POSTGRES_USER", "test_user")
 os.environ.setdefault("POSTGRES_PASSWORD", "test_password")
 
+from app.core.approval import ApprovalGovernanceManager
 from app.core.checkpointer import CheckpointerManager
 from app.core.session_lock import SessionLockBusy, SessionLockManager
 from app.core.store import StoreManager
@@ -73,6 +74,123 @@ class FakeAvailableRedis:
         return True
 
 
+READY_CHECKPOINTER = {
+    "status": "ready",
+    "initialized": True,
+    "pool_open": True,
+}
+MISSING_CHECKPOINTER = {
+    "status": "uninitialized",
+    "initialized": False,
+    "pool_open": False,
+}
+READY_STORE = {
+    "status": "ready",
+    "initialized": True,
+    "pool_open": True,
+}
+HEALTHY_MCP = {
+    "status": "healthy",
+    "healthy_servers": 2,
+    "unavailable_servers": 0,
+    "uninitialized_servers": 0,
+    "tool_count": 4,
+    "servers": {},
+}
+DEGRADED_MCP = {
+    "status": "degraded",
+    "healthy_servers": 1,
+    "unavailable_servers": 1,
+    "uninitialized_servers": 0,
+    "tool_count": 2,
+    "servers": {},
+}
+READY_SESSION_LOCK = {
+    "status": "ready",
+    "backend": "redis",
+    "configured_backend": "auto",
+    "app_env": "production",
+    "redis_available": True,
+    "fallback_to_local": True,
+    "active_locks": 0,
+    "ttl_seconds": 300,
+    "reason": None,
+}
+DEGRADED_SESSION_LOCK = {
+    "status": "degraded",
+    "backend": "degraded_local",
+    "configured_backend": "auto",
+    "app_env": "development",
+    "redis_available": False,
+    "fallback_to_local": True,
+    "active_locks": 0,
+    "ttl_seconds": 300,
+    "reason": "redis is unavailable",
+}
+UNAVAILABLE_SESSION_LOCK = {
+    "status": "unavailable",
+    "backend": "redis",
+    "configured_backend": "auto",
+    "app_env": "production",
+    "redis_available": False,
+    "fallback_to_local": True,
+    "active_locks": 0,
+    "ttl_seconds": 300,
+    "reason": "redis is unavailable",
+}
+READY_APPROVAL_GOVERNANCE = {
+    "status": "ready",
+    "ready": True,
+    "storage": "postgres",
+    "persistent": True,
+    "hitl_closed_loop": True,
+}
+NOT_READY_APPROVAL_GOVERNANCE = {
+    "status": "not_ready",
+    "ready": False,
+    "storage": "postgres",
+    "persistent": False,
+    "hitl_closed_loop": False,
+    "last_error": "database unavailable",
+}
+
+
+def mock_readiness_dependencies(
+    monkeypatch,
+    *,
+    checkpointer=READY_CHECKPOINTER,
+    store=READY_STORE,
+    mcp=HEALTHY_MCP,
+    session_lock=READY_SESSION_LOCK,
+    approval_governance=READY_APPROVAL_GOVERNANCE,
+) -> None:
+    monkeypatch.setattr(
+        CheckpointerManager,
+        "get_status_snapshot",
+        classmethod(lambda cls: checkpointer),
+    )
+    monkeypatch.setattr(
+        StoreManager,
+        "get_status_snapshot",
+        classmethod(lambda cls: store),
+    )
+    monkeypatch.setattr(
+        MCPClientManager,
+        "get_status_snapshot",
+        classmethod(lambda cls: mcp),
+    )
+    monkeypatch.setattr(
+        app_main.session_lock_manager,
+        "get_status_snapshot",
+        lambda: session_lock,
+    )
+    monkeypatch.setattr(
+        ApprovalGovernanceManager,
+        "get_status_snapshot",
+        classmethod(lambda cls: approval_governance),
+    )
+
+
 @pytest.fixture(autouse=True)
 def reset_mcp_singleton():
     MCPClientManager.reset_instance()
@@ -106,6 +224,7 @@ async def test_mcp_manager_retries_transient_server_failure(monkeypatch):
         "app.mcp_core.client.MultiServerMCPClient",
         FakeRetryThenRecoverMCPClient,
     )
+
     async def fake_sleep(_: float) -> None:
         return None
 
@@ -126,6 +245,7 @@ async def test_optional_server_times_out_without_blocking_other_servers(monkeypa
         "app.mcp_core.client.MultiServerMCPClient",
         FakeHangingMCPClient,
     )
+
     async def fake_wait_for(awaitable, timeout):
         close = getattr(awaitable, "close", None)
         if callable(close):
@@ -146,46 +266,23 @@ async def test_optional_server_times_out_without_blocking_other_servers(monkeypa
     assert snapshot["servers"]["weather"]["status"] == "unavailable"
 
 
+def test_build_readiness_payload_reports_ready_when_all_core_dependencies_are_ready(
+    monkeypatch,
+):
+    mock_readiness_dependencies(monkeypatch)
+
+    payload, status_code = build_readiness_payload(startup_complete=True)
+
+    assert status_code == 200
+    assert payload["status"] == "ready"
+    assert payload["services"]["checkpointer"]["initialized"] is True
+    assert payload["services"]["store"]["initialized"] is True
+    assert payload["services"]["session_lock"]["status"] == "ready"
+    assert payload["services"]["approval_governance"]["status"] == "ready"
+
+
 def test_build_readiness_payload_reports_degraded_when_mcp_is_degraded(monkeypatch):
-    monkeypatch.setattr(
-        CheckpointerManager,
-        "get_status_snapshot",
-        classmethod(lambda cls: {"status": "ready", "initialized": True, "pool_open": True}),
-    )
-    monkeypatch.setattr(
-        StoreManager,
-        "get_status_snapshot",
-        classmethod(lambda cls: {"status": "ready", "initialized": True, "pool_open": True}),
-    )
-    monkeypatch.setattr(
-        MCPClientManager,
-        "get_status_snapshot",
-        classmethod(
-            lambda cls: {
-                "status": "degraded",
-                "healthy_servers": 1,
-                "unavailable_servers": 1,
-                "uninitialized_servers": 0,
-                "tool_count": 2,
-                "servers": {},
-            }
-        ),
-    )
-    monkeypatch.setattr(
-        app_main.session_lock_manager,
-        "get_status_snapshot",
-        lambda: {
-            "status": "ready",
-            "backend": "redis",
-            "configured_backend": "auto",
-            "app_env": "production",
-            "redis_available": True,
-            "fallback_to_local": True,
-            "active_locks": 0,
-            "ttl_seconds": 300,
-            "reason": None,
-        },
-    )
+    mock_readiness_dependencies(monkeypatch, mcp=DEGRADED_MCP)
 
     payload, status_code = build_readiness_payload(startup_complete=True)
 
@@ -193,151 +290,56 @@ def test_build_readiness_payload_reports_degraded_when_mcp_is_degraded(monkeypat
     assert payload["status"] == "degraded"
     assert payload["services"]["mcp"]["status"] == "degraded"
     assert payload["services"]["session_lock"]["backend"] == "redis"
+    assert payload["services"]["approval_governance"]["status"] == "ready"
 
 
 def test_build_readiness_payload_reports_not_ready_when_core_is_missing(monkeypatch):
-    monkeypatch.setattr(
-        CheckpointerManager,
-        "get_status_snapshot",
-        classmethod(
-            lambda cls: {"status": "uninitialized", "initialized": False, "pool_open": False}
-        ),
-    )
-    monkeypatch.setattr(
-        StoreManager,
-        "get_status_snapshot",
-        classmethod(lambda cls: {"status": "ready", "initialized": True, "pool_open": True}),
-    )
-    monkeypatch.setattr(
-        MCPClientManager,
-        "get_status_snapshot",
-        classmethod(
-            lambda cls: {
-                "status": "healthy",
-                "healthy_servers": 2,
-                "unavailable_servers": 0,
-                "uninitialized_servers": 0,
-                "tool_count": 4,
-                "servers": {},
-            }
-        ),
-    )
-    monkeypatch.setattr(
-        app_main.session_lock_manager,
-        "get_status_snapshot",
-        lambda: {
-            "status": "ready",
-            "backend": "local",
-            "configured_backend": "local",
-            "app_env": "development",
-            "redis_available": None,
-            "fallback_to_local": True,
-            "active_locks": 0,
-            "ttl_seconds": 300,
-            "reason": None,
-        },
-    )
+    mock_readiness_dependencies(monkeypatch, checkpointer=MISSING_CHECKPOINTER)
 
     payload, status_code = build_readiness_payload(startup_complete=False)
 
     assert status_code == 503
     assert payload["status"] == "not_ready"
+    assert payload["startup_complete"] is False
+    assert "session_lock" in payload["services"]
+    assert "approval_governance" in payload["services"]
 
 
 def test_build_readiness_payload_reports_degraded_local_session_lock(monkeypatch):
-    monkeypatch.setattr(
-        CheckpointerManager,
-        "get_status_snapshot",
-        classmethod(lambda cls: {"status": "ready", "initialized": True, "pool_open": True}),
-    )
-    monkeypatch.setattr(
-        StoreManager,
-        "get_status_snapshot",
-        classmethod(lambda cls: {"status": "ready", "initialized": True, "pool_open": True}),
-    )
-    monkeypatch.setattr(
-        MCPClientManager,
-        "get_status_snapshot",
-        classmethod(
-            lambda cls: {
-                "status": "healthy",
-                "healthy_servers": 2,
-                "unavailable_servers": 0,
-                "uninitialized_servers": 0,
-                "tool_count": 4,
-                "servers": {},
-            }
-        ),
-    )
-    monkeypatch.setattr(
-        app_main.session_lock_manager,
-        "get_status_snapshot",
-        lambda: {
-            "status": "degraded",
-            "backend": "degraded_local",
-            "configured_backend": "auto",
-            "app_env": "development",
-            "redis_available": False,
-            "fallback_to_local": True,
-            "active_locks": 0,
-            "ttl_seconds": 300,
-            "reason": "redis is unavailable",
-        },
-    )
+    mock_readiness_dependencies(monkeypatch, session_lock=DEGRADED_SESSION_LOCK)
 
     payload, status_code = build_readiness_payload(startup_complete=True)
 
     assert status_code == 200
     assert payload["status"] == "degraded"
     assert payload["services"]["session_lock"]["backend"] == "degraded_local"
+    assert payload["services"]["approval_governance"]["ready"] is True
 
 
 def test_build_readiness_payload_fails_when_session_lock_is_unavailable(monkeypatch):
-    monkeypatch.setattr(
-        CheckpointerManager,
-        "get_status_snapshot",
-        classmethod(lambda cls: {"status": "ready", "initialized": True, "pool_open": True}),
-    )
-    monkeypatch.setattr(
-        StoreManager,
-        "get_status_snapshot",
-        classmethod(lambda cls: {"status": "ready", "initialized": True, "pool_open": True}),
-    )
-    monkeypatch.setattr(
-        MCPClientManager,
-        "get_status_snapshot",
-        classmethod(
-            lambda cls: {
-                "status": "healthy",
-                "healthy_servers": 2,
-                "unavailable_servers": 0,
-                "uninitialized_servers": 0,
-                "tool_count": 4,
-                "servers": {},
-            }
-        ),
-    )
-    monkeypatch.setattr(
-        app_main.session_lock_manager,
-        "get_status_snapshot",
-        lambda: {
-            "status": "unavailable",
-            "backend": "redis",
-            "configured_backend": "auto",
-            "app_env": "production",
-            "redis_available": False,
-            "fallback_to_local": True,
-            "active_locks": 0,
-            "ttl_seconds": 300,
-            "reason": "redis is unavailable",
-        },
-    )
+    mock_readiness_dependencies(monkeypatch, session_lock=UNAVAILABLE_SESSION_LOCK)
 
     payload, status_code = build_readiness_payload(startup_complete=True)
 
     assert status_code == 503
     assert payload["status"] == "not_ready"
     assert payload["services"]["session_lock"]["backend"] == "redis"
+    assert payload["services"]["approval_governance"]["ready"] is True
+
+
+def test_build_readiness_payload_requires_persistent_approval_governance(monkeypatch):
+    mock_readiness_dependencies(
+        monkeypatch,
+        approval_governance=NOT_READY_APPROVAL_GOVERNANCE,
+    )
+
+    payload, status_code = build_readiness_payload(startup_complete=True)
+
+    assert status_code == 503
+    assert payload["status"] == "not_ready"
+    assert payload["services"]["session_lock"]["status"] == "ready"
+    assert payload["services"]["approval_governance"]["status"] == "not_ready"
+    assert payload["services"]["approval_governance"]["hitl_closed_loop"] is False
 
 
 @pytest.mark.asyncio

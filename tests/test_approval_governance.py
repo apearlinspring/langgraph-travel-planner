@@ -13,14 +13,24 @@ os.environ.setdefault("POSTGRES_USER", "test")
 os.environ.setdefault("POSTGRES_PASSWORD", "test")
 
 from app.api.dependencies import get_current_user
-from app.api.v1.approvals import router as approvals_router
-from app.core.approval import ApprovalStateError, ApprovalStore, approval_store
+from app.api.v1.approvals import (
+    get_approval_service,
+    router as approvals_router,
+)
+from app.core.approval import (
+    ApprovalGovernanceManager,
+    ApprovalStateError,
+    ApprovalStore,
+    approval_store,
+)
 from app.core.permissions import (
     action_requires_approval,
     get_sensitive_action_policy,
     sanitize_approval_metadata,
 )
 from app.core.state import create_initial_state
+from app.models.approval import ApprovalEvent, ApprovalRequest, ToolAuditEvent
+from app.models.base import Base
 from app.tools.state_transition import generate_order_tool
 
 
@@ -44,9 +54,48 @@ def clear_global_approval_store():
 
 def _approval_client(user_id: str = "user-1") -> TestClient:
     app = FastAPI()
+    service = ApprovalStore()
     app.include_router(approvals_router, prefix="/api/v1")
     app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id=user_id)
+    app.dependency_overrides[get_approval_service] = lambda: service
     return TestClient(app)
+
+
+def test_governance_models_are_registered_for_database_initialization():
+    assert "approval_request" in Base.metadata.tables
+    assert "approval_event" in Base.metadata.tables
+    assert "tool_audit_event" in Base.metadata.tables
+    assert ApprovalRequest.__table__.columns["approval_id"].index is True
+    assert ApprovalEvent.__table__.columns["event_type"].nullable is False
+    assert ToolAuditEvent.__table__.columns["status"].index is True
+
+
+def test_governance_status_does_not_claim_hitl_closed_loop_without_database():
+    ApprovalGovernanceManager.mark_database_unavailable(
+        "database unavailable",
+        app_env="production",
+    )
+    production_snapshot = ApprovalGovernanceManager.get_status_snapshot()
+
+    assert production_snapshot["status"] == "not_ready"
+    assert production_snapshot["storage"] == "postgres"
+    assert production_snapshot["persistent"] is False
+    assert production_snapshot["hitl_closed_loop"] is False
+    assert production_snapshot["memory_fallback_allowed"] is False
+
+    ApprovalGovernanceManager.mark_database_unavailable(
+        "database unavailable",
+        app_env="development",
+    )
+    development_snapshot = ApprovalGovernanceManager.get_status_snapshot()
+
+    assert development_snapshot["status"] == "not_ready"
+    assert development_snapshot["storage"] == "memory"
+    assert development_snapshot["fallback_mode"] == "dev_memory"
+    assert development_snapshot["memory_fallback_allowed"] is True
+    assert development_snapshot["hitl_closed_loop"] is False
+
+    ApprovalGovernanceManager.configure_uninitialized(app_env="development")
 
 
 def test_sensitive_action_policies_separate_record_only_and_forced_approval():
@@ -85,6 +134,10 @@ def test_approval_store_supports_approve_reject_and_expire():
     assert approved.status == "approved"
     assert approved.decided_by == "user-1"
     assert approved.decision_reason == "确认只是测试审批流"
+    payment_events = store.list_events(payment.approval_id)
+    assert [event.event_type for event in payment_events] == ["created", "approved"]
+    assert payment_events[1].from_status == "pending"
+    assert payment_events[1].to_status == "approved"
 
     rejected_payment = store.mark_sensitive_action(
         action="real_booking",
@@ -109,6 +162,9 @@ def test_approval_store_supports_approve_reject_and_expire():
     )
     expired = store.get(expiring_payment.approval_id, now=302.0)
     assert expired.status == "expired"
+    expiring_events = store.list_events(expiring_payment.approval_id)
+    assert [event.event_type for event in expiring_events] == ["created", "expired"]
+    assert expiring_events[1].metadata["auto_expired"] is True
 
     with pytest.raises(ApprovalStateError):
         store.approve(expiring_payment.approval_id, decided_by="user-1", now=303.0)
@@ -143,6 +199,12 @@ def test_approval_api_marks_lists_approves_and_rejects_records():
     )
     assert approve_response.status_code == 200
     assert approve_response.json()["status"] == "approved"
+
+    events_response = client.get(f"/api/v1/approvals/{created['approval_id']}/events")
+    assert events_response.status_code == 200
+    events = events_response.json()["events"]
+    assert [event["event_type"] for event in events] == ["created", "approved"]
+    assert events[0]["metadata"]["requires_approval"] is True
 
     second_response = client.post(
         "/api/v1/approvals",

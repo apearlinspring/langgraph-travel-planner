@@ -18,8 +18,10 @@ from app.api.dependencies import get_current_user
 from app.agents.handoffs.travel_agent import create_travel_agent
 from app.config import settings
 from app.core.session_lock import SessionLockBusy, acquire_session_lock
+from app.core.approval import ApprovalGovernanceManager
 from app.tools.audit import (
     build_tool_audit_event,
+    persist_tool_audit_events,
     start_tool_audit,
     summarize_tool_input,
     summarize_tool_output,
@@ -132,6 +134,47 @@ def _is_transient_stream_disconnect(exc: Exception) -> bool:
         "peer closed connection without sending complete message body" in message
         or "incomplete chunked read" in message
     )
+
+
+async def _persist_tool_audit_events_safely(
+        db: AsyncSession,
+        *,
+        events: list[dict],
+        user_id: str,
+        conversation_id: str,
+) -> dict:
+    if not events:
+        return {"status": "skipped", "reason": "no_events"}
+    if not callable(getattr(db, "add", None)):
+        return {
+            "status": "skipped",
+            "reason": "non_sqlalchemy_session",
+            "persistent": False,
+        }
+    try:
+        await persist_tool_audit_events(
+            db,
+            events,
+            user_id=user_id,
+            conversation_id=conversation_id,
+        )
+        return {"status": "persisted", "count": len(events), "persistent": True}
+    except Exception as error:
+        rollback = getattr(db, "rollback", None)
+        if callable(rollback):
+            await rollback()
+        error_type = error.__class__.__name__
+        ApprovalGovernanceManager.mark_tool_audit_persistence_failed(error)
+        app_logger.exception(
+            "工具审计事件持久化失败，已保留在消息 extra_info 中: "
+            f"conversation_id={conversation_id}, user_id={user_id}"
+        )
+        return {
+            "status": "degraded",
+            "persistent": False,
+            "error_type": error_type,
+            "message": "工具审计事件未能写入 PostgreSQL，已记录降级状态。",
+        }
 
 
 async def generate_sse_stream(
@@ -345,6 +388,14 @@ async def generate_sse_stream(
             assistant_message = fallback_assistant_message
         if tool_audit_events:
             assistant_extra_info["tool_audit_events"] = tool_audit_events
+            audit_persistence = await _persist_tool_audit_events_safely(
+                db,
+                events=tool_audit_events,
+                user_id=str(user.id),
+                conversation_id=conversation_id,
+            )
+            if audit_persistence.get("status") == "degraded":
+                assistant_extra_info["tool_audit_persistence"] = audit_persistence
         if assistant_message.strip():
             await save_message(
                 db,
@@ -394,6 +445,14 @@ async def generate_sse_stream(
                     })
             if tool_audit_events:
                 assistant_extra_info["tool_audit_events"] = tool_audit_events
+                audit_persistence = await _persist_tool_audit_events_safely(
+                    db,
+                    events=tool_audit_events,
+                    user_id=str(user.id),
+                    conversation_id=conversation_id,
+                )
+                if audit_persistence.get("status") == "degraded":
+                    assistant_extra_info["tool_audit_persistence"] = audit_persistence
             if assistant_message.strip():
                 await save_message(
                     db,

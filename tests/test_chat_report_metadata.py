@@ -15,7 +15,9 @@ from app.api.v1.chat import (
     _report_content_from_tool_output,
     _report_extra_info_from_tool_output,
 )
+from app.core.approval import ApprovalGovernanceManager
 from app.core.session_lock import reset_session_locks_for_tests
+from app.tools.audit import build_tool_audit_event, start_tool_audit
 
 
 def test_report_extra_info_from_command_output():
@@ -59,6 +61,45 @@ def test_report_content_from_command_output_falls_back_to_tool_message():
     )
 
     assert _report_content_from_tool_output(output) == "工具消息报告"
+
+
+@pytest.mark.asyncio
+async def test_tool_audit_persistence_failure_records_degradation():
+    class FailingDb:
+        def __init__(self) -> None:
+            self.rolled_back = False
+
+        def add(self, _model):
+            raise RuntimeError("database down")
+
+        async def rollback(self):
+            self.rolled_back = True
+
+    event = build_tool_audit_event(
+        start_tool_audit("query_transport_options"),
+        status="success",
+        input_summary={"origin_city": "北京"},
+        output_summary={"option_count": 1},
+        evidence_type="live_transport_query",
+    )
+    db = FailingDb()
+
+    result = await chat._persist_tool_audit_events_safely(
+        db,
+        events=[event],
+        user_id="user-1",
+        conversation_id="conversation-1",
+    )
+    snapshot = ApprovalGovernanceManager.get_status_snapshot()
+
+    assert result["status"] == "degraded"
+    assert result["persistent"] is False
+    assert result["error_type"] == "RuntimeError"
+    assert "PostgreSQL" in result["message"]
+    assert db.rolled_back is True
+    assert snapshot["status"] == "not_ready"
+    assert snapshot["hitl_closed_loop"] is False
+    ApprovalGovernanceManager.configure_uninitialized(app_env="development")
 
 
 @pytest.mark.asyncio

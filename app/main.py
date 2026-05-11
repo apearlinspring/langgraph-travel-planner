@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.api.v1 import approvals, chat, conversations, maps, users
+from app.core.approval import ApprovalGovernanceManager
 from app.core.checkpointer import CheckpointerManager
 from app.core.session_lock import session_lock_manager
 from app.core.store import StoreManager
@@ -28,12 +29,14 @@ def build_readiness_payload(startup_complete: bool) -> tuple[dict, int]:
     store_status = StoreManager.get_status_snapshot()
     mcp_status = MCPClientManager.get_status_snapshot()
     session_lock_status = session_lock_manager.get_status_snapshot()
+    approval_governance_status = ApprovalGovernanceManager.get_status_snapshot()
 
     core_ready = (
         startup_complete
         and checkpointer_status["initialized"]
         and store_status["initialized"]
         and session_lock_status["status"] != "unavailable"
+        and approval_governance_status["ready"]
     )
     degraded = (
         mcp_status["status"] in {"degraded", "unavailable"}
@@ -58,6 +61,7 @@ def build_readiness_payload(startup_complete: bool) -> tuple[dict, int]:
             "store": store_status,
             "mcp": mcp_status,
             "session_lock": session_lock_status,
+            "approval_governance": approval_governance_status,
         },
     }
     return payload, status_code
@@ -102,6 +106,17 @@ async def lifespan(app: FastAPI):
                     "MCP warmup completed in degraded mode: "
                     f"{mcp_snapshot['healthy_servers']} healthy, "
                     f"{mcp_snapshot['unavailable_servers']} unavailable"
+                )
+
+            approval_governance_snapshot = (
+                await ApprovalGovernanceManager.verify_database()
+            )
+            if approval_governance_snapshot["status"] == "ready":
+                app_logger.info("Approval governance persistence ready")
+            else:
+                app_logger.warning(
+                    "Approval governance is not fully ready: "
+                    f"{approval_governance_snapshot}"
                 )
 
             app.state.startup_complete = True

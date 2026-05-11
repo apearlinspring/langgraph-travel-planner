@@ -5,10 +5,21 @@ from app.tools.audit import (
     summarize_tool_input,
 )
 from app.tools.guardrails import validate_hotel_query_args, validate_transport_query_args
+from app.models.approval import ToolAuditEvent
 from app.tools.state_transition import (
     _build_budget_quality_notes,
     _build_report_tool_audit_summary,
 )
+
+
+def test_tool_audit_event_model_keeps_persistent_summary_contract():
+    columns = ToolAuditEvent.__table__.columns
+
+    assert ToolAuditEvent.__tablename__ == "tool_audit_event"
+    assert columns["name"].index is True
+    assert columns["input_summary"].nullable is False
+    assert columns["output_summary"].nullable is False
+    assert columns["evidence_type"].index is True
 
 
 def test_tool_guardrails_reject_placeholder_transport_and_hotel_args():

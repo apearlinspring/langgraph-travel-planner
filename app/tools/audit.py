@@ -3,8 +3,12 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models.approval import ToolAuditEvent as ToolAuditEventModel
 from app.tools.contracts import ToolAuditEvent, ToolAuditStatus, ToolEvidenceType
 
 
@@ -115,6 +119,51 @@ def build_tool_audit_event(
         "retry_count": max(int(retry_count or 0), 0),
         "evidence_type": evidence_type,
     }
+
+
+def _datetime_from_timestamp(timestamp: float | None) -> datetime:
+    if timestamp is None:
+        return datetime.now(timezone.utc)
+    return datetime.fromtimestamp(timestamp, timezone.utc)
+
+
+async def persist_tool_audit_events(
+    db: AsyncSession,
+    events: list[dict[str, Any]],
+    *,
+    user_id: str | None = None,
+    conversation_id: str | None = None,
+    tool_call_id: str | None = None,
+    approval_id: str | None = None,
+) -> list[ToolAuditEventModel]:
+    """Persist tool audit events without changing the in-state event contract."""
+
+    models: list[ToolAuditEventModel] = []
+    for event in events or []:
+        model = ToolAuditEventModel(
+            name=str(event.get("name") or "unknown_tool"),
+            user_id=str(user_id) if user_id is not None else None,
+            conversation_id=str(conversation_id) if conversation_id is not None else None,
+            tool_call_id=tool_call_id,
+            approval_id=approval_id,
+            started_at=_datetime_from_timestamp(event.get("started_at")),
+            elapsed_seconds=float(event.get("elapsed_seconds") or 0.0),
+            status=str(event.get("status") or "failed"),
+            input_summary=dict(event.get("input_summary") or {}),
+            output_summary=dict(event.get("output_summary") or {}),
+            error_type=(
+                str(event.get("error_type"))
+                if event.get("error_type") is not None
+                else None
+            ),
+            retry_count=max(int(event.get("retry_count") or 0), 0),
+            evidence_type=str(event.get("evidence_type") or "unknown"),
+        )
+        db.add(model)
+        models.append(model)
+    if models:
+        await db.commit()
+    return models
 
 
 def append_tool_audit_event(
