@@ -52,6 +52,7 @@ DIMENSION_LABELS = {
     "tool_audit": "Tool audit surface",
     "live_run": "Live scenario execution",
     "preflight": "Preflight environment check",
+    "environment_dependencies": "Environment dependencies",
 }
 
 
@@ -103,6 +104,10 @@ DIMENSION_SUGGESTIONS = {
     "preflight": (
         "Inspect missing required environment variables, backend health, and scenario "
         "requirements before running live acceptance."
+    ),
+    "environment_dependencies": (
+        "Inspect the preflight readiness checks, required environment variable names, "
+        "backend health endpoints, and declared scenario dependency requirements."
     ),
 }
 
@@ -363,11 +368,17 @@ def _runtime_budget_dimension(
     ]
     if thresholds.require_runtime_budget_pass and not budget_gate:
         findings.insert(0, "runtime_quality.budget_gate is missing")
+    status = "passed"
+    if not passed:
+        status = "failed"
+    elif findings:
+        status = "degraded"
     return _dimension_result(
         key="runtime_budget",
         score=100.0 if passed else 0.0,
         threshold=100.0 if thresholds.require_runtime_budget_pass else None,
         passed=passed,
+        status=status,
         findings=findings[:10],
     )
 
@@ -450,6 +461,31 @@ def _failure_records(
     return failures
 
 
+def _degradation_records(
+    *,
+    scenario: EvaluationScenario,
+    dimensions: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    degradations = []
+    for key, dimension in dimensions.items():
+        if dimension.get("status") != "degraded":
+            continue
+        degradations.append(
+            {
+                "scenario_id": scenario.id,
+                "scenario_name": scenario.name,
+                "dimension": key,
+                "dimension_label": dimension["label"],
+                "status": "degraded",
+                "score": dimension["score"],
+                "threshold": dimension["threshold"],
+                "findings": dimension["findings"] or [f"{dimension['label']} degraded"],
+                "suggestion": dimension["suggestion"],
+            }
+        )
+    return degradations
+
+
 def build_acceptance_gate_result(
     *,
     scenario: EvaluationScenario,
@@ -496,18 +532,21 @@ def build_acceptance_gate_result(
         "tool_audit": _tool_audit_dimension(report_data, gate_thresholds),
     }
     failures = _failure_records(scenario=scenario, dimensions=dimensions)
+    degradations = _degradation_records(scenario=scenario, dimensions=dimensions)
+    status = "failed" if failures else "degraded" if degradations else "passed"
     return {
         "version": ACCEPTANCE_GATE_VERSION,
         "scenario_id": scenario.id,
         "scenario_name": scenario.name,
         "scenario_category": scenario.category,
         "expected_mode": scenario.expected_mode,
-        "status": "passed" if not failures else "failed",
-        "passed": not failures,
+        "status": status,
+        "passed": status == "passed",
         "snapshot_path": snapshot_path,
         "thresholds": gate_thresholds.to_dict(),
         "dimensions": dimensions,
         "failures": failures,
+        "degradations": degradations,
     }
 
 
@@ -545,6 +584,7 @@ def build_error_acceptance_gate_result(
         "thresholds": gate_thresholds.to_dict(),
         "dimensions": dimensions,
         "failures": _failure_records(scenario=scenario, dimensions=dimensions),
+        "degradations": [],
     }
 
 
@@ -563,6 +603,38 @@ def build_skipped_acceptance_gate_result(
         thresholds=thresholds,
         status="skipped",
     )
+
+
+def _preflight_records(
+    preflight: dict[str, Any] | None,
+    *,
+    statuses: set[str],
+) -> list[dict[str, Any]]:
+    records = []
+    for check in _as_list(_as_dict(preflight).get("checks")):
+        if not isinstance(check, dict) or check.get("status") not in statuses:
+            continue
+        status = str(check.get("status") or "failed")
+        records.append(
+            {
+                "scenario_id": "__preflight__",
+                "scenario_name": "Preflight environment",
+                "dimension": "environment_dependencies",
+                "dimension_label": DIMENSION_LABELS["environment_dependencies"],
+                "status": status,
+                "score": 0.0 if status in {"blocked", "skipped"} else None,
+                "threshold": 100.0 if status in {"blocked", "skipped"} else None,
+                "findings": [
+                    f"{check.get('label') or check.get('key')}: {finding}"
+                    for finding in _as_list(check.get("findings"))
+                ]
+                or [f"{check.get('label') or check.get('key')} is {status}"],
+                "suggestion": check.get("suggestion")
+                or DIMENSION_SUGGESTIONS["environment_dependencies"],
+                "env_vars": _as_list(check.get("env_vars")),
+            }
+        )
+    return records
 
 
 def build_acceptance_run_summary(
@@ -589,6 +661,18 @@ def build_acceptance_run_summary(
         for failure in _as_list(gate.get("failures"))
         if isinstance(failure, dict)
     ]
+    degradations = [
+        degradation
+        for gate in gates
+        for degradation in _as_list(gate.get("degradations"))
+        if isinstance(degradation, dict)
+    ]
+    failures.extend(
+        _preflight_records(preflight, statuses={"blocked", "skipped"})
+    )
+    degradations.extend(
+        _preflight_records(preflight, statuses={"degraded"})
+    )
     if missing_ids:
         failures.append(
             {
@@ -619,6 +703,10 @@ def build_acceptance_run_summary(
     preflight_status = _as_dict(preflight).get("status")
     if preflight_status == "blocked":
         run_status = "blocked"
+    elif any(gate.get("status") == "blocked" for gate in gates):
+        run_status = "blocked"
+    elif preflight_status == "degraded" and gates and all(gate.get("status") == "skipped" for gate in gates):
+        run_status = "degraded"
     elif gates and all(gate.get("status") == "skipped" for gate in gates):
         run_status = "skipped"
     elif preflight_status == "skipped" or (not scenarios and not results):
@@ -652,6 +740,7 @@ def build_acceptance_run_summary(
         "average_agent_score": round(sum(scores) / len(scores), 2) if scores else None,
         "results": results,
         "failures": failures,
+        "degradations": degradations,
     }
 
 
@@ -747,6 +836,18 @@ def render_acceptance_markdown(summary: dict[str, Any]) -> str:
             "- "
             f"{failure.get('scenario_id')} / {failure.get('dimension_label')}: {findings} "
             f"建议: {failure.get('suggestion')}"
+        )
+    degradations = _as_list(summary.get("degradations"))
+    if degradations:
+        lines.extend(["", "## 降级提示"])
+    for degradation in degradations:
+        if not isinstance(degradation, dict):
+            continue
+        findings = "; ".join(str(item) for item in _as_list(degradation.get("findings"))[:3])
+        lines.append(
+            "- "
+            f"{degradation.get('scenario_id')} / {degradation.get('dimension_label')}: {findings} "
+            f"建议: {degradation.get('suggestion')}"
         )
     lines.append("")
     return "\n".join(lines)

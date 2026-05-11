@@ -22,6 +22,7 @@ from app.evaluation.live_runner import (  # noqa: E402
 )
 from app.evaluation.acceptance_gate import (  # noqa: E402
     build_acceptance_run_summary,
+    build_error_acceptance_gate_result,
     build_skipped_acceptance_gate_result,
     write_acceptance_summary_files,
 )
@@ -108,11 +109,12 @@ def _preflight_only_exit_code(preflight: dict[str, Any]) -> int:
 
 def _build_skipped_results(scenarios: list[Any], preflight: dict[str, Any]) -> list[dict[str, Any]]:
     reason = _preflight_skip_reason(preflight)
+    result_status = "blocked" if preflight.get("status") == "blocked" else "skipped"
     return [
         {
             "scenario_id": scenario.id,
             "scenario_name": scenario.name,
-            "status": "skipped",
+            "status": result_status,
             "passed": False,
             "normalized_score": None,
             "grade": None,
@@ -121,9 +123,17 @@ def _build_skipped_results(scenarios: list[Any], preflight: dict[str, Any]) -> l
             "agent_score": None,
             "runtime_budget_passed": None,
             "runtime_findings": [],
-            "acceptance_gate": build_skipped_acceptance_gate_result(
-                scenario=scenario,
-                reason=reason,
+            "acceptance_gate": (
+                build_error_acceptance_gate_result(
+                    scenario=scenario,
+                    error=reason,
+                    status="blocked",
+                )
+                if result_status == "blocked"
+                else build_skipped_acceptance_gate_result(
+                    scenario=scenario,
+                    reason=reason,
+                )
             ),
             "error": reason,
         }

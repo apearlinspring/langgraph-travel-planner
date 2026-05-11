@@ -167,6 +167,8 @@ def build_snapshot_payload(
             "event_count": len(events),
             "assistant_chars": len(assistant_text),
             "has_report_data": report_data is not None,
+            "has_quality_summary": quality_summary is not None,
+            "has_turn_observability": bool(observability_events),
             "evaluation": evaluation,
             "quality_summary": quality_summary,
             "tool_event_count": len(tool_events),
@@ -177,6 +179,8 @@ def build_snapshot_payload(
         "assistant_text": assistant_text,
         "report_data": report_data,
         "tool_events": tool_events,
+        "turn_observability": observability_events,
+        "quality_summary": quality_summary,
         "observability_events": observability_events,
         "events": events,
     }
@@ -326,6 +330,37 @@ def runtime_budget_for_scenario(
     if scenario.runtime_budget:
         budget = runtime_budget_from_dict(scenario.runtime_budget, base=budget)
     return budget
+
+
+def _classify_live_error_status(exc: BaseException, *, events: list[dict[str, Any]]) -> str:
+    """Classify live-run failures without hiding real environment blockers."""
+
+    if isinstance(exc, urllib.error.HTTPError) and exc.code in {401, 403, 502, 503, 504}:
+        return "blocked"
+    if isinstance(exc, urllib.error.URLError) and not events:
+        return "blocked"
+
+    message = str(exc).lower()
+    blocked_markers = (
+        "connection refused",
+        "timed out",
+        "timeout",
+        "network is unreachable",
+        "no route to host",
+        "name or service not known",
+        "nodename nor servname",
+        "missing real value",
+        "not configured",
+        "credential",
+        "api key",
+        "api_key",
+        "access_token",
+        "health endpoint",
+        "dependency",
+    )
+    if any(marker in message for marker in blocked_markers):
+        return "blocked"
+    return "failed"
 
 
 def build_quality_summary(
@@ -590,10 +625,12 @@ def run_live_scenario(
             path = snapshot_path_for(scenario, config.output_dir)
             path.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
             snapshot_path = str(path)
+        status = _classify_live_error_status(exc, events=events)
         acceptance_gate = build_error_acceptance_gate_result(
             scenario=scenario,
             error=str(exc),
             snapshot_path=snapshot_path,
+            status=status,
         )
         return LiveScenarioResult(
             scenario_id=scenario.id,
