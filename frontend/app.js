@@ -9,6 +9,20 @@
         isAuthLoading: false,
         serviceStatus: "checking",
         lastHealthCheckAt: 0,
+        readiness: {
+          status: "checking",
+          payload: null,
+          checkedAt: 0,
+        },
+        governance: {
+          approvalFilter: "all",
+          approvals: [],
+          approvalEvents: [],
+          selectedApprovalId: null,
+          isApprovalLoading: false,
+          toolAuditEvents: [],
+          turnObservability: null,
+        },
         plannerCollapsed: localStorage.getItem("zhixing-planner-collapsed") === "1",
         mobileChatFocus: false,
         editingConversationId: null,
@@ -1170,13 +1184,590 @@
         };
       }
 
+      function isServiceUsable() {
+        return state.serviceStatus === "ready" || state.serviceStatus === "degraded";
+      }
+
+      function getStatusLabel(status = "") {
+        const labels = {
+          ready: "ready",
+          degraded: "degraded",
+          not_ready: "not_ready",
+          checking: "检查中",
+          error: "连接失败",
+          idle: "待开始",
+          ok: "ok",
+          pending: "pending",
+          approved: "approved",
+          rejected: "rejected",
+          expired: "expired",
+          failed: "failed",
+          none: "record-only",
+          completed: "completed",
+          running: "running",
+        };
+        return labels[status] || status || "unknown";
+      }
+
+      function getReadinessStatusCopy(status = "") {
+        if (status === "ready") return "核心依赖和治理审计均可用，可以演示完整链路。";
+        if (status === "degraded") return "核心链路可用，但部分可选能力降级，演示时需要说明边界。";
+        if (status === "not_ready") return "核心依赖尚未就绪，暂不开放登录、聊天或审批动作。";
+        return "正在确认服务状态。";
+      }
+
+      function formatEpochSeconds(value) {
+        if (value === null || value === undefined || value === "") return "未设置";
+        const numeric = Number(value);
+        if (!Number.isFinite(numeric)) return String(value);
+        return formatClock(new Date(numeric * 1000));
+      }
+
+      function setPillStatus(el, status, fallbackText = "") {
+        if (!el) return;
+        el.textContent = fallbackText || getStatusLabel(status);
+        el.className = `governance-status-pill ${status || "idle"}`.trim();
+      }
+
+      function summarizeReadinessServices(services = {}) {
+        return [
+          ["checkpointer", "Checkpointer（执行检查点）"],
+          ["store", "Store（长期存储）"],
+          ["mcp", "MCP（模型上下文协议）"],
+          ["session_lock", "会话锁"],
+          ["approval_governance", "审批治理"],
+        ].map(([key, label]) => {
+          const service = services?.[key] || {};
+          const rawStatus = service.status || (service.ready ? "ready" : "unknown");
+          const status =
+            rawStatus === "healthy"
+              ? "ready"
+              : rawStatus === "unavailable"
+                ? "not_ready"
+                : rawStatus;
+          return { key, label, status };
+        });
+      }
+
+      function renderReadinessPanel(payload = null) {
+        const data = payload || state.readiness.payload || {};
+        const status = data.status || state.readiness.status || "checking";
+        const statusPill = document.getElementById("readinessStatusPill");
+        const summary = document.getElementById("readinessSummary");
+        const grid = document.getElementById("readinessServiceGrid");
+
+        setPillStatus(statusPill, status, getStatusLabel(status));
+
+        if (summary) {
+          const missing = Array.isArray(data.missing_required)
+            ? data.missing_required
+            : [];
+          const degraded = Array.isArray(data.degraded_optional)
+            ? data.degraded_optional
+            : [];
+          const approval = data.services?.approval_governance || {};
+          summary.innerHTML = `
+            <strong>${escapeHtml(getReadinessStatusCopy(status))}</strong>
+            <span>环境：${escapeHtml(data.environment || "unknown")}</span>
+            <span>启动：${data.startup_complete ? "已完成" : "未完成"}</span>
+            <span>缺失必需项：${escapeHtml(missing.length ? missing.join("、") : "无")}</span>
+            <span>可选降级：${escapeHtml(degraded.length ? degraded.join("、") : "无")}</span>
+            <span>审批持久化：${approval.persistent ? "PostgreSQL（关系型数据库）已持久化" : "未声明持久化闭环"}</span>
+          `;
+        }
+
+        if (grid) {
+          grid.innerHTML = summarizeReadinessServices(data.services || {})
+            .map(
+              (item) => `
+                <div class="readiness-service-item">
+                  <span>${escapeHtml(item.label)}</span>
+                  <strong>${escapeHtml(getStatusLabel(item.status))}</strong>
+                </div>
+              `
+            )
+            .join("");
+        }
+      }
+
+      function getCurrentUserRole() {
+        return (
+          state.user?.role ||
+          state.user?.preferences?.role ||
+          state.user?.profile?.role ||
+          "user"
+        );
+      }
+
+      function canRequestAllApprovals() {
+        return ["approver", "admin"].includes(getCurrentUserRole());
+      }
+
+      function redactClientText(value = "", maxLength = 180) {
+        const compact = String(value || "")
+          .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, "[REDACTED]")
+          .replace(/\b1[3-9]\d{9}\b/g, "[REDACTED]")
+          .replace(/\b\d{17}[\dXx]\b/g, "[REDACTED]")
+          .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+\b/gi, "Bearer [REDACTED]")
+          .replace(/\beyJ[A-Za-z0-9._~+/=-]+\b/g, "[REDACTED]")
+          .replace(/\b(?:api[_-]?key|token|secret|password)\s*[:=]\s*\S+/gi, "[REDACTED]")
+          .replace(/\s+/g, " ")
+          .trim();
+        return compact.length > maxLength
+          ? `${compact.slice(0, maxLength)}...`
+          : compact;
+      }
+
+      function normalizeToolAuditEvent(event = {}) {
+        const status = String(event.status || "unknown");
+        return {
+          tool: redactClientText(event.tool || event.name || "unknown_tool", 80),
+          status,
+          elapsedSeconds:
+            event.elapsed_seconds === null || event.elapsed_seconds === undefined
+              ? null
+              : Number(event.elapsed_seconds),
+          retryCount: Number(event.retry_count || 0),
+          evidenceType: redactClientText(event.evidence_type || "unknown", 80),
+          errorType: redactClientText(event.error_type || "", 80),
+          degraded:
+            Boolean(event.degraded) ||
+            ["failed", "timeout", "degraded", "skipped", "approval_required"].includes(
+              status
+            ),
+          observedAt: Date.now(),
+        };
+      }
+
+      function rememberToolAuditEvent(event = {}) {
+        const normalized = normalizeToolAuditEvent(event);
+        const key = [
+          normalized.tool,
+          normalized.status,
+          normalized.evidenceType,
+          normalized.errorType,
+        ].join("|");
+        const existingIndex = state.governance.toolAuditEvents.findIndex(
+          (item) => [item.tool, item.status, item.evidenceType, item.errorType].join("|") === key
+        );
+        if (existingIndex >= 0) {
+          state.governance.toolAuditEvents[existingIndex] = normalized;
+        } else {
+          state.governance.toolAuditEvents.unshift(normalized);
+        }
+        state.governance.toolAuditEvents = state.governance.toolAuditEvents.slice(0, 20);
+        renderToolAuditList();
+      }
+
+      function rememberTurnObservability(event = {}) {
+        const observability = event.observability || event;
+        if (!observability || typeof observability !== "object") return;
+        state.governance.turnObservability = {
+          turnId: redactClientText(observability.turn_id || "", 80),
+          status: String(observability.status || "unknown"),
+          step: redactClientText(observability.step || "unknown", 80),
+          planningMode: redactClientText(observability.planning_mode || "unknown", 80),
+          firstTokenSeconds: observability.first_token_seconds,
+          totalElapsedSeconds: observability.total_elapsed_seconds,
+          toolCallCount: Number(observability.tool_call_count || 0),
+          toolFailureCount: Number(observability.tool_failure_count || 0),
+          fallbackCount: Number(observability.fallback_count || 0),
+          degradationStatus: String(observability.degradation_status || "unknown"),
+          estimatedTotalTokens: Number(observability.estimated_total_tokens || 0),
+        };
+        renderTurnObservability();
+      }
+
+      function renderToolAuditList() {
+        const count = document.getElementById("toolAuditCount");
+        const list = document.getElementById("toolAuditList");
+        const events = state.governance.toolAuditEvents;
+        if (count) count.textContent = String(events.length);
+        if (!list) return;
+        if (!events.length) {
+          list.innerHTML =
+            '<div class="governance-empty">本轮还没有可展示的工具审计摘要。</div>';
+          return;
+        }
+        list.innerHTML = events
+          .map((event) => {
+            const elapsed = Number.isFinite(event.elapsedSeconds)
+              ? `${event.elapsedSeconds.toFixed(2)}s`
+              : "未记录";
+            return `
+              <article class="tool-audit-card">
+                <div class="tool-audit-card-head">
+                  <strong>${escapeHtml(event.tool)}</strong>
+                  <span class="governance-status-pill ${
+                    event.degraded ? "degraded" : "ok"
+                  }">${escapeHtml(getStatusLabel(event.status))}</span>
+                </div>
+                <p>仅展示安全摘要：工具名、状态、耗时、重试次数和证据类型。</p>
+                <div class="tool-audit-meta">
+                  <span><i class="fa-regular fa-clock"></i>${escapeHtml(elapsed)}</span>
+                  <span><i class="fa-solid fa-rotate"></i>${event.retryCount} 次重试</span>
+                  <span><i class="fa-solid fa-file-shield"></i>${escapeHtml(
+                    event.evidenceType
+                  )}</span>
+                  ${
+                    event.errorType
+                      ? `<span><i class="fa-solid fa-triangle-exclamation"></i>${escapeHtml(
+                          event.errorType
+                        )}</span>`
+                      : ""
+                  }
+                </div>
+              </article>
+            `;
+          })
+          .join("");
+      }
+
+      function renderTurnObservability() {
+        const grid = document.getElementById("turnObservabilityGrid");
+        const pill = document.getElementById("turnStatusPill");
+        const item = state.governance.turnObservability;
+        if (!grid) return;
+        if (!item) {
+          setPillStatus(pill, "idle", "待开始");
+          grid.innerHTML = `
+            <div class="governance-empty">
+              完成一轮聊天后展示脱敏运行摘要，不展示 PII（个人可识别信息）、密钥或完整工具输入输出。
+            </div>
+          `;
+          return;
+        }
+        setPillStatus(pill, item.degradationStatus, getStatusLabel(item.degradationStatus));
+        const metrics = [
+          ["Turn", item.turnId ? item.turnId.slice(0, 16) : "unknown"],
+          ["状态", item.status],
+          ["阶段", item.step],
+          ["模式", item.planningMode],
+          ["首 token", item.firstTokenSeconds == null ? "未记录" : `${item.firstTokenSeconds}s`],
+          ["总耗时", item.totalElapsedSeconds == null ? "未记录" : `${item.totalElapsedSeconds}s`],
+          ["工具调用", `${item.toolCallCount} 次`],
+          ["失败/兜底", `${item.toolFailureCount}/${item.fallbackCount}`],
+          ["token 估算", `${item.estimatedTotalTokens}`],
+        ];
+        grid.innerHTML = metrics
+          .map(
+            ([label, value]) => `
+              <div class="turn-observability-item">
+                <span>${escapeHtml(label)}</span>
+                <strong>${escapeHtml(value)}</strong>
+              </div>
+            `
+          )
+          .join("");
+      }
+
+      function renderApprovalList() {
+        const list = document.getElementById("approvalList");
+        if (!list) return;
+        const filter = state.governance.approvalFilter;
+        const approvals = state.governance.approvals.filter((approval) =>
+          filter === "pending" ? approval.status === "pending" : true
+        );
+        document.querySelectorAll(".approval-filter-btn").forEach((btn) => {
+          btn.classList.toggle("active", btn.dataset.approvalFilter === filter);
+        });
+
+        if (!state.token) {
+          list.innerHTML = '<div class="governance-empty">登录后展示审批记录。</div>';
+          return;
+        }
+        if (state.governance.isApprovalLoading) {
+          list.innerHTML = '<div class="governance-empty">正在同步审批记录…</div>';
+          return;
+        }
+        if (!approvals.length) {
+          list.innerHTML = `
+            <div class="governance-empty">
+              当前没有${filter === "pending" ? "待审批" : "可展示"}记录。可以用“演示审批”生成未来真实支付的占位审批。
+            </div>
+          `;
+          return;
+        }
+
+        list.innerHTML = approvals
+          .map((approval) => {
+            const id = approval.approval_id || "";
+            const status = approval.status || "none";
+            const isPending = status === "pending";
+            const isActive = state.governance.selectedApprovalId === id;
+            return `
+              <article
+                class="approval-card ${isActive ? "active" : ""}"
+                onclick="selectApprovalRecord('${escapeHtml(id)}')"
+              >
+                <div class="approval-card-head">
+                  <strong>${escapeHtml(redactClientText(approval.label || approval.action || "敏感动作"))}</strong>
+                  <span class="governance-status-pill ${escapeHtml(status)}">${escapeHtml(
+                    getStatusLabel(status)
+                  )}</span>
+                </div>
+                <p>${escapeHtml(redactClientText(approval.reason || "未填写审批理由"))}</p>
+                <div class="approval-card-meta">
+                  <span><i class="fa-solid fa-shield-halved"></i>${approval.requires_approval ? "需审批" : "记录型"}</span>
+                  <span><i class="fa-regular fa-clock"></i>${escapeHtml(
+                    formatEpochSeconds(approval.created_at)
+                  )}</span>
+                  <span><i class="fa-regular fa-hourglass-half"></i>${escapeHtml(
+                    approval.expires_at ? formatEpochSeconds(approval.expires_at) : "无过期时间"
+                  )}</span>
+                </div>
+                <div class="approval-actions">
+                  <button
+                    class="approval-action-btn approve"
+                    type="button"
+                    ${isPending ? "" : "disabled"}
+                    onclick="decideApproval('${escapeHtml(id)}', 'approve', event)"
+                  >
+                    批准
+                  </button>
+                  <button
+                    class="approval-action-btn reject"
+                    type="button"
+                    ${isPending ? "" : "disabled"}
+                    onclick="decideApproval('${escapeHtml(id)}', 'reject', event)"
+                  >
+                    拒绝
+                  </button>
+                  <button
+                    class="approval-action-btn expire"
+                    type="button"
+                    ${isPending ? "" : "disabled"}
+                    onclick="decideApproval('${escapeHtml(id)}', 'expire', event)"
+                  >
+                    过期
+                  </button>
+                </div>
+              </article>
+            `;
+          })
+          .join("");
+      }
+
+      function renderApprovalEvents() {
+        const list = document.getElementById("approvalEventsList");
+        if (!list) return;
+        const events = state.governance.approvalEvents || [];
+        if (!state.governance.selectedApprovalId) {
+          list.className = "governance-empty";
+          list.innerHTML = "选择一条审批记录后展示 append-only（只追加）事件。";
+          return;
+        }
+        if (!events.length) {
+          list.className = "governance-empty";
+          list.innerHTML = "这条审批还没有返回事件。";
+          return;
+        }
+        list.className = "approval-event-list";
+        list.innerHTML = events
+          .map(
+            (event) => `
+              <div class="approval-event-item">
+                <strong>${escapeHtml(event.event_type || "event")} · ${escapeHtml(
+                  event.from_status || "none"
+                )} → ${escapeHtml(event.to_status || "unknown")}</strong>
+                <span>${escapeHtml(formatEpochSeconds(event.created_at))}</span>
+                ${
+                  event.reason
+                    ? `<p>${escapeHtml(redactClientText(event.reason, 120))}</p>`
+                    : ""
+                }
+              </div>
+            `
+          )
+          .join("");
+      }
+
+      async function loadApprovalEvents(approvalId) {
+        if (!approvalId || !state.token || !isServiceUsable()) {
+          state.governance.approvalEvents = [];
+          renderApprovalEvents();
+          return;
+        }
+        try {
+          const response = await fetch(
+            `${getApiBase()}/api/v1/approvals/${encodeURIComponent(approvalId)}/events`,
+            {
+              headers: { Authorization: `Bearer ${state.token}` },
+            }
+          );
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          const data = await response.json();
+          state.governance.approvalEvents = Array.isArray(data.events)
+            ? data.events
+            : [];
+        } catch (error) {
+          state.governance.approvalEvents = [];
+          showToast("审批事件同步失败", true);
+        }
+        renderApprovalEvents();
+      }
+
+      async function loadApprovals({ silent = true } = {}) {
+        if (!state.token || !isServiceUsable()) {
+          state.governance.approvals = [];
+          state.governance.approvalEvents = [];
+          renderApprovalList();
+          renderApprovalEvents();
+          return;
+        }
+        state.governance.isApprovalLoading = true;
+        syncUiAvailability();
+        renderApprovalList();
+        const params = new URLSearchParams();
+        if (canRequestAllApprovals()) params.set("scope", "all");
+        if (state.governance.approvalFilter === "pending") {
+          params.set("status", "pending");
+        }
+        try {
+          const response = await fetch(`${getApiBase()}/api/v1/approvals?${params}`, {
+            headers: { Authorization: `Bearer ${state.token}` },
+          });
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          const data = await response.json();
+          state.governance.approvals = Array.isArray(data.approvals)
+            ? data.approvals
+            : [];
+          if (
+            state.governance.selectedApprovalId &&
+            !state.governance.approvals.some(
+              (approval) => approval.approval_id === state.governance.selectedApprovalId
+            )
+          ) {
+            state.governance.selectedApprovalId = null;
+          }
+          state.governance.selectedApprovalId ||=
+            state.governance.approvals[0]?.approval_id || null;
+          if (!silent) showToast("治理台已刷新");
+        } catch (error) {
+          state.governance.approvals = [];
+          state.governance.selectedApprovalId = null;
+          if (!silent) showToast("审批记录同步失败", true);
+        } finally {
+          state.governance.isApprovalLoading = false;
+          syncUiAvailability();
+          renderApprovalList();
+          await loadApprovalEvents(state.governance.selectedApprovalId);
+        }
+      }
+
+      async function refreshGovernanceConsole(options = {}) {
+        const silent = Boolean(options?.silent);
+        await checkServiceHealth({ silent, reason: "governance-refresh" });
+        renderToolAuditList();
+        renderTurnObservability();
+        await loadApprovals({ silent });
+      }
+
+      async function setApprovalFilter(filter = "all") {
+        state.governance.approvalFilter = filter === "pending" ? "pending" : "all";
+        await loadApprovals({ silent: true });
+      }
+
+      async function selectApprovalRecord(approvalId) {
+        state.governance.selectedApprovalId = approvalId;
+        renderApprovalList();
+        await loadApprovalEvents(approvalId);
+      }
+
+      async function createDemoApproval() {
+        if (!(await ensureServiceReady("创建演示审批"))) return;
+        if (!state.token) {
+          showToast("请先登录后再创建演示审批。", true);
+          return;
+        }
+        state.governance.isApprovalLoading = true;
+        syncUiAvailability();
+        try {
+          const response = await fetch(`${getApiBase()}/api/v1/approvals`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${state.token}`,
+            },
+            body: JSON.stringify({
+              action: "real_payment",
+              reason: "治理台演示：未来真实支付接入前必须审批",
+              conversation_id: state.currentConversationId,
+              metadata: {
+                source: "frontend_governance_console",
+                demo: true,
+              },
+              expires_in_seconds: 3600,
+            }),
+          });
+          const data = await response.json().catch(() => ({}));
+          if (!response.ok) {
+            throw new Error(data?.detail?.message || `HTTP ${response.status}`);
+          }
+          state.governance.selectedApprovalId = data.approval_id;
+          showToast("演示审批已创建");
+          await loadApprovals({ silent: true });
+        } catch (error) {
+          showToast("演示审批创建失败，请确认审批治理服务可用。", true);
+        } finally {
+          state.governance.isApprovalLoading = false;
+          syncUiAvailability();
+        }
+      }
+
+      async function decideApproval(approvalId, decision, event) {
+        event?.stopPropagation();
+        if (!(await ensureServiceReady("处理审批"))) return;
+        if (!approvalId || !["approve", "reject", "expire"].includes(decision)) return;
+        const decisionPath =
+          decision === "approve" ? "approve" : decision === "reject" ? "reject" : "expire";
+        const decisionCopy = {
+          approve: "治理台演示批准：确认仍不触发真实支付或预订。",
+          reject: "治理台演示拒绝：真实供应链未接入。",
+          expire: "",
+        };
+        try {
+          const response = await fetch(
+            `${getApiBase()}/api/v1/approvals/${encodeURIComponent(
+              approvalId
+            )}/${decisionPath}`,
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${state.token}`,
+              },
+              body:
+                decision === "expire"
+                  ? undefined
+                  : JSON.stringify({ reason: decisionCopy[decision] }),
+            }
+          );
+          const data = await response.json().catch(() => ({}));
+          if (!response.ok) {
+            const message =
+              data?.detail?.message ||
+              data?.detail ||
+              "当前账号没有审批权限，或审批记录状态已变化。";
+            throw new Error(redactClientText(message));
+          }
+          state.governance.selectedApprovalId = data.approval_id || approvalId;
+          showToast(`审批已${decision === "approve" ? "批准" : decision === "reject" ? "拒绝" : "过期"}`);
+          await loadApprovals({ silent: true });
+        } catch (error) {
+          showToast(error.message || "审批处理失败", true);
+        }
+      }
+
       function syncUiAvailability() {
-        const healthy = state.serviceStatus === "ready";
+        const healthy = isServiceUsable();
         const input = document.getElementById("chatInput");
         const sendBtn = document.getElementById("sendBtn");
         const authBtn = document.getElementById("authBtn");
         const newChatBtn = document.getElementById("newChatBtn");
         const retryBtn = document.getElementById("retryHealthBtn");
+        const governanceRefreshBtn = document.getElementById("governanceRefreshBtn");
+        const createDemoApprovalBtn = document.getElementById("createDemoApprovalBtn");
         const inputWrapper = document.querySelector(".chat-input-wrapper");
 
         if (input) {
@@ -1199,6 +1790,13 @@
         }
         if (retryBtn) {
           retryBtn.disabled = state.serviceStatus === "checking";
+        }
+        if (governanceRefreshBtn) {
+          governanceRefreshBtn.disabled = state.serviceStatus === "checking";
+        }
+        if (createDemoApprovalBtn) {
+          createDemoApprovalBtn.disabled =
+            !healthy || !state.token || state.governance.isApprovalLoading;
         }
         document.querySelectorAll("[data-planner-control='true']").forEach((el) => {
           el.disabled = !healthy;
@@ -1242,34 +1840,83 @@
           });
           clearTimeout(timeoutId);
 
-          if (!response.ok) {
+          const data = await response.json().catch(() => null);
+          if (!data?.status) {
             throw new Error(`HTTP ${response.status}`);
           }
 
-          const data = await response.json();
-          if (!(data?.status === "ready" && data?.startup_complete)) {
-            throw new Error("service not ready");
+          state.readiness = {
+            status: data.status,
+            payload: data,
+            checkedAt: Date.now(),
+          };
+          renderReadinessPanel(data);
+
+          if (data.status === "ready" && data.startup_complete) {
+            state.serviceStatus = "ready";
+            state.lastHealthCheckAt = Date.now();
+            setRuntimeStatus(state.token ? "已连接" : "服务就绪", "online");
+            updateEndpointTone("idle");
+            setAuthServiceHint(
+              "服务已就绪，可以登录、创建会话并开始规划行程。",
+              "online"
+            );
+            setServiceBanner({
+              visible: false,
+              tone: "success",
+              title: "",
+              text: "",
+              meta: "",
+            });
+            syncUiAvailability();
+            return true;
           }
 
-          state.serviceStatus = "ready";
+          if (data.status === "degraded" && data.startup_complete) {
+            state.serviceStatus = "degraded";
+            state.lastHealthCheckAt = Date.now();
+            setRuntimeStatus(state.token ? "已连接 · 降级" : "服务降级可用", "online");
+            updateEndpointTone("warning");
+            setAuthServiceHint(
+              "核心服务可用，但部分外部能力降级；可以演示聊天、审批和报告治理边界。",
+              "online"
+            );
+            setServiceBanner({
+              visible: true,
+              tone: "loading",
+              title: "服务处于 degraded（降级可用）",
+              text: getReadinessStatusCopy("degraded"),
+              meta: `检查时间：${formatClock(new Date())}`,
+            });
+            syncUiAvailability();
+            return true;
+          }
+
+          state.serviceStatus = "not_ready";
           state.lastHealthCheckAt = Date.now();
-          setRuntimeStatus(state.token ? "已连接" : "服务就绪", "online");
-          updateEndpointTone("idle");
+          setRuntimeStatus("服务未就绪", "error");
+          updateEndpointTone("error");
           setAuthServiceHint(
-            "服务已就绪，可以登录、创建会话并开始规划行程。",
-            "online"
+            "后端核心依赖尚未就绪，暂时不能登录、聊天或执行审批动作。",
+            "error"
           );
           setServiceBanner({
-            visible: false,
-            tone: "success",
-            title: "",
-            text: "",
-            meta: "",
+            visible: true,
+            tone: "error",
+            title: "服务尚未 ready（就绪）",
+            text: getReadinessStatusCopy("not_ready"),
+            meta: `检查时间：${formatClock(new Date())}`,
           });
           syncUiAvailability();
-          return true;
+          return false;
         } catch (error) {
           state.serviceStatus = "error";
+          state.readiness = {
+            status: "error",
+            payload: null,
+            checkedAt: Date.now(),
+          };
+          renderReadinessPanel({ status: "error", services: {} });
           setRuntimeStatus("服务暂不可用", "error");
           updateEndpointTone("error");
           setAuthServiceHint(
@@ -1298,7 +1945,7 @@
       }
 
       async function ensureServiceReady(actionLabel = "继续操作") {
-        if (state.serviceStatus === "ready") return true;
+        if (isServiceUsable()) return true;
         const ok = await checkServiceHealth({ silent: false, reason: actionLabel });
         if (!ok) {
           showToast(`服务尚未就绪，暂时无法${actionLabel}。`, true);
@@ -1397,6 +2044,12 @@
           if (state.serviceStatus === "error") {
             composerHint.textContent =
               "服务暂不可用，建议先点击“重新检查”确认后再继续操作";
+          } else if (state.serviceStatus === "not_ready") {
+            composerHint.textContent =
+              "服务尚未 ready（就绪），请等待后端核心依赖完成初始化";
+          } else if (state.serviceStatus === "degraded") {
+            composerHint.textContent =
+              "服务 degraded（降级可用），可继续演示核心链路并留意治理台提示";
           } else if (state.serviceStatus === "checking") {
             composerHint.textContent =
               "正在检测服务状态，确认就绪后会自动开放发送和新建会话";
@@ -3598,6 +4251,10 @@
         const budgetConfidence = reportData.budget_confidence || {};
         const toolAudit = reportData.tool_audit_summary || {};
         const agencyContext = reportData.agency_context || {};
+        const approval =
+          toolAudit.approval ||
+          reportData.evidence_bundle?.approval_governance ||
+          {};
         const pendingChecks = normalizeReportDataList([
           ...normalizeReportDataList(budgetConfidence.verification_items),
           ...normalizeReportDataList(toolAudit.pending_checks),
@@ -3619,6 +4276,24 @@
             usedSources: normalizeReportDataList(toolAudit.used_sources),
             pendingChecks,
             unsupportedActions: normalizeReportDataList(toolAudit.unsupported_actions),
+            toolEvents: Array.isArray(toolAudit.events) ? toolAudit.events : [],
+          },
+          approval: {
+            approvalId: String(approval.approval_id || "").trim(),
+            action: String(approval.action || "generate_order_id").trim(),
+            status: String(approval.status || "none").trim(),
+            pending: Boolean(approval.pending),
+            requiresApproval: Boolean(approval.requires_approval),
+            isBlocking: Boolean(approval.is_blocking),
+            recordOnly: approval.record_only !== false,
+            expiresAt: approval.expires_at || null,
+            reason: String(approval.reason || "").trim(),
+            boundary:
+              String(approval.boundary || "").trim() ||
+              "当前报告不代表真实支付、真实预订、真实锁价或履约成功。",
+            unsupportedWithoutIntegration: normalizeReportDataList(
+              approval.unsupported_without_integration
+            ),
           },
           agency: {
             summary: String(agencyContext.summary || "").trim(),
@@ -3718,6 +4393,44 @@
                 icon: "fa-ban",
                 tone: "unsupported",
               })}
+            </div>
+          </div>
+        `;
+      }
+
+      function renderReportDataGovernancePanel(viewModel) {
+        const approval = viewModel.approval || {};
+        const unsupported = [
+          "不接真实支付，不生成支付链接。",
+          "不接真实预订、短信、客服或供应链下单。",
+          "不承诺真实库存、真实锁价或履约成功。",
+          ...normalizeReportDataList(approval.unsupportedWithoutIntegration),
+        ].filter((item, index, list) => list.indexOf(item) === index);
+        const statusText = approval.requiresApproval
+          ? approval.pending
+            ? "等待人工审批"
+            : getStatusLabel(approval.status)
+          : "记录型治理边界";
+        return `
+          <div class="travel-report-governance">
+            <div class="travel-report-governance-status">
+              <div>
+                <span>审批状态</span>
+                <strong>${escapeHtml(statusText)}</strong>
+              </div>
+              <div>
+                <span>动作</span>
+                <strong>${escapeHtml(approval.action || "敏感动作")}</strong>
+              </div>
+              <div>
+                <span>阻塞</span>
+                <strong>${approval.isBlocking ? "阻塞真实动作" : "当前不阻塞报告交付"}</strong>
+              </div>
+            </div>
+            <div class="travel-report-governance-boundary">
+              <strong>审批治理边界</strong>
+              <p>${escapeHtml(approval.boundary)}</p>
+              ${renderReportDataList(unsupported, "暂无额外不可承诺项。")}
             </div>
           </div>
         `;
@@ -4050,6 +4763,13 @@
                 label: "交付清单",
                 title: "顾问核验与下一步",
                 body: renderReportDataHandoffPanel(viewModel),
+              })}
+              ${renderReportDataCard({
+                tone: "governance",
+                icon: "fa-shield-halved",
+                label: "治理边界",
+                title: "审批治理与不可承诺项",
+                body: renderReportDataGovernancePanel(viewModel),
               })}
             </div>
             ${mapDigest ? `<div class="travel-report-map">${mapDigest}</div>` : ""}
@@ -4806,6 +5526,11 @@
         });
         syncUiAvailability();
         updateEndpointUI();
+        renderReadinessPanel();
+        renderApprovalList();
+        renderApprovalEvents();
+        renderToolAuditList();
+        renderTurnObservability();
         applyPlannerPanelState();
         await checkServiceHealth({ silent: false, reason: "startup" });
         if (state.token && state.user) {
@@ -4814,10 +5539,11 @@
           updateUserInfo();
           setRuntimeStatus("正在同步会话", "loading");
           await loadConversations();
+          await loadApprovals({ silent: true });
         } else {
           showIntroOverlay();
           hideAuthOverlay();
-          if (state.serviceStatus === "ready") {
+          if (isServiceUsable()) {
             setRuntimeStatus("等待登录", "idle");
           }
           setMobileChatFocus(false);
@@ -4956,6 +5682,7 @@
             renderConversationsList();
             setRuntimeStatus("正在同步会话", "loading");
             await loadConversations();
+            await loadApprovals({ silent: true });
           } else {
             setRuntimeStatus("登录失败", "error");
             setAuthFeedback(data.detail || "认证失败，请检查用户名和密码。", "error");
@@ -4996,6 +5723,11 @@
         state.user = null;
         state.currentConversationId = null;
         state.conversations = [];
+        state.governance.approvals = [];
+        state.governance.approvalEvents = [];
+        state.governance.selectedApprovalId = null;
+        state.governance.toolAuditEvents = [];
+        state.governance.turnObservability = null;
         localStorage.removeItem("token");
         localStorage.removeItem("user");
         resetPlannerDraft({ silent: true });
@@ -5007,6 +5739,10 @@
         setMobileChatFocus(false);
         setRuntimeStatus("等待登录", "idle");
         updateSessionOverview();
+        renderApprovalList();
+        renderApprovalEvents();
+        renderToolAuditList();
+        renderTurnObservability();
         showToast("已登出账号");
       }
 
@@ -5371,6 +6107,7 @@
               data.title || DEFAULT_CONVERSATION_TITLE;
             renderConversationsList();
             await loadConversations({ preserveCurrentConversationId: true });
+            await loadApprovals({ silent: true });
             updateSessionOverview();
             setRuntimeStatus("新会话已创建", "online");
             showToast("新行程已创建");
@@ -5420,10 +6157,36 @@
           clearChatMessages();
           setRuntimeStatus("加载失败", "error");
         }
+        await loadApprovals({ silent: true });
+      }
+
+      function hydrateGovernanceFromMessages(messages = []) {
+        state.governance.toolAuditEvents = [];
+        state.governance.turnObservability = null;
+        (Array.isArray(messages) ? messages : []).forEach((msg) => {
+          if (msg.role !== "assistant") return;
+          const extra = msg.extra_info || msg.extraInfo || {};
+          const auditEvents = Array.isArray(extra.tool_audit_events)
+            ? extra.tool_audit_events
+            : [];
+          auditEvents.forEach((event) => {
+            const normalized = normalizeToolAuditEvent(event);
+            state.governance.toolAuditEvents.unshift(normalized);
+          });
+          const observation = extra.observability?.metrics || extra.observability;
+          if (observation) {
+            state.governance.turnObservability = null;
+            rememberTurnObservability(observation);
+          }
+        });
+        state.governance.toolAuditEvents = state.governance.toolAuditEvents.slice(0, 20);
+        renderToolAuditList();
+        renderTurnObservability();
       }
 
       function renderMessages(messages) {
         const container = document.getElementById("chatMessages");
+        hydrateGovernanceFromMessages(messages);
         if (messages.length === 0) {
           clearChatMessages();
           return;
@@ -5610,6 +6373,12 @@
             const applyStreamEvent = (event) => {
               if (event?.type === "report_data" && event.report_data) {
                 streamingReportData = event.report_data;
+              }
+              if (event?.type === "tool_audit") {
+                rememberToolAuditEvent(event);
+              }
+              if (event?.type === "turn_observability") {
+                rememberTurnObservability(event);
               }
             };
 
