@@ -1,7 +1,22 @@
 """
 Pytest defaults for layered test execution.
 """
+import os
+
 import pytest
+
+
+TEST_ENV_DEFAULTS = {
+    "DASHSCOPE_API_KEY": "test-key-dashscope",
+    "LANGSMITH_API_KEY": "test-key-langsmith",
+    "POSTGRES_DB": "test_db",
+    "POSTGRES_USER": "test_user",
+    "POSTGRES_PASSWORD": "test_password",
+}
+
+
+for key, value in TEST_ENV_DEFAULTS.items():
+    os.environ.setdefault(key, value)
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
