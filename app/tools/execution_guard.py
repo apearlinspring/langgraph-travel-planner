@@ -73,6 +73,13 @@ def _policy_evidence_type(policy: ToolExecutionPolicy) -> ToolEvidenceType:
         return "public_rag_evidence"
     if policy.category == "mcp_external_query":
         return "mcp_live_query"
+    if policy.category == "destination_router_query":
+        return "destination_router_evidence"
+    if policy.category in {
+        "record_only_sensitive_action",
+        "future_sensitive_action",
+    }:
+        return "internal_state_update"
     return "unknown"
 
 
@@ -125,6 +132,7 @@ def _blocked_attempt(
     *,
     message: str,
     error_type: str | None,
+    status: ToolAuditStatus = "skipped",
     output_summary: dict[str, Any] | None = None,
     approval_update: dict[str, Any] | None = None,
 ) -> ToolExecutionAttempt:
@@ -132,7 +140,7 @@ def _blocked_attempt(
     attempt.approval_update = approval_update or {}
     attempt.blocked_event = build_tool_audit_event(
         attempt.context,
-        status="skipped",
+        status=status,
         input_summary=attempt.input_summary,
         output_summary=output_summary or {"message": message},
         error_type=error_type,
@@ -185,6 +193,7 @@ def begin_tool_execution(
             attempt,
             message=message,
             error_type=error_type,
+            status="approval_required",
             approval_update=approval_update,
         )
 
@@ -291,7 +300,7 @@ async def execute_guarded_call(
     )
     if not attempt.ok and attempt.blocked_event is not None:
         return ToolExecutionGuardResult(
-            status="skipped",
+            status=attempt.blocked_event["status"],
             event=attempt.blocked_event,
             output=None,
             message=attempt.blocked_message,

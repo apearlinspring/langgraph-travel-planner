@@ -11,6 +11,7 @@ from app.core.checkpointer import get_checkpointer
 from app.core.middleware import create_step_config_middleware
 from app.core.state import TravelState
 from app.tools.mcp_tools import get_all_mcp_tools, get_hotel_followup_tools
+from app.tools.contracts import classify_tool_governance
 from app.tools.memory_tools import (
     add_travel_record_tool,
     update_accommodation_preference_tool,
@@ -53,6 +54,22 @@ def _build_tool_signature(*tool_groups) -> tuple[str, ...]:
             if getattr(tool, "name", None)
         )
     )
+
+
+def describe_tool_governance(tool) -> dict:
+    """Return the governance coverage record for one registered tool."""
+
+    record = classify_tool_governance(
+        getattr(tool, "name", ""),
+        metadata=getattr(tool, "metadata", None) or {},
+    )
+    return record.to_dict()
+
+
+def describe_travel_agent_tool_governance(tools: list) -> list[dict]:
+    """List every Travel Agent tool with its execution-governance coverage."""
+
+    return [describe_tool_governance(tool) for tool in tools]
 
 
 def get_llm():
@@ -128,6 +145,22 @@ async def create_travel_agent(*, force_refresh: bool = False):
             *hotel_followup_tools,
             *all_mcp_tools,
         ]
+        tool_governance = describe_travel_agent_tool_governance(all_tools)
+        missing_governance = [
+            item["tool_name"]
+            for item in tool_governance
+            if item["coverage"] == "missing"
+        ]
+        if missing_governance:
+            app_logger.warning(
+                "Travel agent has tools missing governance classification: "
+                f"{missing_governance}"
+            )
+        else:
+            app_logger.info(
+                "Travel agent tool governance coverage ready: "
+                f"tool_count={len(tool_governance)}"
+            )
 
         agent = create_agent(
             model=llm,

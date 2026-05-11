@@ -11,6 +11,9 @@ from typing import Any, Optional
 from langchain.tools import tool
 
 from app.mcp_core.client import get_mcp_client
+from app.tools.execution_guard import execute_guarded_call
+from app.tools.guardrails import validate_transport_query_args
+from app.tools.result_validation import validate_transport_result
 from app.utils.logger import app_logger
 
 
@@ -50,6 +53,8 @@ CITY_IATA_CODES = {
     "哈尔滨": "HRB",
     "拉萨": "LXA",
 }
+TOOL_AUDIT_EVENTS_ARTIFACT_KEY = "tool_audit_events"
+FLIGHT_QUERY_TIMEOUT_SECONDS = 45.0
 
 
 def resolve_city_iata_code(city: str) -> str:
@@ -173,17 +178,12 @@ async def _get_aviation_tool(tool_name: str) -> Any | None:
     return None
 
 
-@tool
-async def query_flight_options(
+async def _query_flight_options_raw(
     origin_city: str,
     destination_city: str,
     departure_date: str,
     max_results: int = 5,
 ) -> str:
-    """
-    查询真实航班方案，自动转换城市 IATA 码，并返回推荐摘要和低价候选。
-    """
-
     itinerary_tool = await _get_aviation_tool("searchFlightItineraries")
     price_tool = await _get_aviation_tool("getFlightPriceByCities")
     if itinerary_tool is None and price_tool is None:
@@ -239,3 +239,52 @@ async def query_flight_options(
     sections.append("")
     sections.append("提示：航班价格和余票会随库存实时变化，正式预订前需要再次核实。")
     return "\n".join(sections)
+
+
+@tool(response_format="content_and_artifact")
+async def query_flight_options(
+    origin_city: str,
+    destination_city: str,
+    departure_date: str,
+    max_results: int = 5,
+) -> tuple[str, dict[str, Any]]:
+    """
+    查询真实航班方案，自动转换城市 IATA 码，并返回推荐摘要和低价候选。
+    """
+
+    async def _call(guarded_args: dict[str, Any]) -> str:
+        return await _query_flight_options_raw(
+            origin_city=str(guarded_args["origin_city"]),
+            destination_city=str(guarded_args["destination_city"]),
+            departure_date=str(guarded_args["departure_date"]),
+            max_results=int(guarded_args.get("max_results") or max_results),
+        )
+
+    guarded = await execute_guarded_call(
+        "query_flight_options",
+        {
+            "origin_city": origin_city,
+            "destination_city": destination_city,
+            "departure_date": departure_date,
+            "transport_type": "flight",
+            "max_results": max_results,
+        },
+        _call,
+        input_validator=validate_transport_query_args,
+        result_validator=validate_transport_result,
+        evidence_type="live_transport_query",
+        timeout_seconds=FLIGHT_QUERY_TIMEOUT_SECONDS,
+    )
+    artifact = {
+        TOOL_AUDIT_EVENTS_ARTIFACT_KEY: [guarded.event],
+        "tool_guard_status": guarded.status,
+        "tool_guard_error_type": guarded.error_type,
+    }
+    if guarded.output is not None:
+        return str(guarded.output), artifact
+
+    fallback = (
+        f"航班查询这次未得到可靠结果（{guarded.error_type or 'tool_guard_failed'}）。"
+        "我不会编造航班、票价或余票；请标注为待二次核实，稍后可重新查询。"
+    )
+    return fallback, artifact

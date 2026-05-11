@@ -8,7 +8,15 @@ from typing import Any
 from app.evaluation.report_quality import CriterionResult
 
 
-FAILURE_STATUSES = {"failed", "failure", "timeout", "degraded", "error"}
+FAILURE_STATUSES = {
+    "failed",
+    "failure",
+    "timeout",
+    "degraded",
+    "skipped",
+    "approval_required",
+    "error",
+}
 REDUNDANCY_TRACKED_TOOLS = frozenset(
     {
         "query_destination_info",

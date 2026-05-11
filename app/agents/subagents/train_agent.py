@@ -5,6 +5,7 @@
 import asyncio
 from langchain.agents import create_agent
 from app.mcp_core.client import get_mcp_client
+from app.tools.mcp_tools import guard_mcp_tools
 from app.tools.train_query import query_train_options
 from app.utils.llm_factory import build_chat_model
 from app.utils.logger import app_logger
@@ -27,8 +28,9 @@ async def _get_railway_followup_tools():
         if tool.name in followup_tool_names
     ]
 
-    app_logger.info(f"高铁补充工具: {[t.name for t in railway_tools]}")
-    return railway_tools
+    guarded_tools = guard_mcp_tools(railway_tools)
+    app_logger.info(f"高铁补充工具: {[t.name for t in guarded_tools]}")
+    return guarded_tools
 
 
 async def create_train_subagent():

@@ -1,6 +1,7 @@
 import asyncio
 
 import pytest
+from langchain.tools import ToolRuntime
 from langchain_core.tools import StructuredTool
 from langgraph.types import Command
 
@@ -16,10 +17,12 @@ from app.tools.audit import (
     start_tool_audit,
     summarize_tool_input,
 )
+from app.tools.contracts import classify_tool_governance
 from app.tools.execution_guard import begin_tool_execution, execute_guarded_call
 from app.tools.guardrails import validate_hotel_query_args, validate_transport_query_args
 from app.models.approval import ToolAuditEvent
 from app.tools import mcp_tools
+from app.tools import router_query
 from app.tools.mcp_tools import guard_mcp_tool
 from app.tools.state_transition import (
     _build_budget_quality_notes,
@@ -141,13 +144,25 @@ def test_execution_guard_blocks_sensitive_action_before_real_call():
     )
 
     assert attempt.ok is False
-    assert attempt.blocked_event["status"] == "skipped"
+    assert attempt.blocked_event["status"] == "approval_required"
     assert attempt.blocked_event["error_type"] == "approval_required"
     assert attempt.approval_update["approval_pending"] is True
     assert attempt.approval_update["approval_action"] == "real_payment"
     record = approval_store.get(attempt.approval_update["approval_record_id"])
     assert record.metadata["phone"] == "[REDACTED]"
     approval_store.clear()
+
+
+def test_tool_governance_classifier_marks_core_registered_tools():
+    guarded = classify_tool_governance("query_train_options")
+    boundary = classify_tool_governance("generate_order_tool")
+    exception = classify_tool_governance("select_destination_tool")
+    missing = classify_tool_governance("new_unregistered_tool")
+
+    assert guarded.coverage == "guarded"
+    assert boundary.coverage == "governed_boundary"
+    assert exception.coverage == "exception"
+    assert missing.coverage == "missing"
 
 
 @pytest.mark.asyncio
@@ -318,3 +333,35 @@ def test_chat_stream_prefers_embedded_tool_audit_event_from_command():
     command = Command(update={"tool_audit_events": [event]})
 
     assert _extract_embedded_tool_audit_events(command) == [event]
+
+
+@pytest.mark.asyncio
+async def test_destination_router_tool_writes_guard_audit_event(monkeypatch):
+    class FakeRouter:
+        async def ainvoke(self, payload):
+            return {
+                "final_report": (
+                    f"{payload['destination']}目的地信息已查询，适合结合天气和景点继续规划。"
+                )
+            }
+
+    monkeypatch.setattr(router_query, "create_destination_router", lambda: FakeRouter())
+    runtime = ToolRuntime(
+        state={"destination_options": []},
+        context=None,
+        config={},
+        stream_writer=lambda _: None,
+        tool_call_id="destination-call-1",
+        store=None,
+    )
+
+    command = await router_query.query_destination_info.ainvoke(
+        {"destination": "西安", "query": "景点推荐", "runtime": runtime}
+    )
+    event = command.update["tool_audit_events"][0]
+
+    assert "西安目的地信息已查询" in command.update["messages"][0].content
+    assert command.update["destination_options"][0]["name"] == "西安"
+    assert event["name"] == "query_destination_info"
+    assert event["status"] == "success"
+    assert event["evidence_type"] == "destination_router_evidence"

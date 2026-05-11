@@ -16,7 +16,13 @@ PUBLIC_TURN_OBSERVABILITY_VERSION = "turn_observability.public.v1"
 PUBLIC_TOOL_AUDIT_VERSION = "tool_audit.public.v1"
 OBSERVABILITY_CONTEXT_VERSION = "observability_context.v1"
 
-TOOL_FAILURE_STATUSES = {"failed", "timeout", "degraded", "skipped"}
+TOOL_FAILURE_STATUSES = {
+    "failed",
+    "timeout",
+    "degraded",
+    "skipped",
+    "approval_required",
+}
 SENSITIVE_KEY_PARTS = (
     "api_key",
     "authorization",

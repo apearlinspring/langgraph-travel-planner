@@ -12,11 +12,16 @@ from typing import Any
 from langchain.tools import tool
 
 from app.mcp_core.client import get_mcp_client
+from app.tools.execution_guard import execute_guarded_call
+from app.tools.guardrails import validate_transport_query_args
+from app.tools.result_validation import validate_transport_result
 from app.utils.logger import app_logger
 
 
 DEFAULT_TRAIN_FILTER_FLAGS = "GD"
 MAX_TEXT_CHARS = 3500
+TOOL_AUDIT_EVENTS_ARTIFACT_KEY = "tool_audit_events"
+TRAIN_QUERY_TIMEOUT_SECONDS = 45.0
 
 
 @dataclass
@@ -274,8 +279,7 @@ def _ticket_payloads(
     ]
 
 
-@tool
-async def query_train_options(
+async def _query_train_options_raw(
     origin_city: str,
     destination_city: str,
     departure_date: str,
@@ -283,10 +287,6 @@ async def query_train_options(
     allow_transfer: bool = True,
     max_results: int = 5,
 ) -> str:
-    """
-    查询真实 12306 火车/高铁方案，自动解析站点编码，优先直达，无直达时查询中转。
-    """
-
     tickets_tool = await _get_railway_tool("get-tickets")
     if tickets_tool is None:
         return "12306 余票查询服务当前不可用，请稍后再试，或先给出非实时交通建议。"
@@ -379,3 +379,60 @@ async def query_train_options(
         ]
     )
     return "\n".join(sections)
+
+
+@tool(response_format="content_and_artifact")
+async def query_train_options(
+    origin_city: str,
+    destination_city: str,
+    departure_date: str,
+    train_filter_flags: str = DEFAULT_TRAIN_FILTER_FLAGS,
+    allow_transfer: bool = True,
+    max_results: int = 5,
+) -> tuple[str, dict[str, Any]]:
+    """
+    查询真实 12306 火车/高铁方案，自动解析站点编码，优先直达，无直达时查询中转。
+    """
+
+    async def _call(guarded_args: dict[str, Any]) -> str:
+        return await _query_train_options_raw(
+            origin_city=str(guarded_args["origin_city"]),
+            destination_city=str(guarded_args["destination_city"]),
+            departure_date=str(guarded_args["departure_date"]),
+            train_filter_flags=str(
+                guarded_args.get("train_filter_flags") or DEFAULT_TRAIN_FILTER_FLAGS
+            ),
+            allow_transfer=bool(guarded_args.get("allow_transfer", allow_transfer)),
+            max_results=int(guarded_args.get("max_results") or max_results),
+        )
+
+    guarded = await execute_guarded_call(
+        "query_train_options",
+        {
+            "origin_city": origin_city,
+            "destination_city": destination_city,
+            "departure_date": departure_date,
+            "transport_type": "train",
+            "train_filter_flags": train_filter_flags,
+            "allow_transfer": allow_transfer,
+            "max_results": max_results,
+        },
+        _call,
+        input_validator=validate_transport_query_args,
+        result_validator=validate_transport_result,
+        evidence_type="live_transport_query",
+        timeout_seconds=TRAIN_QUERY_TIMEOUT_SECONDS,
+    )
+    artifact = {
+        TOOL_AUDIT_EVENTS_ARTIFACT_KEY: [guarded.event],
+        "tool_guard_status": guarded.status,
+        "tool_guard_error_type": guarded.error_type,
+    }
+    if guarded.output is not None:
+        return str(guarded.output), artifact
+
+    fallback = (
+        f"12306 查询这次未得到可靠结果（{guarded.error_type or 'tool_guard_failed'}）。"
+        "我不会编造车次、余票或票价；请标注为待二次核实，稍后可重新查询。"
+    )
+    return fallback, artifact

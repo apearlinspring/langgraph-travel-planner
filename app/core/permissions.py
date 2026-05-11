@@ -303,6 +303,14 @@ PUBLIC_RAG_POLICY = ToolExecutionPolicy(
     default_timeout_seconds=20.0,
 )
 
+DESTINATION_ROUTER_POLICY = ToolExecutionPolicy(
+    tool_name="destination_router_query",
+    category="destination_router_query",
+    risk_level="medium",
+    description="目的地 Router 组合公开 RAG、天气和搜索等外部信息，必须保留超时、审计和待核验边界。",
+    default_timeout_seconds=30.0,
+)
+
 TOOL_EXECUTION_POLICIES: dict[str, ToolExecutionPolicy] = {
     "query_hotel_options": ToolExecutionPolicy(
         tool_name="query_hotel_options",
@@ -317,6 +325,52 @@ TOOL_EXECUTION_POLICIES: dict[str, ToolExecutionPolicy] = {
         risk_level="high",
         description="真实交通方案查询，失败时不得编造车次、航班或价格。",
         default_timeout_seconds=60.0,
+    ),
+    "query_flight_options": ToolExecutionPolicy(
+        tool_name="query_flight_options",
+        category="live_transport_query",
+        risk_level="high",
+        description="真实航班方案查询，失败时不得编造航班、价格、余票或出票状态。",
+        default_timeout_seconds=45.0,
+    ),
+    "query_train_options": ToolExecutionPolicy(
+        tool_name="query_train_options",
+        category="live_transport_query",
+        risk_level="high",
+        description="真实 12306 火车/高铁方案查询，失败时不得编造车次、余票或票价。",
+        default_timeout_seconds=45.0,
+    ),
+    "query_driving_route": ToolExecutionPolicy(
+        tool_name="query_driving_route",
+        category="live_transport_query",
+        risk_level="medium",
+        description="高德自驾路线查询，失败时不得编造路线距离、时长或实时路况。",
+        default_timeout_seconds=30.0,
+    ),
+    "query_destination_info": ToolExecutionPolicy(
+        tool_name="query_destination_info",
+        category="destination_router_query",
+        risk_level="medium",
+        description="目的地综合信息查询，失败时不得混用其他城市或编造天气、开放状态。",
+        default_timeout_seconds=30.0,
+    ),
+    "generate_order_tool": ToolExecutionPolicy(
+        tool_name="generate_order_tool",
+        category="record_only_sensitive_action",
+        risk_level="medium",
+        description="生成项目内模拟订单号，只用于方案归档，不代表真实支付、预订或履约。",
+        requires_approval=False,
+        approval_action="generate_order_id",
+        default_timeout_seconds=None,
+    ),
+    "export_final_report": ToolExecutionPolicy(
+        tool_name="export_final_report",
+        category="record_only_sensitive_action",
+        risk_level="medium",
+        description="导出最终报告只代表方案交付，不代表支付、出票、预订或供应链确认。",
+        requires_approval=False,
+        approval_action="export_final_report",
+        default_timeout_seconds=None,
     ),
     "real_booking": ToolExecutionPolicy(
         tool_name="real_booking",
@@ -334,6 +388,24 @@ TOOL_EXECUTION_POLICIES: dict[str, ToolExecutionPolicy] = {
         description="真实支付占位能力，当前必须先完成人工审批且项目未接入真实执行。",
         requires_approval=True,
         approval_action="real_payment",
+        default_timeout_seconds=10.0,
+    ),
+    "send_sms": ToolExecutionPolicy(
+        tool_name="send_sms",
+        category="future_sensitive_action",
+        risk_level="critical",
+        description="短信发送占位能力，当前必须先完成人工审批且项目未接入真实短信通道。",
+        requires_approval=True,
+        approval_action="send_sms",
+        default_timeout_seconds=10.0,
+    ),
+    "export_customer_profile": ToolExecutionPolicy(
+        tool_name="export_customer_profile",
+        category="future_sensitive_action",
+        risk_level="critical",
+        description="客户资料导出占位能力，当前必须先完成人工审批且必须最小化导出字段。",
+        requires_approval=True,
+        approval_action="export_customer_profile",
         default_timeout_seconds=10.0,
     ),
 }
@@ -355,6 +427,10 @@ def get_tool_execution_policy(tool_name: str) -> ToolExecutionPolicy:
     }:
         return ToolExecutionPolicy(
             **{**PUBLIC_RAG_POLICY.to_dict(), "tool_name": normalized}
+        )
+    if normalized == "query_destination_info":
+        return ToolExecutionPolicy(
+            **{**DESTINATION_ROUTER_POLICY.to_dict(), "tool_name": normalized}
         )
     if normalized in {
         "getHotelDetail",

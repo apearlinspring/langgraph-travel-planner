@@ -1,76 +1,106 @@
-# 模块 E：工具调用治理与审计交付说明
+# 工具治理覆盖审计
 
-## 范围
+## 审计范围
 
-本轮改造聚焦真实旅行社智能顾问 Agent（智能体）里的高风险工具调用治理：Tool Execution Guard（工具执行网关）、交通、酒店、内部 RAG（检索增强生成）、MCP（模型上下文协议）外部查询和流式聊天 API（应用程序接口）工具事件。
+本分支审计所有面向 Agent（智能体）的旅行规划工具，重点证明 Tool Execution Guard（工具执行网关）不是只覆盖少数 happy path（顺利路径）。覆盖范围包括：
 
-已完成内容：
+- Travel Agent（旅行智能体）直接注册的阶段状态工具、酒店、交通、目的地 Router（路由器）、内部 RAG（检索增强生成）、记忆工具和动态 MCP（模型上下文协议）工具。
+- 交通子代理注册的航班、高铁和自驾核心查询工具。
+- 目的地 Router 使用的公开 RAG 工具。
+- 航班、高铁、交通协调器里的补充 MCP 工具。
+- 当前不接入但需要治理边界的真实支付、真实下单、短信、客户资料导出等高风险占位动作。
 
-- 新增统一工具审计契约：`ToolAuditEvent`。
-- 新增统一执行网关：`app/tools/execution_guard.py`，集中处理调用前权限判断、HITL（人类在环）审批阻断、参数预检、超时、结果校验、失败分类和审计事件生成。
-- 新增工具执行策略：`ToolExecutionPolicy`，对酒店、交通、内部 RAG、公开 RAG、MCP 外部查询和未来真实支付/预订占位动作做风险分级。
-- 新增调用前参数校验：酒店目的地、日期、人数、预算等级；交通出发地、目的地、日期、交通枚举。
-- 新增调用后结果校验：空结果、失败文本、超时、RAG 空证据和待核验信号会被归类。
-- 酒店与交通真实查询工具会把审计事件写入 `tool_audit_events`。
-- 内部 RAG 工具通过统一网关执行，失败时仍返回空证据契约，不把异常静默吞掉。
-- MCP 工具获取后会被 `guard_mcp_tool` 包装，统一加超时、占位参数拦截和诚实兜底。
-- 工具失败、超时或跳过会进入预算待核验项，并在最终 `report_data.evidence_bundle` 与 `report_data.tool_audit_summary` 中体现。
-- SSE（服务器发送事件）流式聊天会优先读取工具返回的内嵌审计事件；没有内嵌事件时按统一结果校验器生成 `tool_audit` 事件，并把本轮工具运行事件写入助手消息 `extra_info` 与持久化审计表。
+## 审计状态契约
 
-## 设计取舍
+工具审计事件统一使用 `ToolAuditEvent`，至少包含工具名、开始时间、耗时、输入摘要、输出摘要、错误分类、重试次数和证据类型。
 
-- 第一阶段先治理最容易误导用户的真实查询入口：`query_hotel_options` 和 `query_transport_options`，并把共性能力迁入统一执行网关。
-- MCP 原始工具通过轻包装保留原工具名、描述和参数 schema（结构契约），失败时返回清晰兜底文本，不继续冒充真实结果。
-- 审计事件只保存摘要，不保存密钥、认证 token（令牌）或完整大结果。
-- 失败时不生成虚假的酒店、车次、航班、价格、库存、锁价、支付或预订成功状态。
-- 未来真实预订和真实支付仍只是占位敏感动作；网关会先生成审批状态并阻断执行，不接真实支付、真实下单或短信发送。
+当前状态值：
 
-## 验证
+- `success`：工具得到可用结果。
+- `failed`：工具失败或返回不可恢复错误。
+- `degraded`：工具返回可展示内容，但包含空结果、失败提示或待核验信号。
+- `skipped`：参数不完整、权限不允许或治理策略要求跳过。
+- `approval_required`：命中 HITL（人类在环）审批边界，审批前不得继续执行。
+- `timeout`：兼容既有报告和观测链路的超时扩展状态，统一按待核验失败类处理，错误类型为 `upstream_timeout`。
 
-本轮已通过：
+## Travel Agent 注册工具清单
 
-```powershell
-.\.venv\Scripts\python -m compileall app\tools app\core app\api\v1\chat.py
-```
+| 工具 | 覆盖状态 | 理由 |
+|---|---|---|
+| `record_requirement_tool` | 例外 | 本地记录已确认需求和阶段状态，不触发外部查询。 |
+| `set_planning_mode_tool` | 例外 | 只写入规划模式状态。 |
+| `confirm_planning_mode_tool` | 例外 | 只确认当前规划模式。 |
+| `record_evidence_bundle_tool` | 例外 | 只记录证据摘要；证据来源工具本身单独受治理。 |
+| `select_destination_tool` | 例外 | 只保存用户确认目的地和上下文。 |
+| `select_transport_tool` | 例外 | 只保存已确认交通选择；真实查询由 `query_transport_options` 治理。 |
+| `select_accommodation_tool` | 例外 | 只保存已确认住宿偏好或候选；真实查询由 `query_hotel_options` 治理。 |
+| `select_food_tool` | 例外 | 只保存餐饮偏好，不做真实预订。 |
+| `generate_itinerary_tool` | 例外 | 基于已确认状态生成本地行程草案。 |
+| `summarize_budget_tool` | 例外 | 只做估算和待核验汇总，不锁价、不支付、不下单。 |
+| `generate_order_tool` | 治理边界 | 生成项目内模拟订单号，写入 `approval_governance`；不代表真实支付、预订或履约。 |
+| `go_back_to_step` / `go_back_to_*` | 例外 | 只回退本地工作流状态并清理后续字段。 |
+| `check_current_progress` | 例外 | 只读取当前本地状态。 |
+| `query_destination_info` | 网关覆盖 | 目的地 Router 入口已做参数预检、结果校验、失败分类和审计事件。 |
+| `query_hotel_options` | 网关覆盖 | 真实酒店候选查询，校验目的地、日期、人数、预算和地点类型，失败不编造酒店。 |
+| `query_transport_options` | 网关覆盖 | 真实交通协调入口，校验出发地、目的地、日期和交通方式，失败不编造车次、航班或价格。 |
+| `update_travel_style_tool` | 例外 | 长期记忆写入已有 `memory_scope` 过滤和记忆审计条目。 |
+| `update_dietary_restriction_tool` | 例外 | 长期记忆写入已有 `memory_scope` 过滤和记忆审计条目。 |
+| `update_food_preference_tool` | 例外 | 长期记忆写入已有 `memory_scope` 过滤和记忆审计条目。 |
+| `update_accommodation_preference_tool` | 例外 | 长期记忆写入已有 `memory_scope` 过滤和记忆审计条目。 |
+| `add_travel_record_tool` | 例外 | 长期记忆写入已有记忆审计条目。 |
+| `search_agency_product_templates` | 网关覆盖 | 内部 RAG 工具通过统一网关执行。 |
+| `search_agency_service_sop` | 网关覆盖 | 内部 RAG 工具通过统一网关执行。 |
+| `search_agency_pricing_rules` | 网关覆盖 | 内部 RAG 工具通过统一网关执行。 |
+| `search_agency_risk_playbook` | 网关覆盖 | 内部 RAG 工具通过统一网关执行。 |
+| `search_agency_report_standards` | 网关覆盖 | 内部 RAG 工具通过统一网关执行。 |
+| 酒店后续 MCP 工具，如 `getHotelDetail`、`getHotelSearchTags` | 元数据网关覆盖 | `guard_mcp_tool` 包装后带 `execution_guard=tool_execution_guard`。 |
+| 默认 MCP 工具，如天气、搜索、地图 | 元数据网关覆盖 | `get_all_mcp_tools()` 统一返回已包装工具。 |
 
-结果：
+机器校验入口是 `describe_travel_agent_tool_governance()`，`tests/test_travel_agent_tool_registry.py` 会断言 Travel Agent 当前注册工具没有 `missing` 覆盖项。
 
-```text
-编译通过
-```
+## 子代理与公开 RAG 覆盖
 
-```powershell
-.\.venv\Scripts\python -m pytest tests\test_tool_audit_governance.py tests\test_tool_quality_evaluation.py tests\test_hotel_query_tool.py tests\test_transport_query_tool.py tests\test_internal_rag_businessization.py -q
-```
+交通子代理的核心工具也纳入治理：
 
-结果：
+- `query_flight_options`：航班查询，走 `execute_guarded_call`，证据类型为 `live_transport_query`。
+- `query_train_options`：12306 火车/高铁查询，走 `execute_guarded_call`，证据类型为 `live_transport_query`。
+- `query_driving_route`：高德自驾路线查询，走 `execute_guarded_call`，证据类型为 `live_transport_query`。
 
-```text
-52 passed
-```
+航班、高铁和交通协调器里的补充 MCP 工具不再裸注册，统一通过 `guard_mcp_tools()` 包装。
 
-```powershell
-.\.venv\Scripts\python -m pytest -q
-```
+公开 RAG 工具也纳入统一网关：
 
-结果：
+- `search_destination_guide`
+- `search_food_recommendations`
+- `search_accommodation_info`
+- `search_travel_tips`
 
-```text
-280 passed, 24 deselected
-```
+## 高风险动作边界
 
-## 自审
+当前项目仍不接入真实支付、真实下单、短信发送、客服链接或供应链履约。
 
-- 未写入 `.env` 真实密钥，测试只使用虚拟环境变量。
-- 未新增真实支付、真实下单、真实库存、真实锁价或客服承诺。
-- 酒店和交通失败路径都会给出诚实兜底，并进入待核验链路。
-- 审批未通过的敏感占位动作会返回 `skipped` 审计状态和审批字段，不会继续执行真实外部动作。
-- 默认回归分层未新增真实网络依赖；新增测试均为本地 fake（模拟对象）测试。
-- 报告继续由结构化 `report_data` 渲染，审计摘要不会依赖自然语言正则解析。
+治理策略中已登记的敏感动作：
+
+- `generate_order_tool` / `generate_order_id`：记录型动作，不阻塞，但报告必须说明订单号只用于项目内归档。
+- `export_final_report`：记录型动作，报告导出不代表支付、出票或酒店确认。
+- `real_booking`：未来真实预订占位，必须 HITL 审批。
+- `real_payment`：未来真实支付占位，必须 HITL 审批。
+- `send_sms`：未来短信发送占位，必须 HITL 审批。
+- `export_customer_profile`：未来客户资料导出占位，必须 HITL 审批并最小化字段。
+
+命中强制审批时，审计事件状态为 `approval_required`，同时写入审批状态字段；真实动作不会继续执行。
+
+## 测试保护
+
+新增或强化的保护点：
+
+- `tests/test_tool_audit_governance.py`：验证审批状态、MCP 包装、目的地 Router 审计、治理分类器。
+- `tests/test_travel_agent_tool_registry.py`：验证 Travel Agent 注册工具全量有治理分类。
+- `tests/test_flight_query_tool.py`、`tests/test_train_query_tool.py`、`tests/test_driving_query_tool.py`：验证交通子查询工具保持兼容并走治理包装。
+- `tests/test_hotel_query_tool.py`、`tests/test_transport_query_tool.py`：继续保护酒店和交通顶层真实查询的失败兜底与审计事件。
 
 ## 剩余风险
 
-- MCP 第三方工具的包装保持原参数 schema，但不同上游工具的返回结构差异很大；当前结果校验仍以空结果、错误词和超时信号为主。
-- 工具重复调用治理仍主要依赖中间件提示和最近工具名检测，后续可把审计事件接入更严格的重复调用限流。
-- 工具成本统计目前只有耗时和结果摘要，还没有 token（令牌）成本或外部 API 计费估算。
-- 工具内嵌审计事件通过聊天流持久化；如果调用链不经过聊天 API，需要调用方显式持久化 `tool_audit_events`。
+- 第三方 MCP 工具返回结构差异仍然较大，结果校验以空内容、失败词、待核验词和超时为主。
+- 交通子代理内部工具的审计 artifact（附加产物）在直接调用子代理时可用；通过顶层 `query_transport_options` 调用时，最终持久化仍以交通协调器整体审计事件为主。
+- 记忆工具暂未接入 Tool Execution Guard，因为它们依赖现有长期记忆服务和记忆审计条目；当前用注册表例外和测试防止被误认为未治理。
