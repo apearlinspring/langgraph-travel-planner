@@ -182,7 +182,7 @@ def build_runtime_dependency_payload(
         },
     )
 
-    for key in ("map", "search", "hotel", "flight", "langsmith"):
+    for key in ("map", "search", "hotel", "flight", "langsmith", "auth_jwt"):
         dependency = dependencies.get(key)
         if not dependency:
             continue

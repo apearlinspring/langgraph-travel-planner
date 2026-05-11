@@ -44,6 +44,8 @@ ENVIRONMENT_ALIASES: dict[str, RuntimeEnvironment] = {
 PLACEHOLDER_MARKERS = (
     "your-",
     "change-me",
+    "dev-only",
+    "default",
     "placeholder",
     "not-a-real",
     "test-key",
@@ -257,6 +259,22 @@ RUNTIME_DEPENDENCY_SPECS: tuple[RuntimeDependencySpec, ...] = (
         category="observability",
         check="configuration",
         optional_reason="缺少时不影响核心规划，但会降低排障可观测性。",
+    ),
+    RuntimeDependencySpec(
+        key="auth_jwt",
+        label="Auth（认证）/ JWT（JSON Web Token，令牌认证）",
+        description="用户登录态签名密钥；生产和验收环境必须使用非默认、非占位的真实密钥。",
+        env_vars=("JWT_SECRET_KEY", "JWT_ALGORITHM"),
+        requirements=_requirements(
+            development="optional",
+            test="optional",
+            staging="required",
+            production="required",
+        ),
+        category="security",
+        check="configuration",
+        optional_reason="development/test 可以使用默认开发密钥，staging/production 不允许。",
+        mockable_in_test=False,
     ),
 )
 

@@ -28,6 +28,7 @@
 | 航班 / VariFlight | optional | optional | optional | optional | 缺少时航班真实候选标记待二次核实 |
 | 铁路 / 12306 MCP | optional | optional | optional | optional | 缺少时高铁候选标记待二次核实 |
 | LangSmith（LangChain 可观测平台） | optional | optional | optional | optional | 缺少时降低排障可观测性 |
+| Auth（认证）/ JWT（JSON Web Token，令牌认证） | optional | optional | required | required | 生产和验收必须使用非默认、非占位密钥 |
 
 ## Ready Check 契约
 
@@ -43,6 +44,7 @@
 整体判断：
 
 - 必需依赖缺失、Checkpointer 或 Store 未初始化、生产 Redis 会话锁不可用、审批治理无法持久化时，返回 `not_ready`。
+- `staging` 和 `production` 下，`JWT_SECRET_KEY` 为空、仍是默认开发密钥或明显 placeholder（占位）值时，Auth/JWT 依赖进入 `missing_required`。
 - MCP 服务池或开发 Redis 降级时，核心依赖已就绪则返回 `degraded`。
 - 可选外部 API 缺少密钥不会阻塞核心 ready，但会在依赖明细里显示 `not_configured`。
 

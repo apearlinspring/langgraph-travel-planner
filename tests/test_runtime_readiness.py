@@ -49,6 +49,8 @@ def test_dependency_matrix_marks_core_and_optional_boundaries():
     assert production["redis"]["requirement"] == "required"
     assert production["llm"]["requirement"] == "required"
     assert production["map"]["requirement"] == "required"
+    assert production["auth_jwt"]["requirement"] == "required"
+    assert development["auth_jwt"]["requirement"] == "optional"
     assert production["hotel"]["requirement"] == "optional"
     assert development["redis"]["requirement"] == "optional"
     assert test["llm"]["requirement"] == "optional"
@@ -65,6 +67,8 @@ def test_runtime_configuration_allows_test_mocks_but_blocks_production_placehold
         "REDIS_PORT": "6379",
         "REDIS_DB": "0",
         "AMAP_API_KEY": "your-amap-api-key",
+        "JWT_SECRET_KEY": "dev-only-jwt-secret-change-me",
+        "JWT_ALGORITHM": "HS256",
     }
 
     test_snapshot = runtime_configuration_snapshot(
@@ -84,7 +88,41 @@ def test_runtime_configuration_allows_test_mocks_but_blocks_production_placehold
     assert "llm" in production_snapshot["missing_required"]
     assert "postgresql" in production_snapshot["missing_required"]
     assert "map" in production_snapshot["missing_required"]
+    assert "auth_jwt" in production_snapshot["missing_required"]
     assert production_snapshot["dependencies"]["llm"]["value_policy"] == "real"
+
+
+def test_staging_and_production_block_empty_or_placeholder_jwt_secret(tmp_path: Path):
+    env = {
+        "DASHSCOPE_API_KEY": "real-ish-dashscope",
+        "POSTGRES_DB": "travel_planner_db",
+        "POSTGRES_USER": "travel_user",
+        "POSTGRES_PASSWORD": "real-ish-password",
+        "REDIS_HOST": "localhost",
+        "REDIS_PORT": "6379",
+        "REDIS_DB": "0",
+        "AMAP_API_KEY": "real-ish-amap",
+        "JWT_SECRET_KEY": "",
+        "JWT_ALGORITHM": "HS256",
+    }
+
+    empty_secret = runtime_configuration_snapshot(
+        app_env="staging",
+        environ=env,
+        dotenv_path=tmp_path / "missing.env",
+        require_real_values=True,
+    )
+    env["JWT_SECRET_KEY"] = "placeholder-jwt-secret"
+    placeholder_secret = runtime_configuration_snapshot(
+        app_env="production",
+        environ=env,
+        dotenv_path=tmp_path / "missing.env",
+        require_real_values=True,
+    )
+
+    assert "auth_jwt" in empty_secret["missing_required"]
+    assert "auth_jwt" in placeholder_secret["missing_required"]
+    assert empty_secret["dependencies"]["auth_jwt"]["status"] == "blocked"
 
 
 def test_acceptance_preflight_blocks_missing_real_external_credentials(tmp_path: Path):
@@ -99,6 +137,8 @@ def test_acceptance_preflight_blocks_missing_real_external_credentials(tmp_path:
             "REDIS_HOST": "localhost",
             "REDIS_PORT": "6379",
             "REDIS_DB": "0",
+            "JWT_SECRET_KEY": "real-ish-jwt-secret-with-enough-entropy",
+            "JWT_ALGORITHM": "HS256",
         },
         dotenv_path=tmp_path / "missing.env",
         check_backend=False,
