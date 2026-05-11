@@ -28,7 +28,6 @@ from app.utils.logger import app_logger
 
 router = APIRouter(prefix="/chat", tags=["对话"])
 
-SESSION_BUSY_RETRY_AFTER_SECONDS = 3
 SESSION_BUSY_MESSAGE = "当前会话正在处理上一轮消息，请稍后再试。"
 
 
@@ -62,13 +61,25 @@ def sse(data: dict) -> str:
     return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
-def _session_busy_payload(conversation_id: str) -> dict:
-    return {
+def _session_busy_payload(
+    conversation_id: str,
+    active_lock=None,
+) -> dict:
+    payload = {
         "type": "session_busy",
         "content": SESSION_BUSY_MESSAGE,
         "conversation_id": conversation_id,
-        "retry_after_seconds": SESSION_BUSY_RETRY_AFTER_SECONDS,
+        "retry_after_seconds": settings.session_lock_busy_retry_after_seconds,
     }
+    if active_lock is not None:
+        payload["lock_backend"] = active_lock.backend
+        payload["active_seconds"] = round(time.time() - active_lock.acquired_at, 2)
+        if active_lock.expires_at is not None:
+            payload["expires_in_seconds"] = max(
+                round(active_lock.expires_at - time.time(), 2),
+                0,
+            )
+    return payload
 
 
 def _extract_command_update(output) -> dict:
@@ -145,7 +156,10 @@ async def generate_sse_stream(
 
     try:
         try:
-            session_lock = await acquire_session_lock(conversation_id)
+            session_lock = await acquire_session_lock(
+                conversation_id,
+                wait_seconds=settings.session_lock_acquire_wait_seconds,
+            )
         except SessionLockBusy as lock_error:
             active_lock = lock_error.active_lock
             active_since = (
@@ -156,16 +170,23 @@ async def generate_sse_stream(
             app_logger.warning(
                 "SSE chat rejected because conversation is busy: "
                 f"conversation_id={conversation_id}, user_id={user.id}, "
-                f"active_seconds={active_since}"
+                f"active_seconds={active_since}, "
+                f"lock_backend={(active_lock.backend if active_lock else 'unknown')}"
             )
-            yield sse(_session_busy_payload(conversation_id))
+            yield sse(_session_busy_payload(conversation_id, active_lock))
             yield sse({"type": "done"})
             return
 
+        session_lock.start_auto_renew(
+            settings.session_lock_renew_interval_seconds
+        )
         app_logger.info(
             "SSE chat started: "
             f"conversation_id={conversation_id}, user_id={user.id}, "
-            f"message_length={len(user_message)}"
+            f"message_length={len(user_message)}, "
+            f"lock_backend={session_lock.snapshot.backend}, "
+            f"lock_wait_seconds={session_lock.snapshot.wait_seconds:.3f}, "
+            f"lock_ttl_seconds={session_lock.snapshot.ttl_seconds:.1f}"
         )
         # 1. 保存用户消息
         await save_message(db, conversation_id, "user", user_message)

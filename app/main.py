@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 
 from app.api.v1 import approvals, chat, conversations, maps, users
 from app.core.checkpointer import CheckpointerManager
+from app.core.session_lock import session_lock_manager
 from app.core.store import StoreManager
 from app.mcp_core.client import MCPClientManager
 from app.utils.logger import app_logger
@@ -26,13 +27,18 @@ def build_readiness_payload(startup_complete: bool) -> tuple[dict, int]:
     checkpointer_status = CheckpointerManager.get_status_snapshot()
     store_status = StoreManager.get_status_snapshot()
     mcp_status = MCPClientManager.get_status_snapshot()
+    session_lock_status = session_lock_manager.get_status_snapshot()
 
     core_ready = (
         startup_complete
         and checkpointer_status["initialized"]
         and store_status["initialized"]
+        and session_lock_status["status"] != "unavailable"
     )
-    degraded = mcp_status["status"] in {"degraded", "unavailable"}
+    degraded = (
+        mcp_status["status"] in {"degraded", "unavailable"}
+        or session_lock_status["status"] == "degraded"
+    )
 
     if core_ready and not degraded:
         overall_status = "ready"
@@ -51,6 +57,7 @@ def build_readiness_payload(startup_complete: bool) -> tuple[dict, int]:
             "checkpointer": checkpointer_status,
             "store": store_status,
             "mcp": mcp_status,
+            "session_lock": session_lock_status,
         },
     }
     return payload, status_code

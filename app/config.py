@@ -58,6 +58,41 @@ class Settings(BaseSettings):
     redis_db: int = Field(default=0, alias="REDIS_DB")
     redis_password: str = Field(default="", alias="REDIS_PASSWORD")
 
+    # ============== 会话一致性配置 ==============
+    session_lock_backend: str = Field(default="auto", alias="SESSION_LOCK_BACKEND")
+    session_lock_key_prefix: str = Field(
+        default="zhixing:session_lock",
+        alias="SESSION_LOCK_KEY_PREFIX",
+    )
+    session_lock_ttl_seconds: float = Field(
+        default=300.0,
+        alias="SESSION_LOCK_TTL_SECONDS",
+    )
+    session_lock_renew_interval_seconds: float = Field(
+        default=30.0,
+        alias="SESSION_LOCK_RENEW_INTERVAL_SECONDS",
+    )
+    session_lock_acquire_wait_seconds: float = Field(
+        default=0.0,
+        alias="SESSION_LOCK_ACQUIRE_WAIT_SECONDS",
+    )
+    session_lock_busy_retry_after_seconds: int = Field(
+        default=3,
+        alias="SESSION_LOCK_BUSY_RETRY_AFTER_SECONDS",
+    )
+    session_lock_redis_operation_timeout_seconds: float = Field(
+        default=0.5,
+        alias="SESSION_LOCK_REDIS_OPERATION_TIMEOUT_SECONDS",
+    )
+    session_lock_redis_fallback_to_local: bool = Field(
+        default=True,
+        alias="SESSION_LOCK_REDIS_FALLBACK_TO_LOCAL",
+    )
+    session_lock_redis_retry_interval_seconds: float = Field(
+        default=5.0,
+        alias="SESSION_LOCK_REDIS_RETRY_INTERVAL_SECONDS",
+    )
+
     # ============== LangGraph 运行配置 ==============
     langgraph_recursion_limit: int = Field(default=60, alias="LANGGRAPH_RECURSION_LIMIT")
 
