@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from app.evaluation.preflight import ACCEPTANCE_STATUSES
 from app.evaluation.scenarios import ACCEPTANCE_CORE_TAG, EvaluationScenario
 
 
@@ -48,6 +49,7 @@ DIMENSION_LABELS = {
     "internal_evidence": "Internal evidence references",
     "tool_audit": "Tool audit surface",
     "live_run": "Live scenario execution",
+    "preflight": "Preflight environment check",
 }
 
 
@@ -91,6 +93,10 @@ DIMENSION_SUGGESTIONS = {
     "live_run": (
         "Inspect the saved snapshot, backend logs, SSE stream events, and the final "
         "state-transition turn that should produce report_data."
+    ),
+    "preflight": (
+        "Inspect missing required environment variables, backend health, and scenario "
+        "requirements before running live acceptance."
     ),
 }
 
@@ -170,11 +176,16 @@ def _dimension_result(
     score: float | None,
     threshold: float | None,
     passed: bool,
+    status: str | None = None,
     findings: list[str] | None = None,
 ) -> dict[str, Any]:
+    resolved_status = status or ("passed" if passed else "failed")
+    if resolved_status not in ACCEPTANCE_STATUSES:
+        raise ValueError(f"Unknown acceptance status: {resolved_status}")
     return {
         "key": key,
         "label": DIMENSION_LABELS.get(key, key),
+        "status": resolved_status,
         "score": score,
         "threshold": threshold,
         "passed": passed,
@@ -395,6 +406,7 @@ def _failure_records(
                 "scenario_name": scenario.name,
                 "dimension": key,
                 "dimension_label": dimension["label"],
+                "status": dimension.get("status", "failed"),
                 "score": dimension["score"],
                 "threshold": dimension["threshold"],
                 "findings": dimension["findings"] or [f"{dimension['label']} failed"],
@@ -452,6 +464,7 @@ def build_acceptance_gate_result(
         "scenario_name": scenario.name,
         "scenario_category": scenario.category,
         "expected_mode": scenario.expected_mode,
+        "status": "passed" if not failures else "failed",
         "passed": not failures,
         "snapshot_path": snapshot_path,
         "thresholds": gate_thresholds.to_dict(),
@@ -466,15 +479,19 @@ def build_error_acceptance_gate_result(
     error: str,
     snapshot_path: str | None = None,
     thresholds: AcceptanceThresholds | None = None,
+    status: str = "failed",
 ) -> dict[str, Any]:
     """Build an acceptance result for a scenario that failed before scoring."""
 
+    if status not in {"failed", "blocked", "skipped"}:
+        raise ValueError("Error acceptance gate status must be failed, blocked, or skipped")
     gate_thresholds = thresholds or DEFAULT_ACCEPTANCE_THRESHOLDS
     dimension = _dimension_result(
         key="live_run",
         score=0.0,
         threshold=100.0,
         passed=False,
+        status=status,
         findings=[error],
     )
     dimensions = {"live_run": dimension}
@@ -484,12 +501,30 @@ def build_error_acceptance_gate_result(
         "scenario_name": scenario.name,
         "scenario_category": scenario.category,
         "expected_mode": scenario.expected_mode,
+        "status": status,
         "passed": False,
         "snapshot_path": snapshot_path,
         "thresholds": gate_thresholds.to_dict(),
         "dimensions": dimensions,
         "failures": _failure_records(scenario=scenario, dimensions=dimensions),
     }
+
+
+def build_skipped_acceptance_gate_result(
+    *,
+    scenario: EvaluationScenario,
+    reason: str,
+    thresholds: AcceptanceThresholds | None = None,
+) -> dict[str, Any]:
+    """Build an acceptance result for a scenario skipped by preflight."""
+
+    return build_error_acceptance_gate_result(
+        scenario=scenario,
+        error=reason,
+        snapshot_path=None,
+        thresholds=thresholds,
+        status="skipped",
+    )
 
 
 def build_acceptance_run_summary(
@@ -499,6 +534,7 @@ def build_acceptance_run_summary(
     base_url: str,
     output_dir: Path,
     thresholds: AcceptanceThresholds | None = None,
+    preflight: dict[str, Any] | None = None,
     created_at: datetime | None = None,
 ) -> dict[str, Any]:
     """Build the JSON-serializable run-level acceptance summary."""
@@ -532,25 +568,49 @@ def build_acceptance_run_summary(
             }
         )
 
-    passed_count = sum(1 for gate in gates if gate.get("passed"))
+    status_counts = {
+        status: sum(1 for gate in gates if gate.get("status") == status)
+        for status in sorted(ACCEPTANCE_STATUSES)
+    }
+    passed_count = status_counts.get("passed", 0)
     scores = [
         float(_as_dict(gate.get("dimensions")).get("agent_quality", {}).get("score"))
         for gate in gates
         if isinstance(_as_dict(gate.get("dimensions")).get("agent_quality", {}).get("score"), (int, float))
     ]
+    preflight_status = _as_dict(preflight).get("status")
+    if preflight_status == "blocked":
+        run_status = "blocked"
+    elif gates and all(gate.get("status") == "skipped" for gate in gates):
+        run_status = "skipped"
+    elif preflight_status == "skipped" or (not scenarios and not results):
+        run_status = "skipped"
+    elif failures or len(results) != len(scenarios) or not results:
+        run_status = "failed"
+    elif preflight_status == "degraded" or any(gate.get("status") == "degraded" for gate in gates):
+        run_status = "degraded"
+    else:
+        run_status = "passed"
+
     return {
         "version": ACCEPTANCE_SUMMARY_VERSION,
         "created_at": created.isoformat(),
         "base_url": base_url,
         "output_dir": str(output_dir),
         "core_tag": ACCEPTANCE_CORE_TAG,
+        "status": run_status,
         "thresholds": gate_thresholds.to_dict(),
+        "preflight": preflight,
         "selected_scenarios": [scenario.to_dict() for scenario in scenarios],
         "result_count": len(results),
         "selected_count": len(scenarios),
+        "status_counts": status_counts,
         "passed_count": passed_count,
-        "failed_count": len(results) - passed_count + len(missing_ids),
-        "passed": not failures and len(results) == len(scenarios) and bool(results),
+        "failed_count": status_counts.get("failed", 0) + len(missing_ids),
+        "blocked_count": status_counts.get("blocked", 0),
+        "degraded_count": status_counts.get("degraded", 0),
+        "skipped_count": status_counts.get("skipped", 0),
+        "passed": run_status == "passed",
         "average_agent_score": round(sum(scores) / len(scores), 2) if scores else None,
         "results": results,
         "failures": failures,
@@ -560,12 +620,20 @@ def build_acceptance_run_summary(
 def render_acceptance_markdown(summary: dict[str, Any]) -> str:
     """Render a human-readable Markdown acceptance summary."""
 
-    status = "PASS" if summary.get("passed") else "FAIL"
+    status = str(summary.get("status") or ("passed" if summary.get("passed") else "failed"))
+    status_label = {
+        "passed": "passed（通过）",
+        "failed": "failed（失败）",
+        "degraded": "degraded（降级）",
+        "blocked": "blocked（环境阻塞）",
+        "skipped": "skipped（跳过）",
+    }.get(status, status)
     lines = [
         "# 第一阶段验收质量门禁",
         "",
-        f"- 结论: {status}",
+        f"- 结论: {status_label}",
         f"- 场景: {summary.get('passed_count')} / {summary.get('selected_count')} 通过",
+        f"- 状态统计: {summary.get('status_counts')}",
         f"- 平均 Agent（智能体）综合分: {summary.get('average_agent_score')}",
         f"- 生成时间: {summary.get('created_at')}",
         f"- 后端地址: {summary.get('base_url')}",
@@ -583,6 +651,24 @@ def render_acceptance_markdown(summary: dict[str, Any]) -> str:
             f"- 旅行社内部证据类别: >= {thresholds.get('min_internal_evidence_categories')}",
         ]
     )
+    preflight = _as_dict(summary.get("preflight"))
+    if preflight:
+        lines.extend(["", "## Preflight（预检）"])
+        lines.append(f"- 状态: {preflight.get('status')}")
+        lines.append(f"- `.env` 存在: {preflight.get('dotenv_present')}")
+        skipped_metrics = _as_list(preflight.get("skipped_metrics"))
+        if skipped_metrics:
+            lines.append("- 指标不可判定: " + ", ".join(str(item) for item in skipped_metrics))
+        lines.extend(["", "| 检查项 | 状态 | 环境变量 | 发现 |", "|---|---:|---|---|"])
+        for check in _as_list(preflight.get("checks")):
+            if not isinstance(check, dict):
+                continue
+            lines.append(
+                "| "
+                f"{check.get('label')} | {check.get('status')} | "
+                f"{', '.join(str(item) for item in _as_list(check.get('env_vars'))) or '-'} | "
+                f"{'; '.join(str(item) for item in _as_list(check.get('findings'))) or '-'} |"
+            )
     lines.extend(
         [
             "",
@@ -601,7 +687,7 @@ def render_acceptance_markdown(summary: dict[str, Any]) -> str:
         def score(key: str) -> Any:
             return _as_dict(dimensions.get(key)).get("score", "-")
 
-        result_status = "PASS" if gate.get("passed") else "FAIL"
+        result_status = gate.get("status") or ("passed" if gate.get("passed") else "failed")
         snapshot = result.get("snapshot_path") or gate.get("snapshot_path") or "-"
         lines.append(
             "| "

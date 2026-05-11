@@ -10,7 +10,13 @@
       "expected_mode": "free_planning",
       "min_score": 82,
       "focus": ["nearby pacing", "daily route", "budget explanation", "food and scenery"],
-      "tags": ["free", "nearby", "weekend", "acceptance-core"]
+      "tags": ["free", "nearby", "weekend", "acceptance-core"],
+      "requirements": {
+        "real_llm": true,
+        "real_mcp": true,
+        "mcp_servers": ["weather", "search", "amap"],
+        "external_apis": ["amap", "tavily"]
+      }
     },
     {
       "id": "free_city_three_days",
@@ -20,7 +26,13 @@
       "expected_mode": "free_planning",
       "min_score": 82,
       "focus": ["first-time destination", "culture and food", "low-stress route", "map routes"],
-      "tags": ["free", "city", "culture", "acceptance-core"]
+      "tags": ["free", "city", "culture", "acceptance-core"],
+      "requirements": {
+        "real_llm": true,
+        "real_mcp": true,
+        "mcp_servers": ["weather", "search", "amap"],
+        "external_apis": ["amap", "tavily"]
+      }
     },
     {
       "id": "free_long_distance",
@@ -30,7 +42,13 @@
       "expected_mode": "free_planning",
       "min_score": 84,
       "focus": ["transport comparison", "hotel area", "4-day itinerary", "budget confidence"],
-      "tags": ["free", "long-distance", "transport"]
+      "tags": ["free", "long-distance", "transport"],
+      "requirements": {
+        "real_llm": true,
+        "real_mcp": true,
+        "mcp_servers": ["weather", "search", "amap", "12306-mcp", "VariFlight-Aviation"],
+        "external_apis": ["amap", "tavily", "variflight"]
+      }
     },
     {
       "id": "agency_couple_relaxed",
@@ -40,7 +58,13 @@
       "expected_mode": "agency_plan",
       "min_score": 86,
       "focus": ["agency playbook", "romantic pacing", "hotel and food", "service standards"],
-      "tags": ["agency", "couple", "relaxed", "acceptance-core"]
+      "tags": ["agency", "couple", "relaxed", "acceptance-core"],
+      "requirements": {
+        "real_llm": true,
+        "real_mcp": true,
+        "mcp_servers": ["weather", "search", "amap", "12306-mcp", "VariFlight-Aviation", "aigohotel-mcp"],
+        "external_apis": ["amap", "tavily", "variflight", "aigohotel"]
+      }
     },
     {
       "id": "agency_family_parent_child",
@@ -50,7 +74,13 @@
       "expected_mode": "agency_plan",
       "min_score": 86,
       "focus": ["family suitability", "low walking load", "clean hotel", "risk fallback"],
-      "tags": ["agency", "family", "parent-child", "acceptance-core"]
+      "tags": ["agency", "family", "parent-child", "acceptance-core"],
+      "requirements": {
+        "real_llm": true,
+        "real_mcp": true,
+        "mcp_servers": ["weather", "search", "amap", "aigohotel-mcp"],
+        "external_apis": ["amap", "tavily", "aigohotel"]
+      }
     },
     {
       "id": "agency_senior_low_stress",
@@ -60,7 +90,13 @@
       "expected_mode": "agency_plan",
       "min_score": 86,
       "focus": ["senior-friendly pacing", "stable transport", "accessible hotel", "safety reminders"],
-      "tags": ["agency", "senior", "low-stress", "acceptance-core"]
+      "tags": ["agency", "senior", "low-stress", "acceptance-core"],
+      "requirements": {
+        "real_llm": true,
+        "real_mcp": true,
+        "mcp_servers": ["weather", "search", "amap", "aigohotel-mcp"],
+        "external_apis": ["amap", "tavily", "aigohotel"]
+      }
     },
     {
       "id": "edge_tight_budget",
@@ -70,7 +106,13 @@
       "expected_mode": "free_planning",
       "min_score": 80,
       "focus": ["budget feasibility", "honest constraints", "alternatives", "risk disclosure"],
-      "tags": ["edge", "budget", "constraint"]
+      "tags": ["edge", "budget", "constraint"],
+      "requirements": {
+        "real_llm": true,
+        "real_mcp": true,
+        "mcp_servers": ["weather", "search", "amap"],
+        "external_apis": ["amap", "tavily"]
+      }
     },
     {
       "id": "edge_hotel_tool_fallback",
@@ -81,6 +123,12 @@
       "min_score": 82,
       "focus": ["hotel preference parsing", "fuzzy matching", "tool failure fallback", "clear verification"],
       "tags": ["edge", "hotel", "fallback", "acceptance-core"],
+      "requirements": {
+        "real_llm": true,
+        "real_mcp": true,
+        "mcp_servers": ["weather", "search", "amap", "aigohotel-mcp"],
+        "external_apis": ["amap", "tavily", "aigohotel"]
+      },
       "runtime_budget": {
         "max_tool_call_count": 36,
         "max_first_token_seconds": 75
@@ -94,7 +142,13 @@
       "expected_mode": "agency_plan",
       "min_score": 86,
       "focus": ["group suitability", "service nodes", "budget basis", "risk fallback"],
-      "tags": ["agency", "team", "budget"]
+      "tags": ["agency", "team", "budget"],
+      "requirements": {
+        "real_llm": true,
+        "real_mcp": true,
+        "mcp_servers": ["weather", "search", "amap", "aigohotel-mcp"],
+        "external_apis": ["amap", "tavily", "aigohotel"]
+      }
     },
     {
       "id": "pricing_agency_quote_explanation",
@@ -104,7 +158,13 @@
       "expected_mode": "agency_plan",
       "min_score": 86,
       "focus": ["price evidence", "included and excluded costs", "verification items", "agency quote policy"],
-      "tags": ["agency", "pricing", "budget", "acceptance-core"]
+      "tags": ["agency", "pricing", "budget", "acceptance-core"],
+      "requirements": {
+        "real_llm": true,
+        "real_mcp": true,
+        "mcp_servers": ["weather", "search", "amap"],
+        "external_apis": ["amap", "tavily"]
+      }
     },
     {
       "id": "risk_weather_disruption",
@@ -115,6 +175,12 @@
       "min_score": 84,
       "focus": ["weather fallback", "senior-friendly route", "risk checklist", "verification items"],
       "tags": ["agency", "risk", "weather", "senior", "acceptance-core"],
+      "requirements": {
+        "real_llm": true,
+        "real_mcp": true,
+        "mcp_servers": ["weather", "search", "amap", "aigohotel-mcp"],
+        "external_apis": ["amap", "tavily", "aigohotel"]
+      },
       "runtime_budget": {
         "max_first_token_seconds": 75,
         "max_tool_call_count": 36
@@ -129,6 +195,12 @@
       "min_score": 82,
       "focus": ["transport lookup intent", "tool failure fallback", "verification", "route feasibility"],
       "tags": ["edge", "transport", "fallback", "acceptance-core"],
+      "requirements": {
+        "real_llm": true,
+        "real_mcp": true,
+        "mcp_servers": ["weather", "search", "amap", "12306-mcp", "VariFlight-Aviation"],
+        "external_apis": ["amap", "tavily", "variflight"]
+      },
       "runtime_budget": {
         "max_tool_call_count": 36,
         "max_first_token_seconds": 75
@@ -143,6 +215,12 @@
       "min_score": 84,
       "focus": ["long context", "preference carryover", "mode stability", "final report readiness"],
       "tags": ["agency", "long-context", "family", "risk"],
+      "requirements": {
+        "real_llm": true,
+        "real_mcp": true,
+        "mcp_servers": ["weather", "search", "amap", "12306-mcp", "VariFlight-Aviation", "aigohotel-mcp"],
+        "external_apis": ["amap", "tavily", "variflight", "aigohotel"]
+      },
       "runtime_budget": {
         "max_total_elapsed_seconds": 1200,
         "max_first_token_seconds": 90,

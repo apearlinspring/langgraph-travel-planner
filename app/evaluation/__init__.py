@@ -9,8 +9,16 @@ from app.evaluation.acceptance_gate import (
     build_acceptance_gate_result,
     build_acceptance_run_summary,
     build_error_acceptance_gate_result,
+    build_skipped_acceptance_gate_result,
     render_acceptance_markdown,
     write_acceptance_summary_files,
+)
+from app.evaluation.preflight import (
+    PREFLIGHT_VERSION,
+    PreflightCheck,
+    PreflightResult,
+    required_capabilities_for_scenarios,
+    run_acceptance_preflight,
 )
 from app.evaluation.rag_quality import RagQualityResult, evaluate_rag_quality
 from app.evaluation.report_quality import (
@@ -74,11 +82,15 @@ __all__ = [
     "ACCEPTANCE_SUMMARY_VERSION",
     "DEFAULT_ACCEPTANCE_THRESHOLDS",
     "MIN_ACCEPTANCE_CORE_SCENARIOS",
+    "PREFLIGHT_VERSION",
+    "PreflightCheck",
+    "PreflightResult",
     "acceptance_core_scenarios",
     "acceptance_thresholds_from_dict",
     "build_acceptance_gate_result",
     "build_acceptance_run_summary",
     "build_error_acceptance_gate_result",
+    "build_skipped_acceptance_gate_result",
     "DEFAULT_RUNTIME_BUDGET",
     "build_runtime_governance_summary",
     "collect_runtime_metrics",
@@ -95,7 +107,9 @@ __all__ = [
     "load_scenarios",
     "load_tool_call_scenarios",
     "render_acceptance_markdown",
+    "required_capabilities_for_scenarios",
     "runtime_budget_from_dict",
+    "run_acceptance_preflight",
     "run_live_scenario",
     "tool_overuse_summary",
     "write_acceptance_summary_files",

@@ -6,9 +6,11 @@ import pytest
 from app.evaluation.acceptance_gate import (
     build_acceptance_gate_result,
     build_acceptance_run_summary,
+    build_skipped_acceptance_gate_result,
     render_acceptance_markdown,
     write_acceptance_summary_files,
 )
+from app.evaluation.preflight import required_capabilities_for_scenarios, run_acceptance_preflight
 from app.evaluation.live_runner import (
     build_quality_summary,
     build_snapshot_payload,
@@ -33,6 +35,12 @@ def _scenario(scenario_id: str, mode: str = "agency_plan") -> EvaluationScenario
         min_score=80,
         focus=["contract"],
         tags=["agency" if mode == "agency_plan" else "free"],
+        requirements={
+            "real_llm": True,
+            "real_mcp": True,
+            "mcp_servers": ["weather", "search", "amap"],
+            "external_apis": ["amap", "tavily"],
+        },
     )
 
 
@@ -358,3 +366,65 @@ def test_acceptance_gate_flags_budget_confidence_gap():
     assert gate["passed"] is False
     assert gate["dimensions"]["budget_confidence"]["passed"] is False
     assert any(failure["dimension"] == "budget_confidence" for failure in gate["failures"])
+
+
+def test_preflight_blocks_when_real_credentials_are_missing():
+    scenario = _scenario("agency_couple")
+
+    preflight = run_acceptance_preflight(
+        [scenario],
+        base_url="http://127.0.0.1:8000",
+        environ={},
+        check_backend=False,
+    )
+
+    assert preflight.status == "blocked"
+    assert "real_llm" in preflight.missing_required
+    assert "report_quality" in preflight.skipped_metrics
+
+
+def test_preflight_declares_scenario_capability_requirements():
+    scenario = _scenario("agency_couple")
+
+    capabilities = required_capabilities_for_scenarios([scenario])
+
+    assert capabilities["real_llm"] is True
+    assert capabilities["real_mcp"] is True
+    assert "weather" in capabilities["mcp_servers"]
+    assert {"amap", "tavily"}.issubset(capabilities["external_apis"])
+
+
+def test_blocked_preflight_summary_cannot_pass_acceptance(tmp_path: Path):
+    scenario = _scenario("agency_couple")
+    preflight = run_acceptance_preflight(
+        [scenario],
+        base_url="http://127.0.0.1:8000",
+        environ={},
+        check_backend=False,
+    ).to_dict()
+    skipped_gate = build_skipped_acceptance_gate_result(
+        scenario=scenario,
+        reason="Preflight blocked live acceptance",
+    )
+
+    summary = build_acceptance_run_summary(
+        results=[
+            {
+                "scenario_id": scenario.id,
+                "scenario_name": scenario.name,
+                "status": "skipped",
+                "passed": False,
+                "acceptance_gate": skipped_gate,
+            }
+        ],
+        scenarios=[scenario],
+        base_url="http://127.0.0.1:8000",
+        output_dir=tmp_path,
+        preflight=preflight,
+    )
+    markdown = render_acceptance_markdown(summary)
+
+    assert summary["status"] == "blocked"
+    assert summary["passed"] is False
+    assert summary["skipped_count"] == 1
+    assert "指标不可判定" in markdown

@@ -91,6 +91,7 @@ class LiveScenarioResult:
     grade: str | None
     snapshot_path: str | None
     elapsed_seconds: float
+    status: str = "failed"
     agent_score: float | None = None
     runtime_budget_passed: bool | None = None
     runtime_findings: list[str] | None = None
@@ -543,6 +544,7 @@ def run_live_scenario(
             grade=str(evaluation["grade"]),
             snapshot_path=str(path),
             elapsed_seconds=round(elapsed_seconds, 2),
+            status=str(acceptance_gate["status"]),
             agent_score=float(quality_summary["aggregate"]["normalized_score"]),
             runtime_budget_passed=bool(
                 quality_summary["runtime_quality"]["budget_gate"]["passed"]
@@ -585,6 +587,7 @@ def run_live_scenario(
             grade=None,
             snapshot_path=snapshot_path,
             elapsed_seconds=round(elapsed_seconds, 2),
+            status=str(acceptance_gate["status"]),
             acceptance_gate=acceptance_gate,
             error=str(exc),
         )

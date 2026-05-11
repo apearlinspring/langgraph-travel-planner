@@ -35,6 +35,7 @@ class EvaluationScenario:
     tags: list[str]
     followups: list[str] = field(default_factory=list)
     runtime_budget: dict[str, Any] = field(default_factory=dict)
+    requirements: dict[str, Any] = field(default_factory=dict)
     notes: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -113,6 +114,32 @@ def _as_optional_runtime_budget(
     return dict(value)
 
 
+def _as_optional_requirements(
+    value: Any,
+    *,
+    scenario_id: str,
+) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(f"Scenario {scenario_id!r} field 'requirements' must be an object")
+
+    requirements = dict(value)
+    for field_name in ("real_llm", "real_mcp"):
+        if field_name in requirements and not isinstance(requirements[field_name], bool):
+            raise ValueError(f"Scenario {scenario_id!r} requirements.{field_name} must be a boolean")
+    for field_name in ("mcp_servers", "external_apis"):
+        if field_name in requirements:
+            _as_optional_string_list(
+                requirements[field_name],
+                field_name=f"requirements.{field_name}",
+                scenario_id=scenario_id,
+            )
+    if "notes" in requirements and not isinstance(requirements["notes"], str):
+        raise ValueError(f"Scenario {scenario_id!r} requirements.notes must be a string")
+    return requirements
+
+
 def _validate_scenario_id(payload: dict[str, Any]) -> str:
     scenario_id = payload.get("id")
     if not isinstance(scenario_id, str) or not scenario_id:
@@ -182,6 +209,10 @@ def _scenario_from_dict(payload: dict[str, Any]) -> EvaluationScenario:
         ),
         runtime_budget=_as_optional_runtime_budget(
             payload.get("runtime_budget"),
+            scenario_id=scenario_id,
+        ),
+        requirements=_as_optional_requirements(
+            payload.get("requirements"),
             scenario_id=scenario_id,
         ),
         notes=str(payload.get("notes") or "").strip(),

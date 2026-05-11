@@ -4,6 +4,8 @@
 
 本阶段已建立可重复运行、可审计的总体验收质量门禁。门禁不改核心 Agent（智能体）业务逻辑，只聚合真实链路快照中的结构化报告、RAG（检索增强生成）证据、工具调用事件和运行时指标，把“是否达成阶段目标”转成确定性评分和失败维度。
 
+当前环境结论：blocked（环境阻塞）。当前没有真实 LLM（大语言模型）和外部 API（应用程序接口）密钥，不能生成“有效验收通过”的结论；只能生成环境阻塞报告。
+
 核心验收命令：
 
 ```powershell
@@ -35,6 +37,15 @@
 - 预算置信度契约检查。
 - 旅行社内部证据引用检查。
 - 工具审计表面检查。
+
+每个核心场景都显式声明 `requirements`：
+
+- `real_llm`：是否需要真实 LLM（大语言模型）。
+- `real_mcp`：是否需要真实 MCP（模型上下文协议）服务。
+- `mcp_servers`：需要的 MCP（模型上下文协议）服务清单。
+- `external_apis`：需要的外部 API（应用程序接口）清单。
+
+本批 9 个核心场景都需要真实 LLM（大语言模型）和真实 MCP（模型上下文协议）。核心场景合计需要的外部 API（应用程序接口）包括 `amap`、`tavily`、`variflight`、`aigohotel`。
 
 ## 门禁阈值
 
@@ -93,6 +104,37 @@ uv run --frozen python scripts\run_evaluation_scenarios.py --acceptance-core --d
 - 当前没有 `.env`，进程环境中也没有真实 DashScope（阿里云灵积模型服务）、高德、搜索、航班、酒店等外部 API（应用程序接口）密钥。
 - 使用占位模型密钥尝试启动后端时，应用卡在 MCP（模型上下文协议）外部服务初始化阶段；日志显示外部服务因缺 API（应用程序接口）密钥返回非 MCP JSON（JavaScript 对象表示法）响应，导致后端未监听 `8000` 端口。
 - 因此真实 `--acceptance-core` 验收仍未运行；当前阻塞点是缺真实模型和外部 API（应用程序接口）凭据，或需要调整本地 MCP（模型上下文协议）启动配置让无密钥服务降级后不阻塞启动。
+
+2026-05-11 追加 preflight（预检）结果：
+
+```powershell
+.\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-core --preflight-only --summary-dir .runtime\preflight-check --summary-prefix preflight-check --json
+```
+
+结果：blocked（环境阻塞），9 个核心场景均为 skipped（跳过）。生成了环境阻塞摘要：
+
+- `.runtime\preflight-check\20260511-015126-preflight-check.json`
+- `.runtime\preflight-check\20260511-015126-preflight-check.md`
+
+本次缺失依赖：
+
+- 后端启动必需环境变量：`DASHSCOPE_API_KEY`、`LANGSMITH_API_KEY`、`POSTGRES_DB`、`POSTGRES_USER`、`POSTGRES_PASSWORD`。
+- 真实 LLM（大语言模型）：`DASHSCOPE_API_KEY`。
+- 高德 API（应用程序接口）：`AMAP_API_KEY`。
+- Tavily 搜索 API（应用程序接口）：`TAVILY_API_KEY`。
+- 航班 API（应用程序接口）：`VARIFLIGHT_API_KEY`。
+- 酒店 API（应用程序接口）：`AIGOHOTEL_API_KEY`、`AIGOHOTEL_MCP_API` 或 `AIGOHOTEL_SECRET_KEY`。
+- 后端健康检查：`GET /health/live` 不可达。
+
+本次不可判定指标：
+
+- 报告质量。
+- RAG（检索增强生成）质量。
+- 工具治理质量。
+- 运行时质量。
+- 预算置信度。
+- 旅行社内部证据引用。
+- 工具审计表面。
 
 ## 后续使用建议
 

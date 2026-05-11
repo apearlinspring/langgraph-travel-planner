@@ -35,6 +35,10 @@ def test_acceptance_core_scenarios_cover_first_stage_gate():
 
     assert len(scenarios) >= MIN_ACCEPTANCE_CORE_SCENARIOS
     assert all(ACCEPTANCE_CORE_TAG in scenario.tags for scenario in scenarios)
+    assert all(scenario.requirements.get("real_llm") is True for scenario in scenarios)
+    assert all(scenario.requirements.get("real_mcp") is True for scenario in scenarios)
+    assert all(scenario.requirements.get("mcp_servers") for scenario in scenarios)
+    assert all(scenario.requirements.get("external_apis") for scenario in scenarios)
     assert {"free_planning", "agency_plan", "pricing", "risk", "edge_case"}.issubset(categories)
     assert {"hotel", "transport", "budget", "weather"}.issubset(tags)
 
@@ -53,6 +57,7 @@ def test_load_scenarios_accepts_runtime_budget_contract():
 
     assert scenario.runtime_budget["max_total_elapsed_seconds"] == 1200
     assert scenario.runtime_budget["max_estimated_total_tokens"] == 180000
+    assert "aigohotel" in scenario.requirements["external_apis"]
 
 
 def test_load_rag_quality_scenarios_has_business_coverage():
