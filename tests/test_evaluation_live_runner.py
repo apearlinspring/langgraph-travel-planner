@@ -22,6 +22,10 @@ from app.evaluation.live_runner import (
     snapshot_path_for,
 )
 from app.evaluation.scenarios import EvaluationScenario
+from scripts.run_evaluation_scenarios import (
+    _preflight_only_exit_code,
+    _preflight_skip_reason,
+)
 from tests.test_report_quality_evaluation import _valid_report_data
 
 
@@ -392,6 +396,36 @@ def test_preflight_declares_scenario_capability_requirements():
     assert capabilities["real_mcp"] is True
     assert "weather" in capabilities["mcp_servers"]
     assert {"amap", "tavily"}.issubset(capabilities["external_apis"])
+
+
+def test_preflight_only_passed_exit_code_is_success():
+    preflight = {
+        "status": "passed",
+        "checks": [],
+        "missing_required": [],
+        "degraded_optional": [],
+    }
+
+    assert _preflight_only_exit_code(preflight) == 0
+    assert "Preflight-only passed" in _preflight_skip_reason(preflight)
+
+
+def test_preflight_only_blocked_exit_code_is_failure():
+    preflight = {
+        "status": "blocked",
+        "checks": [
+            {
+                "label": "Backend live health endpoint",
+                "status": "blocked",
+                "findings": ["connection refused"],
+            }
+        ],
+        "missing_required": ["backend_live"],
+        "degraded_optional": [],
+    }
+
+    assert _preflight_only_exit_code(preflight) == 2
+    assert "Backend live health endpoint" in _preflight_skip_reason(preflight)
 
 
 def test_blocked_preflight_summary_cannot_pass_acceptance(tmp_path: Path):

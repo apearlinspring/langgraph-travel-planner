@@ -117,11 +117,12 @@ def _load_effective_env(
     dotenv_path: Path | None = None,
 ) -> tuple[dict[str, str], bool]:
     path = dotenv_path or DEFAULT_DOTENV_PATH
+    should_load_dotenv = environ is None or dotenv_path is not None
     dotenv_values_map = {
         key: value
         for key, value in dotenv_values(path).items()
         if isinstance(key, str) and isinstance(value, str)
-    } if path.exists() else {}
+    } if should_load_dotenv and path.exists() else {}
     effective = dict(dotenv_values_map)
     effective.update(dict(os.environ if environ is None else environ))
     return effective, path.exists()

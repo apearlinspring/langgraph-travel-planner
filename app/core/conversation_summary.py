@@ -12,7 +12,6 @@ import os
 import re
 import logging
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Literal
 
 from app.core.context_budget import (
@@ -550,15 +549,4 @@ def _safe_int(value: str | None, *, default: int) -> int:
 
 
 def _has_model_credentials() -> bool:
-    if (os.getenv("DASHSCOPE_API_KEY") or "").strip():
-        return True
-
-    env_path = Path(__file__).resolve().parents[2] / ".env"
-    try:
-        for line in env_path.read_text(encoding="utf-8").splitlines():
-            key, separator, value = line.partition("=")
-            if separator and key.strip() == "DASHSCOPE_API_KEY":
-                return bool(value.strip().strip("'\""))
-    except OSError:
-        return False
-    return False
+    return bool((os.getenv("DASHSCOPE_API_KEY") or "").strip())

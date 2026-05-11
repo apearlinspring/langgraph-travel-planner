@@ -82,6 +82,14 @@ def _print_results(results: list[dict[str, Any]]) -> None:
 
 
 def _preflight_skip_reason(preflight: dict[str, Any]) -> str:
+    status = str(preflight.get("status") or "")
+    if status == "passed":
+        return "Preflight-only passed; live scenarios were intentionally not run."
+    if status == "degraded":
+        degraded = preflight.get("degraded_optional") or []
+        detail = ", ".join(str(item) for item in degraded) if degraded else "optional checks degraded"
+        return "Preflight-only degraded; live scenarios were intentionally not run: " + detail
+
     missing = preflight.get("missing_required") or []
     checks = preflight.get("checks") or []
     findings = [
@@ -92,6 +100,10 @@ def _preflight_skip_reason(preflight: dict[str, Any]) -> str:
     if findings:
         return "Preflight blocked live acceptance: " + " | ".join(findings[:5])
     return "Preflight blocked live acceptance; missing required checks: " + ", ".join(missing)
+
+
+def _preflight_only_exit_code(preflight: dict[str, Any]) -> int:
+    return 0 if preflight.get("status") in {"passed", "degraded"} else 2
 
 
 def _build_skipped_results(scenarios: list[Any], preflight: dict[str, Any]) -> list[dict[str, Any]]:
@@ -288,6 +300,8 @@ def main() -> int:
                 print("# Acceptance Summary Artifacts")
                 print(f"- JSON: {summary_paths['json']}")
                 print(f"- Markdown: {summary_paths['markdown']}")
+        if args.preflight_only:
+            return _preflight_only_exit_code(preflight)
         return 0 if summary["status"] == "passed" else 2
 
     runtime_budget_overrides = {
