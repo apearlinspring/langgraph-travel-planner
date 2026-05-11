@@ -5,6 +5,12 @@ from dataclasses import asdict, dataclass
 from typing import Any, Literal
 
 from app.tools.contracts import ToolPermissionDecision, ToolRiskLevel
+from app.utils.security import (
+    REDACTED_VALUE,
+    is_sensitive_key,
+    redact_sensitive_data,
+    redact_sensitive_text,
+)
 
 ApprovalStatus = Literal["none", "pending", "approved", "rejected", "expired"]
 ApprovalAction = Literal[
@@ -239,21 +245,6 @@ ACTION_ALIASES: dict[str, ApprovalAction] = {
     "导出客户资料": "export_customer_profile",
 }
 
-SENSITIVE_METADATA_KEYS = {
-    "api_key",
-    "apikey",
-    "authorization",
-    "cookie",
-    "id_card",
-    "identity",
-    "mobile",
-    "password",
-    "phone",
-    "secret",
-    "token",
-}
-
-
 def normalize_approval_action(action: str) -> ApprovalAction:
     """Normalize user-facing action names to the canonical policy key."""
 
@@ -290,22 +281,27 @@ def sanitize_approval_metadata(metadata: dict[str, Any] | None) -> dict[str, Any
     sanitized: dict[str, Any] = {}
     for key, value in metadata.items():
         key_text = str(key)
-        key_lookup = key_text.lower()
-        if any(sensitive_key in key_lookup for sensitive_key in SENSITIVE_METADATA_KEYS):
-            sanitized[key_text] = "[REDACTED]"
+        if is_sensitive_key(key_text):
+            sanitized[key_text] = REDACTED_VALUE
             continue
         if isinstance(value, (str, int, float, bool)) or value is None:
             text_value = value
-            if isinstance(value, str) and len(value) > 300:
-                text_value = value[:300] + "..."
+            if isinstance(value, str):
+                text_value = redact_sensitive_text(value)
+                if len(text_value) > 300:
+                    text_value = text_value[:300] + "..."
             sanitized[key_text] = text_value
         elif isinstance(value, (list, tuple)):
             sanitized[key_text] = [
-                item if isinstance(item, (str, int, float, bool)) or item is None else str(item)
+                redact_sensitive_data(item)
+                if isinstance(item, (str, int, float, bool, dict, list, tuple)) or item is None
+                else redact_sensitive_text(str(item))
                 for item in value[:20]
             ]
+        elif isinstance(value, dict):
+            sanitized[key_text] = redact_sensitive_data(value)
         else:
-            sanitized[key_text] = str(value)[:300]
+            sanitized[key_text] = redact_sensitive_text(str(value))[:300]
     return sanitized
 
 

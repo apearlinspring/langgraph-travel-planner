@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.permissions import UserRole, get_user_role
 from app.models.base import get_db
 from app.models.user import User
-from app.utils.security import decode_access_token
+from app.utils.security import decode_access_token, redact_sensitive_data, redact_sensitive_text
 
 
 security = HTTPBearer(auto_error=False)
@@ -29,14 +29,14 @@ def error_detail(
 
     payload: dict[str, Any] = {
         "code": code,
-        "message": message,
+        "message": redact_sensitive_text(message),
     }
     if required_roles is not None:
         payload["required_roles"] = required_roles
     if current_role is not None:
         payload["current_role"] = current_role
     if extra:
-        payload.update(extra)
+        payload.update(redact_sensitive_data(extra))
     return payload
 
 

@@ -373,9 +373,38 @@ def test_sanitize_approval_metadata_redacts_sensitive_keys():
             "api_key": "secret",
             "phone": "18800000000",
             "safe_note": "可公开测试说明",
+            "free_text": "邮箱 test@example.com，手机号 13800138000，身份证 110101199001011234",
+            "nested": {"contact": "test@example.com"},
         }
     )
 
     assert metadata["api_key"] == "[REDACTED]"
     assert metadata["phone"] == "[REDACTED]"
     assert metadata["safe_note"] == "可公开测试说明"
+    assert "test@example.com" not in metadata["free_text"]
+    assert "13800138000" not in metadata["free_text"]
+    assert "110101199001011234" not in metadata["free_text"]
+    assert "test@example.com" not in metadata["nested"]["contact"]
+
+
+def test_approval_store_redacts_reason_and_decision_reason():
+    store = ApprovalStore()
+
+    record = store.mark_sensitive_action(
+        action="real_payment",
+        reason="联系 test@example.com，手机号 13800138000",
+        user_id="user-1",
+        now=100.0,
+    )
+    decided = store.approve(
+        record.approval_id,
+        decided_by="approver-1",
+        decision_reason="批准备注 sk-testvalue123456789",
+        now=110.0,
+    )
+    events = store.list_events(record.approval_id)
+
+    serialized = str([record.to_dict(), decided.to_dict(), *[event.to_dict() for event in events]])
+    assert "test@example.com" not in serialized
+    assert "13800138000" not in serialized
+    assert "sk-testvalue123456789" not in serialized

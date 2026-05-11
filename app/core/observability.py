@@ -10,6 +10,8 @@ from datetime import datetime, timezone
 from threading import Lock
 from typing import Any
 
+from app.utils.security import is_sensitive_key, redact_sensitive_text
+
 
 TURN_OBSERVABILITY_VERSION = "turn_observability.v1"
 PUBLIC_TURN_OBSERVABILITY_VERSION = "turn_observability.public.v1"
@@ -17,23 +19,6 @@ PUBLIC_TOOL_AUDIT_VERSION = "tool_audit.public.v1"
 OBSERVABILITY_CONTEXT_VERSION = "observability_context.v1"
 
 TOOL_FAILURE_STATUSES = {"failed", "timeout", "degraded", "skipped"}
-SENSITIVE_KEY_PARTS = (
-    "api_key",
-    "authorization",
-    "cookie",
-    "email",
-    "id_card",
-    "mobile",
-    "passport",
-    "password",
-    "phone",
-    "secret",
-    "token",
-    "身份证",
-    "手机号",
-    "护照",
-)
-
 
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -50,8 +35,7 @@ def estimate_token_count(text: str) -> int:
 
 
 def _is_sensitive_key(key: Any) -> bool:
-    normalized = str(key or "").lower()
-    return any(part in normalized for part in SENSITIVE_KEY_PARTS)
+    return is_sensitive_key(key)
 
 
 def sanitize_observability_value(
@@ -76,7 +60,7 @@ def sanitize_observability_value(
             items.append(f"...(+{len(value) - max_list_items})")
         return items
     if isinstance(value, str):
-        compact = " ".join(value.split())
+        compact = redact_sensitive_text(" ".join(value.split()))
         return compact[:max_text_length] + ("..." if len(compact) > max_text_length else "")
     return value
 

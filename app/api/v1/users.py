@@ -1,7 +1,7 @@
 """
 用户管理 API
 """
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.models.base import get_db
@@ -9,6 +9,8 @@ from app.models.user import User
 from app.schemas.user import UserRegister, UserLogin, UserResponse, TokenResponse
 from app.utils.security import hash_password, verify_password, create_access_token
 from app.api.dependencies import get_current_user
+from app.api.dependencies import api_error
+from app.core.permissions import get_user_role
 
 router = APIRouter(prefix="/users", tags=["用户管理"])
 
@@ -23,17 +25,19 @@ async def register(
     # 检查用户名是否存在
     result = await db.execute(select(User).where(User.username == user_data.username))
     if result.scalar_one_or_none():
-        raise HTTPException(
+        raise api_error(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="用户名已存在"
+            code="username_exists",
+            message="用户名已存在",
         )
 
     # 检查邮箱是否存在
     result = await db.execute(select(User).where(User.email == user_data.email))
     if result.scalar_one_or_none():
-        raise HTTPException(
+        raise api_error(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="邮箱已被注册"
+            code="email_exists",
+            message="邮箱已被注册",
         )
 
     # 创建用户
@@ -41,7 +45,7 @@ async def register(
         username=user_data.username,
         email=user_data.email,
         password_hash=hash_password(user_data.password),
-        preferences={}
+        preferences={"role": "user"}
     )
 
     db.add(user)
@@ -49,7 +53,9 @@ async def register(
     await db.refresh(user)
 
     # 生成 JWT
-    access_token = create_access_token(data={"sub": str(user.id)})
+    access_token = create_access_token(
+        data={"sub": str(user.id), "role": get_user_role(user)}
+    )
 
     return TokenResponse(
         access_token=access_token,
@@ -69,13 +75,16 @@ async def login(
     user = result.scalar_one_or_none()
 
     if not user or not verify_password(credentials.password, user.password_hash):
-        raise HTTPException(
+        raise api_error(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="用户名或密码错误"
+            code="invalid_credentials",
+            message="用户名或密码错误",
         )
 
     # 生成 JWT
-    access_token = create_access_token(data={"sub": str(user.id)})
+    access_token = create_access_token(
+        data={"sub": str(user.id), "role": get_user_role(user)}
+    )
 
     return TokenResponse(
         access_token=access_token,

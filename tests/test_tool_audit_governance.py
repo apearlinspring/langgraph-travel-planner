@@ -67,7 +67,7 @@ def test_tool_guardrails_reject_placeholder_transport_and_hotel_args():
 
 
 def test_tool_input_summary_accepts_non_dict_and_masks_secret_key_parts():
-    plain = summarize_tool_input("直接查询南京酒店")
+    plain = summarize_tool_input("直接查询南京酒店，联系 test@example.com")
     masked = summarize_tool_input(
         {
             "destination": "南京",
@@ -76,7 +76,7 @@ def test_tool_input_summary_accepts_non_dict_and_masks_secret_key_parts():
         }
     )
 
-    assert plain == {"input": "直接查询南京酒店"}
+    assert plain == {"input": "直接查询南京酒店，联系 [REDACTED]"}
     assert "aigohotel_api_key" not in masked
     assert "access_token" not in masked["nested"]
     assert masked["nested"]["safe"] == "ok"
@@ -118,6 +118,27 @@ def test_failed_tool_audit_events_feed_budget_and_report_pending_checks():
     assert any("真实查询超时" in item for item in quality["verification_items"])
     assert summary["events"][0]["status"] == "timeout"
     assert any("住宿" in item and "超时" in item for item in summary["pending_checks"])
+
+
+def test_tool_audit_event_redacts_sensitive_output_summary():
+    context = start_tool_audit("query_transport_options")
+    event = build_tool_audit_event(
+        context,
+        status="failed",
+        input_summary={"query": "手机号 13800138000"},
+        output_summary={
+            "message": "邮箱 test@example.com，身份证 110101199001011234",
+            "nested": {"api_key": "sk-testvalue123456789"},
+        },
+        error_type="upstream_error",
+        evidence_type="live_transport_query",
+    )
+    serialized = str(event)
+
+    assert "13800138000" not in serialized
+    assert "test@example.com" not in serialized
+    assert "110101199001011234" not in serialized
+    assert "sk-testvalue123456789" not in serialized
 
 
 def test_tool_execution_policy_classifies_high_value_tools():

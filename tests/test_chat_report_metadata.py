@@ -25,6 +25,7 @@ def test_report_extra_info_from_command_output():
     report_data = {
         "version": "travel_report.v1",
         "overview": {"route_label": "北京 -> 上海"},
+        "traveler": {"email": "test@example.com"},
     }
     output = SimpleNamespace(
         update={
@@ -37,7 +38,8 @@ def test_report_extra_info_from_command_output():
 
     assert extra_info["message_type"] == "travel_report"
     assert extra_info["order_id"] == "ORDER-1234"
-    assert extra_info["report_data"] == report_data
+    assert extra_info["report_data"]["version"] == "travel_report.v1"
+    assert extra_info["report_data"]["traveler"]["email"] == "[REDACTED]"
 
 
 def test_report_extra_info_ignores_non_report_tool_output():
@@ -46,9 +48,26 @@ def test_report_extra_info_ignores_non_report_tool_output():
 
 
 def test_report_content_from_command_output_prefers_report_field():
-    output = SimpleNamespace(update={"report": "# 完整报告", "messages": []})
+    output = SimpleNamespace(update={"report": "# 完整报告 test@example.com", "messages": []})
 
-    assert _report_content_from_tool_output(output) == "# 完整报告"
+    assert _report_content_from_tool_output(output) == "# 完整报告 [REDACTED]"
+
+
+def test_sse_redacts_sensitive_payload_values():
+    frame = chat.sse(
+        {
+            "type": "token",
+            "content": "联系 test@example.com，手机号 13800138000",
+            "nested": {"api_key": "sk-testvalue123456789"},
+        }
+    )
+    payload = json.loads(frame.removeprefix("data: ").strip())
+    serialized = json.dumps(payload, ensure_ascii=False)
+
+    assert "test@example.com" not in serialized
+    assert "13800138000" not in serialized
+    assert "sk-testvalue123456789" not in serialized
+    assert payload["nested"]["api_key"] == "[REDACTED]"
 
 
 def test_report_content_from_command_output_falls_back_to_tool_message():

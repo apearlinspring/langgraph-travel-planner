@@ -25,6 +25,7 @@ from app.evaluation.runtime_metrics import (
 )
 from app.evaluation.scenarios import EvaluationScenario
 from app.evaluation.tool_quality import evaluate_tool_quality, extract_tool_events
+from app.utils.security import redact_sensitive_data, redact_sensitive_text
 
 
 DEFAULT_BASE_URL = "http://127.0.0.1:8000"
@@ -156,7 +157,7 @@ def build_snapshot_payload(
         and event.get("type") == "turn_observability"
         and isinstance(event.get("observability"), dict)
     ]
-    return {
+    payload = {
         "version": "evaluation_live_snapshot.v1",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "base_url": base_url,
@@ -180,6 +181,7 @@ def build_snapshot_payload(
         "observability_events": observability_events,
         "events": events,
     }
+    return redact_sensitive_data(payload)
 
 
 def snapshot_path_for(
@@ -481,10 +483,12 @@ def run_live_scenario(
                     ):
                         turn_observability = event["observability"]
                     elif event_type == "error":
-                        turn_error = str(event.get("message") or "SSE error event")
+                        turn_error = redact_sensitive_text(
+                            str(event.get("message") or "SSE error event")
+                        )
                         break
             except (urllib.error.URLError, OSError) as exc:
-                turn_error = str(exc)
+                turn_error = redact_sensitive_text(str(exc))
 
             turn_events = events[turn_event_count_before:]
             turns.append(
@@ -507,7 +511,10 @@ def run_live_scenario(
             last_error = next((turn.get("error") for turn in reversed(turns) if turn.get("error")), None)
             message = "Live scenario did not produce structured report_data"
             if last_error:
-                message = f"{message}; last turn error: {last_error}"
+                message = (
+                    f"{message}; last turn error: "
+                    f"{redact_sensitive_text(str(last_error))}"
+                )
             raise RuntimeError(message)
 
         evaluation = evaluate_report_quality(
@@ -585,14 +592,14 @@ def run_live_scenario(
                 elapsed_seconds=elapsed_seconds,
                 base_url=config.base_url,
                 turns=turns,
-                error=str(exc),
+                error=redact_sensitive_text(str(exc)),
             )
             path = snapshot_path_for(scenario, config.output_dir)
             path.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
             snapshot_path = str(path)
         acceptance_gate = build_error_acceptance_gate_result(
             scenario=scenario,
-            error=str(exc),
+            error=redact_sensitive_text(str(exc)),
             snapshot_path=snapshot_path,
         )
         return LiveScenarioResult(
@@ -605,5 +612,5 @@ def run_live_scenario(
             elapsed_seconds=round(elapsed_seconds, 2),
             status=str(acceptance_gate["status"]),
             acceptance_gate=acceptance_gate,
-            error=str(exc),
+            error=redact_sensitive_text(str(exc)),
         )
