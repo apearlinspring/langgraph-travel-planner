@@ -176,6 +176,13 @@ class MCPClientManager:
                 "unavailable_servers": 0,
                 "uninitialized_servers": len(cls.SERVER_CONFIGS),
                 "tool_count": 0,
+                "startup_servers": cls.get_startup_server_names(),
+                "optional_startup_servers": [
+                    server
+                    for server in sorted(cls.OPTIONAL_STARTUP_SERVERS)
+                    if server in cls.SERVER_CONFIGS
+                ],
+                "configured_servers": sorted(cls.SERVER_CONFIGS),
                 "servers": {
                     server: cls._build_status_entry(server, "uninitialized")
                     for server in cls.SERVER_CONFIGS
@@ -433,6 +440,13 @@ class MCPClientManager:
             "unavailable_servers": unavailable_servers,
             "uninitialized_servers": uninitialized_servers,
             "tool_count": tool_count,
+            "startup_servers": self.get_startup_server_names(),
+            "optional_startup_servers": [
+                server
+                for server in sorted(self.OPTIONAL_STARTUP_SERVERS)
+                if server in self.SERVER_CONFIGS
+            ],
+            "configured_servers": sorted(self.SERVER_CONFIGS),
             "servers": deepcopy(self._server_status),
         }
 

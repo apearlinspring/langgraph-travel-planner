@@ -90,9 +90,18 @@
 - `mcp_servers`：场景需要的 MCP（模型上下文协议）服务，例如 `weather`、`search`、`amap`、`12306-mcp`、`VariFlight-Aviation`、`aigohotel-mcp`。
 - `external_apis`：场景需要的外部 API（应用程序接口），例如 `amap`、`tavily`、`variflight`、`aigohotel`。
 
+预检同时复用 Runtime Config Readiness（运行配置就绪）矩阵，按 `staging` 验收档位要求真实值：PostgreSQL（关系型数据库）、Redis（内存数据结构存储）、LLM（大语言模型）、RAG（检索增强生成）向量库和地图等 required（必需）依赖缺失时会直接 blocked（环境阻塞）。`test` 档位允许 mock（模拟）或 skip（跳过）真实能力，但 `--acceptance-core` 不允许用占位密钥冒充真实验收。
+
 没有真实密钥、后端健康检查不可达，或缺少所选场景声明的真实能力时，脚本不会运行真实场景，也不会给出“有效验收通过”的结论；它只会生成 blocked（环境阻塞）报告，并把场景标为 skipped（跳过）。此时报告质量、RAG（检索增强生成）质量、工具治理质量、运行时质量、预算置信度、内部证据和工具审计都标记为不可判定。
 
-运行时预检读取后端 `/health/ready` 时，统一按集成后的 ready check（就绪检查）契约判断：`services` 至少包含 `checkpointer`、`store`、`mcp`、`session_lock` 和 `approval_governance`。MCP（模型上下文协议）降级可以使验收摘要进入 `degraded`；但启动未完成、Checkpointer（执行检查点）或 Store（长期存储）未初始化、生产 Redis（内存数据结构存储）会话锁不可用、审批治理不能持久化到 PostgreSQL（关系型数据库）时，预检必须视为 blocked（环境阻塞）或不可继续运行。
+运行时预检读取后端 `/health/ready` 时，统一按 `runtime_readiness.v1` ready check（就绪检查）契约判断：顶层会包含 `environment`、`dependencies`、`missing_required`、`degraded_optional` 和 `services`。`services` 至少包含 `checkpointer`、`store`、`mcp`、`session_lock` 和 `approval_governance`。MCP（模型上下文协议）降级可以使验收摘要进入 `degraded`；但启动未完成、Checkpointer（执行检查点）或 Store（长期存储）未初始化、生产 Redis（内存数据结构存储）会话锁不可用、审批治理不能持久化到 PostgreSQL（关系型数据库）时，预检必须视为 blocked（环境阻塞）或不可继续运行。
+
+也可以只运行预检，不发起真实对话：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\run_evaluation_scenarios.py --acceptance-core --preflight-only --json
+.\.venv\Scripts\python.exe scripts\check_runtime_readiness.py --target acceptance --json
+```
 
 默认会在 `.runtime/evaluations/` 下生成两类整批摘要：
 

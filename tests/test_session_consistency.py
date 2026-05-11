@@ -153,12 +153,26 @@ async def test_local_session_lock_expires_and_allows_new_owner():
 
 @pytest.mark.asyncio
 async def test_local_session_lock_auto_renew_keeps_lease_active():
-    manager = LocalSessionLockManager(ttl_seconds=0.05)
+    manager = LocalSessionLockManager(ttl_seconds=0.2)
     lease = await manager.acquire("conversation-1")
-    lease.start_auto_renew(0.02)
+    initial_expires_at = lease.snapshot.expires_at
+    lease.start_auto_renew(0.03)
 
     try:
-        await asyncio.sleep(0.09)
+        renewed_snapshot = None
+        for _ in range(20):
+            await asyncio.sleep(0.03)
+            snapshot = manager.active_snapshot("conversation-1")
+            if (
+                snapshot is not None
+                and initial_expires_at is not None
+                and snapshot.expires_at is not None
+                and snapshot.expires_at > initial_expires_at + 0.05
+            ):
+                renewed_snapshot = snapshot
+                break
+
+        assert renewed_snapshot is not None
         with pytest.raises(SessionLockBusy):
             await manager.acquire("conversation-1")
     finally:
