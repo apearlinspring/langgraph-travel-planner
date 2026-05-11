@@ -73,6 +73,17 @@ SSE 只返回安全摘要，不返回完整工具参数、工具输出、错误�
 
 `app/core/middleware.py` 会把 `observability_context` 写回状态，包含当前阶段、规划模式、模式来源和本轮可用工具数量。这个上下文不包含用户原文。
 
+## 前端展示
+
+`frontend/app.js` 会消费公开 SSE（服务器发送事件）帧中的两类安全摘要，并展示在右侧治理台：
+
+- `tool_audit`：只显示工具名、状态、粗粒度耗时、重试次数、证据类型和错误类型；不显示完整工具输入、完整工具输出、认证头、密钥或上游原始错误。
+- `turn_observability`：只显示 `turn_id`、状态、阶段、规划模式、首 token（文本令牌）等待、总耗时、工具调用数、失败/兜底计数和 token 估算。
+
+历史会话加载时，前端只从助手消息 `extra_info.tool_audit_events` 中提取同样的安全字段，忽略输入摘要和输出摘要，避免把内部审计账本当作用户可见明细。前端还会对可能出现的邮箱、手机号、身份证、Bearer token（持有者令牌）、JWT（JSON Web Token，令牌认证）和常见密钥形态做二次脱敏。
+
+治理台中的观测信息用于演示“慢在哪里、是否降级、工具是否失败”，不用于展示客户原文、PII（个人可识别信息）或完整供应链响应。
+
 ## 评估与验收
 
 `app/evaluation/runtime_metrics.py` 会消费 `turn_observability`：
