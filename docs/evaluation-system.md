@@ -92,7 +92,7 @@
 
 预检同时复用 Runtime Config Readiness（运行配置就绪）矩阵，按 `staging` 验收档位要求真实值：PostgreSQL（关系型数据库）、Redis（内存数据结构存储）、LLM（大语言模型）、RAG（检索增强生成）向量库和地图等 required（必需）依赖缺失时会直接 blocked（环境阻塞）。`test` 档位允许 mock（模拟）或 skip（跳过）真实能力，但 `--acceptance-core` 不允许用占位密钥冒充真实验收。
 
-没有真实密钥、后端健康检查不可达，或缺少所选场景声明的真实能力时，脚本不会运行真实场景，也不会给出“有效验收通过”的结论；它只会生成 blocked（环境阻塞）报告，并把场景标为 skipped（跳过）。此时报告质量、RAG（检索增强生成）质量、工具治理质量、运行时质量、预算置信度、内部证据和工具审计都标记为不可判定。
+没有真实密钥、后端健康检查不可达，或缺少所选场景声明的真实能力时，脚本不会运行真实场景，也不会给出“有效验收通过”的结论；它会生成 blocked（环境阻塞）报告，并把受影响核心场景标为 blocked（环境阻塞）。只做 preflight（预检）且预检不是 blocked（环境阻塞）时，场景才会标为 skipped（跳过）。此时报告质量、RAG（检索增强生成）质量、工具治理质量、运行时质量、预算置信度、内部证据和工具审计都标记为不可判定。
 
 运行时预检读取后端 `/health/ready` 时，统一按 `runtime_readiness.v1` ready check（就绪检查）契约判断：顶层会包含 `environment`、`dependencies`、`missing_required`、`degraded_optional` 和 `services`。`services` 至少包含 `checkpointer`、`store`、`mcp`、`session_lock` 和 `approval_governance`。MCP（模型上下文协议）降级可以使验收摘要进入 `degraded`；但启动未完成、Checkpointer（执行检查点）或 Store（长期存储）未初始化、生产 Redis（内存数据结构存储）会话锁不可用、审批治理不能持久化到 PostgreSQL（关系型数据库）时，预检必须视为 blocked（环境阻塞）或不可继续运行。
 
@@ -129,6 +129,7 @@
 
 - 失败场景。
 - 失败维度，例如报告、RAG（检索增强生成）、工具、运行时、预算置信度、内部证据或工具审计。
+- 环境依赖失败维度，例如真实密钥、后端健康检查、RAG（检索增强生成）向量库和场景声明的外部 API（应用程序接口）。
 - 关键发现。
 - 建议排查方向，例如检查 `report_data` 契约、内部证据类别、SSE（服务器发送事件）工具调用、运行预算或报告中的待核验项。
 
@@ -136,7 +137,7 @@
 
 - `passed`（通过）：预检通过，所有场景门禁通过。
 - `failed`（失败）：预检具备运行条件，但至少一个场景或质量维度失败。
-- `degraded`（降级）：核心门禁未失败，但存在非阻塞预检或运行治理风险。
+- `degraded`（降级）：核心门禁未失败，但存在非阻塞预检、运行预算 warning（警告）或运行治理风险；不等同于 passed（通过）。
 - `blocked`（环境阻塞）：缺少真实密钥、后端不可达或核心依赖不足，不能生成有效通过结论。
 - `skipped`（跳过）：场景没有执行，常见原因是 blocked（环境阻塞）或只运行 preflight（预检）。
 
@@ -173,7 +174,10 @@ $env:ZHIXING_EVAL_PASSWORD="000000"
 
 成功的 live snapshot（真实链路快照）现在会包含：
 
+- 顶层 `report_data`：最终结构化旅行报告。
 - `tool_events`：从 SSE（服务器发送事件）中归一化出来的工具调用事件。
+- 顶层 `turn_observability`：每轮安全运行观测摘要。
+- 顶层 `quality_summary`：综合 Agent（智能体）质量摘要，便于审计直接定位。
 - `summary.quality_summary.report_quality`：原有结构化报告评分。
 - `summary.quality_summary.rag_quality`：证据契约、类别覆盖、模式适配、费用可追溯和安全交付评分。
 - `summary.quality_summary.tool_quality`：工具意图覆盖、禁用工具规避、同轮高成本查询重复调用、失败兜底和审计可见性评分。

@@ -5,6 +5,7 @@ import pytest
 
 from app.evaluation.acceptance_gate import (
     build_acceptance_gate_result,
+    build_error_acceptance_gate_result,
     build_acceptance_run_summary,
     build_skipped_acceptance_gate_result,
     render_acceptance_markdown,
@@ -12,6 +13,7 @@ from app.evaluation.acceptance_gate import (
 )
 from app.evaluation.preflight import required_capabilities_for_scenarios, run_acceptance_preflight
 from app.evaluation.live_runner import (
+    _classify_live_error_status,
     build_quality_summary,
     build_snapshot_payload,
     infer_tool_policy_from_scenario,
@@ -83,13 +85,20 @@ def test_build_snapshot_payload_contains_report_and_evaluation_summary():
     payload = build_snapshot_payload(
         scenario=scenario,
         conversation={"id": "conversation-id"},
-        events=[{"type": "token", "content": "hello"}],
+        events=[
+            {"type": "token", "content": "hello"},
+            {
+                "type": "turn_observability",
+                "observability": {"degradation_status": "ok"},
+            },
+        ],
         assistant_text="hello",
         report_data={"version": "travel_report.v1"},
         evaluation={"normalized_score": 90, "passed": True},
         elapsed_seconds=12.345,
         base_url="http://127.0.0.1:8000",
         turns=[{"turn_index": 1, "produced_report_data": True}],
+        quality_summary={"aggregate": {"normalized_score": 90}},
     )
 
     assert payload["version"] == "evaluation_live_snapshot.v1"
@@ -98,6 +107,10 @@ def test_build_snapshot_payload_contains_report_and_evaluation_summary():
     assert payload["summary"]["has_report_data"] is True
     assert payload["summary"]["evaluation"]["normalized_score"] == 90
     assert payload["summary"]["tool_event_count"] == 0
+    assert payload["summary"]["has_quality_summary"] is True
+    assert payload["summary"]["has_turn_observability"] is True
+    assert payload["quality_summary"]["aggregate"]["normalized_score"] == 90
+    assert payload["turn_observability"] == [{"degradation_status": "ok"}]
     assert payload["tool_events"] == []
     assert payload["turns"][0]["produced_report_data"] is True
 
@@ -370,6 +383,72 @@ def test_acceptance_gate_passes_valid_quality_summary(tmp_path: Path):
     assert Path(paths["markdown"]).exists()
 
 
+def test_acceptance_gate_marks_runtime_warnings_as_degraded():
+    scenario = _scenario("agency_couple")
+    report_data = _valid_report_data()
+    report_evaluation = {
+        "normalized_score": 100,
+        "passed": True,
+        "grade": "A",
+        "total_score": 100,
+        "max_score": 100,
+        "summary": [],
+        "criteria": [],
+    }
+    quality_summary = build_quality_summary(
+        scenario=scenario,
+        events=[
+            {"type": "token", "content": "hello", "turn_index": 1, "elapsed_since_scenario_start": 6},
+            {"type": "report_data", "turn_index": 1},
+            {
+                "type": "turn_observability",
+                "observability": {
+                    "tool_call_count": 0,
+                    "tool_failure_count": 0,
+                    "fallback_count": 0,
+                    "degradation_status": "ok",
+                    "estimated_input_tokens": 1,
+                    "estimated_output_tokens": 2,
+                    "estimated_total_tokens": 3,
+                },
+            },
+        ],
+        turns=[{"turn_index": 1, "user_message": "Plan", "elapsed_seconds": 8.5}],
+        assistant_text="hello",
+        report_data=report_data,
+        report_evaluation=report_evaluation,
+        elapsed_seconds=8.5,
+        timeout_seconds=900.0,
+        runtime_budget=runtime_budget_for_scenario(
+            EvaluationScenario(
+                id="warn",
+                name="Warn",
+                category="agency_plan",
+                prompt="Plan",
+                expected_mode="agency_plan",
+                min_score=80,
+                focus=["contract"],
+                tags=["agency"],
+                runtime_budget={
+                    "max_total_elapsed_seconds": 10,
+                    "warning_total_elapsed_ratio": 0.5,
+                },
+            )
+        ),
+    )
+
+    gate = build_acceptance_gate_result(
+        scenario=scenario,
+        quality_summary=quality_summary,
+        report_data=report_data,
+    )
+
+    assert gate["status"] == "degraded"
+    assert gate["passed"] is False
+    assert gate["dimensions"]["runtime_budget"]["status"] == "degraded"
+    assert gate["degradations"][0]["dimension"] == "runtime_budget"
+
+
 def test_acceptance_gate_flags_budget_confidence_gap():
     scenario = _scenario("agency_couple")
     report_data = _valid_report_data()
@@ -476,6 +555,13 @@ def test_preflight_only_blocked_exit_code_is_failure():
     assert "Backend live health endpoint" in _preflight_skip_reason(preflight)
 
 
+def test_live_dependency_errors_are_classified_as_blocked():
+    error = RuntimeError("Missing real value for one of: DASHSCOPE_API_KEY")
+
+    assert _classify_live_error_status(error, events=[]) == "blocked"
+    assert _classify_live_error_status(RuntimeError("report_data missing"), events=[{"type": "token"}]) == "failed"
+
+
 def test_blocked_preflight_summary_cannot_pass_acceptance(tmp_path: Path):
     scenario = _scenario("agency_couple")
     preflight = run_acceptance_preflight(
@@ -484,9 +570,55 @@ def test_blocked_preflight_summary_cannot_pass_acceptance(tmp_path: Path):
         environ={},
         check_backend=False,
     ).to_dict()
+    blocked_gate = build_error_acceptance_gate_result(
+        scenario=scenario,
+        error="Preflight blocked live acceptance",
+        status="blocked",
+    )
+
+    summary = build_acceptance_run_summary(
+        results=[
+            {
+                "scenario_id": scenario.id,
+                "scenario_name": scenario.name,
+                "status": "blocked",
+                "passed": False,
+                "acceptance_gate": blocked_gate,
+            }
+        ],
+        scenarios=[scenario],
+        base_url="http://127.0.0.1:8000",
+        output_dir=tmp_path,
+        preflight=preflight,
+    )
+    markdown = render_acceptance_markdown(summary)
+
+    assert summary["status"] == "blocked"
+    assert summary["passed"] is False
+    assert summary["blocked_count"] == 1
+    assert any(failure["dimension"] == "environment_dependencies" for failure in summary["failures"])
+    assert "指标不可判定" in markdown
+
+
+def test_degraded_preflight_summary_remains_degraded(tmp_path: Path):
+    scenario = _scenario("agency_couple")
+    preflight = {
+        "status": "degraded",
+        "checks": [
+            {
+                "key": "backend_ready",
+                "label": "Backend ready health endpoint",
+                "status": "degraded",
+                "findings": ["optional MCP service degraded"],
+            }
+        ],
+        "missing_required": [],
+        "degraded_optional": ["backend_ready"],
+        "skipped_metrics": [],
+    }
     skipped_gate = build_skipped_acceptance_gate_result(
         scenario=scenario,
-        reason="Preflight blocked live acceptance",
+        reason="Preflight-only degraded",
     )
 
     summary = build_acceptance_run_summary(
@@ -504,9 +636,7 @@ def test_blocked_preflight_summary_cannot_pass_acceptance(tmp_path: Path):
         output_dir=tmp_path,
         preflight=preflight,
     )
-    markdown = render_acceptance_markdown(summary)
 
-    assert summary["status"] == "blocked"
-    assert summary["passed"] is False
-    assert summary["skipped_count"] == 1
-    assert "指标不可判定" in markdown
+    assert summary["status"] == "degraded"
+    assert summary["degraded_count"] == 0
+    assert summary["degradations"][0]["dimension"] == "environment_dependencies"
