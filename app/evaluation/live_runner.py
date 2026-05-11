@@ -149,6 +149,13 @@ def build_snapshot_payload(
     """Build the JSON artifact saved after a live scenario run."""
 
     tool_events = [record.to_dict() for record in extract_tool_events(events)]
+    observability_events = [
+        event.get("observability")
+        for event in events
+        if isinstance(event, dict)
+        and event.get("type") == "turn_observability"
+        and isinstance(event.get("observability"), dict)
+    ]
     return {
         "version": "evaluation_live_snapshot.v1",
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -163,12 +170,14 @@ def build_snapshot_payload(
             "evaluation": evaluation,
             "quality_summary": quality_summary,
             "tool_event_count": len(tool_events),
+            "observability_event_count": len(observability_events),
             "error": error,
         },
         "turns": turns or [],
         "assistant_text": assistant_text,
         "report_data": report_data,
         "tool_events": tool_events,
+        "observability_events": observability_events,
         "events": events,
     }
 
@@ -443,6 +452,7 @@ def run_live_scenario(
             turn_assistant_parts: list[str] = []
             turn_event_count_before = len(events)
             turn_error: str | None = None
+            turn_observability: dict[str, Any] | None = None
 
             try:
                 for event in client.stream_json_events(
@@ -465,6 +475,11 @@ def run_live_scenario(
                             turn_assistant_parts.append(content)
                     elif event_type == "report_data" and isinstance(event.get("report_data"), dict):
                         report_data = event["report_data"]
+                    elif event_type == "turn_observability" and isinstance(
+                        event.get("observability"),
+                        dict,
+                    ):
+                        turn_observability = event["observability"]
                     elif event_type == "error":
                         turn_error = str(event.get("message") or "SSE error event")
                         break
@@ -481,6 +496,7 @@ def run_live_scenario(
                     "tool_call_count": sum(1 for event in turn_events if event.get("type") == "tool_call"),
                     "elapsed_seconds": round(time.perf_counter() - turn_started_at, 2),
                     "produced_report_data": report_data is not None,
+                    "observability": turn_observability,
                     "error": turn_error,
                 }
             )

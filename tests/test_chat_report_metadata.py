@@ -16,6 +16,7 @@ from app.api.v1.chat import (
     _report_extra_info_from_tool_output,
 )
 from app.core.approval import ApprovalGovernanceManager
+from app.core.observability import get_turn_observability_snapshot
 from app.core.session_lock import reset_session_locks_for_tests
 from app.tools.audit import build_tool_audit_event, start_tool_audit
 
@@ -167,12 +168,19 @@ async def test_chat_stream_stops_after_structured_report_event(monkeypatch):
         "tool_call",
         "report_data",
         "tool_audit",
+        "turn_observability",
         "done",
     ]
     assert events[1]["report_data"] == report_data
+    assert events[2]["status"] == "success"
+    assert "input_summary" not in events[2]
+    assert "output_summary" not in events[2]
+    assert events[3]["observability"]["tool_call_count"] == 1
     assert saved_messages[-1]["role"] == "assistant"
     assert saved_messages[-1]["content"] == "# 完整报告"
     assert saved_messages[-1]["extra_info"]["report_data"] == report_data
+    assert saved_messages[-1]["extra_info"]["observability"]["turn_id"] == events[-1]["turn_id"]
+    assert get_turn_observability_snapshot(events[-1]["turn_id"]) is not None
 
 
 @pytest.mark.asyncio
@@ -214,8 +222,12 @@ async def test_chat_stream_suppresses_duplicate_tool_call_events(monkeypatch):
         events.append(json.loads(frame.removeprefix("data: ").strip()))
 
     tool_call_events = [event for event in events if event["type"] == "tool_call"]
-    assert tool_call_events == [{"type": "tool_call", "tool": "search_travel_info"}]
+    assert len(tool_call_events) == 1
+    assert tool_call_events[0]["tool"] == "search_travel_info"
+    assert tool_call_events[0]["turn_id"]
     assert [event["type"] for event in events].count("tool_audit") == 2
+    observability = next(event["observability"] for event in events if event["type"] == "turn_observability")
+    assert observability["tool_call_count"] == 2
 
 
 @pytest.mark.asyncio
@@ -253,9 +265,11 @@ async def test_chat_stream_finishes_transient_disconnect_after_partial_content(m
     ):
         events.append(json.loads(frame.removeprefix("data: ").strip()))
 
-    assert [event["type"] for event in events] == ["token", "done"]
+    assert [event["type"] for event in events] == ["token", "turn_observability", "done"]
     assert events[0]["content"] == "已生成部分回答"
+    assert events[1]["observability"]["fallback_count"] == 1
     assert saved_messages[-1]["content"] == "已生成部分回答"
+    assert saved_messages[-1]["extra_info"]["observability"]["metrics"]["degradation_status"] == "degraded"
 
 
 @pytest.mark.asyncio
@@ -288,6 +302,40 @@ async def test_chat_stream_uses_fallback_token_for_empty_transient_disconnect(mo
     ):
         events.append(json.loads(frame.removeprefix("data: ").strip()))
 
-    assert [event["type"] for event in events] == ["token", "done"]
+    assert [event["type"] for event in events] == ["token", "turn_observability", "done"]
     assert "模型流式连接中断" in events[0]["content"]
+    assert events[1]["observability"]["fallback_count"] == 1
     assert saved_messages[-1]["content"] == events[0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_sanitizes_user_visible_error(monkeypatch):
+    await reset_session_locks_for_tests()
+
+    async def fake_save_message(db, conversation_id, role, content, extra_info=None):
+        return SimpleNamespace()
+
+    class FakeAgent:
+        async def astream_events(self, *args, **kwargs):
+            if False:
+                yield {}
+            raise RuntimeError("upstream leaked secret-token")
+
+    async def fake_create_travel_agent():
+        return FakeAgent()
+
+    monkeypatch.setattr(chat, "save_message", fake_save_message)
+    monkeypatch.setattr(chat, "create_travel_agent", fake_create_travel_agent)
+
+    events = []
+    async for frame in chat.generate_sse_stream(
+        "conversation-error",
+        "继续规划",
+        db=SimpleNamespace(),
+        user=SimpleNamespace(id="user-1"),
+    ):
+        events.append(json.loads(frame.removeprefix("data: ").strip()))
+
+    assert [event["type"] for event in events] == ["turn_observability", "error"]
+    assert events[0]["observability"]["degradation_status"] == "failed"
+    assert "secret-token" not in json.dumps(events, ensure_ascii=False)

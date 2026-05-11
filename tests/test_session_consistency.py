@@ -254,21 +254,27 @@ async def test_chat_stream_returns_busy_event_without_saving_user_message(monkey
         )
 
         busy_event = _decode_sse_frame(await anext(stream))
+        observability_event = _decode_sse_frame(await anext(stream))
         done_event = _decode_sse_frame(await anext(stream))
 
         assert busy_event["type"] == "session_busy"
         assert "当前会话正在处理" in busy_event["content"]
         assert busy_event["lock_backend"] == "local"
-        assert done_event == {"type": "done"}
+        assert busy_event["turn_id"]
+        assert observability_event["type"] == "turn_observability"
+        assert observability_event["observability"]["degradation_status"] == "degraded"
+        assert done_event["type"] == "done"
+        assert done_event["turn_id"] == busy_event["turn_id"]
         assert saved_messages == []
 
         metrics = collect_runtime_metrics(
-            events=[busy_event, done_event],
+            events=[busy_event, observability_event, done_event],
             turns=[{"turn_index": 1, "user_message": "继续规划", "elapsed_seconds": 0.1}],
             assistant_text=busy_event["content"],
             elapsed_seconds=0.1,
         )
         assert metrics.session_busy_event_count == 1
+        assert metrics.turn_observability_event_count == 1
     finally:
         await stream.aclose()
         await lease.release()
@@ -303,7 +309,9 @@ async def test_chat_stream_releases_session_lock_when_generator_closes(monkeypat
     )
 
     token_event = _decode_sse_frame(await anext(stream))
-    assert token_event == {"type": "token", "content": "你好"}
+    assert token_event["type"] == "token"
+    assert token_event["content"] == "你好"
+    assert token_event["turn_id"]
     assert session_lock_manager.is_locked("conversation-1") is True
 
     await stream.aclose()

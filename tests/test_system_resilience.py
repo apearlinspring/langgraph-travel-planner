@@ -11,6 +11,7 @@ os.environ.setdefault("POSTGRES_PASSWORD", "test_password")
 
 from app.core.approval import ApprovalGovernanceManager
 from app.core.checkpointer import CheckpointerManager
+from app.core.observability import TurnObservation, get_turn_observability_snapshot
 from app.core.session_lock import SessionLockBusy, SessionLockManager
 from app.core.store import StoreManager
 import app.main as app_main
@@ -431,3 +432,20 @@ def test_session_lock_status_reports_redis_when_available():
 
     assert snapshot["status"] == "ready"
     assert snapshot["backend"] == "redis"
+
+
+def test_turn_observability_records_degraded_fallback_without_readiness_dependency():
+    observation = TurnObservation(
+        conversation_id="conversation-1",
+        user_id="user-1",
+        user_message="查一下真实酒店",
+    )
+
+    observation.record_tool_start("query_hotel_options")
+    observation.mark_fallback("hotel_mcp_unavailable")
+    snapshot = observation.finish("completed")
+
+    assert snapshot["metrics"]["degradation_status"] == "degraded"
+    assert snapshot["metrics"]["fallback_count"] == 1
+    assert snapshot["metadata"]["current_step"] == "unknown"
+    assert get_turn_observability_snapshot(observation.turn_id)["turn_id"] == observation.turn_id
