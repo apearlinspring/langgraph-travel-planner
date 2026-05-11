@@ -74,6 +74,8 @@ def test_workflow_metadata_covers_every_planning_step():
 def test_create_initial_state_uses_shared_entry_step():
     state = create_initial_state(user_id="user-1", session_id="session-1")
     assert state["current_step"] == INITIAL_PLANNING_STEP
+    assert state["key_history_turns"] == []
+    assert state["context_layer_boundaries"] == {}
 
 
 def test_transport_coordinator_prompt_guards_real_recommendation_quality():

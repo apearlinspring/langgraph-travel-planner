@@ -6,7 +6,7 @@ from typing import Any, Callable
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
 from langchain_core.messages import HumanMessage, ToolMessage
 
-from app.core.context_pack import build_context_pack
+from app.core.context_pack import abuild_context_pack
 from app.core.intent import PlanningModeDecision, TravelIntent, detect_travel_intent, resolve_planning_mode
 from app.core.state import TravelState
 from app.core.store import get_user_memory_service
@@ -1005,7 +1005,7 @@ class StepConfigMiddleware(AgentMiddleware):
         context_messages = list(request.messages or [])
         if not context_messages:
             context_messages = list(state_dict.get("messages") or [])
-        context_pack = build_context_pack(
+        context_pack = await abuild_context_pack(
             state=state_dict,
             messages=context_messages,
             memory_prompt=memory_prompt,
@@ -1016,6 +1016,8 @@ class StepConfigMiddleware(AgentMiddleware):
             state["context_summary_updated_at"] = time.time()
         state["context_last_step"] = current_step
         state["context_pack_metadata"] = context_pack.metadata
+        state["key_history_turns"] = context_pack.key_history_turns
+        state["context_layer_boundaries"] = context_pack.metadata.get("context_layer_boundaries", {})
         app_logger.info(
             "上下文打包完成: "
             f"messages={context_pack.metadata['message_count']}, "

@@ -2,7 +2,9 @@ from langchain.tools import tool, ToolRuntime
 
 from app.core.memory_models import (
     MemoryWriteCandidate,
+    build_memory_audit_entries,
     filter_stable_memory_values,
+    normalize_memory_extraction_method,
     normalize_memory_scope,
 )
 from app.core.state import TravelState
@@ -15,6 +17,23 @@ def _format_temporary_memory_response(rejected: list[MemoryWriteCandidate]) -> s
     if not values:
         return "已识别为本次旅行临时条件，未写入长期记忆。"
     return "已作为本次旅行临时条件处理，未写入长期记忆：" + "、".join(values)
+
+
+def _memory_audit_entries(
+        field: str,
+        values: list[str] | None,
+        *,
+        memory_scope: str,
+        tool_name: str,
+        extraction_method: str = "llm_extraction",
+):
+    return build_memory_audit_entries(
+        field,
+        values,
+        memory_scope=memory_scope,
+        source=f"memory_tool:{tool_name}",
+        extraction_method=extraction_method,
+    )
 
 
 # ============== 1️⃣ 读取用户记忆工具 ==============
@@ -60,6 +79,7 @@ async def get_user_memory_tool(
 async def update_travel_style_tool(
         styles: list[str],
         memory_scope: str = "stable",
+        extraction_method: str = "llm_extraction",
         runtime: ToolRuntime[None, TravelState] = None
 ) -> str:
     """
@@ -79,6 +99,7 @@ async def update_travel_style_tool(
       * 户外冒险（徒步、攀岩、极限运动）
       * 美食之旅（吃货、美食、小吃）
     - memory_scope: stable 表示长期稳定偏好；temporary/current_trip 表示仅本次旅行使用，不写入长期记忆。
+    - extraction_method: llm_extraction 表示模型抽取；human_confirmed 表示用户明确要求记住；rule_extraction 表示规则抽取。
     """
     user_id = runtime.state.get("user_id")
 
@@ -87,13 +108,25 @@ async def update_travel_style_tool(
     stable_styles, rejected = filter_stable_memory_values(
         styles,
         memory_scope=memory_scope,
+        source="memory_tool:update_travel_style_tool",
+        extraction_method=extraction_method,
     )
     if not stable_styles:
         return _format_temporary_memory_response(rejected)
 
     try:
         service = await get_user_memory_service()
-        await service.update_travel_styles(user_id, stable_styles)
+        await service.update_travel_styles(
+            user_id,
+            stable_styles,
+            audit_entries=_memory_audit_entries(
+                "profile.travel_styles",
+                stable_styles,
+                memory_scope=memory_scope,
+                tool_name="update_travel_style_tool",
+                extraction_method=extraction_method,
+            ),
+        )
 
         app_logger.info(f"💾 保存旅行风格: {user_id} -> {stable_styles}")
         return f"✅ 已记录您的长期旅行风格偏好：{', '.join(stable_styles)}"
@@ -109,6 +142,7 @@ async def update_travel_style_tool(
 async def update_dietary_restriction_tool(
         restrictions: list[str],
         memory_scope: str = "stable",
+        extraction_method: str = "llm_extraction",
         runtime: ToolRuntime[None, TravelState] = None
 ) -> str:
     """
@@ -133,6 +167,7 @@ async def update_dietary_restriction_tool(
       * 不吃羊肉
       * 鸡蛋过敏
     - memory_scope: stable 表示用户长期饮食禁忌；temporary/current_trip 表示仅本次同行人或本次行程使用，不写入长期记忆。
+    - extraction_method: llm_extraction 表示模型抽取；human_confirmed 表示用户明确确认；rule_extraction 表示规则抽取。
 
     注意：这些信息对用户健康很重要，务必准确记录！
     """
@@ -143,13 +178,25 @@ async def update_dietary_restriction_tool(
     stable_restrictions, rejected = filter_stable_memory_values(
         restrictions,
         memory_scope=memory_scope,
+        source="memory_tool:update_dietary_restriction_tool",
+        extraction_method=extraction_method,
     )
     if not stable_restrictions:
         return _format_temporary_memory_response(rejected)
 
     try:
         service = await get_user_memory_service()
-        await service.update_dietary_restrictions(user_id, stable_restrictions)
+        await service.update_dietary_restrictions(
+            user_id,
+            stable_restrictions,
+            audit_entries=_memory_audit_entries(
+                "profile.dietary_restrictions",
+                stable_restrictions,
+                memory_scope=memory_scope,
+                tool_name="update_dietary_restriction_tool",
+                extraction_method=extraction_method,
+            ),
+        )
 
         app_logger.info(f"💾 保存饮食禁忌: {user_id} -> {stable_restrictions}")
         return f"✅ 已记录您的长期饮食禁忌：{', '.join(stable_restrictions)}。后续推荐会特别注意避开这些食物。"
@@ -165,6 +212,7 @@ async def update_dietary_restriction_tool(
 async def update_food_preference_tool(
         preferences: list[str],
         memory_scope: str = "stable",
+        extraction_method: str = "llm_extraction",
         runtime: ToolRuntime[None, TravelState] = None
 ) -> str:
     """
@@ -196,6 +244,7 @@ async def update_food_preference_tool(
       * 日料
       * 韩餐
     - memory_scope: stable 表示长期口味偏好；temporary/current_trip 表示仅本次旅行使用，不写入长期记忆。
+    - extraction_method: llm_extraction 表示模型抽取；human_confirmed 表示用户明确确认；rule_extraction 表示规则抽取。
     """
     user_id = runtime.state.get("user_id")
 
@@ -204,13 +253,25 @@ async def update_food_preference_tool(
     stable_preferences, rejected = filter_stable_memory_values(
         preferences,
         memory_scope=memory_scope,
+        source="memory_tool:update_food_preference_tool",
+        extraction_method=extraction_method,
     )
     if not stable_preferences:
         return _format_temporary_memory_response(rejected)
 
     try:
         service = await get_user_memory_service()
-        await service.update_food_preferences(user_id, stable_preferences)
+        await service.update_food_preferences(
+            user_id,
+            stable_preferences,
+            audit_entries=_memory_audit_entries(
+                "profile.food_preferences",
+                stable_preferences,
+                memory_scope=memory_scope,
+                tool_name="update_food_preference_tool",
+                extraction_method=extraction_method,
+            ),
+        )
 
         app_logger.info(f"💾 保存饮食偏好: {user_id} -> {stable_preferences}")
         return f"✅ 已记录您的长期饮食偏好：{', '.join(stable_preferences)}"
@@ -227,6 +288,7 @@ async def update_accommodation_preference_tool(
         preferred_types: list[str] = None,
         avg_budget_per_night: float = None,
         memory_scope: str = "stable",
+        extraction_method: str = "llm_extraction",
         runtime: ToolRuntime[None, TravelState] = None
 ) -> str:
     """
@@ -246,6 +308,7 @@ async def update_accommodation_preference_tool(
       * 青年旅社（背包客、青旅）
     - avg_budget_per_night: 平均每晚预算（元），可选
     - memory_scope: stable 表示长期住宿偏好；temporary/current_trip 表示仅本次旅行使用，不写入长期记忆。
+    - extraction_method: llm_extraction 表示模型抽取；human_confirmed 表示用户明确确认；rule_extraction 表示规则抽取。
     """
     user_id = runtime.state.get("user_id")
 
@@ -257,6 +320,8 @@ async def update_accommodation_preference_tool(
     stable_types, rejected = filter_stable_memory_values(
         preferred_types,
         memory_scope=memory_scope,
+        source="memory_tool:update_accommodation_preference_tool",
+        extraction_method=extraction_method,
     )
     is_temporary_scope = normalize_memory_scope(memory_scope) == "temporary"
     if not stable_types and (preferred_types or is_temporary_scope):
@@ -266,10 +331,31 @@ async def update_accommodation_preference_tool(
 
     try:
         service = await get_user_memory_service()
+        audit_entries = _memory_audit_entries(
+            "history.accommodation_preference.preferred_types",
+            stable_types,
+            memory_scope=memory_scope,
+            tool_name="update_accommodation_preference_tool",
+            extraction_method=extraction_method,
+        )
+        if avg_budget_per_night:
+            audit_entries.append(
+                {
+                    "field": "history.accommodation_preference.avg_budget_per_night",
+                    "value": f"{avg_budget_per_night:.0f}",
+                    "source": "memory_tool:update_accommodation_preference_tool",
+                    "extraction_method": normalize_memory_extraction_method(extraction_method),
+                    "reason": "用户表达长期住宿预算偏好",
+                    "confidence": 0.7,
+                    "scope": "stable",
+                    "accepted": True,
+                }
+            )
         await service.update_accommodation_preference(
             user_id=user_id,
             preferred_types=stable_types,
-            avg_budget=avg_budget_per_night
+            avg_budget=avg_budget_per_night,
+            audit_entries=audit_entries,
         )
 
         result_parts = ["✅ 已记录您的住宿偏好："]
@@ -296,6 +382,7 @@ async def add_travel_record_tool(
         visited_attractions: list[str] = None,
         start_date: str = None,
         end_date: str = None,
+        extraction_method: str = "llm_extraction",
         runtime: ToolRuntime[None, TravelState] = None
 ) -> str:
     """
@@ -311,6 +398,7 @@ async def add_travel_record_tool(
     - visited_attractions: 去过的景点列表（可选）
     - start_date: 出发日期 YYYY-MM-DD（可选）
     - end_date: 结束日期 YYYY-MM-DD（可选）
+    - extraction_method: llm_extraction 表示模型抽取；human_confirmed 表示用户明确确认；rule_extraction 表示规则抽取。
 
     记录出行历史的好处：
     - 避免重复推荐去过的地方
@@ -332,7 +420,19 @@ async def add_travel_record_tool(
             destination=destination,
             start_date=start_date or "",
             end_date=end_date or "",
-            visited_attractions=visited_attractions or []
+            visited_attractions=visited_attractions or [],
+            audit_entries=[
+                {
+                    "field": "history.completed_trips",
+                    "value": destination,
+                    "source": "memory_tool:add_travel_record_tool",
+                    "extraction_method": normalize_memory_extraction_method(extraction_method),
+                    "reason": "用户陈述历史出行记录，可作为避免重复推荐的长期事实",
+                    "confidence": 0.75,
+                    "scope": "stable",
+                    "accepted": True,
+                }
+            ],
         )
 
         result = f"✅ 已记录您去过 {destination}"

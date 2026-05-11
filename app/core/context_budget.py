@@ -16,6 +16,7 @@ ContextLayerName = Literal[
     "short_term_state",
     "recent_messages",
     "conversation_summary",
+    "key_history",
     "long_term_memory",
     "evidence_bundle",
 ]
@@ -30,11 +31,13 @@ class ContextBudget:
     short_term_state_tokens: int = 1800
     recent_message_tokens: int = 2800
     conversation_summary_tokens: int = 900
+    key_history_tokens: int = 700
     long_term_memory_tokens: int = 700
     evidence_bundle_tokens: int = 600
     max_messages_without_summary: int = 18
     max_recent_human_turns: int = 6
     final_stage_recent_human_turns: int = 2
+    max_key_history_turns: int = 6
     max_message_chars: int = 1600
     max_tool_message_chars: int = 900
 

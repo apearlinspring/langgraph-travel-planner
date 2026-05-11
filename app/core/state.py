@@ -180,8 +180,10 @@ class TravelState(AgentState):
     evidence_bundle: NotRequired[dict]
     tool_audit_events: NotRequired[list[dict]]
     conversation_summary: NotRequired[str]
+    key_history_turns: NotRequired[list[dict]]
     context_last_step: NotRequired[PlanningStep]
     context_pack_metadata: NotRequired[dict]
+    context_layer_boundaries: NotRequired[dict]
     context_summary_updated_at: NotRequired[float]
 
     user_requirement: NotRequired[UserRequirement]
@@ -240,8 +242,10 @@ def create_initial_state(user_id: str, session_id: str) -> TravelState:
         planning_mode_confirmed=False,
         tool_audit_events=[],
         conversation_summary="",
+        key_history_turns=[],
         context_last_step=INITIAL_PLANNING_STEP,
         context_pack_metadata={},
+        context_layer_boundaries={},
         user_id=user_id,
         session_id=session_id,
         created_at=time.time(),
