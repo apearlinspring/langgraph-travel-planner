@@ -25,6 +25,14 @@ def test_evaluation_runner_exposes_preflight_only_entrypoint():
     assert "run_acceptance_preflight" in source
 
 
+def test_acceptance_comparison_script_imports_cleanly():
+    module = importlib.import_module("scripts.compare_acceptance_runs")
+    assert hasattr(module, "main")
+    source = Path(module.__file__).read_text(encoding="utf-8")
+    assert "compare_acceptance_summaries" in source
+    assert "--fail-on-regression" in source
+
+
 def test_ci_workflow_has_default_and_manual_gates():
     workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
 

@@ -90,6 +90,27 @@
 
 这两个摘要配合使用：`tool_quality` 判断工具调用是否符合意图，`runtime_governance` 判断这些调用是否带来运行预算压力。
 
+## Shadow / A-B 比较中的运行指标
+
+Shadow（影子流量）/ A-B（分流实验）比较复用验收摘要里的安全聚合指标，不读取线上聊天路由，也不记录真实用户分组。`build_acceptance_run_summary()` 会把每个场景的 `runtime_metrics` 和 `tool_counts` 汇总成：
+
+- `runtime_totals.elapsed_seconds`
+- `runtime_totals.tool_call_count`
+- `runtime_totals.tool_failure_count`
+- `runtime_totals.fallback_count`
+- `runtime_totals.estimated_input_tokens`
+- `runtime_totals.estimated_output_tokens`
+- `runtime_totals.estimated_total_tokens`
+- `tool_counts`
+
+`scripts/compare_acceptance_runs.py` 会用这些字段比较 baseline（基线）和 candidate（候选方案）的耗时、工具压力和 token（文本令牌）估算。输出只包含聚合值和工具名计数，不保存完整工具原文、密钥、手机号、邮箱或身份证。
+
+运行治理侧的判断原则：
+
+- candidate（候选方案）可以更高分，但如果工具调用或估算 token 明显升高，需要在比较报告里暴露。
+- candidate（候选方案）如果通过率下降、场景从 passed（通过）变 failed（失败），或失败维度增加，应视为 regression（回归退化）。
+- shadow-only（只观测）和 offline-ab（离线分组）都只作用于离线验收产物；线上用户仍只经过现有聊天链路。
+
 ## 当前边界
 
 - token 使用量是字符近似估算，不等于供应商真实计费 token。

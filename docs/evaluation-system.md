@@ -217,7 +217,50 @@ $env:ZHIXING_EVAL_PASSWORD="000000"
 .\.venv\Scripts\python.exe scripts\evaluate_report_snapshot.py .runtime\evaluations\sample.json --scenario agency_couple_relaxed --enforce-agent-gate
 ```
 
-## 第四阶段：模型表现评估
+## 第四阶段：Shadow / A-B 离线比较
+
+Shadow（影子流量）/ A-B（分流实验）评估框架只比较离线验收产物，不修改线上聊天路由，也不做真实用户分流。它面向三类变更回归：
+
+- prompt（提示词）变更。
+- model profile（模型用途档位）变更，例如 `planner`、`report`、`transport`。
+- tool strategy（工具策略）变更，例如是否放宽候选查询、是否启用更严格的兜底策略。
+
+核心结构在 `app/evaluation/experiment.py`：
+
+- `experiment_id`：一次实验的稳定标识。
+- `scenario_set`：固定场景集合，包含场景集 ID、场景 ID 列表、来源文件和标签。
+- `variant`（实验变体）：一次 prompt、模型或工具策略组合。
+- `baseline`（基线）：作为对照的当前稳定方案。
+- `candidate`（候选方案）：待验证的新方案。
+
+当前支持两种模式：
+
+- `shadow-only`：只观测候选方案的离线结果，不影响用户，也不改变用户可见回复。
+- `offline-ab`：对固定场景集做离线分组或双跑比较，只比较验收摘要，不接入真实流量分配。
+
+比较两次验收摘要使用：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\compare_acceptance_runs.py .runtime\acceptance\baseline.json .runtime\acceptance\candidate.json --mode offline-ab --experiment-id planner-prompt-20260511 --output-json .runtime\acceptance\comparison.json --output-md .runtime\acceptance\comparison.md --fail-on-regression
+```
+
+比较器会输出：
+
+- 通过率和平均 Agent（智能体）综合分差异。
+- 失败维度与降级维度变化。
+- 总耗时、工具调用次数、失败工具数、fallback（兜底）次数。
+- 估算 token（文本令牌）输入、输出和总量变化。
+- 按工具名聚合的调用计数变化。
+- 场景级退化，例如从 passed（通过）变成 failed（失败），或综合分下降 5 分以上。
+
+隐私和安全边界：
+
+- 比较结果不保存完整工具输入、工具输出或 SSE（服务器发送事件）原文。
+- 只保存聚合工具名、计数、耗时、分数和失败维度。
+- 输出会脱敏常见密钥、手机号、邮箱、身份证和访问令牌形态文本。
+- `online_traffic_split` 固定为 `false`，用于审计确认没有线上真实分流。
+
+## 第五阶段：模型表现评估
 
 确定性评分只能判断结构和基本业务规则。后续可以增加 LLM-as-judge（大模型评审）或人工评分，重点看：
 
