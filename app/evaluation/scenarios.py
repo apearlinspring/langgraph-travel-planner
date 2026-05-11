@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from app.evaluation.runtime_metrics import runtime_budget_from_dict
 
@@ -13,6 +13,8 @@ SCENARIO_CATALOG_VERSION = "evaluation_scenarios.v1"
 RAG_SCENARIO_CATALOG_VERSION = "rag_quality_scenarios.v1"
 TOOL_SCENARIO_CATALOG_VERSION = "tool_call_scenarios.v1"
 VALID_PLANNING_MODES = {"agency_plan", "free_planning"}
+ACCEPTANCE_CORE_TAG = "acceptance-core"
+MIN_ACCEPTANCE_CORE_SCENARIOS = 8
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_SCENARIO_FILE = PROJECT_ROOT / "data" / "evaluation" / "report_quality_scenarios.json"
 DEFAULT_RAG_SCENARIO_FILE = PROJECT_ROOT / "data" / "evaluation" / "rag_quality_scenarios.json"
@@ -33,6 +35,7 @@ class EvaluationScenario:
     tags: list[str]
     followups: list[str] = field(default_factory=list)
     runtime_budget: dict[str, Any] = field(default_factory=dict)
+    requirements: dict[str, Any] = field(default_factory=dict)
     notes: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -111,6 +114,32 @@ def _as_optional_runtime_budget(
     return dict(value)
 
 
+def _as_optional_requirements(
+    value: Any,
+    *,
+    scenario_id: str,
+) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(f"Scenario {scenario_id!r} field 'requirements' must be an object")
+
+    requirements = dict(value)
+    for field_name in ("real_llm", "real_mcp"):
+        if field_name in requirements and not isinstance(requirements[field_name], bool):
+            raise ValueError(f"Scenario {scenario_id!r} requirements.{field_name} must be a boolean")
+    for field_name in ("mcp_servers", "external_apis"):
+        if field_name in requirements:
+            _as_optional_string_list(
+                requirements[field_name],
+                field_name=f"requirements.{field_name}",
+                scenario_id=scenario_id,
+            )
+    if "notes" in requirements and not isinstance(requirements["notes"], str):
+        raise ValueError(f"Scenario {scenario_id!r} requirements.notes must be a string")
+    return requirements
+
+
 def _validate_scenario_id(payload: dict[str, Any]) -> str:
     scenario_id = payload.get("id")
     if not isinstance(scenario_id, str) or not scenario_id:
@@ -180,6 +209,10 @@ def _scenario_from_dict(payload: dict[str, Any]) -> EvaluationScenario:
         ),
         runtime_budget=_as_optional_runtime_budget(
             payload.get("runtime_budget"),
+            scenario_id=scenario_id,
+        ),
+        requirements=_as_optional_requirements(
+            payload.get("requirements"),
             scenario_id=scenario_id,
         ),
         notes=str(payload.get("notes") or "").strip(),
@@ -261,6 +294,26 @@ def load_scenarios(path: Path | None = None) -> list[EvaluationScenario]:
     ]
     _validate_unique_ids(scenarios)
     return scenarios
+
+
+def acceptance_core_scenarios(
+    scenarios: Iterable[EvaluationScenario] | None = None,
+    *,
+    min_count: int = MIN_ACCEPTANCE_CORE_SCENARIOS,
+) -> list[EvaluationScenario]:
+    """Return the first-stage core acceptance scenarios in catalog order."""
+
+    selected = [
+        scenario
+        for scenario in (list(scenarios) if scenarios is not None else load_scenarios())
+        if ACCEPTANCE_CORE_TAG in scenario.tags
+    ]
+    if len(selected) < min_count:
+        raise ValueError(
+            "Acceptance core scenario set must contain at least "
+            f"{min_count} scenarios tagged {ACCEPTANCE_CORE_TAG!r}; found {len(selected)}"
+        )
+    return selected
 
 
 def load_rag_quality_scenarios(path: Path | None = None) -> list[RagQualityScenario]:

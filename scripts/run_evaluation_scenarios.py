@@ -20,8 +20,14 @@ from app.evaluation.live_runner import (  # noqa: E402
     scenario_message_sequence,
     select_scenarios,
 )
+from app.evaluation.acceptance_gate import (  # noqa: E402
+    build_acceptance_run_summary,
+    build_skipped_acceptance_gate_result,
+    write_acceptance_summary_files,
+)
+from app.evaluation.preflight import run_acceptance_preflight  # noqa: E402
 from app.evaluation.runtime_metrics import runtime_budget_from_dict  # noqa: E402
-from app.evaluation.scenarios import load_scenarios  # noqa: E402
+from app.evaluation.scenarios import acceptance_core_scenarios, load_scenarios  # noqa: E402
 
 
 def _print_plan(scenarios: list[Any]) -> None:
@@ -29,6 +35,14 @@ def _print_plan(scenarios: list[Any]) -> None:
     print()
     for scenario in scenarios:
         print(f"- {scenario.id}: {scenario.expected_mode}, min_score={scenario.min_score}")
+        requirements = scenario.requirements or {}
+        print(
+            "  requirements: "
+            f"real_llm={requirements.get('real_llm', True)}, "
+            f"real_mcp={requirements.get('real_mcp', False)}, "
+            f"mcp_servers={requirements.get('mcp_servers', [])}, "
+            f"external_apis={requirements.get('external_apis', [])}"
+        )
         for index, message in enumerate(scenario_message_sequence(scenario), start=1):
             print(f"  turn {index}: {message}")
 
@@ -37,7 +51,7 @@ def _print_results(results: list[dict[str, Any]]) -> None:
     print("# Evaluation Scenario Results")
     print()
     for result in results:
-        status = "PASS" if result["passed"] else "FAIL"
+        status = str(result.get("status") or ("passed" if result["passed"] else "failed")).upper()
         score = result["normalized_score"] if result["normalized_score"] is not None else "-"
         agent_score = result.get("agent_score")
         agent_score_text = f", agent_score={agent_score}" if agent_score is not None else ""
@@ -57,6 +71,52 @@ def _print_results(results: list[dict[str, Any]]) -> None:
             print(f"  snapshot={result['snapshot_path']}")
         if result.get("error"):
             print(f"  error={result['error']}")
+        gate = result.get("acceptance_gate") or {}
+        for failure in (gate.get("failures") or [])[:3]:
+            print(
+                "  gate="
+                f"{failure.get('dimension_label')}: "
+                f"{'; '.join(str(item) for item in (failure.get('findings') or [])[:2])}"
+            )
+            print(f"  next={failure.get('suggestion')}")
+
+
+def _preflight_skip_reason(preflight: dict[str, Any]) -> str:
+    missing = preflight.get("missing_required") or []
+    checks = preflight.get("checks") or []
+    findings = [
+        f"{check.get('label')}: {'; '.join(str(item) for item in (check.get('findings') or []))}"
+        for check in checks
+        if isinstance(check, dict) and check.get("status") in {"blocked", "skipped"}
+    ]
+    if findings:
+        return "Preflight blocked live acceptance: " + " | ".join(findings[:5])
+    return "Preflight blocked live acceptance; missing required checks: " + ", ".join(missing)
+
+
+def _build_skipped_results(scenarios: list[Any], preflight: dict[str, Any]) -> list[dict[str, Any]]:
+    reason = _preflight_skip_reason(preflight)
+    return [
+        {
+            "scenario_id": scenario.id,
+            "scenario_name": scenario.name,
+            "status": "skipped",
+            "passed": False,
+            "normalized_score": None,
+            "grade": None,
+            "snapshot_path": None,
+            "elapsed_seconds": 0.0,
+            "agent_score": None,
+            "runtime_budget_passed": None,
+            "runtime_findings": [],
+            "acceptance_gate": build_skipped_acceptance_gate_result(
+                scenario=scenario,
+                reason=reason,
+            ),
+            "error": reason,
+        }
+        for scenario in scenarios
+    ]
 
 
 def main() -> int:
@@ -111,6 +171,11 @@ def main() -> int:
         help="Print selected scenarios without calling the backend",
     )
     parser.add_argument(
+        "--acceptance-core",
+        action="store_true",
+        help="Run the first-stage core acceptance scenario set tagged acceptance-core.",
+    )
+    parser.add_argument(
         "--continue-on-error",
         action="store_true",
         help="Continue running remaining scenarios after a failed scenario",
@@ -150,12 +215,80 @@ def main() -> int:
         default=None,
         help="Override runtime budget for SSE error events",
     )
+    parser.add_argument(
+        "--summary-dir",
+        type=Path,
+        default=None,
+        help="Directory for JSON and Markdown acceptance summaries. Defaults to output-dir.",
+    )
+    parser.add_argument(
+        "--summary-prefix",
+        default="acceptance-summary",
+        help="Filename prefix for generated acceptance summary artifacts.",
+    )
+    parser.add_argument(
+        "--no-summary",
+        action="store_true",
+        help="Do not write run-level JSON and Markdown acceptance summaries.",
+    )
+    parser.add_argument(
+        "--preflight-only",
+        action="store_true",
+        help="Run acceptance preflight and write blocked/degraded summary without live scenario calls.",
+    )
     args = parser.parse_args()
 
-    scenarios = select_scenarios(load_scenarios(args.scenarios_file), args.scenario)
+    catalog = load_scenarios(args.scenarios_file)
+    scenarios = (
+        acceptance_core_scenarios(catalog)
+        if args.acceptance_core and not args.scenario
+        else select_scenarios(catalog, args.scenario)
+    )
     if args.dry_run:
         _print_plan(scenarios)
         return 0
+
+    preflight = run_acceptance_preflight(
+        scenarios,
+        base_url=args.base_url,
+        check_backend=True,
+    ).to_dict()
+
+    if preflight["status"] in {"blocked", "skipped"} or args.preflight_only:
+        results = _build_skipped_results(scenarios, preflight)
+        summary_output_dir = args.summary_dir or args.output_dir
+        summary = build_acceptance_run_summary(
+            results=results,
+            scenarios=scenarios,
+            base_url=args.base_url,
+            output_dir=summary_output_dir,
+            preflight=preflight,
+        )
+        summary_paths = None if args.no_summary else write_acceptance_summary_files(
+            summary,
+            summary_output_dir,
+            prefix=args.summary_prefix,
+        )
+        if args.json:
+            print(
+                json.dumps(
+                    {
+                        "results": results,
+                        "acceptance_summary": summary,
+                        "summary_paths": summary_paths,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+        else:
+            _print_results(results)
+            if summary_paths:
+                print()
+                print("# Acceptance Summary Artifacts")
+                print(f"- JSON: {summary_paths['json']}")
+                print(f"- Markdown: {summary_paths['markdown']}")
+        return 0 if summary["status"] == "passed" else 2
 
     runtime_budget_overrides = {
         key: value
@@ -178,18 +311,52 @@ def main() -> int:
         runtime_budget=runtime_budget_from_dict(runtime_budget_overrides or None),
     )
     results = []
+    continue_on_error = args.continue_on_error or args.acceptance_core
     for scenario in scenarios:
         result = run_live_scenario(scenario, config)
         results.append(result.to_dict())
-        if not result.passed and not args.continue_on_error:
+        if not result.passed and not continue_on_error:
             break
 
+    summary = None
+    summary_paths = None
+    if not args.no_summary:
+        summary_output_dir = args.summary_dir or args.output_dir
+        summary = build_acceptance_run_summary(
+            results=results,
+            scenarios=scenarios,
+            base_url=args.base_url,
+            output_dir=summary_output_dir,
+            preflight=preflight,
+        )
+        summary_paths = write_acceptance_summary_files(
+            summary,
+            summary_output_dir,
+            prefix=args.summary_prefix,
+        )
+
     if args.json:
-        print(json.dumps({"results": results}, ensure_ascii=False, indent=2))
+        print(
+            json.dumps(
+                {
+                    "results": results,
+                    "acceptance_summary": summary,
+                    "summary_paths": summary_paths,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
     else:
         _print_results(results)
+        if summary_paths:
+            print()
+            print("# Acceptance Summary Artifacts")
+            print(f"- JSON: {summary_paths['json']}")
+            print(f"- Markdown: {summary_paths['markdown']}")
 
-    return 0 if results and all(result["passed"] for result in results) else 2
+    passed = bool(summary["passed"]) if isinstance(summary, dict) else bool(results and all(result["passed"] for result in results))
+    return 0 if passed else 2
 
 
 if __name__ == "__main__":

@@ -21,7 +21,7 @@
 
 ## 使用方式
 
-对真实链路保存的 JSON 快照运行：
+对真实链路保存的 JSON（JavaScript 对象表示法）快照运行：
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\evaluate_report_snapshot.py .runtime\real-agency-rag-final-report-retake3-20260509.json --expected-mode agency_plan
@@ -72,6 +72,62 @@
 ## 真实链路跑批
 
 `run_evaluation_scenarios.py` 可以把场景真正发给本地后端，读取 SSE（服务器发送事件）返回的 `report_data`，保存快照并自动评分。跑批结果现在按综合 Agent（智能体）质量门禁判断通过，不再只看最终报告分。
+
+### 第一阶段总体验收质量门禁
+
+第一阶段验收把“已完成计划目标”固化成可重复运行、可审计的结果。核心入口是：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\run_evaluation_scenarios.py --acceptance-core --base-url http://127.0.0.1:8000
+```
+
+`--acceptance-core` 会选择 `data/evaluation/report_quality_scenarios.json` 中带 `acceptance-core` 标记的核心场景，目前覆盖自由行、旅行社省心方案、报价解释、天气风险、酒店兜底和交通兜底 9 个场景。该模式会自动继续执行全部核心场景，即使中途有失败，也会在最后给出完整失败清单。
+
+脚本会先执行 preflight（预检）。预检会读取当前进程环境变量和 `.env`，但只输出环境变量名和状态，不输出真实密钥值。核心场景的 `requirements` 字段会声明它需要的真实能力：
+
+- `real_llm`：真实 LLM（大语言模型），当前对应 `DASHSCOPE_API_KEY`。
+- `real_mcp`：真实 MCP（模型上下文协议）服务。
+- `mcp_servers`：场景需要的 MCP（模型上下文协议）服务，例如 `weather`、`search`、`amap`、`12306-mcp`、`VariFlight-Aviation`、`aigohotel-mcp`。
+- `external_apis`：场景需要的外部 API（应用程序接口），例如 `amap`、`tavily`、`variflight`、`aigohotel`。
+
+没有真实密钥、后端健康检查不可达，或缺少所选场景声明的真实能力时，脚本不会运行真实场景，也不会给出“有效验收通过”的结论；它只会生成 blocked（环境阻塞）报告，并把场景标为 skipped（跳过）。此时报告质量、RAG（检索增强生成）质量、工具治理质量、运行时质量、预算置信度、内部证据和工具审计都标记为不可判定。
+
+默认会在 `.runtime/evaluations/` 下生成两类整批摘要：
+
+- JSON（JavaScript 对象表示法）：机器可读，包含每个场景的报告质量、RAG（检索增强生成）质量、工具治理质量、运行时指标、阈值和失败维度。
+- Markdown（标记文本）：人工审阅，包含场景总览、阈值、每个场景分数、快照路径和排查建议。
+
+可以调整摘要目录：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\run_evaluation_scenarios.py --acceptance-core --base-url http://127.0.0.1:8000 --summary-dir .runtime\acceptance
+```
+
+核心门禁由 `app/evaluation/acceptance_gate.py` 聚合现有评分结果，不直接修改核心 Agent（智能体）业务逻辑。当前阈值包括：
+
+- 综合 Agent（智能体）分：不低于场景 `min_score`，且全局最低 82 分。
+- 报告质量：不低于 80 分。
+- RAG（检索增强生成）质量：不低于 80 分。
+- 工具治理质量：不低于 80 分。
+- 运行时质量：不低于 80 分，并要求运行预算门禁通过。
+- 预算置信度：必须包含置信度等级、已确认或估算项、待核验项。
+- 旅行社省心方案：至少覆盖 3 类内部证据。
+- 工具审计：必须暴露使用来源、待核验项和不支持承诺。
+
+失败时摘要会明确给出：
+
+- 失败场景。
+- 失败维度，例如报告、RAG（检索增强生成）、工具、运行时、预算置信度、内部证据或工具审计。
+- 关键发现。
+- 建议排查方向，例如检查 `report_data` 契约、内部证据类别、SSE（服务器发送事件）工具调用、运行预算或报告中的待核验项。
+
+摘要状态语义：
+
+- `passed`（通过）：预检通过，所有场景门禁通过。
+- `failed`（失败）：预检具备运行条件，但至少一个场景或质量维度失败。
+- `degraded`（降级）：核心门禁未失败，但存在非阻塞预检或运行治理风险。
+- `blocked`（环境阻塞）：缺少真实密钥、后端不可达或核心依赖不足，不能生成有效通过结论。
+- `skipped`（跳过）：场景没有执行，常见原因是 blocked（环境阻塞）或只运行 preflight（预检）。
 
 先查看将要运行的场景，不调用后端：
 

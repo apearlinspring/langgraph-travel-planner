@@ -1,8 +1,16 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 
+from app.evaluation.acceptance_gate import (
+    build_acceptance_gate_result,
+    build_acceptance_run_summary,
+    build_skipped_acceptance_gate_result,
+    render_acceptance_markdown,
+    write_acceptance_summary_files,
+)
+from app.evaluation.preflight import required_capabilities_for_scenarios, run_acceptance_preflight
 from app.evaluation.live_runner import (
     build_quality_summary,
     build_snapshot_payload,
@@ -27,6 +35,12 @@ def _scenario(scenario_id: str, mode: str = "agency_plan") -> EvaluationScenario
         min_score=80,
         focus=["contract"],
         tags=["agency" if mode == "agency_plan" else "free"],
+        requirements={
+            "real_llm": True,
+            "real_mcp": True,
+            "mcp_servers": ["weather", "search", "amap"],
+            "external_apis": ["amap", "tavily"],
+        },
     )
 
 
@@ -253,3 +267,164 @@ def test_build_quality_summary_fails_aggregate_when_runtime_budget_fails():
 
     assert summary["runtime_quality"]["budget_gate"]["passed"] is False
     assert summary["aggregate"]["passed"] is False
+
+
+def test_acceptance_gate_passes_valid_quality_summary(tmp_path: Path):
+    scenario = _scenario("agency_couple")
+    report_data = _valid_report_data()
+    report_evaluation = {
+        "normalized_score": 100,
+        "passed": True,
+        "grade": "A",
+        "total_score": 100,
+        "max_score": 100,
+        "summary": [],
+        "criteria": [],
+    }
+    quality_summary = build_quality_summary(
+        scenario=scenario,
+        events=[
+            {"type": "token", "content": "hello", "turn_index": 1, "elapsed_since_scenario_start": 0.5},
+            {"type": "report_data", "turn_index": 1},
+        ],
+        turns=[{"turn_index": 1, "user_message": "Plan", "elapsed_seconds": 1.0}],
+        assistant_text="hello",
+        report_data=report_data,
+        report_evaluation=report_evaluation,
+        elapsed_seconds=1.0,
+        timeout_seconds=900.0,
+    )
+
+    gate = build_acceptance_gate_result(
+        scenario=scenario,
+        quality_summary=quality_summary,
+        report_data=report_data,
+        snapshot_path="snapshot.json",
+    )
+    run_summary = build_acceptance_run_summary(
+        results=[
+            {
+                "scenario_id": scenario.id,
+                "scenario_name": scenario.name,
+                "passed": True,
+                "snapshot_path": "snapshot.json",
+                "acceptance_gate": gate,
+            }
+        ],
+        scenarios=[scenario],
+        base_url="http://127.0.0.1:8000",
+        output_dir=tmp_path,
+        created_at=datetime(2026, 5, 10, tzinfo=timezone.utc),
+    )
+    markdown = render_acceptance_markdown(run_summary)
+    paths = write_acceptance_summary_files(
+        run_summary,
+        tmp_path,
+        created_at=datetime(2026, 5, 10, 12, 0, tzinfo=timezone.utc),
+    )
+
+    assert gate["passed"] is True
+    assert run_summary["passed"] is True
+    assert "RAG（检索增强生成）" in markdown
+    assert Path(paths["json"]).exists()
+    assert Path(paths["markdown"]).exists()
+
+
+def test_acceptance_gate_flags_budget_confidence_gap():
+    scenario = _scenario("agency_couple")
+    report_data = _valid_report_data()
+    report_data["budget_confidence"]["verification_items"] = []
+    report_evaluation = {
+        "normalized_score": 100,
+        "passed": True,
+        "grade": "A",
+        "total_score": 100,
+        "max_score": 100,
+        "summary": [],
+        "criteria": [],
+    }
+    quality_summary = build_quality_summary(
+        scenario=scenario,
+        events=[
+            {"type": "token", "content": "hello", "turn_index": 1, "elapsed_since_scenario_start": 0.5},
+            {"type": "report_data", "turn_index": 1},
+        ],
+        turns=[{"turn_index": 1, "user_message": "Plan", "elapsed_seconds": 1.0}],
+        assistant_text="hello",
+        report_data=_valid_report_data(),
+        report_evaluation=report_evaluation,
+        elapsed_seconds=1.0,
+        timeout_seconds=900.0,
+    )
+
+    gate = build_acceptance_gate_result(
+        scenario=scenario,
+        quality_summary=quality_summary,
+        report_data=report_data,
+    )
+
+    assert gate["passed"] is False
+    assert gate["dimensions"]["budget_confidence"]["passed"] is False
+    assert any(failure["dimension"] == "budget_confidence" for failure in gate["failures"])
+
+
+def test_preflight_blocks_when_real_credentials_are_missing():
+    scenario = _scenario("agency_couple")
+
+    preflight = run_acceptance_preflight(
+        [scenario],
+        base_url="http://127.0.0.1:8000",
+        environ={},
+        check_backend=False,
+    )
+
+    assert preflight.status == "blocked"
+    assert "real_llm" in preflight.missing_required
+    assert "report_quality" in preflight.skipped_metrics
+
+
+def test_preflight_declares_scenario_capability_requirements():
+    scenario = _scenario("agency_couple")
+
+    capabilities = required_capabilities_for_scenarios([scenario])
+
+    assert capabilities["real_llm"] is True
+    assert capabilities["real_mcp"] is True
+    assert "weather" in capabilities["mcp_servers"]
+    assert {"amap", "tavily"}.issubset(capabilities["external_apis"])
+
+
+def test_blocked_preflight_summary_cannot_pass_acceptance(tmp_path: Path):
+    scenario = _scenario("agency_couple")
+    preflight = run_acceptance_preflight(
+        [scenario],
+        base_url="http://127.0.0.1:8000",
+        environ={},
+        check_backend=False,
+    ).to_dict()
+    skipped_gate = build_skipped_acceptance_gate_result(
+        scenario=scenario,
+        reason="Preflight blocked live acceptance",
+    )
+
+    summary = build_acceptance_run_summary(
+        results=[
+            {
+                "scenario_id": scenario.id,
+                "scenario_name": scenario.name,
+                "status": "skipped",
+                "passed": False,
+                "acceptance_gate": skipped_gate,
+            }
+        ],
+        scenarios=[scenario],
+        base_url="http://127.0.0.1:8000",
+        output_dir=tmp_path,
+        preflight=preflight,
+    )
+    markdown = render_acceptance_markdown(summary)
+
+    assert summary["status"] == "blocked"
+    assert summary["passed"] is False
+    assert summary["skipped_count"] == 1
+    assert "指标不可判定" in markdown

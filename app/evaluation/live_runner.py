@@ -10,6 +10,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from app.evaluation.acceptance_gate import (
+    build_acceptance_gate_result,
+    build_error_acceptance_gate_result,
+)
 from app.evaluation.rag_quality import evaluate_rag_quality
 from app.evaluation.report_quality import evaluate_report_quality
 from app.evaluation.runtime_metrics import (
@@ -87,9 +91,11 @@ class LiveScenarioResult:
     grade: str | None
     snapshot_path: str | None
     elapsed_seconds: float
+    status: str = "failed"
     agent_score: float | None = None
     runtime_budget_passed: bool | None = None
     runtime_findings: list[str] | None = None
+    acceptance_gate: dict[str, Any] | None = None
     error: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -523,15 +529,22 @@ def run_live_scenario(
         )
         path = snapshot_path_for(scenario, config.output_dir)
         path.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
+        acceptance_gate = build_acceptance_gate_result(
+            scenario=scenario,
+            quality_summary=quality_summary,
+            report_data=report_data,
+            snapshot_path=str(path),
+        )
 
         return LiveScenarioResult(
             scenario_id=scenario.id,
             scenario_name=scenario.name,
-            passed=bool(quality_summary["aggregate"]["passed"]),
+            passed=bool(acceptance_gate["passed"]),
             normalized_score=float(evaluation["normalized_score"]),
             grade=str(evaluation["grade"]),
             snapshot_path=str(path),
             elapsed_seconds=round(elapsed_seconds, 2),
+            status=str(acceptance_gate["status"]),
             agent_score=float(quality_summary["aggregate"]["normalized_score"]),
             runtime_budget_passed=bool(
                 quality_summary["runtime_quality"]["budget_gate"]["passed"]
@@ -540,6 +553,7 @@ def run_live_scenario(
                 *quality_summary["runtime_quality"]["budget_gate"]["violations"],
                 *quality_summary["runtime_quality"]["budget_gate"]["warnings"],
             ][:5],
+            acceptance_gate=acceptance_gate,
         )
     except (urllib.error.URLError, OSError, RuntimeError, ValueError) as exc:
         elapsed_seconds = time.perf_counter() - started_at
@@ -560,6 +574,11 @@ def run_live_scenario(
             path = snapshot_path_for(scenario, config.output_dir)
             path.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
             snapshot_path = str(path)
+        acceptance_gate = build_error_acceptance_gate_result(
+            scenario=scenario,
+            error=str(exc),
+            snapshot_path=snapshot_path,
+        )
         return LiveScenarioResult(
             scenario_id=scenario.id,
             scenario_name=scenario.name,
@@ -568,5 +587,7 @@ def run_live_scenario(
             grade=None,
             snapshot_path=snapshot_path,
             elapsed_seconds=round(elapsed_seconds, 2),
+            status=str(acceptance_gate["status"]),
+            acceptance_gate=acceptance_gate,
             error=str(exc),
         )
