@@ -29,7 +29,7 @@
 
 - 内部 RAG 当前偏“检索几段文档文本”，缺少稳定的证据结构、适用条件和引用契约。
 - 旅行社方案模式与自由行模式主要靠关键词判断，还没有显式的 planning mode（规划模式）状态和用户确认机制。
-- 报告生成仍集中在 `state_transition.py`，文件过大，报告逻辑、预算逻辑、业务规则耦合重。
+- 报告生成已迁入 `app/reports/` 和 `app/agency/`，但 `state_transition.py` 仍保留路线节点补全和预算数值估算，后续可继续拆分。
 - 工具调用有阶段约束，但缺少统一的参数校验、调用前后异常检测、失败重试与审计记录。
 - 上下文管理还没有完整策略：长对话摘要、剪枝、历史关键轮次检索、token budget（令牌预算）分配都需要补。
 - 评估指标偏最终报告结构，缺少 RAG 命中质量、工具调用准确率、冗余工具调用率、延迟和成本指标。
@@ -323,10 +323,12 @@ tool_audit_events: NotRequired[list[dict]]
 当前落地状态：
 
 - 已新增 `app/reports/` 契约、校验、Markdown（标记文本）渲染和 bundle（交付包）构建入口。
-- `generate_order_tool` 生成最终报告时先构造 `report_data`，再由报告模块校验并渲染 Markdown。
+- `generate_order_tool` 生成最终报告时调用 `app/reports/builder.py` 组装 `report_data`，再由报告模块校验并渲染 Markdown。
 - `report_data` 已包含 `evidence_bundle` 和 `tool_audit_summary`，用于承载证据、待核验项和不支持承诺。
+- `agency_product` 与 `quote_policy` 已进入报告领域契约，报价继续保持“估算、不锁价、正式预订前核验”的边界。
 - 前端已优先消费结构化 `report_data.tool_audit_summary` 展示顾问交付清单。
-- `_format_report_*`、`_format_budget_*` 等低层格式化函数仍在 `state_transition.py`，后续可继续细拆。
+- 预算解释、预算置信度、报价规则和调整建议已收敛到 `app/agency/pricing_rules.py`；风险提示收敛到 `app/agency/risk_rules.py`；旅行社上下文和内部证据收敛到 `app/agency/product_rules.py`。
+- `state_transition.py` 仍保留路线节点补全、预算数值估算和少量兼容 wrapper，后续可继续把路线归一化抽到专门的报告路线模块。
 
 建议新增文件：
 
@@ -338,12 +340,11 @@ tool_audit_events: NotRequired[list[dict]]
 
 建议迁移函数：
 
-- `_build_report_data`
-- `_build_final_report`
-- `_format_report_*`
-- `_format_budget_*`
-- `_format_adjustment_options`
-- `_format_agency_context_lines`
+- `_build_report_data`：已迁移到 `build_travel_report_data`，工具层只负责准备状态和路线摘要。
+- `_format_budget_*` / `_format_adjustment_options`：已迁移到 `app/agency/pricing_rules.py`。
+- `_format_report_*` 中的概览、风险和交付清单拼装已迁移到 `app/reports/` 与 `app/agency/`；路线点生成仍在工具层。
+- `_format_agency_context_lines` 与内部证据加载已迁移到 `app/agency/product_rules.py`。
+- `_build_final_report`：工具层保留兼容入口，实际 Markdown（标记文本）仍由 `report_data` 渲染。
 
 报告契约建议：
 

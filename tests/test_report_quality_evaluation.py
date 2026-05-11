@@ -75,6 +75,16 @@ def _valid_report_data(mode="agency_plan"):
                 _agency_evidence("report"),
             ],
         },
+        "agency_product": {
+            "mode": mode,
+            "segment": "standard",
+            "code": "comfort_light_custom",
+            "name": "Light custom planning",
+            "product_type": "Consultant planning",
+            "positioning": "Route, budget, and risk-control deliverable.",
+            "deliverables": ["route structure", "budget breakdown", "risk checklist"],
+            "non_commitments": ["do not promise inventory", "do not lock prices"],
+        },
         "budget": {
             "currency": "CNY",
             "total": 3480,
@@ -86,6 +96,19 @@ def _valid_report_data(mode="agency_plan"):
                 {"key": "attractions", "label": "Attractions", "amount": 80, "basis": "Ticket estimate"},
                 {"key": "misc", "label": "Buffer", "amount": 600, "basis": "Flexible buffer"},
             ],
+        },
+        "quote_policy": {
+            "pricing_status": "estimate_only",
+            "locked_price": False,
+            "currency": "CNY",
+            "product_code": "comfort_light_custom",
+            "product_name": "Light custom planning",
+            "quote_basis": ["2 people / 1 day estimate", "Transport: Rail estimate"],
+            "included": ["planning service", "budget explanation", "risk checklist"],
+            "excluded": ["no actual ticket payment", "no hotel payment", "no inventory lock"],
+            "price_variables": ["date", "hotel room", "ticket availability"],
+            "verification_required": ["verify ticket price, hotel, booking, and weather"],
+            "disclaimer": "Estimate only; not a formal contract quote or inventory lock.",
         },
         "budget_confidence": {
             "level": "low",
@@ -162,6 +185,20 @@ def test_evaluate_report_quality_flags_missing_budget_and_map_contracts():
     assert any("map_routes" in item for item in result.summary)
 
 
+def test_evaluate_report_quality_flags_itinerary_route_count_mismatch():
+    report_data = _valid_report_data()
+    extra_day = dict(report_data["itinerary"][0])
+    extra_day["day_number"] = 2
+    extra_day["route"] = dict(extra_day["route"])
+    extra_day["route"]["day_number"] = 2
+    report_data["itinerary"].append(extra_day)
+
+    result = evaluate_report_quality(report_data, expected_mode="agency_plan")
+
+    assert result.passed is False
+    assert any("map_routes count must match itinerary day count" in item for item in result.summary)
+
+
 def test_evaluate_report_quality_checks_expected_planning_mode():
     result = evaluate_report_quality(
         _valid_report_data(mode="free_planning"),
@@ -185,6 +222,16 @@ def test_evaluate_report_quality_checks_agency_evidence_contract():
 
     assert result.passed is False
     assert any("agency_context.evidence" in item for item in result.summary)
+
+
+def test_evaluate_report_quality_checks_quote_policy_boundaries():
+    report_data = _valid_report_data()
+    report_data["quote_policy"] = {"pricing_status": "locked", "locked_price": True}
+
+    result = evaluate_report_quality(report_data, expected_mode="agency_plan")
+
+    assert result.passed is False
+    assert any("quote_policy" in item for item in result.summary)
 
 
 def test_evaluate_report_quality_rejects_non_dict_report_data():
