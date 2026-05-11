@@ -9,6 +9,7 @@ from typing import Any
 from uuid import uuid4
 
 from sqlalchemy import desc, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.permissions import (
@@ -16,7 +17,11 @@ from app.core.permissions import (
     get_sensitive_action_policy,
     sanitize_approval_metadata,
 )
-from app.models.approval import ApprovalEvent, ApprovalRequest
+from app.models.approval import (
+    ApprovalEvent,
+    ApprovalRequest,
+    ToolAuditEvent as ToolAuditEventModel,
+)
 
 
 class ApprovalError(ValueError):
@@ -29,6 +34,10 @@ class ApprovalNotFound(ApprovalError):
 
 class ApprovalStateError(ApprovalError):
     """Raised when a status transition is invalid."""
+
+
+class ApprovalPersistenceError(ApprovalError):
+    """Raised when approval governance cannot be persisted."""
 
 
 @dataclass
@@ -100,6 +109,129 @@ def _timestamp_from_datetime(value: datetime | None) -> float | None:
     if value.tzinfo is None:
         value = value.replace(tzinfo=timezone.utc)
     return value.timestamp()
+
+
+class ApprovalGovernanceManager:
+    """Track whether HITL governance is backed by durable storage."""
+
+    MEMORY_ALLOWED_ENVS = {"development", "dev", "local", "test", "testing"}
+    _lock = RLock()
+    _snapshot: dict[str, Any] = {
+        "status": "uninitialized",
+        "ready": False,
+        "storage": "postgres",
+        "persistent": False,
+        "database_required": True,
+        "memory_fallback_allowed": False,
+        "fallback_mode": None,
+        "hitl_closed_loop": False,
+        "last_error": None,
+    }
+
+    @classmethod
+    def memory_fallback_allowed(cls, app_env: str | None = None) -> bool:
+        if app_env is None:
+            from app.config import settings
+
+            app_env = settings.app_env
+        return str(app_env or "").lower() in cls.MEMORY_ALLOWED_ENVS
+
+    @classmethod
+    def configure_uninitialized(cls, app_env: str | None = None) -> None:
+        memory_allowed = cls.memory_fallback_allowed(app_env)
+        with cls._lock:
+            cls._snapshot = {
+                "status": "uninitialized",
+                "ready": False,
+                "storage": "postgres",
+                "persistent": False,
+                "database_required": not memory_allowed,
+                "memory_fallback_allowed": memory_allowed,
+                "fallback_mode": None,
+                "hitl_closed_loop": False,
+                "last_error": None,
+            }
+
+    @classmethod
+    def mark_database_ready(cls, app_env: str | None = None) -> None:
+        memory_allowed = cls.memory_fallback_allowed(app_env)
+        with cls._lock:
+            cls._snapshot = {
+                "status": "ready",
+                "ready": True,
+                "storage": "postgres",
+                "persistent": True,
+                "database_required": not memory_allowed,
+                "memory_fallback_allowed": memory_allowed,
+                "fallback_mode": None,
+                "hitl_closed_loop": True,
+                "last_error": None,
+            }
+
+    @classmethod
+    def mark_database_unavailable(
+        cls,
+        error: Exception | str,
+        *,
+        app_env: str | None = None,
+    ) -> None:
+        memory_allowed = cls.memory_fallback_allowed(app_env)
+        with cls._lock:
+            cls._snapshot = {
+                "status": "not_ready",
+                "ready": False,
+                "storage": "memory" if memory_allowed else "postgres",
+                "persistent": False,
+                "database_required": not memory_allowed,
+                "memory_fallback_allowed": memory_allowed,
+                "fallback_mode": "dev_memory" if memory_allowed else None,
+                "hitl_closed_loop": False,
+                "last_error": str(error),
+            }
+
+    @classmethod
+    def mark_tool_audit_persistence_failed(
+        cls,
+        error: Exception | str,
+        *,
+        app_env: str | None = None,
+    ) -> None:
+        cls.mark_database_unavailable(
+            f"工具审计事件写入失败：{error}",
+            app_env=app_env,
+        )
+
+    @classmethod
+    def get_status_snapshot(cls) -> dict[str, Any]:
+        with cls._lock:
+            return dict(cls._snapshot)
+
+    @classmethod
+    def should_use_memory_fallback(cls) -> bool:
+        snapshot = cls.get_status_snapshot()
+        return (
+            snapshot.get("storage") == "memory"
+            and snapshot.get("memory_fallback_allowed") is True
+        )
+
+    @classmethod
+    async def verify_database(cls) -> dict[str, Any]:
+        """Check that all governance tables are readable before declaring ready."""
+
+        from app.config import settings
+        from app.models.base import async_session_maker
+
+        try:
+            async with async_session_maker() as session:
+                await session.execute(select(ApprovalRequest.approval_id).limit(1))
+                await session.execute(select(ApprovalEvent.approval_id).limit(1))
+                await session.execute(select(ToolAuditEventModel.name).limit(1))
+                await session.rollback()
+        except Exception as error:
+            cls.mark_database_unavailable(error, app_env=settings.app_env)
+        else:
+            cls.mark_database_ready(app_env=settings.app_env)
+        return cls.get_status_snapshot()
 
 
 class ApprovalStore:
@@ -379,61 +511,67 @@ class DatabaseApprovalStore:
         expires_in_seconds: int | None = None,
         now: float | None = None,
     ) -> ApprovalRecord:
-        policy = get_sensitive_action_policy(action)
-        timestamp = _now() if now is None else now
-        created_at = _datetime_from_timestamp(timestamp)
-        ttl_seconds = (
-            expires_in_seconds
-            if expires_in_seconds is not None
-            else policy.default_ttl_seconds
-        )
-        expires_at = (
-            _datetime_from_timestamp(timestamp + ttl_seconds)
-            if policy.requires_approval and ttl_seconds is not None
-            else None
-        )
-        status = _next_status_for_policy(policy.requires_approval)
-        approval = ApprovalRequest(
-            approval_id=_approval_id(),
-            action=policy.action,
-            label=policy.label,
-            status=status,
-            reason=reason.strip() or policy.description,
-            user_id=str(user_id),
-            conversation_id=str(conversation_id) if conversation_id else None,
-            requires_approval=policy.requires_approval,
-            is_blocking=policy.is_blocking,
-            governance_boundary=policy.governance_boundary,
-            unsupported_without_integration=list(
-                policy.unsupported_without_integration
-            ),
-            request_metadata=sanitize_approval_metadata(metadata),
-            expires_at=expires_at,
-            created_at=created_at,
-            updated_at=created_at,
-        )
-        self._session.add(approval)
-        self._append_event_model(
-            approval,
-            event_type="created",
-            from_status=None,
-            to_status=status,
-            actor_id=str(user_id),
-            reason=approval.reason,
-            metadata={"requires_approval": approval.requires_approval},
-            created_at=created_at,
-        )
-        await self._session.commit()
-        await self._session.refresh(approval)
-        return self._record_from_model(approval)
-
-    async def get(self, approval_id: str, *, now: float | None = None) -> ApprovalRecord:
-        approval = await self._get_model(approval_id)
-        changed = self._expire_if_due_model(approval, _now() if now is None else now)
-        if changed:
+        try:
+            policy = get_sensitive_action_policy(action)
+            timestamp = _now() if now is None else now
+            created_at = _datetime_from_timestamp(timestamp)
+            ttl_seconds = (
+                expires_in_seconds
+                if expires_in_seconds is not None
+                else policy.default_ttl_seconds
+            )
+            expires_at = (
+                _datetime_from_timestamp(timestamp + ttl_seconds)
+                if policy.requires_approval and ttl_seconds is not None
+                else None
+            )
+            status = _next_status_for_policy(policy.requires_approval)
+            approval = ApprovalRequest(
+                approval_id=_approval_id(),
+                action=policy.action,
+                label=policy.label,
+                status=status,
+                reason=reason.strip() or policy.description,
+                user_id=str(user_id),
+                conversation_id=str(conversation_id) if conversation_id else None,
+                requires_approval=policy.requires_approval,
+                is_blocking=policy.is_blocking,
+                governance_boundary=policy.governance_boundary,
+                unsupported_without_integration=list(
+                    policy.unsupported_without_integration
+                ),
+                request_metadata=sanitize_approval_metadata(metadata),
+                expires_at=expires_at,
+                created_at=created_at,
+                updated_at=created_at,
+            )
+            self._session.add(approval)
+            self._append_event_model(
+                approval,
+                event_type="created",
+                from_status=None,
+                to_status=status,
+                actor_id=str(user_id),
+                reason=approval.reason,
+                metadata={"requires_approval": approval.requires_approval},
+                created_at=created_at,
+            )
             await self._session.commit()
             await self._session.refresh(approval)
-        return self._record_from_model(approval)
+            return self._record_from_model(approval)
+        except SQLAlchemyError as error:
+            await self._fail_persistence(error)
+
+    async def get(self, approval_id: str, *, now: float | None = None) -> ApprovalRecord:
+        try:
+            approval = await self._get_model(approval_id)
+            changed = self._expire_if_due_model(approval, _now() if now is None else now)
+            if changed:
+                await self._session.commit()
+                await self._session.refresh(approval)
+            return self._record_from_model(approval)
+        except SQLAlchemyError as error:
+            await self._fail_persistence(error)
 
     async def list_records(
         self,
@@ -444,31 +582,37 @@ class DatabaseApprovalStore:
         conversation_id: str | None = None,
         now: float | None = None,
     ) -> list[ApprovalRecord]:
-        await self._expire_due_records(_now() if now is None else now)
-        stmt = select(ApprovalRequest).order_by(desc(ApprovalRequest.created_at))
-        if user_id is not None:
-            stmt = stmt.where(ApprovalRequest.user_id == str(user_id))
-        if status:
-            stmt = stmt.where(ApprovalRequest.status == status)
-        if action:
-            canonical_action = get_sensitive_action_policy(action).action
-            stmt = stmt.where(ApprovalRequest.action == canonical_action)
-        if conversation_id is not None:
-            stmt = stmt.where(ApprovalRequest.conversation_id == str(conversation_id))
-        result = await self._session.execute(stmt)
-        return [self._record_from_model(model) for model in result.scalars().all()]
+        try:
+            await self._expire_due_records(_now() if now is None else now)
+            stmt = select(ApprovalRequest).order_by(desc(ApprovalRequest.created_at))
+            if user_id is not None:
+                stmt = stmt.where(ApprovalRequest.user_id == str(user_id))
+            if status:
+                stmt = stmt.where(ApprovalRequest.status == status)
+            if action:
+                canonical_action = get_sensitive_action_policy(action).action
+                stmt = stmt.where(ApprovalRequest.action == canonical_action)
+            if conversation_id is not None:
+                stmt = stmt.where(ApprovalRequest.conversation_id == str(conversation_id))
+            result = await self._session.execute(stmt)
+            return [self._record_from_model(model) for model in result.scalars().all()]
+        except SQLAlchemyError as error:
+            await self._fail_persistence(error)
 
     async def list_events(self, approval_id: str) -> list[ApprovalEventRecord]:
-        await self._get_model(approval_id)
-        result = await self._session.execute(
-            select(ApprovalEvent)
-            .where(ApprovalEvent.approval_id == approval_id)
-            .order_by(ApprovalEvent.created_at)
-        )
-        return [
-            self._event_from_model(model)
-            for model in result.scalars().all()
-        ]
+        try:
+            await self._get_model(approval_id)
+            result = await self._session.execute(
+                select(ApprovalEvent)
+                .where(ApprovalEvent.approval_id == approval_id)
+                .order_by(ApprovalEvent.created_at)
+            )
+            return [
+                self._event_from_model(model)
+                for model in result.scalars().all()
+            ]
+        except SQLAlchemyError as error:
+            await self._fail_persistence(error)
 
     async def approve(
         self,
@@ -508,23 +652,26 @@ class DatabaseApprovalStore:
         *,
         now: float | None = None,
     ) -> ApprovalRecord:
-        timestamp = _now() if now is None else now
-        approval = await self._get_model(approval_id)
-        if approval.status != "pending":
-            raise ApprovalStateError(
-                f"只有 pending 状态可以过期，当前状态为 {approval.status}。"
+        try:
+            timestamp = _now() if now is None else now
+            approval = await self._get_model(approval_id)
+            if approval.status != "pending":
+                raise ApprovalStateError(
+                    f"只有 pending 状态可以过期，当前状态为 {approval.status}。"
+                )
+            self._transition_model(
+                approval,
+                status="expired",
+                actor_id=None,
+                decision_reason="审批已过期",
+                event_type="expired",
+                timestamp=timestamp,
             )
-        self._transition_model(
-            approval,
-            status="expired",
-            actor_id=None,
-            decision_reason="审批已过期",
-            event_type="expired",
-            timestamp=timestamp,
-        )
-        await self._session.commit()
-        await self._session.refresh(approval)
-        return self._record_from_model(approval)
+            await self._session.commit()
+            await self._session.refresh(approval)
+            return self._record_from_model(approval)
+        except SQLAlchemyError as error:
+            await self._fail_persistence(error)
 
     async def _decide(
         self,
@@ -535,26 +682,29 @@ class DatabaseApprovalStore:
         decision_reason: str | None,
         now: float | None = None,
     ) -> ApprovalRecord:
-        timestamp = _now() if now is None else now
-        approval = await self._get_model(approval_id)
-        if self._expire_if_due_model(approval, timestamp):
+        try:
+            timestamp = _now() if now is None else now
+            approval = await self._get_model(approval_id)
+            if self._expire_if_due_model(approval, timestamp):
+                await self._session.commit()
+                await self._session.refresh(approval)
+            if approval.status != "pending":
+                raise ApprovalStateError(
+                    f"只有 pending 状态可以审批，当前状态为 {approval.status}。"
+                )
+            self._transition_model(
+                approval,
+                status=status,
+                actor_id=str(decided_by),
+                decision_reason=(decision_reason or "").strip() or None,
+                event_type=status,
+                timestamp=timestamp,
+            )
             await self._session.commit()
             await self._session.refresh(approval)
-        if approval.status != "pending":
-            raise ApprovalStateError(
-                f"只有 pending 状态可以审批，当前状态为 {approval.status}。"
-            )
-        self._transition_model(
-            approval,
-            status=status,
-            actor_id=str(decided_by),
-            decision_reason=(decision_reason or "").strip() or None,
-            event_type=status,
-            timestamp=timestamp,
-        )
-        await self._session.commit()
-        await self._session.refresh(approval)
-        return self._record_from_model(approval)
+            return self._record_from_model(approval)
+        except SQLAlchemyError as error:
+            await self._fail_persistence(error)
 
     async def _get_model(self, approval_id: str) -> ApprovalRequest:
         result = await self._session.execute(
@@ -564,6 +714,13 @@ class DatabaseApprovalStore:
         if approval is None:
             raise ApprovalNotFound(f"审批记录不存在：{approval_id}")
         return approval
+
+    async def _fail_persistence(self, error: SQLAlchemyError) -> None:
+        await self._session.rollback()
+        ApprovalGovernanceManager.mark_database_unavailable(error)
+        raise ApprovalPersistenceError(
+            "审批治理数据库不可用，审批或审计持久化未完成。"
+        ) from error
 
     async def _expire_due_records(self, now: float) -> None:
         now_dt = _datetime_from_timestamp(now)

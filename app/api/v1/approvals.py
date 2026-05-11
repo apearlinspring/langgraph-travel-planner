@@ -4,17 +4,19 @@ from __future__ import annotations
 import inspect
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import get_current_user
 from app.core.approval import (
+    ApprovalGovernanceManager,
     ApprovalNotFound,
+    ApprovalPersistenceError,
     ApprovalStateError,
     ApprovalStore,
     DatabaseApprovalStore,
+    approval_store,
 )
 from app.core.permissions import get_sensitive_action_policy, list_sensitive_action_policies
-from app.models.base import get_db
+from app.models.base import async_session_maker
 from app.models.user import User
 from app.schemas.approval import (
     ApprovalCreateRequest,
@@ -43,10 +45,13 @@ async def _maybe_await(value):
     return value
 
 
-async def get_approval_service(
-    db: AsyncSession = Depends(get_db),
-) -> DatabaseApprovalStore:
-    return DatabaseApprovalStore(db)
+async def get_approval_service():
+    if ApprovalGovernanceManager.should_use_memory_fallback():
+        yield approval_store
+        return
+
+    async with async_session_maker() as db:
+        yield DatabaseApprovalStore(db)
 
 
 def _approval_error_to_http(error: Exception) -> HTTPException:
@@ -58,6 +63,11 @@ def _approval_error_to_http(error: Exception) -> HTTPException:
     if isinstance(error, ApprovalStateError):
         return HTTPException(
             status_code=status.HTTP_409_CONFLICT,
+            detail=str(error),
+        )
+    if isinstance(error, ApprovalPersistenceError):
+        return HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=str(error),
         )
     return HTTPException(
@@ -99,7 +109,7 @@ async def mark_sensitive_action(
                 expires_in_seconds=data.expires_in_seconds,
             )
         )
-    except ValueError as error:
+    except (ValueError, ApprovalPersistenceError) as error:
         raise _approval_error_to_http(error) from error
     return _record_response(record)
 
@@ -127,7 +137,7 @@ async def list_approvals(
                 conversation_id=conversation_id,
             )
         )
-    except ValueError as error:
+    except (ValueError, ApprovalPersistenceError) as error:
         raise _approval_error_to_http(error) from error
     approvals = [_record_response(record) for record in records]
     return ApprovalListResponse(approvals=approvals, total=len(approvals))
@@ -145,7 +155,7 @@ async def get_approval(
 
     try:
         record = await _maybe_await(approval_service.get(approval_id))
-    except (ApprovalNotFound, ApprovalStateError) as error:
+    except (ApprovalNotFound, ApprovalStateError, ApprovalPersistenceError) as error:
         raise _approval_error_to_http(error) from error
     if record.user_id != str(user.id):
         raise HTTPException(
@@ -177,7 +187,7 @@ async def approve_approval(
                 decision_reason=data.reason if data else None,
             )
         )
-    except (ApprovalNotFound, ApprovalStateError) as error:
+    except (ApprovalNotFound, ApprovalStateError, ApprovalPersistenceError) as error:
         raise _approval_error_to_http(error) from error
     return _record_response(record)
 
@@ -204,7 +214,7 @@ async def reject_approval(
                 decision_reason=data.reason if data else None,
             )
         )
-    except (ApprovalNotFound, ApprovalStateError) as error:
+    except (ApprovalNotFound, ApprovalStateError, ApprovalPersistenceError) as error:
         raise _approval_error_to_http(error) from error
     return _record_response(record)
 
@@ -224,7 +234,7 @@ async def expire_approval(
         if record.user_id != str(user.id):
             raise ApprovalNotFound(f"审批记录不存在：{approval_id}")
         record = await _maybe_await(approval_service.expire(approval_id))
-    except (ApprovalNotFound, ApprovalStateError) as error:
+    except (ApprovalNotFound, ApprovalStateError, ApprovalPersistenceError) as error:
         raise _approval_error_to_http(error) from error
     return _record_response(record)
 
@@ -244,7 +254,7 @@ async def list_approval_events(
         if record.user_id != str(user.id):
             raise ApprovalNotFound(f"审批记录不存在：{approval_id}")
         events = await _maybe_await(approval_service.list_events(approval_id))
-    except (ApprovalNotFound, ApprovalStateError) as error:
+    except (ApprovalNotFound, ApprovalStateError, ApprovalPersistenceError) as error:
         raise _approval_error_to_http(error) from error
     responses = [_event_response(event) for event in events]
     return ApprovalEventListResponse(events=responses, total=len(responses))

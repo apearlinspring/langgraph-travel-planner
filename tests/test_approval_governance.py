@@ -17,7 +17,12 @@ from app.api.v1.approvals import (
     get_approval_service,
     router as approvals_router,
 )
-from app.core.approval import ApprovalStateError, ApprovalStore, approval_store
+from app.core.approval import (
+    ApprovalGovernanceManager,
+    ApprovalStateError,
+    ApprovalStore,
+    approval_store,
+)
 from app.core.permissions import (
     action_requires_approval,
     get_sensitive_action_policy,
@@ -63,6 +68,34 @@ def test_governance_models_are_registered_for_database_initialization():
     assert ApprovalRequest.__table__.columns["approval_id"].index is True
     assert ApprovalEvent.__table__.columns["event_type"].nullable is False
     assert ToolAuditEvent.__table__.columns["status"].index is True
+
+
+def test_governance_status_does_not_claim_hitl_closed_loop_without_database():
+    ApprovalGovernanceManager.mark_database_unavailable(
+        "database unavailable",
+        app_env="production",
+    )
+    production_snapshot = ApprovalGovernanceManager.get_status_snapshot()
+
+    assert production_snapshot["status"] == "not_ready"
+    assert production_snapshot["storage"] == "postgres"
+    assert production_snapshot["persistent"] is False
+    assert production_snapshot["hitl_closed_loop"] is False
+    assert production_snapshot["memory_fallback_allowed"] is False
+
+    ApprovalGovernanceManager.mark_database_unavailable(
+        "database unavailable",
+        app_env="development",
+    )
+    development_snapshot = ApprovalGovernanceManager.get_status_snapshot()
+
+    assert development_snapshot["status"] == "not_ready"
+    assert development_snapshot["storage"] == "memory"
+    assert development_snapshot["fallback_mode"] == "dev_memory"
+    assert development_snapshot["memory_fallback_allowed"] is True
+    assert development_snapshot["hitl_closed_loop"] is False
+
+    ApprovalGovernanceManager.configure_uninitialized(app_env="development")
 
 
 def test_sensitive_action_policies_separate_record_only_and_forced_approval():

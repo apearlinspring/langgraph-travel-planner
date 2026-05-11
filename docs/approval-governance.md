@@ -12,6 +12,7 @@
 - TravelState（旅行规划状态）审批字段。
 - API（应用程序接口）契约：标记、查询、批准、拒绝、过期。
 - 最终报告中的治理边界说明。
+- `/health/ready` 会暴露审批治理 readiness（就绪状态），数据库不可用时不声明 HITL（人类在环）闭环完成。
 
 ## 敏感动作策略
 
@@ -66,6 +67,8 @@ approval_governance: dict
 
 审批 API 默认使用 `DatabaseApprovalStore` 写入数据库；测试可以注入同接口的 `ApprovalStore` 内存替身，以保持本地快速回归。这个替身不作为生产审计账本。
 
+生产环境必须使用 PostgreSQL 持久化审批请求、审批事件和工具审计事件，不允许回退到进程内内存存储。开发、测试和本地环境可以启用内存审批存储作为调试替身，但治理状态仍会标记为 `not_ready`，并且 `hitl_closed_loop=false`，表示不能宣称 HITL 闭环已经完成。
+
 ## 持久化数据模型
 
 治理表定义在 `app/models/approval.py`，由 `scripts/init_db.py` 的业务表初始化流程创建。
@@ -77,6 +80,16 @@ approval_governance: dict
 | `tool_audit_event` | 工具调用审计事件 | 保存工具名、输入摘要、输出摘要、状态、耗时、错误类型、重试次数和证据类型。 |
 
 `approval_request.status` 是为了查询当前状态的派生快照；可信历史以 `approval_event` 为准。审批自动过期和手动过期都会追加 `expired` 事件。
+
+## Readiness 语义
+
+`/health/ready` 的 `services.approval_governance` 字段用于判断审批治理是否可作为生产能力使用：
+
+- `status="ready"`：审批请求、审批事件和工具审计事件均可访问 PostgreSQL，`persistent=true`，`hitl_closed_loop=true`。
+- `status="not_ready"`：数据库不可用、治理表缺失或工具审计写入失败，`persistent=false`，`hitl_closed_loop=false`。
+- `storage="memory"` 且 `fallback_mode="dev_memory"`：仅表示开发环境允许继续用内存替身调试 API，不代表生产 HITL 闭环完成。
+
+当审批治理不是 `ready` 时，整体 readiness 返回 `not_ready`，避免核心依赖已经启动但治理审计能力缺失时被误判为可生产使用。
 
 ## 订单号治理边界
 
@@ -105,6 +118,14 @@ approval_governance: dict
 当前文档、测试和提交说明不写入真实密钥、真实手机号、真实身份证号或真实客户资料。
 
 工具审计事件只保存摘要，不保存完整外部 API（应用程序接口）请求、认证头、密钥或原始大段结果；上游工具返回失败时，审计事件用于报告待核验项，不用于编造真实价格、库存或预订状态。
+
+如果工具审计事件写入 PostgreSQL 失败，系统会：
+
+- 将审批治理状态标记为 `not_ready`。
+- 在消息 `extra_info.tool_audit_persistence` 中记录 `status="degraded"`、错误类型和降级说明。
+- 写入服务日志，明确说明审计事件未能完成持久化。
+
+这类失败不会被静默吞掉；后续真实支付、短信、客户资料导出或供应链下单接入前，必须把这类写入失败作为阻断条件处理。
 
 ## 未覆盖范围
 

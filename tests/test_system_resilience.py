@@ -2,6 +2,7 @@ import asyncio
 
 import pytest
 
+from app.core.approval import ApprovalGovernanceManager
 from app.core.checkpointer import CheckpointerManager
 from app.core.store import StoreManager
 from app.main import build_readiness_payload
@@ -143,12 +144,26 @@ def test_build_readiness_payload_reports_degraded_when_mcp_is_degraded(monkeypat
             }
         ),
     )
+    monkeypatch.setattr(
+        ApprovalGovernanceManager,
+        "get_status_snapshot",
+        classmethod(
+            lambda cls: {
+                "status": "ready",
+                "ready": True,
+                "storage": "postgres",
+                "persistent": True,
+                "hitl_closed_loop": True,
+            }
+        ),
+    )
 
     payload, status_code = build_readiness_payload(startup_complete=True)
 
     assert status_code == 200
     assert payload["status"] == "degraded"
     assert payload["services"]["mcp"]["status"] == "degraded"
+    assert payload["services"]["approval_governance"]["status"] == "ready"
 
 
 def test_build_readiness_payload_reports_not_ready_when_core_is_missing(monkeypatch):
@@ -178,8 +193,69 @@ def test_build_readiness_payload_reports_not_ready_when_core_is_missing(monkeypa
             }
         ),
     )
+    monkeypatch.setattr(
+        ApprovalGovernanceManager,
+        "get_status_snapshot",
+        classmethod(
+            lambda cls: {
+                "status": "ready",
+                "ready": True,
+                "storage": "postgres",
+                "persistent": True,
+                "hitl_closed_loop": True,
+            }
+        ),
+    )
 
     payload, status_code = build_readiness_payload(startup_complete=False)
 
     assert status_code == 503
     assert payload["status"] == "not_ready"
+
+
+def test_build_readiness_payload_requires_persistent_approval_governance(monkeypatch):
+    monkeypatch.setattr(
+        CheckpointerManager,
+        "get_status_snapshot",
+        classmethod(lambda cls: {"status": "ready", "initialized": True, "pool_open": True}),
+    )
+    monkeypatch.setattr(
+        StoreManager,
+        "get_status_snapshot",
+        classmethod(lambda cls: {"status": "ready", "initialized": True, "pool_open": True}),
+    )
+    monkeypatch.setattr(
+        MCPClientManager,
+        "get_status_snapshot",
+        classmethod(
+            lambda cls: {
+                "status": "healthy",
+                "healthy_servers": 2,
+                "unavailable_servers": 0,
+                "uninitialized_servers": 0,
+                "tool_count": 4,
+                "servers": {},
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        ApprovalGovernanceManager,
+        "get_status_snapshot",
+        classmethod(
+            lambda cls: {
+                "status": "not_ready",
+                "ready": False,
+                "storage": "postgres",
+                "persistent": False,
+                "hitl_closed_loop": False,
+                "last_error": "database unavailable",
+            }
+        ),
+    )
+
+    payload, status_code = build_readiness_payload(startup_complete=True)
+
+    assert status_code == 503
+    assert payload["status"] == "not_ready"
+    assert payload["services"]["approval_governance"]["status"] == "not_ready"
+    assert payload["services"]["approval_governance"]["hitl_closed_loop"] is False
