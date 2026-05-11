@@ -15,6 +15,7 @@ from app.agency.product_rules import build_agency_context, build_light_product
 from app.agency.risk_rules import build_report_risk_lines
 from app.reports.contracts import REPORT_VERSION, report_sections
 from app.reports.render_markdown import render_report_markdown
+from app.reports.route_builder import normalize_report_route_alignment
 from app.reports.validators import ReportValidationResult, validate_report_data
 from app.tools.audit import pending_checks_from_audit_events, summarize_audit_events_for_report
 
@@ -38,10 +39,6 @@ def build_report_bundle(report_data: dict[str, Any]) -> ReportBundle:
         markdown=markdown,
         validation=validation,
     )
-
-
-def _as_list(value: Any) -> list[Any]:
-    return value if isinstance(value, list) else []
 
 
 def _clean_report_line(line: Any) -> str:
@@ -197,8 +194,13 @@ def build_travel_report_data(
 ) -> dict[str, Any]:
     """Assemble the stable report_data contract from normalized planning state."""
 
+    route_alignment = normalize_report_route_alignment(itinerary, route_summaries)
+    itinerary = route_alignment.itinerary
+    route_summaries = route_alignment.route_summaries
+
     itinerary_data = []
-    for day, route_summary in zip(itinerary, route_summaries):
+    for index, day in enumerate(itinerary):
+        route_summary = route_summaries[index]
         itinerary_data.append(
             {
                 "day_number": day.get("day_number"),
@@ -255,6 +257,8 @@ def build_travel_report_data(
         selected_accommodation,
         state.get("tool_audit_events"),
     )
+    if route_alignment.findings:
+        evidence_bundle["route_alignment_findings"] = list(route_alignment.findings)
     tool_audit_summary = build_report_tool_audit_summary(
         budget,
         route_summaries,

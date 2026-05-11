@@ -18,6 +18,7 @@ from app.reports.contracts import (
     report_sections,
 )
 from app.reports.render_markdown import render_report_markdown
+from app.reports.route_builder import RouteAlignmentResult, normalize_report_route_alignment
 from app.reports.validators import ReportValidationResult, validate_report_data
 
 __all__ = [
@@ -26,6 +27,7 @@ __all__ = [
     "REPORT_VERSION",
     "REQUIRED_REPORT_SECTION_IDS",
     "REQUIRED_REPORT_TOP_LEVEL_KEYS",
+    "RouteAlignmentResult",
     "ReportBundle",
     "ReportValidationResult",
     "build_report_evidence_bundle",
@@ -35,6 +37,7 @@ __all__ = [
     "format_report_duration",
     "format_report_people",
     "format_report_route_label",
+    "normalize_report_route_alignment",
     "render_report_markdown",
     "report_sections",
     "validate_report_data",

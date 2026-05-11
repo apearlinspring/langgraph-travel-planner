@@ -185,6 +185,20 @@ def test_evaluate_report_quality_flags_missing_budget_and_map_contracts():
     assert any("map_routes" in item for item in result.summary)
 
 
+def test_evaluate_report_quality_flags_itinerary_route_count_mismatch():
+    report_data = _valid_report_data()
+    extra_day = dict(report_data["itinerary"][0])
+    extra_day["day_number"] = 2
+    extra_day["route"] = dict(extra_day["route"])
+    extra_day["route"]["day_number"] = 2
+    report_data["itinerary"].append(extra_day)
+
+    result = evaluate_report_quality(report_data, expected_mode="agency_plan")
+
+    assert result.passed is False
+    assert any("map_routes count must match itinerary day count" in item for item in result.summary)
+
+
 def test_evaluate_report_quality_checks_expected_planning_mode():
     result = evaluate_report_quality(
         _valid_report_data(mode="free_planning"),
