@@ -24,6 +24,7 @@ wheels/
 
 # Local runtime state
 logs/
+.runtime/
 .tmp/
 .fastmcp/
 .uv-cache/
