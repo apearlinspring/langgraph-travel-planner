@@ -102,6 +102,7 @@ def test_build_snapshot_payload_contains_report_and_evaluation_summary():
         base_url="http://127.0.0.1:8000",
         turns=[{"turn_index": 1, "produced_report_data": True, "error": "test@example.com"}],
         quality_summary={"aggregate": {"normalized_score": 90}},
+        llm_judge_evaluation={"status": "blocked", "findings": ["missing key"]},
     )
     serialized = str(payload)
 
@@ -112,6 +113,9 @@ def test_build_snapshot_payload_contains_report_and_evaluation_summary():
     assert payload["summary"]["evaluation"]["normalized_score"] == 90
     assert payload["summary"]["tool_event_count"] == 0
     assert payload["summary"]["has_quality_summary"] is True
+    assert payload["summary"]["has_llm_judge"] is True
+    assert payload["summary"]["llm_judge"]["status"] == "blocked"
+    assert payload["llm_judge"]["status"] == "blocked"
     assert payload["summary"]["has_turn_observability"] is True
     assert payload["quality_summary"]["aggregate"]["normalized_score"] == 90
     assert payload["turn_observability"] == [
@@ -521,6 +525,32 @@ def test_preflight_blocks_when_real_credentials_are_missing():
     assert preflight.status == "blocked"
     assert "real_llm" in preflight.missing_required
     assert "report_quality" in preflight.skipped_metrics
+
+
+def test_preflight_blocks_requested_llm_judge_without_real_credentials():
+    scenario = EvaluationScenario(
+        id="offline_judge",
+        name="Offline judge",
+        category="snapshot",
+        prompt="Plan a trip",
+        expected_mode="agency_plan",
+        min_score=80,
+        focus=["judge"],
+        tags=["agency"],
+        requirements={"real_llm": False},
+    )
+
+    preflight = run_acceptance_preflight(
+        [scenario],
+        base_url="http://127.0.0.1:8000",
+        environ={},
+        check_backend=False,
+        require_llm_judge=True,
+    )
+
+    assert preflight.status == "blocked"
+    assert "llm_judge" in preflight.missing_required
+    assert "llm_judge" in preflight.skipped_metrics
 
 
 def test_preflight_declares_scenario_capability_requirements():

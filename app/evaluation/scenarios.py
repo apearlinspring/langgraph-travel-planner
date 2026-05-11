@@ -36,6 +36,7 @@ class EvaluationScenario:
     followups: list[str] = field(default_factory=list)
     runtime_budget: dict[str, Any] = field(default_factory=dict)
     requirements: dict[str, Any] = field(default_factory=dict)
+    manual_review: dict[str, Any] = field(default_factory=dict)
     notes: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -140,6 +141,36 @@ def _as_optional_requirements(
     return requirements
 
 
+def _as_optional_manual_review(
+    value: Any,
+    *,
+    scenario_id: str,
+) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(f"Scenario {scenario_id!r} field 'manual_review' must be an object")
+
+    manual_review = dict(value)
+    for field_name in ("status", "reviewer_id", "reviewed_at", "decision", "notes"):
+        if field_name in manual_review and not isinstance(manual_review[field_name], str):
+            raise ValueError(f"Scenario {scenario_id!r} manual_review.{field_name} must be a string")
+    for field_name in ("labels", "corrections"):
+        if field_name in manual_review:
+            _as_optional_string_list(
+                manual_review[field_name],
+                field_name=f"manual_review.{field_name}",
+                scenario_id=scenario_id,
+            )
+    if "dataset_candidate" in manual_review and not isinstance(manual_review["dataset_candidate"], bool):
+        raise ValueError(f"Scenario {scenario_id!r} manual_review.dataset_candidate must be a boolean")
+    if "overall_score" in manual_review:
+        score = manual_review["overall_score"]
+        if not isinstance(score, (int, float)) or not 0 <= float(score) <= 100:
+            raise ValueError(f"Scenario {scenario_id!r} manual_review.overall_score must be between 0 and 100")
+    return manual_review
+
+
 def _validate_scenario_id(payload: dict[str, Any]) -> str:
     scenario_id = payload.get("id")
     if not isinstance(scenario_id, str) or not scenario_id:
@@ -213,6 +244,10 @@ def _scenario_from_dict(payload: dict[str, Any]) -> EvaluationScenario:
         ),
         requirements=_as_optional_requirements(
             payload.get("requirements"),
+            scenario_id=scenario_id,
+        ),
+        manual_review=_as_optional_manual_review(
+            payload.get("manual_review"),
             scenario_id=scenario_id,
         ),
         notes=str(payload.get("notes") or "").strip(),

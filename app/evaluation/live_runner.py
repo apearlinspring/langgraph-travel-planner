@@ -16,6 +16,7 @@ from app.evaluation.acceptance_gate import (
 )
 from app.evaluation.rag_quality import evaluate_rag_quality
 from app.evaluation.report_quality import evaluate_report_quality
+from app.evaluation.llm_judge import DEFAULT_LLM_JUDGE_THRESHOLD, evaluate_llm_judge
 from app.evaluation.runtime_metrics import (
     DEFAULT_RUNTIME_BUDGET,
     RuntimeBudget,
@@ -81,6 +82,8 @@ class LiveRunConfig:
     timeout_seconds: float = 900.0
     conversation_title_prefix: str = "eval"
     runtime_budget: RuntimeBudget = DEFAULT_RUNTIME_BUDGET
+    enable_llm_judge: bool = False
+    llm_judge_threshold: float = DEFAULT_LLM_JUDGE_THRESHOLD
 
 
 @dataclass
@@ -145,6 +148,7 @@ def build_snapshot_payload(
     base_url: str,
     turns: list[dict[str, Any]] | None = None,
     quality_summary: dict[str, Any] | None = None,
+    llm_judge_evaluation: dict[str, Any] | None = None,
     error: str | None = None,
 ) -> dict[str, Any]:
     """Build the JSON artifact saved after a live scenario run."""
@@ -169,9 +173,11 @@ def build_snapshot_payload(
             "assistant_chars": len(assistant_text),
             "has_report_data": report_data is not None,
             "has_quality_summary": quality_summary is not None,
+            "has_llm_judge": llm_judge_evaluation is not None,
             "has_turn_observability": bool(observability_events),
             "evaluation": evaluation,
             "quality_summary": quality_summary,
+            "llm_judge": llm_judge_evaluation,
             "tool_event_count": len(tool_events),
             "observability_event_count": len(observability_events),
             "error": error,
@@ -182,6 +188,7 @@ def build_snapshot_payload(
         "tool_events": tool_events,
         "turn_observability": observability_events,
         "quality_summary": quality_summary,
+        "llm_judge": llm_judge_evaluation,
         "observability_events": observability_events,
         "events": events,
     }
@@ -376,6 +383,7 @@ def build_quality_summary(
     elapsed_seconds: float,
     timeout_seconds: float,
     runtime_budget: RuntimeBudget | None = None,
+    llm_judge_evaluation: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the combined Agent run quality score saved in live snapshots."""
 
@@ -438,7 +446,7 @@ def build_quality_summary(
             "runtime_quality": 0.1,
         },
     }
-    return {
+    summary = {
         "version": "agent_quality_summary.v1",
         "aggregate": aggregate,
         "report_quality": report_evaluation,
@@ -454,6 +462,9 @@ def build_quality_summary(
             "requires_fallback": tool_policy["requires_fallback"],
         },
     }
+    if llm_judge_evaluation is not None:
+        summary["llm_judge"] = llm_judge_evaluation
+    return summary
 
 
 def run_live_scenario(
@@ -573,6 +584,18 @@ def run_live_scenario(
                 base_budget=config.runtime_budget,
             ),
         )
+        llm_judge_evaluation = None
+        if config.enable_llm_judge:
+            llm_judge_evaluation = evaluate_llm_judge(
+                report_data=report_data,
+                scenario=scenario.to_dict(),
+                deterministic_evaluation=evaluation,
+                assistant_text=assistant_text,
+                enabled=True,
+                threshold=config.llm_judge_threshold,
+                manual_review=scenario.manual_review,
+            ).to_dict()
+            quality_summary["llm_judge"] = llm_judge_evaluation
         snapshot = build_snapshot_payload(
             scenario=scenario,
             conversation=conversation,
@@ -584,6 +607,7 @@ def run_live_scenario(
             base_url=config.base_url,
             turns=turns,
             quality_summary=quality_summary,
+            llm_judge_evaluation=llm_judge_evaluation,
         )
         path = snapshot_path_for(scenario, config.output_dir)
         path.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -592,6 +616,7 @@ def run_live_scenario(
             quality_summary=quality_summary,
             report_data=report_data,
             snapshot_path=str(path),
+            llm_judge_evaluation=llm_judge_evaluation,
         )
 
         return LiveScenarioResult(

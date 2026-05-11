@@ -53,6 +53,7 @@ DIMENSION_LABELS = {
     "live_run": "Live scenario execution",
     "preflight": "Preflight environment check",
     "environment_dependencies": "Environment dependencies",
+    "llm_judge": "LLM judge supplement",
 }
 
 
@@ -108,6 +109,10 @@ DIMENSION_SUGGESTIONS = {
     "environment_dependencies": (
         "Inspect the preflight readiness checks, required environment variable names, "
         "backend health endpoints, and declared scenario dependency requirements."
+    ),
+    "llm_judge": (
+        "Inspect the redacted judge result as qualitative feedback only; deterministic "
+        "acceptance dimensions remain the source of truth for pass/fail."
     ),
 }
 
@@ -351,6 +356,46 @@ def _tool_audit_dimension(
     )
 
 
+def _llm_judge_supplement_dimension(
+    result: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if not result:
+        return _dimension_result(
+            key="llm_judge",
+            score=None,
+            threshold=None,
+            passed=False,
+            status="skipped",
+            findings=["LLM judge was not requested for this run."],
+        )
+
+    score = result.get("normalized_score")
+    numeric_score = float(score) if isinstance(score, (int, float)) else None
+    status = str(result.get("status") or ("passed" if result.get("passed") else "failed"))
+    if status not in ACCEPTANCE_STATUSES:
+        status = "failed"
+    findings = [
+        str(item)
+        for item in [
+            *_as_list(result.get("findings")),
+            *_as_list(result.get("concerns")),
+        ]
+        if str(item).strip()
+    ][:10]
+    return _dimension_result(
+        key="llm_judge",
+        score=numeric_score,
+        threshold=(
+            float(result["threshold"])
+            if isinstance(result.get("threshold"), (int, float))
+            else None
+        ),
+        passed=bool(result.get("passed")) and status == "passed",
+        status=status,
+        findings=findings,
+    )
+
+
 def _runtime_budget_dimension(
     quality_summary: dict[str, Any],
     thresholds: AcceptanceThresholds,
@@ -493,6 +538,7 @@ def build_acceptance_gate_result(
     report_data: dict[str, Any] | None,
     snapshot_path: str | None = None,
     thresholds: AcceptanceThresholds | None = None,
+    llm_judge_evaluation: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build one auditable acceptance gate result for a completed scenario."""
 
@@ -534,6 +580,9 @@ def build_acceptance_gate_result(
     failures = _failure_records(scenario=scenario, dimensions=dimensions)
     degradations = _degradation_records(scenario=scenario, dimensions=dimensions)
     status = "failed" if failures else "degraded" if degradations else "passed"
+    supplemental_dimensions = {
+        "llm_judge": _llm_judge_supplement_dimension(llm_judge_evaluation),
+    }
     return {
         "version": ACCEPTANCE_GATE_VERSION,
         "scenario_id": scenario.id,
@@ -545,6 +594,7 @@ def build_acceptance_gate_result(
         "snapshot_path": snapshot_path,
         "thresholds": gate_thresholds.to_dict(),
         "dimensions": dimensions,
+        "supplemental_dimensions": supplemental_dimensions,
         "failures": failures,
         "degradations": degradations,
     }
@@ -557,6 +607,7 @@ def build_error_acceptance_gate_result(
     snapshot_path: str | None = None,
     thresholds: AcceptanceThresholds | None = None,
     status: str = "failed",
+    llm_judge_evaluation: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build an acceptance result for a scenario that failed before scoring."""
 
@@ -583,6 +634,9 @@ def build_error_acceptance_gate_result(
         "snapshot_path": snapshot_path,
         "thresholds": gate_thresholds.to_dict(),
         "dimensions": dimensions,
+        "supplemental_dimensions": {
+            "llm_judge": _llm_judge_supplement_dimension(llm_judge_evaluation),
+        },
         "failures": _failure_records(scenario=scenario, dimensions=dimensions),
         "degradations": [],
     }
@@ -694,6 +748,14 @@ def build_acceptance_run_summary(
         status: sum(1 for gate in gates if gate.get("status") == status)
         for status in sorted(ACCEPTANCE_STATUSES)
     }
+    llm_judge_status_counts = {
+        status: sum(
+            1
+            for gate in gates
+            if _as_dict(_as_dict(gate.get("supplemental_dimensions")).get("llm_judge")).get("status") == status
+        )
+        for status in sorted(ACCEPTANCE_STATUSES)
+    }
     passed_count = status_counts.get("passed", 0)
     scores = [
         float(_as_dict(gate.get("dimensions")).get("agent_quality", {}).get("score"))
@@ -731,6 +793,7 @@ def build_acceptance_run_summary(
         "result_count": len(results),
         "selected_count": len(scenarios),
         "status_counts": status_counts,
+        "llm_judge_status_counts": llm_judge_status_counts,
         "passed_count": passed_count,
         "failed_count": status_counts.get("failed", 0) + len(missing_ids),
         "blocked_count": status_counts.get("blocked", 0),
@@ -761,6 +824,7 @@ def render_acceptance_markdown(summary: dict[str, Any]) -> str:
         f"- 结论: {status_label}",
         f"- 场景: {summary.get('passed_count')} / {summary.get('selected_count')} 通过",
         f"- 状态统计: {summary.get('status_counts')}",
+        f"- LLM-as-Judge（大模型评审）补充统计: {summary.get('llm_judge_status_counts')}",
         f"- 平均 Agent（智能体）综合分: {summary.get('average_agent_score')}",
         f"- 生成时间: {summary.get('created_at')}",
         f"- 后端地址: {summary.get('base_url')}",
@@ -802,8 +866,8 @@ def render_acceptance_markdown(summary: dict[str, Any]) -> str:
             "",
             "## 场景结果",
             "",
-            "| 场景 | 状态 | Agent 分 | 报告 | RAG | 工具 | 运行时 | 快照 |",
-            "|---|---:|---:|---:|---:|---:|---:|---|",
+            "| 场景 | 状态 | Agent 分 | 报告 | RAG | 工具 | 运行时 | LLM 评审 | 快照 |",
+            "|---|---:|---:|---:|---:|---:|---:|---:|---|",
         ]
     )
     for result in _as_list(summary.get("results")):
@@ -811,18 +875,40 @@ def render_acceptance_markdown(summary: dict[str, Any]) -> str:
             continue
         gate = _as_dict(result.get("acceptance_gate"))
         dimensions = _as_dict(gate.get("dimensions"))
+        supplements = _as_dict(gate.get("supplemental_dimensions"))
 
         def score(key: str) -> Any:
             return _as_dict(dimensions.get(key)).get("score", "-")
 
         result_status = gate.get("status") or ("passed" if gate.get("passed") else "failed")
         snapshot = result.get("snapshot_path") or gate.get("snapshot_path") or "-"
+        llm_judge = _as_dict(supplements.get("llm_judge"))
+        llm_judge_text = llm_judge.get("score", "-")
+        if llm_judge.get("status"):
+            llm_judge_text = f"{llm_judge_text} ({llm_judge.get('status')})"
         lines.append(
             "| "
             f"{result.get('scenario_id')} | {result_status} | {score('agent_quality')} | "
             f"{score('report_quality')} | {score('rag_quality')} | {score('tool_quality')} | "
-            f"{score('runtime_quality')} | {snapshot} |"
+            f"{score('runtime_quality')} | {llm_judge_text} | {snapshot} |"
         )
+
+    llm_judge_rows: list[str] = []
+    for result in _as_list(summary.get("results")):
+        if not isinstance(result, dict):
+            continue
+        gate = _as_dict(result.get("acceptance_gate"))
+        llm_judge = _as_dict(_as_dict(gate.get("supplemental_dimensions")).get("llm_judge"))
+        if not llm_judge:
+            continue
+        findings = "; ".join(str(item) for item in _as_list(llm_judge.get("findings"))[:3]) or "-"
+        llm_judge_rows.append(
+            f"- {result.get('scenario_id')}: {llm_judge.get('status')} "
+            f"score={llm_judge.get('score')} findings={findings}"
+        )
+    if llm_judge_rows:
+        lines.extend(["", "## LLM-as-Judge（大模型评审）补充"])
+        lines.extend(llm_judge_rows)
 
     lines.extend(["", "## 失败排查"])
     failures = _as_list(summary.get("failures"))

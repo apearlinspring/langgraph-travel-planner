@@ -4,7 +4,7 @@
 
 评估体系先解决一个核心问题：真实对话链路跑完后，最终交付物是不是足够像一份可交付的旅游规划报告，而不只是“模型写得很长”。
 
-第一版采用确定性规则评分，不依赖额外模型，适合作为本地调试、回归测试和 CI（持续集成）的质量基线。模块 G 已把评估对象从最终报告扩展到 Agent（智能体）运行质量：同时看 RAG（检索增强生成）证据、工具调用、运行耗时和 token（令牌）近似成本。后续可以逐步加入 LLM-as-judge（大模型评审）和人工验收数据集。
+第一版采用确定性规则评分，不依赖额外模型，适合作为本地调试、回归测试和 CI（持续集成）的质量基线。模块 G 已把评估对象从最终报告扩展到 Agent（智能体）运行质量：同时看 RAG（检索增强生成）证据、工具调用、运行耗时和 token（令牌）近似成本。现在还提供可选 LLM-as-Judge（大模型评审）补充层，用来补足人工质感判断，但不覆盖确定性门禁结论。
 
 ## 第一阶段：结构化报告质量评分
 
@@ -18,6 +18,29 @@
 - 前端导出准备 10 分：检查地图标签、每日路线与导出章节是否能支撑 HTML/PDF/图片导出。
 
 默认通过线是 80 分，并且不能有任何关键维度的失败发现。
+
+## 可选 LLM-as-Judge（大模型评审）补充层
+
+`app/evaluation/llm_judge.py` 提供可选评审层，默认关闭。它只作为质量摘要里的补充维度，不参与 `acceptance_gate.passed`、退出码或确定性阈值计算；即使 LLM-as-Judge（大模型评审）给低分，只会出现在 `supplemental_dimensions.llm_judge` 中，不能把确定性通过改成失败，也不能把确定性失败改成通过。
+
+评审 rubric（评分规程）满分 100 分，五个维度各 20 分：
+
+- 业务贴合：是否符合用户约束、已确认偏好、规划模式和旅行社服务边界。
+- 事实忠实：是否避免编造真实票价、库存、天气、联系人、支付链接或外部事实。
+- 可交付性：是否能作为顾问交付物，包含路线、预算、待核验项和导出友好结构。
+- 风险表达：是否清楚表达 Plan B、待核验项和不确定性，不夸大置信度。
+- 旅行社专业度：是否像专业旅行顾问，而不是泛泛的聊天回复。
+
+真实模型评审必须显式开启：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\evaluate_report_snapshot.py .runtime\evaluations\sample.json --scenario agency_couple_relaxed --llm-judge
+.\.venv\Scripts\python.exe scripts\run_evaluation_scenarios.py --acceptance-core --base-url http://127.0.0.1:8000 --llm-judge
+```
+
+LLM（大语言模型）创建统一走 `app/utils/llm_factory.py` 的 `build_chat_model(profile="report")`。缺少真实 `DASHSCOPE_API_KEY` 时，显式开启的评审会返回 blocked（环境阻塞），不会假装通过；默认未开启时返回 skipped（跳过）或不生成评审结果。单元测试使用 mock（模拟）模型结果，不依赖真实模型或真实密钥。
+
+评审输入会先经过 redaction（脱敏）再发送给模型，输出保存前也会脱敏，避免记录真实密钥、手机号、邮箱、证件号、JWT（JSON Web Token，令牌认证）或其他 PII（个人可识别信息）。场景和评审结果都预留 `manual_review` 字段，包含 `reviewer_id`、`reviewed_at`、`overall_score`、`decision`、`labels`、`dataset_candidate` 和 `corrections`，用于后续沉淀人工评审数据集。
 
 ## 使用方式
 
@@ -204,6 +227,7 @@ $env:ZHIXING_EVAL_PASSWORD="000000"
 - `summary.quality_summary.runtime_quality.budget_gate`：确定性运行预算门禁，包含 `passed`、`violations`、`warnings` 和实际采用的预算阈值。
 - `summary.quality_summary.runtime_governance`：运行治理摘要，用于回答“慢在哪里、成本风险在哪里、工具是否过度调用”。
 - `summary.quality_summary.aggregate`：综合分，当前权重是报告 50%、RAG 20%、工具 20%、运行指标 10%。
+- 可选 `llm_judge`：显式 `--llm-judge` 时写入的 LLM-as-Judge（大模型评审）补充结果；缺密钥会记录 blocked（环境阻塞），不会影响确定性门禁。
 
 默认运行预算是：
 
@@ -229,7 +253,7 @@ $env:ZHIXING_EVAL_PASSWORD="000000"
 
 ## 第四阶段：模型表现评估
 
-确定性评分只能判断结构和基本业务规则。后续可以增加 LLM-as-judge（大模型评审）或人工评分，重点看：
+确定性评分只能判断结构和基本业务规则。LLM-as-Judge（大模型评审）和后续人工评分重点看：
 
 - 方案是否符合用户偏好。
 - 行程是否真的顺路、不超载。

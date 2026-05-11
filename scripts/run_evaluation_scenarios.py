@@ -73,6 +73,13 @@ def _print_results(results: list[dict[str, Any]]) -> None:
         if result.get("error"):
             print(f"  error={result['error']}")
         gate = result.get("acceptance_gate") or {}
+        supplements = gate.get("supplemental_dimensions") or {}
+        llm_judge = supplements.get("llm_judge") or {}
+        if llm_judge:
+            print(
+                "  llm_judge="
+                f"{llm_judge.get('status')}, score={llm_judge.get('score')}"
+            )
         for failure in (gate.get("failures") or [])[:3]:
             print(
                 "  gate="
@@ -258,6 +265,17 @@ def main() -> int:
         action="store_true",
         help="Run acceptance preflight and write blocked/degraded summary without live scenario calls.",
     )
+    parser.add_argument(
+        "--llm-judge",
+        action="store_true",
+        help="Run optional LLM-as-Judge supplemental review after deterministic scoring.",
+    )
+    parser.add_argument(
+        "--llm-judge-threshold",
+        type=float,
+        default=80.0,
+        help="Supplemental LLM judge pass threshold. Does not override deterministic gates.",
+    )
     args = parser.parse_args()
 
     catalog = load_scenarios(args.scenarios_file)
@@ -274,6 +292,7 @@ def main() -> int:
         scenarios,
         base_url=args.base_url,
         check_backend=True,
+        require_llm_judge=args.llm_judge,
     ).to_dict()
 
     if preflight["status"] in {"blocked", "skipped"} or args.preflight_only:
@@ -333,6 +352,8 @@ def main() -> int:
         timeout_seconds=args.timeout,
         conversation_title_prefix=args.title_prefix,
         runtime_budget=runtime_budget_from_dict(runtime_budget_overrides or None),
+        enable_llm_judge=args.llm_judge,
+        llm_judge_threshold=args.llm_judge_threshold,
     )
     results = []
     continue_on_error = args.continue_on_error or args.acceptance_core

@@ -13,6 +13,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from app.evaluation.acceptance_gate import build_acceptance_gate_result  # noqa: E402
 from app.evaluation.live_runner import build_quality_summary  # noqa: E402
+from app.evaluation.llm_judge import DEFAULT_LLM_JUDGE_THRESHOLD, evaluate_llm_judge  # noqa: E402
 from app.evaluation.report_quality import evaluate_report_quality  # noqa: E402
 from app.evaluation.runtime_metrics import runtime_budget_from_dict  # noqa: E402
 from app.evaluation.scenarios import EvaluationScenario, get_scenario, load_scenarios  # noqa: E402
@@ -93,6 +94,13 @@ def _print_markdown(result: dict[str, Any]) -> None:
         print()
         print("## Acceptance Gate")
         print(f"- Passed: {acceptance_gate.get('passed')}")
+        supplements = acceptance_gate.get("supplemental_dimensions") or {}
+        llm_judge = supplements.get("llm_judge") or {}
+        if llm_judge:
+            print(
+                "- LLM-as-Judge（大模型评审）: "
+                f"{llm_judge.get('status')}, score={llm_judge.get('score')}"
+            )
         for failure in (acceptance_gate.get("failures") or [])[:10]:
             findings = "; ".join(str(item) for item in (failure.get("findings") or [])[:3])
             print(
@@ -181,6 +189,17 @@ def main() -> int:
         help="Exit with code 2 if the first-stage acceptance quality gate fails",
     )
     parser.add_argument(
+        "--llm-judge",
+        action="store_true",
+        help="Run optional LLM-as-Judge supplemental review. Disabled by default.",
+    )
+    parser.add_argument(
+        "--llm-judge-threshold",
+        type=float,
+        default=DEFAULT_LLM_JUDGE_THRESHOLD,
+        help="Supplemental LLM judge pass threshold. Does not override deterministic gates.",
+    )
+    parser.add_argument(
         "--max-total-seconds",
         type=float,
         default=None,
@@ -247,6 +266,18 @@ def main() -> int:
     assistant_text = snapshot.get("assistant_text") if isinstance(snapshot.get("assistant_text"), str) else ""
     elapsed_seconds = summary.get("elapsed_seconds") if isinstance(summary.get("elapsed_seconds"), (int, float)) else 0
     report_evaluation = dict(result)
+    llm_judge_result = None
+    if args.llm_judge:
+        llm_judge_result = evaluate_llm_judge(
+            report_data=report_data,
+            scenario=quality_scenario.to_dict(),
+            deterministic_evaluation=report_evaluation,
+            assistant_text=assistant_text,
+            enabled=True,
+            threshold=args.llm_judge_threshold,
+            manual_review=quality_scenario.manual_review,
+        ).to_dict()
+        result["llm_judge"] = llm_judge_result
     runtime_budget_overrides = {
         key: value
         for key, value in {
@@ -272,12 +303,14 @@ def main() -> int:
             if runtime_budget_overrides
             else None
         ),
+        llm_judge_evaluation=llm_judge_result,
     )
     result["acceptance_gate"] = build_acceptance_gate_result(
         scenario=quality_scenario,
         quality_summary=result["quality_summary"],
         report_data=report_data,
         snapshot_path=str(args.snapshot),
+        llm_judge_evaluation=llm_judge_result,
     )
 
     if args.format == "json":
