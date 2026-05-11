@@ -946,6 +946,7 @@ html {
       /* === 聊天主窗口 === */
       .chat-main {
         flex: 1;
+        min-width: 0;
         display: flex;
         flex-direction: column;
         border-radius: var(--radius-lg);
@@ -1203,6 +1204,324 @@ html {
       .service-banner-meta {
         font-size: 11px;
         color: var(--text-light);
+      }
+
+      /* === 治理台 === */
+      .governance-console {
+        width: 350px;
+        flex: 0 0 350px;
+        min-width: 0;
+        border-radius: var(--radius-lg);
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(249, 252, 249, 0.86));
+        border: 1px solid rgba(26, 77, 84, 0.1);
+      }
+      .governance-console-head {
+        padding: 22px 22px 16px;
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+        border-bottom: 1px solid rgba(26, 77, 84, 0.08);
+      }
+      .governance-console-kicker,
+      .governance-section-label {
+        display: block;
+        color: var(--accent);
+        font-size: 11px;
+        font-weight: 900;
+        letter-spacing: 0.06em;
+      }
+      .governance-console h2,
+      .governance-section h3 {
+        margin: 4px 0 0;
+        color: var(--text-serif);
+        line-height: 1.25;
+      }
+      .governance-console h2 {
+        font-size: 22px;
+        font-family: "Noto Serif SC", "Songti SC", "STSong", serif;
+      }
+      .governance-section h3 {
+        font-size: 15px;
+      }
+      .governance-icon-btn,
+      .governance-text-btn {
+        border: 1px solid rgba(26, 77, 84, 0.12);
+        background: rgba(255, 255, 255, 0.88);
+        color: var(--primary);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        transition: transform 0.2s ease, border-color 0.2s ease, background 0.2s ease;
+      }
+      .governance-icon-btn {
+        width: 36px;
+        height: 36px;
+        border-radius: 999px;
+        flex: 0 0 auto;
+      }
+      .governance-text-btn {
+        min-height: 32px;
+        padding: 7px 10px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 800;
+        white-space: nowrap;
+      }
+      .governance-icon-btn:hover,
+      .governance-text-btn:hover {
+        transform: translateY(-1px);
+        border-color: rgba(194, 142, 92, 0.34);
+        background: rgba(255, 251, 245, 0.96);
+      }
+      .governance-icon-btn:disabled,
+      .governance-text-btn:disabled,
+      .approval-action-btn:disabled,
+      .approval-filter-btn:disabled {
+        opacity: 0.55;
+        cursor: not-allowed;
+        transform: none;
+      }
+      .governance-section {
+        padding: 16px 22px;
+        border-bottom: 1px solid rgba(26, 77, 84, 0.08);
+      }
+      .governance-section:last-child {
+        border-bottom: none;
+      }
+      .governance-section-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 12px;
+      }
+      .governance-status-pill,
+      .governance-count-pill {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 28px;
+        padding: 6px 9px;
+        border-radius: 999px;
+        font-size: 11px;
+        font-weight: 900;
+        white-space: nowrap;
+        border: 1px solid rgba(26, 77, 84, 0.1);
+        background: rgba(26, 77, 84, 0.07);
+        color: var(--primary);
+      }
+      .governance-status-pill.ready,
+      .governance-status-pill.ok,
+      .governance-status-pill.approved {
+        color: #17603a;
+        background: rgba(23, 96, 58, 0.1);
+        border-color: rgba(23, 96, 58, 0.18);
+      }
+      .governance-status-pill.degraded,
+      .governance-status-pill.pending,
+      .governance-status-pill.checking {
+        color: #9a6a2b;
+        background: rgba(194, 142, 92, 0.13);
+        border-color: rgba(194, 142, 92, 0.24);
+      }
+      .governance-status-pill.not_ready,
+      .governance-status-pill.rejected,
+      .governance-status-pill.expired,
+      .governance-status-pill.failed {
+        color: #b42318;
+        background: rgba(180, 35, 24, 0.08);
+        border-color: rgba(180, 35, 24, 0.18);
+      }
+      .readiness-summary,
+      .governance-empty {
+        padding: 12px;
+        border-radius: 14px;
+        background: rgba(26, 77, 84, 0.055);
+        color: rgba(72, 97, 102, 0.9);
+        font-size: 12px;
+        line-height: 1.7;
+      }
+      .readiness-summary strong,
+      .readiness-summary span {
+        display: block;
+      }
+      .readiness-summary strong {
+        color: var(--primary);
+        margin-bottom: 4px;
+      }
+      .readiness-service-grid,
+      .turn-observability-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+        margin-top: 10px;
+      }
+      .readiness-service-item,
+      .turn-observability-item {
+        min-width: 0;
+        padding: 10px;
+        border-radius: 14px;
+        background: rgba(255, 255, 255, 0.76);
+        border: 1px solid rgba(26, 77, 84, 0.08);
+      }
+      .readiness-service-item span,
+      .turn-observability-item span {
+        display: block;
+        color: var(--text-light);
+        font-size: 10px;
+        font-weight: 900;
+        letter-spacing: 0.04em;
+      }
+      .readiness-service-item strong,
+      .turn-observability-item strong {
+        display: block;
+        margin-top: 4px;
+        color: var(--primary);
+        font-size: 13px;
+        line-height: 1.35;
+        overflow-wrap: anywhere;
+      }
+      .approval-filter-row {
+        display: inline-flex;
+        gap: 6px;
+        padding: 4px;
+        border-radius: 999px;
+        background: rgba(26, 77, 84, 0.06);
+        margin-bottom: 10px;
+      }
+      .approval-filter-btn {
+        border: none;
+        border-radius: 999px;
+        padding: 7px 10px;
+        background: transparent;
+        color: var(--text-light);
+        font-size: 12px;
+        font-weight: 800;
+        cursor: pointer;
+      }
+      .approval-filter-btn.active {
+        background: rgba(255, 255, 255, 0.94);
+        color: var(--primary);
+        box-shadow: 0 6px 14px rgba(19, 52, 57, 0.08);
+      }
+      .approval-list,
+      .tool-audit-list {
+        display: grid;
+        gap: 10px;
+      }
+      .approval-card,
+      .tool-audit-card {
+        padding: 12px;
+        border-radius: 16px;
+        background: rgba(255, 255, 255, 0.82);
+        border: 1px solid rgba(26, 77, 84, 0.09);
+      }
+      .approval-card.active {
+        border-color: rgba(194, 142, 92, 0.34);
+        box-shadow: 0 10px 18px rgba(194, 142, 92, 0.08);
+      }
+      .approval-card-head,
+      .tool-audit-card-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 10px;
+      }
+      .approval-card strong,
+      .tool-audit-card strong {
+        color: var(--primary);
+        font-size: 13px;
+        line-height: 1.4;
+      }
+      .approval-card p,
+      .tool-audit-card p {
+        margin: 7px 0 0;
+        color: var(--text-light);
+        font-size: 12px;
+        line-height: 1.7;
+        overflow-wrap: anywhere;
+      }
+      .approval-card-meta,
+      .tool-audit-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-top: 9px;
+      }
+      .approval-card-meta span,
+      .tool-audit-meta span {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        padding: 5px 7px;
+        border-radius: 999px;
+        background: rgba(26, 77, 84, 0.06);
+        color: rgba(72, 97, 102, 0.86);
+        font-size: 11px;
+        font-weight: 700;
+      }
+      .approval-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-top: 10px;
+      }
+      .approval-action-btn {
+        border: 1px solid rgba(26, 77, 84, 0.1);
+        border-radius: 999px;
+        padding: 7px 9px;
+        background: rgba(255, 255, 255, 0.92);
+        color: var(--primary);
+        font-size: 11px;
+        font-weight: 800;
+        cursor: pointer;
+      }
+      .approval-action-btn.approve {
+        color: #17603a;
+        border-color: rgba(23, 96, 58, 0.2);
+      }
+      .approval-action-btn.reject,
+      .approval-action-btn.expire {
+        color: #b42318;
+        border-color: rgba(180, 35, 24, 0.18);
+      }
+      .approval-events {
+        margin-top: 12px;
+      }
+      .approval-events-title {
+        color: var(--text-serif);
+        font-size: 12px;
+        font-weight: 900;
+        margin-bottom: 8px;
+      }
+      .approval-event-list {
+        display: grid;
+        gap: 8px;
+      }
+      .approval-event-item {
+        padding: 9px 10px;
+        border-radius: 13px;
+        background: rgba(26, 77, 84, 0.045);
+        color: rgba(72, 97, 102, 0.92);
+        font-size: 12px;
+        line-height: 1.6;
+      }
+      .approval-event-item strong {
+        display: block;
+        color: var(--primary);
+      }
+      .governance-boundary-list {
+        margin: 0;
+        padding-left: 18px;
+        color: rgba(72, 97, 102, 0.92);
+        font-size: 12px;
+        line-height: 1.8;
       }
 
       .chat-messages {
@@ -2638,7 +2957,8 @@ html {
         grid-column: 1 / -1;
       }
       .message.assistant .message-text .travel-report-card.confidence,
-      .message.assistant .message-text .travel-report-card.handoff {
+      .message.assistant .message-text .travel-report-card.handoff,
+      .message.assistant .message-text .travel-report-card.governance {
         grid-column: 1 / -1;
       }
       .message.assistant .message-text .travel-report-card.warning {
@@ -2728,12 +3048,14 @@ html {
         line-height: 1.6;
       }
       .message.assistant .message-text .travel-report-confidence,
-      .message.assistant .message-text .travel-report-handoff {
+      .message.assistant .message-text .travel-report-handoff,
+      .message.assistant .message-text .travel-report-governance {
         display: grid;
         gap: 12px;
       }
       .message.assistant .message-text .travel-report-confidence-head,
-      .message.assistant .message-text .travel-report-handoff-status {
+      .message.assistant .message-text .travel-report-handoff-status,
+      .message.assistant .message-text .travel-report-governance-boundary {
         display: grid;
         gap: 5px;
         padding: 14px;
@@ -2750,16 +3072,49 @@ html {
         background: linear-gradient(135deg, rgba(180, 35, 24, 0.08), rgba(219, 169, 104, 0.12));
       }
       .message.assistant .message-text .travel-report-confidence-head span,
-      .message.assistant .message-text .travel-report-handoff-status span {
+      .message.assistant .message-text .travel-report-handoff-status span,
+      .message.assistant .message-text .travel-report-governance-status span {
         color: var(--accent);
         font-size: 12px;
         font-weight: 900;
       }
       .message.assistant .message-text .travel-report-confidence-head strong,
-      .message.assistant .message-text .travel-report-handoff-status strong {
+      .message.assistant .message-text .travel-report-handoff-status strong,
+      .message.assistant .message-text .travel-report-governance-status strong,
+      .message.assistant .message-text .travel-report-governance-boundary strong {
         color: var(--primary);
         font-size: 22px;
         line-height: 1.25;
+      }
+      .message.assistant .message-text .travel-report-governance-status {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
+      }
+      .message.assistant .message-text .travel-report-governance-status > div {
+        min-width: 0;
+        padding: 13px;
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.78);
+        border: 1px solid rgba(26, 77, 84, 0.08);
+      }
+      .message.assistant .message-text .travel-report-governance-status strong {
+        display: block;
+        margin-top: 4px;
+        font-size: 16px;
+        overflow-wrap: anywhere;
+      }
+      .message.assistant .message-text .travel-report-governance-boundary {
+        background: linear-gradient(135deg, rgba(26, 77, 84, 0.06), rgba(194, 142, 92, 0.08));
+      }
+      .message.assistant .message-text .travel-report-governance-boundary strong {
+        font-size: 18px;
+      }
+      .message.assistant .message-text .travel-report-governance-boundary p {
+        margin: 0;
+        color: var(--text-main);
+        font-size: 13px;
+        line-height: 1.7;
       }
       .message.assistant .message-text .travel-report-confidence-head p {
         margin: 0;
@@ -3028,6 +3383,9 @@ html {
         }
         .message.assistant .message-text .travel-report-insight-grid,
         .message.assistant .message-text .travel-report-insight-grid.compact {
+          grid-template-columns: 1fr;
+        }
+        .message.assistant .message-text .travel-report-governance-status {
           grid-template-columns: 1fr;
         }
         .message.assistant .message-text .travel-report-day {
@@ -3720,6 +4078,10 @@ html {
         .sidebar {
           width: 250px;
         }
+        .governance-console {
+          width: 320px;
+          flex-basis: 320px;
+        }
         .chat-header,
         .chat-input-area,
         .service-banner {
@@ -3767,12 +4129,29 @@ html {
           flex-direction: column;
           padding: 10px;
           gap: 10px;
+          overflow-y: auto;
         }
         .sidebar {
           width: 100%;
           height: auto;
           padding: 14px;
           border-radius: 22px;
+        }
+        .governance-console {
+          order: 3;
+          width: 100%;
+          flex: 0 0 auto;
+          max-height: none;
+          border-radius: 22px;
+        }
+        .governance-console-head,
+        .governance-section {
+          padding-left: 18px;
+          padding-right: 18px;
+        }
+        .readiness-service-grid,
+        .turn-observability-grid {
+          grid-template-columns: repeat(4, minmax(0, 1fr));
         }
         .sidebar-header {
           padding: 0 0 14px;
@@ -4044,6 +4423,16 @@ html {
         }
         .sidebar {
           padding: 12px;
+        }
+        .readiness-service-grid,
+        .turn-observability-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+        .governance-console-head {
+          align-items: center;
+        }
+        .governance-section-head {
+          align-items: flex-start;
         }
         .sidebar-header {
           flex-direction: column;

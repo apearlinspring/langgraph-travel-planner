@@ -113,6 +113,40 @@ function sampleReportData(mode) {
       used_sources: ["预算：已拆分为已确认、估算和待核验项目"],
       pending_checks: ["酒店入住政策和取消规则"],
       unsupported_actions: ["不承诺真实库存、真实锁价或真实预订成功。"],
+      approval: {
+        approval_id: "approval-demo",
+        action: "generate_order_id",
+        status: "none",
+        pending: false,
+        requires_approval: false,
+        is_blocking: false,
+        record_only: true,
+        boundary:
+          "当前订单号仅用于项目内报告串联，不代表真实支付、真实预订、真实锁价或履约成功。",
+        unsupported_without_integration: ["不生成支付链接"],
+      },
+      events: [
+        {
+          name: "generate_order_tool",
+          status: "success",
+          elapsed_seconds: 0.3,
+          evidence_type: "state_transition",
+        },
+      ],
+    },
+    evidence_bundle: {
+      approval_governance: {
+        approval_id: "approval-demo",
+        action: "generate_order_id",
+        status: "none",
+        pending: false,
+        requires_approval: false,
+        is_blocking: false,
+        record_only: true,
+        boundary:
+          "当前订单号仅用于项目内报告串联，不代表真实支付、真实预订、真实锁价或履约成功。",
+        unsupported_without_integration: ["不生成支付链接"],
+      },
     },
   };
 }
@@ -138,6 +172,8 @@ for (const mode of ["agency_plan", "free_planning"]) {
       "预算置信度",
       "正式购票前复核余票和票价",
       "不承诺真实库存",
+      "审批治理边界",
+      "不代表真实支付",
       "路线联动",
       "顾问核验与下一步",
     ],

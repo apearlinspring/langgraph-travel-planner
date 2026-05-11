@@ -12,7 +12,7 @@
       href="https://cdn.bootcdn.net/ajax/libs/font-awesome/6.4.0/css/all.min.css"
     />
 
-        <link rel="stylesheet" href="./styles.css?v=20260510-report-h" />
+        <link rel="stylesheet" href="./styles.css?v=20260511-governance-a" />
   </head>
   <body>
     <div
@@ -557,6 +557,131 @@
           </div>
         </div>
       </main>
+
+      <aside
+        class="governance-console glass-card"
+        id="governanceConsole"
+        aria-label="知行治理台"
+      >
+        <div class="governance-console-head">
+          <div>
+            <div class="governance-console-kicker">HITL（人类在环）治理</div>
+            <h2>治理台</h2>
+          </div>
+          <button
+            class="governance-icon-btn"
+            id="governanceRefreshBtn"
+            type="button"
+            aria-label="刷新治理台"
+            title="刷新治理台"
+            onclick="refreshGovernanceConsole()"
+          >
+            <i class="fa-solid fa-rotate-right"></i>
+          </button>
+        </div>
+
+        <section class="governance-section readiness" aria-labelledby="readinessTitle">
+          <div class="governance-section-head">
+            <div>
+              <span class="governance-section-label">ready check（就绪检查）</span>
+              <h3 id="readinessTitle">运行状态</h3>
+            </div>
+            <span class="governance-status-pill checking" id="readinessStatusPill">
+              检查中
+            </span>
+          </div>
+          <div class="readiness-summary" id="readinessSummary">
+            正在读取 /health/ready 摘要。
+          </div>
+          <div class="readiness-service-grid" id="readinessServiceGrid"></div>
+        </section>
+
+        <section class="governance-section approvals" aria-labelledby="approvalTitle">
+          <div class="governance-section-head">
+            <div>
+              <span class="governance-section-label">审批记录</span>
+              <h3 id="approvalTitle">敏感动作审批</h3>
+            </div>
+            <button
+              class="governance-text-btn"
+              id="createDemoApprovalBtn"
+              type="button"
+              onclick="createDemoApproval()"
+            >
+              演示审批
+            </button>
+          </div>
+          <div class="approval-filter-row" role="group" aria-label="审批记录筛选">
+            <button
+              class="approval-filter-btn active"
+              type="button"
+              data-approval-filter="all"
+              onclick="setApprovalFilter('all')"
+            >
+              全部
+            </button>
+            <button
+              class="approval-filter-btn"
+              type="button"
+              data-approval-filter="pending"
+              onclick="setApprovalFilter('pending')"
+            >
+              待审批
+            </button>
+          </div>
+          <div class="approval-list" id="approvalList">
+            <div class="governance-empty">登录后展示审批记录。</div>
+          </div>
+          <div class="approval-events" id="approvalEvents">
+            <div class="approval-events-title">审批事件</div>
+            <div id="approvalEventsList" class="governance-empty">
+              选择一条审批记录后展示 append-only（只追加）事件。
+            </div>
+          </div>
+        </section>
+
+        <section class="governance-section audit" aria-labelledby="toolAuditTitle">
+          <div class="governance-section-head">
+            <div>
+              <span class="governance-section-label">工具审计</span>
+              <h3 id="toolAuditTitle">安全摘要</h3>
+            </div>
+            <span class="governance-count-pill" id="toolAuditCount">0</span>
+          </div>
+          <div class="tool-audit-list" id="toolAuditList">
+            <div class="governance-empty">本轮还没有可展示的工具审计摘要。</div>
+          </div>
+        </section>
+
+        <section class="governance-section observability" aria-labelledby="observabilityTitle">
+          <div class="governance-section-head">
+            <div>
+              <span class="governance-section-label">SSE（服务器发送事件）</span>
+              <h3 id="observabilityTitle">轮次观测</h3>
+            </div>
+            <span class="governance-status-pill idle" id="turnStatusPill">待开始</span>
+          </div>
+          <div class="turn-observability-grid" id="turnObservabilityGrid">
+            <div class="governance-empty">
+              完成一轮聊天后展示脱敏运行摘要，不展示 PII（个人可识别信息）、密钥或完整工具输入输出。
+            </div>
+          </div>
+        </section>
+
+        <section class="governance-section boundary" aria-labelledby="boundaryTitle">
+          <div class="governance-section-head">
+            <div>
+              <span class="governance-section-label">报告治理边界</span>
+              <h3 id="boundaryTitle">不可承诺项</h3>
+            </div>
+          </div>
+          <ul class="governance-boundary-list">
+            <li>不接真实支付，不生成支付链接。</li>
+            <li>不接真实预订、短信、客服或供应链下单。</li>
+            <li>不承诺真实库存、真实锁价或履约成功。</li>
+          </ul>
+        </section>
+      </aside>
     </div>
 
     <div class="journey-map-modal" id="journeyMapModal" aria-hidden="true">
@@ -588,7 +713,7 @@
       <i class="fa-solid fa-info-circle"></i> <span id="toastMsg"></span>
     </div>
 
-        <script src="./app.js?v=20260510-report-h"></script>
+        <script src="./app.js?v=20260511-governance-a"></script>
   </body>
 </html>
 
