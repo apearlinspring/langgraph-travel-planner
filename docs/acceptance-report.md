@@ -111,7 +111,7 @@ uv run --frozen python scripts\run_evaluation_scenarios.py --acceptance-core --d
 .\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-core --preflight-only --summary-dir .runtime\preflight-check --summary-prefix preflight-check --json
 ```
 
-结果：blocked（环境阻塞），9 个核心场景均为 skipped（跳过）。生成了环境阻塞摘要：
+结果：blocked（环境阻塞），当时 9 个核心场景均为 skipped（跳过）。生成了环境阻塞摘要：
 
 - `.runtime\preflight-check\20260511-015126-preflight-check.json`
 - `.runtime\preflight-check\20260511-015126-preflight-check.md`
@@ -146,3 +146,42 @@ uv run --frozen python scripts\run_evaluation_scenarios.py --acceptance-core --d
 ## 后续使用建议
 
 每次合并影响报告、RAG（检索增强生成）、工具治理或运行时行为的改动前，至少运行一次 `--acceptance-core`。如果失败，优先查看 Markdown（标记文本）摘要中的失败维度，再打开对应 JSON（JavaScript 对象表示法）快照复盘原始事件。
+
+## 2026-05-11 第三批生产化收口追加
+
+本分支继续收口真实 live acceptance（在线验收）语义，详见 `docs/round3-live-acceptance.md`。
+
+新增结论：
+
+- `--acceptance-core` 当前稳定选择 9 个核心场景，满足至少 8 个核心场景要求。
+- blocked（环境阻塞）不再只表现为 skipped（跳过）；真实依赖缺失时，每个受影响核心场景和整批摘要都会输出 blocked（环境阻塞）。
+- 只做 preflight（预检）且预检不是 blocked（环境阻塞）时，场景才会保持 skipped（跳过）。
+- 成功 live snapshot（真实链路快照）新增顶层 `quality_summary` 和 `turn_observability`，并继续保留 `report_data`、`tool_events`、`summary.quality_summary` 和 `observability_events`。
+- 汇总报告新增 `environment_dependencies` 失败维度，用于指向真实密钥、后端健康检查、RAG（检索增强生成）向量库和场景外部 API（应用程序接口）依赖。
+- 运行预算 warning（警告）会使门禁进入 degraded（降级），不会被当作 passed（通过）。
+
+本次实际验证：
+
+```powershell
+.\.venv\Scripts\python -m pytest tests/test_evaluation_live_runner.py tests/test_runtime_readiness.py tests/test_runtime_metrics.py -q
+```
+
+结果：`39 passed`。
+
+```powershell
+.\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-core --dry-run
+```
+
+结果：退出码 0，列出 9 个核心验收场景。
+
+```powershell
+.\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-core --preflight-only --json --no-summary
+```
+
+结果：非零退出，整体 blocked（环境阻塞），9 个核心场景均为 blocked（环境阻塞），没有写出有效 passed（通过）结论。
+
+```powershell
+.\.venv\Scripts\python scripts\check_runtime_readiness.py --target acceptance --json
+```
+
+结果：非零退出，`status=blocked`，`scenario_count=9`。
