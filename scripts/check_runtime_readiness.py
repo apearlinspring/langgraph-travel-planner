@@ -21,10 +21,20 @@ from app.config import (  # noqa: E402
 from app.evaluation.live_runner import DEFAULT_BASE_URL  # noqa: E402
 from app.evaluation.preflight import run_acceptance_preflight  # noqa: E402
 from app.evaluation.scenarios import acceptance_core_scenarios, load_scenarios  # noqa: E402
+from app.models.migration_contract import (  # noqa: E402
+    BUSINESS_MANAGED_TABLES,
+    EXTERNALLY_MANAGED_DATABASE_OBJECTS,
+    LANGGRAPH_CHECKPOINT_TABLES,
+    LANGGRAPH_STORE_TABLES,
+)
 
 
 READINESS_REPORT_VERSION = "runtime_readiness_report.v1"
+DATABASE_MIGRATION_READINESS_VERSION = "database_migration_readiness.v1"
 READINESS_TARGETS = ("development", "acceptance", "production")
+ALEMBIC_CONFIG_PATH = PROJECT_ROOT / "alembic.ini"
+ALEMBIC_SCRIPT_PATH = PROJECT_ROOT / "alembic"
+ALEMBIC_VERSION_PATH = ALEMBIC_SCRIPT_PATH / "versions"
 
 
 def _dependency_status_counts(dependencies: Mapping[str, dict[str, Any]]) -> dict[str, int]:
@@ -87,6 +97,53 @@ def _acceptance_target(
     }
 
 
+def build_database_migration_readiness_report() -> dict[str, Any]:
+    """Build a static migration readiness report without connecting to PostgreSQL."""
+
+    revision_files = sorted(ALEMBIC_VERSION_PATH.glob("*.py")) if ALEMBIC_VERSION_PATH.exists() else []
+    missing: list[str] = []
+    if not ALEMBIC_CONFIG_PATH.exists():
+        missing.append("alembic.ini")
+    if not (ALEMBIC_SCRIPT_PATH / "env.py").exists():
+        missing.append("alembic/env.py")
+    if not revision_files:
+        missing.append("alembic/versions/*.py")
+
+    status = "blocked" if missing else "passed"
+    return {
+        "version": DATABASE_MIGRATION_READINESS_VERSION,
+        "status": status,
+        "requires_database_connection": False,
+        "missing_required": missing,
+        "alembic": {
+            "config_path": str(ALEMBIC_CONFIG_PATH),
+            "script_path": str(ALEMBIC_SCRIPT_PATH),
+            "revision_files": [str(path) for path in revision_files],
+        },
+        "managed_tables": {
+            "business": list(BUSINESS_MANAGED_TABLES),
+            "langgraph_checkpointer": list(LANGGRAPH_CHECKPOINT_TABLES),
+            "langgraph_store": list(LANGGRAPH_STORE_TABLES),
+        },
+        "boundaries": {
+            "business_migrations": (
+                "Alembic manages only app.models business, user/session/message, "
+                "approval, and tool audit tables."
+            ),
+            "externally_managed": list(EXTERNALLY_MANAGED_DATABASE_OBJECTS),
+            "langgraph": (
+                "LangGraph Checkpointer and Store tables are created and upgraded by "
+                "AsyncPostgresSaver.setup() and AsyncPostgresStore.setup()."
+            ),
+        },
+        "commands": {
+            "first_bootstrap": "python -m scripts.init_db --mode bootstrap",
+            "incremental_migration": "alembic upgrade head",
+            "acceptance_check": "python scripts/check_runtime_readiness.py --target production --json",
+        },
+    }
+
+
 def build_runtime_readiness_report(
     *,
     targets: list[str] | None = None,
@@ -127,7 +184,10 @@ def build_runtime_readiness_report(
         )
 
     statuses = {key: value["status"] for key, value in target_results.items()}
+    database_migrations = build_database_migration_readiness_report()
     if any(status == "blocked" for status in statuses.values()):
+        overall_status = "blocked"
+    elif database_migrations["status"] == "blocked":
         overall_status = "blocked"
     elif any(status == "skipped" for status in statuses.values()):
         overall_status = "skipped"
@@ -143,6 +203,7 @@ def build_runtime_readiness_report(
         "dotenv_path": str(resolved_dotenv),
         "targets": target_results,
         "target_statuses": statuses,
+        "database_migrations": database_migrations,
         "dependency_matrix": {
             key: spec.to_dict(settings.runtime_environment)
             for key, spec in dependency_specs_by_key().items()
@@ -158,6 +219,17 @@ def _render_human(report: dict[str, Any]) -> str:
         f"- .env path: {report['dotenv_path']}",
         "",
     ]
+    database_migrations = report.get("database_migrations") or {}
+    lines.append(f"## database migrations: {database_migrations.get('status')}")
+    lines.append(
+        "- Business tables: "
+        + ", ".join((database_migrations.get("managed_tables") or {}).get("business") or [])
+    )
+    lines.append(
+        "- LangGraph-owned: "
+        + ", ".join((database_migrations.get("boundaries") or {}).get("externally_managed") or [])
+    )
+    lines.append("")
     for target, result in report["targets"].items():
         lines.append(f"## {target}: {result['status']}")
         if target == "acceptance":
