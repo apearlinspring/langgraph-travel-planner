@@ -10,11 +10,14 @@ services:
       - path: .env
         required: false
     environment:
-      APP_ENV: ${APP_ENV:-production}
+      APP_ENV: ${APP_ENV:-staging}
       APP_HOST: ${APP_HOST:-0.0.0.0}
       APP_PORT: ${APP_PORT:-8000}
       DEBUG: ${DEBUG:-false}
       SQL_ECHO: ${SQL_ECHO:-false}
+      RUNTIME_STARTUP_DEPENDENCY_TIMEOUT_SECONDS: ${RUNTIME_STARTUP_DEPENDENCY_TIMEOUT_SECONDS:-12}
+      RUNTIME_MCP_STARTUP_TIMEOUT_SECONDS: ${RUNTIME_MCP_STARTUP_TIMEOUT_SECONDS:-8}
+      RUNTIME_MCP_OPTIONAL_STARTUP_TIMEOUT_SECONDS: ${RUNTIME_MCP_OPTIONAL_STARTUP_TIMEOUT_SECONDS:-25}
       DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
       QWEN_MODEL_NAME: ${QWEN_MODEL_NAME:-qwen3.6-plus}
       QWEN_PLANNER_MODEL_NAME: ${QWEN_PLANNER_MODEL_NAME:-qwen3.6-plus}
@@ -30,6 +33,9 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-travel_planner_db}
       POSTGRES_USER: ${POSTGRES_USER:-travel_user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+      POSTGRES_CONNECT_TIMEOUT_SECONDS: ${POSTGRES_CONNECT_TIMEOUT_SECONDS:-5}
+      POSTGRES_POOL_TIMEOUT_SECONDS: ${POSTGRES_POOL_TIMEOUT_SECONDS:-5}
+      POSTGRES_STATEMENT_TIMEOUT_SECONDS: ${POSTGRES_STATEMENT_TIMEOUT_SECONDS:-10}
       REDIS_HOST: redis
       REDIS_PORT: ${REDIS_PORT:-6379}
       REDIS_DB: ${REDIS_DB:-0}
@@ -55,6 +61,8 @@ services:
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
+    ports:
+      - "${BACKEND_PORT:-8000}:${APP_PORT:-8000}"
     depends_on:
       postgres:
         condition: service_healthy

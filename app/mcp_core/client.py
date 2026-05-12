@@ -31,7 +31,14 @@ class MCPClientManager:
     MCP_RETRY_DELAY_SECONDS = 1.0
     OPTIONAL_STARTUP_SERVERS = {"aigohotel-mcp"}
     SERVER_RETRY_ATTEMPTS = {"aigohotel-mcp": 1}
-    SERVER_TOOL_LOAD_TIMEOUTS = {"aigohotel-mcp": 25.0}
+    SERVER_TOOL_LOAD_TIMEOUTS = {
+        "weather": 8.0,
+        "search": 8.0,
+        "amap": 8.0,
+        "12306-mcp": 8.0,
+        "VariFlight-Aviation": 8.0,
+        "aigohotel-mcp": 25.0,
+    }
     AIGOHOTEL_MCP_MODULE = "aigohotel_mcp.server"
     ENV_VARS: dict[str, str] = {}
     SERVER_CONFIGS: dict[str, dict[str, Any]] = {}

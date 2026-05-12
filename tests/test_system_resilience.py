@@ -1,6 +1,7 @@
 import asyncio
 import os
 
+from fastapi.testclient import TestClient
 import pytest
 
 os.environ.setdefault("DASHSCOPE_API_KEY", "test-dashscope-key")
@@ -302,8 +303,43 @@ def test_build_readiness_payload_reports_not_ready_when_core_is_missing(monkeypa
     assert status_code == 503
     assert payload["status"] == "not_ready"
     assert payload["startup_complete"] is False
+    assert "startup" in payload["blocking_items"]
+    assert "checkpointer" in payload["blocking_items"]
     assert "session_lock" in payload["services"]
     assert "approval_governance" in payload["services"]
+
+
+def test_lifespan_exposes_live_while_startup_dependencies_are_pending(monkeypatch):
+    async def wait_forever(*args, **kwargs):
+        await asyncio.sleep(3600)
+
+    monkeypatch.setattr(
+        CheckpointerManager,
+        "get_instance",
+        classmethod(wait_forever),
+    )
+    monkeypatch.setattr(
+        StoreManager,
+        "get_instance",
+        classmethod(wait_forever),
+    )
+    monkeypatch.setattr(
+        ApprovalGovernanceManager,
+        "verify_database",
+        classmethod(wait_forever),
+    )
+    monkeypatch.setattr(MCPClientManager, "refresh_server_configs", classmethod(lambda cls: None))
+    monkeypatch.setattr(MCPClientManager, "SERVER_CONFIGS", {})
+
+    with TestClient(app_main.app) as client:
+        live = client.get("/health/live")
+        ready = client.get("/health/ready")
+
+    assert live.status_code == 200
+    assert live.json() == {"status": "alive"}
+    assert ready.status_code == 503
+    assert ready.json()["status"] == "not_ready"
+    assert "startup" in ready.json()["blocking_items"]
 
 
 def test_build_readiness_payload_reports_degraded_local_session_lock(monkeypatch):

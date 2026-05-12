@@ -26,6 +26,37 @@ from app.models.base import init_db as create_business_tables_legacy
 ALEMBIC_INI_PATH = PROJECT_ROOT / "alembic.ini"
 
 
+async def _probe_postgres_tcp() -> None:
+    """Fail fast when PostgreSQL is not reachable before heavier bootstrap work."""
+
+    timeout = settings.postgres_connect_timeout_seconds
+    try:
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(settings.postgres_host, settings.postgres_port),
+            timeout=timeout,
+        )
+    except Exception as error:
+        raise RuntimeError(
+            "PostgreSQL TCP 连接不可用："
+            f"{settings.postgres_host}:{settings.postgres_port} "
+            f"在 {timeout:.1f}s 内未连通。请先启动数据库或修正 POSTGRES_HOST/POSTGRES_PORT。"
+        ) from error
+    writer.close()
+    await writer.wait_closed()
+
+
+def _actionable_database_error(error: Exception) -> str:
+    message = str(error).strip() or error.__class__.__name__
+    return (
+        "数据库初始化失败，已停止。请按顺序检查："
+        "1) docker compose up -d postgres；"
+        "2) .env 或环境变量中的 POSTGRES_HOST/PORT/DB/USER/PASSWORD；"
+        "3) pgvector/pgvector 镜像是否支持 CREATE EXTENSION vector；"
+        "4) 业务表迁移可用时执行 alembic upgrade head。"
+        f" 原始错误类型：{error.__class__.__name__}，摘要：{message}"
+    )
+
+
 def build_alembic_config() -> Config:
     """Build Alembic config without exposing database credentials in alembic.ini."""
 
@@ -39,7 +70,7 @@ def run_business_migrations(revision: str = "head") -> None:
 
     app_logger.info(f"执行业务表 Alembic 迁移到 revision={revision}")
     command.upgrade(build_alembic_config(), revision)
-    app_logger.info("✅ 业务表 Alembic 迁移完成")
+    app_logger.info("[ok] 业务表 Alembic 迁移完成")
 
 
 async def _init_langgraph_tables(db_url: str) -> None:
@@ -48,24 +79,30 @@ async def _init_langgraph_tables(db_url: str) -> None:
     app_logger.info("初始化 LangGraph Checkpointer 表...")
     async with AsyncPostgresSaver.from_conn_string(db_url) as checkpointer:
         await checkpointer.setup()
-    app_logger.info("✅ LangGraph Checkpointer 表创建/迁移成功")
+    app_logger.info("[ok] LangGraph Checkpointer 表创建/迁移成功")
 
     app_logger.info("初始化 LangGraph Store 表...")
     async with AsyncPostgresStore.from_conn_string(db_url) as store:
         await store.setup()
-    app_logger.info("✅ LangGraph Store 表创建/迁移成功")
+    app_logger.info("[ok] LangGraph Store 表创建/迁移成功")
 
 
 async def _enable_pgvector(db_url: str) -> None:
     """Enable pgvector extension for LangGraph Store vector indexing."""
 
     app_logger.info("启用 pgvector 扩展...")
-    async with AsyncConnectionPool(conninfo=db_url, min_size=1, max_size=2) as pool:
+    async with AsyncConnectionPool(
+        conninfo=db_url,
+        min_size=1,
+        max_size=2,
+        timeout=settings.postgres_pool_timeout_seconds,
+        kwargs={"connect_timeout": settings.postgres_connect_timeout_seconds},
+    ) as pool:
         async with pool.connection() as conn:
             async with conn.cursor() as cur:
                 await cur.execute("CREATE EXTENSION IF NOT EXISTS vector;")
                 await conn.commit()
-    app_logger.info("✅ pgvector 扩展启用成功")
+    app_logger.info("[ok] pgvector 扩展启用成功")
 
 
 async def init_database(
@@ -82,13 +119,15 @@ async def init_database(
     app_logger.info(f"连接数据库: {settings.postgres_host}:{settings.postgres_port}/{settings.postgres_db}")
 
     try:
+        await _probe_postgres_tcp()
+
         if legacy_create_all:
             runtime_env = normalize_runtime_environment(settings.app_env)
             if runtime_env in {"staging", "production"}:
                 raise RuntimeError("staging/production 不允许使用 legacy create_all 初始化业务表")
             app_logger.warning("使用 legacy create_all 创建业务表，仅限本地一次性调试")
             await create_business_tables_legacy()
-            app_logger.info("✅ legacy 业务表 create_all 完成")
+            app_logger.info("[ok] legacy 业务表 create_all 完成")
         elif apply_business_migrations:
             run_business_migrations(revision)
 
@@ -100,7 +139,7 @@ async def init_database(
 
         app_logger.info("数据库初始化/迁移完成")
     except Exception as e:
-        app_logger.error(f"❌ 数据库初始化失败: {e}")
+        app_logger.error(f"[failed] 数据库初始化失败: {e}")
         raise
 
 
@@ -130,16 +169,20 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    mode = args.mode
-    asyncio.run(
-        init_database(
-            revision=args.revision,
-            apply_business_migrations=mode in {"bootstrap", "migrate"},
-            initialize_langgraph=mode in {"bootstrap", "langgraph"},
-            enable_pgvector=mode in {"bootstrap", "pgvector"},
-            legacy_create_all=args.legacy_create_all,
+    try:
+        mode = args.mode
+        asyncio.run(
+            init_database(
+                revision=args.revision,
+                apply_business_migrations=mode in {"bootstrap", "migrate"},
+                initialize_langgraph=mode in {"bootstrap", "langgraph"},
+                enable_pgvector=mode in {"bootstrap", "pgvector"},
+                legacy_create_all=args.legacy_create_all,
+            )
         )
-    )
+    except Exception as error:
+        app_logger.error(_actionable_database_error(error))
+        return 1
     return 0
 
 

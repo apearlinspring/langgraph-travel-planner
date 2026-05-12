@@ -526,6 +526,20 @@ class Settings(BaseSettings):
     debug: bool = Field(default=False, alias="DEBUG")
     sql_echo: bool = Field(default=False, alias="SQL_ECHO")
 
+    # ============== Runtime 启动韧性配置 ==============
+    runtime_startup_dependency_timeout_seconds: float = Field(
+        default=12.0,
+        alias="RUNTIME_STARTUP_DEPENDENCY_TIMEOUT_SECONDS",
+    )
+    runtime_mcp_startup_timeout_seconds: float = Field(
+        default=8.0,
+        alias="RUNTIME_MCP_STARTUP_TIMEOUT_SECONDS",
+    )
+    runtime_mcp_optional_startup_timeout_seconds: float = Field(
+        default=25.0,
+        alias="RUNTIME_MCP_OPTIONAL_STARTUP_TIMEOUT_SECONDS",
+    )
+
     # ============== LLM 配置 ==============
     dashscope_api_key: str = Field(default="", alias="DASHSCOPE_API_KEY")
     qwen_model_name: str = Field(default="qwen3.6-plus", alias="QWEN_MODEL_NAME")
@@ -558,6 +572,18 @@ class Settings(BaseSettings):
     postgres_db: str = Field(default="travel_planner_db", alias="POSTGRES_DB")
     postgres_user: str = Field(default="travel_user", alias="POSTGRES_USER")
     postgres_password: str = Field(default="change-me", alias="POSTGRES_PASSWORD")
+    postgres_connect_timeout_seconds: float = Field(
+        default=5.0,
+        alias="POSTGRES_CONNECT_TIMEOUT_SECONDS",
+    )
+    postgres_pool_timeout_seconds: float = Field(
+        default=5.0,
+        alias="POSTGRES_POOL_TIMEOUT_SECONDS",
+    )
+    postgres_statement_timeout_seconds: float = Field(
+        default=10.0,
+        alias="POSTGRES_STATEMENT_TIMEOUT_SECONDS",
+    )
 
     redis_host: str = Field(default="localhost", alias="REDIS_HOST")
     redis_port: int = Field(default=6379, alias="REDIS_PORT")

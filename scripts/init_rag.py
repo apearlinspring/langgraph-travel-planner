@@ -17,6 +17,22 @@ from app.rag.contracts import validate_internal_knowledge_base
 from app.utils.logger import app_logger
 
 
+class RagInitializationError(RuntimeError):
+    """Raised when RAG bootstrap cannot create a usable vector store."""
+
+
+def _actionable_rag_error(error: Exception) -> str:
+    message = str(error).strip() or error.__class__.__name__
+    return (
+        "RAG 初始化失败，已停止。请检查："
+        "1) data/documents/destinations/ 是否有公开目的地 Markdown 文档；"
+        "2) data/documents/internal/ 的 metadata 是否通过 validate_rag_knowledge；"
+        "3) sentence-transformers 模型依赖是否已安装并可下载；"
+        "4) data/vectorstore 与 data/vectorstore_internal 是否可写。"
+        f" 原始错误类型：{error.__class__.__name__}，摘要：{message}"
+    )
+
+
 def _build_vectorstore(
     *,
     documents: list,
@@ -25,6 +41,8 @@ def _build_vectorstore(
     label: str,
 ):
     """切分文档并创建一个向量库集合。"""
+    if not documents:
+        raise RagInitializationError(f"{label} 没有可索引文档")
 
     app_logger.info(f"切分文档: {label}...")
     splitter = AdvancedParentDocumentSplitter()
@@ -44,7 +62,7 @@ def _build_vectorstore(
     app_logger.info(f"   - 向量数据库：{vs_manager.persist_directory}")
 
 
-async def main():
+async def initialize_rag() -> None:
     """初始化 RAG 系统"""
 
     app_logger.info("开始初始化 RAG 系统...")
@@ -55,8 +73,7 @@ async def main():
     destination_documents = doc_manager.load_destination_documents()
 
     if not destination_documents:
-        app_logger.error("未找到文档，请先添加文档到 data/documents/destinations/")
-        return
+        raise RagInitializationError("未找到文档，请先添加文档到 data/documents/destinations/")
 
     # ========== 2. 校验并加载内部知识库 ==========
     internal_dir = doc_manager.base_dir / "internal"
@@ -69,6 +86,8 @@ async def main():
             )
         raise SystemExit(1)
     internal_documents = doc_manager.load_internal_documents()
+    if not internal_documents:
+        raise RagInitializationError("未找到内部知识库文档，请检查 data/documents/internal/")
 
     # ========== 3. 创建公开攻略与内部知识向量库 ==========
     _build_vectorstore(
@@ -85,5 +104,14 @@ async def main():
     )
 
 
+def main() -> int:
+    try:
+        asyncio.run(initialize_rag())
+    except Exception as error:
+        app_logger.error(_actionable_rag_error(error))
+        return 1
+    return 0
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    raise SystemExit(main())
