@@ -1,5 +1,45 @@
 # Live Acceptance（在线验收）Runbook（运行手册）
 
+## 2026-05-12 R2 复跑入口
+
+当前工作树：`D:\Users\Administrator\PycharmProjects\ZhiXing\langgraph-travel-planner-live-acceptance-pass`。
+
+当前分支：`codex/live-acceptance-pass`。
+
+本轮新增 `acceptance-smoke`（验收冒烟）入口，用于后端 ready（就绪）后先跑一个最小真实对话场景，再扩展到 `acceptance-core`（核心验收）全集。
+
+推荐复跑顺序：
+
+```powershell
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+chcp 65001 | Out-Null
+
+.\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-core --preflight-only --json --no-summary
+.\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-smoke --base-url http://127.0.0.1:8000 --json
+.\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-core --base-url http://127.0.0.1:8000 --json
+```
+
+判定规则：
+
+- preflight（预检）为 `blocked` 时必须停止，不能把任何场景判定为 `passed`。
+- preflight（预检）为 `degraded` 时可以留证复跑，但整批结论不能是 `passed`。
+- 只有真实场景完成、`report_data` 存在，且报告质量、预算置信度、风险、待核验项、旅行社业务字段和运行时门禁均通过，才允许 `passed`。
+- 所有本地 JSON（JavaScript 对象表示法）、Markdown（标记文本）和快照产物必须写入 `.runtime/`，该目录不提交。
+
+本轮实际复跑结果：
+
+- `--acceptance-smoke --dry-run`：退出码 0，选择 1 个场景 `pricing_agency_quote_explanation`。
+- `--acceptance-smoke --preflight-only --json --no-summary`：退出码 2，`status=blocked`、`passed=false`、`missing_required=7`、`health_checks=2`、`blocking_reasons=7`。
+- `--acceptance-core --preflight-only --json --no-summary`：退出码 2，stdout（标准输出）可解析为 JSON，`status=blocked`、`passed=false`、`missing_required=9`、`health_checks=2`、`blocking_reasons=9`。
+- `--acceptance-core --base-url http://127.0.0.1:8000 --json`：退出码 2，preflight（预检）阶段阻断，未调用真实聊天接口；本地 blocked 摘要写入 `.runtime\evaluations\20260512-064458-acceptance-summary.json` 和 `.runtime\evaluations\20260512-064458-acceptance-summary.md`。
+
+本轮仍未解决的环境阻塞：
+
+- `.venv` 初始不可用；本轮先用 `uv run --frozen`（Python 依赖运行器）恢复依赖环境，随后按 `.venv\Scripts\python` 入口复跑通过编译、单测和 preflight（预检）命令。
+- 缺 PostgreSQL（关系型数据库）、Redis（内存数据结构存储）、真实 LLM（大语言模型）、RAG（检索增强生成）向量库、MCP（模型上下文协议）上游 API（应用程序接口）凭据和 Auth（认证）/ JWT（JSON Web Token，令牌认证）配置。
+- 后端 `/health/live` 与 `/health/ready` 不可达。
+
 ## 本轮结论
 
 执行时间：2026-05-11 23:10-23:18，环境为本地 Windows PowerShell，工作树为 `D:\Users\Administrator\PycharmProjects\ZhiXing\langgraph-travel-planner-live-acceptance-runbook`，分支为 `codex/live-acceptance-runbook`。
