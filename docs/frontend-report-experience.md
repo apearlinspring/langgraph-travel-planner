@@ -41,10 +41,11 @@ node scripts\verify_frontend_report_renderer.js
 浏览器验证建议：
 
 - 轻量静态回归继续运行 `node scripts\verify_frontend_report_renderer.js`，用于确认 `renderAssistantText` 对结构化 `report_data` 的 HTML 输出仍包含关键章节。
+- 也可以使用统一的 npm（Node.js 包管理器，Node.js 是 JavaScript 运行时）入口：`npm run verify:frontend-renderer`、`npm run verify:frontend-browser`，或一次性运行 `npm run verify:frontend`。
 - 真实浏览器 E2E（端到端）回归运行 `node scripts\verify_frontend_browser_regression.js`。脚本使用 Playwright（浏览器自动化测试框架）启动 Chromium（谷歌开源浏览器内核）无头浏览器，分别覆盖 `1440x1000` 桌面视口和 `390x900` 移动视口。
 - 浏览器脚本会加载真实 `frontend/zhixing.html`，模拟 ready check（就绪检查）成功、会话列表和审批治理数据，验证登录入口、主界面、治理台、报告卡片、导出报告按钮和地图预览入口。
-- 脚本会收集 console error（控制台错误）和页面异常；如果缺少 Playwright 或 Chromium，会明确输出 skip（跳过）与安装命令，不会静默当作通过。
-- 截图产物输出到 `.runtime/`，当前包括 `frontend-browser-regression-desktop.png`、`frontend-browser-regression-mobile.png` 和 `frontend-browser-regression-mobile-governance.png`，属于本地临时验证文件，不纳入提交。
+- 脚本会收集 console error（控制台错误）和页面异常；如果缺少 Playwright 或 Chromium，会明确输出安装命令。本地默认标记为 skip（跳过），`CI=true` 或 `ZHIXING_FRONTEND_BROWSER_STRICT=1` 时会失败退出，避免关键门禁被静默跳过。
+- 截图产物输出到 `.runtime/`，当前包括 `frontend-browser-regression-desktop.png`、`frontend-browser-regression-desktop-report.png`、`frontend-browser-regression-mobile.png`、`frontend-browser-regression-mobile-report.png` 和 `frontend-browser-regression-mobile-governance.png`，属于本地临时验证文件，不纳入提交。
 
 首次运行前如果本机没有依赖，可执行：
 
@@ -53,7 +54,9 @@ node scripts\verify_frontend_report_renderer.js
 $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 chcp 65001 | Out-Null
 npm install
-npx playwright install chromium
+npm run prepare:frontend-browser
 ```
 
-如果只想让缺失浏览器依赖在持续集成中直接失败，可设置 `ZHIXING_FRONTEND_BROWSER_STRICT=1` 后再运行浏览器脚本。
+`npm run prepare:frontend-browser` 等价于 `npx playwright install chromium`。在 GitHub Actions（GitHub 自动化流水线）中使用 `npx playwright install --with-deps chromium`，同时安装 Linux（操作系统内核）运行 Chromium 所需的系统依赖。
+
+如果只想让缺失浏览器依赖在本地也直接失败，可设置 `ZHIXING_FRONTEND_BROWSER_STRICT=1` 后再运行浏览器脚本。

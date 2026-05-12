@@ -50,6 +50,8 @@ test2.py
 # Local UI/e2e review artifacts
 tmp-playwright-review/
 tmp-frontend-review-*.png
+playwright-report/
+test-results/
 after-login*.png
 home.png
 mobile-home.png

@@ -2,7 +2,7 @@
 
 本文面向上线前检查，和 `docs/runtime-environment.md` 的 Runtime Config Readiness（运行配置就绪）契约保持一致。
 
-本项目的 CI/CD（持续集成/持续交付）入口在 `.github/workflows/ci.yml`。默认 push（推送）和 pull request（合并请求）只运行不依赖真实密钥的静态检查、单元测试、前端报告渲染验证和 development（开发）运行配置预检；真实验收只通过 GitHub Actions（GitHub 自动化流水线）的 `workflow_dispatch`（手动触发）入口运行。
+本项目的 CI/CD（持续集成/持续交付）入口在 `.github/workflows/ci.yml`。默认 push（推送）和 pull request（合并请求）只运行不依赖真实密钥的静态检查、单元测试、前端报告渲染验证、Playwright（浏览器自动化测试框架）浏览器回归和 development（开发）运行配置预检；真实验收只通过 GitHub Actions（GitHub 自动化流水线）的 `workflow_dispatch`（手动触发）入口运行。
 
 ## 上线前必须满足
 
@@ -24,10 +24,18 @@
 .\.venv\Scripts\python -m compileall app tests scripts
 .\.venv\Scripts\python -m pytest tests\test_script_entrypoints.py tests\test_runtime_readiness.py -q
 node scripts\verify_frontend_report_renderer.js
+node scripts\verify_frontend_browser_regression.js
 .\.venv\Scripts\python scripts\check_runtime_readiness.py --target development --json
 ```
 
 本地默认可以使用 `.env.example` 中的变量名做参照，但真实 `.env` 不应进入提交、日志或测试快照。
+
+首次运行前需要安装 npm（Node.js 包管理器，Node.js 是 JavaScript 运行时）前端依赖和 Chromium（浏览器内核）：
+
+```powershell
+npm install
+npm run prepare:frontend-browser
+```
 
 ### CI 默认门禁
 
@@ -37,11 +45,16 @@ GitHub Actions（GitHub 自动化流水线）默认门禁等价于：
 python -m compileall app tests scripts
 python -m pytest --collect-only -q
 python -m pytest -q
+npm ci
+npx playwright install --with-deps chromium
 node scripts\verify_frontend_report_renderer.js
+npm run verify:frontend-browser
 python scripts\check_runtime_readiness.py --target development --json
 ```
 
-这组命令只使用测试占位配置，不读取真实外部 API（应用程序接口）密钥，不发起真实 LLM（大语言模型）、MCP（模型上下文协议）或供应链调用。
+这组命令只使用测试占位配置，不读取真实外部 API（应用程序接口）密钥，不发起真实 LLM（大语言模型）、MCP（模型上下文协议）或供应链调用。前端浏览器回归只加载本地 `frontend/zhixing.html`，并在浏览器上下文中 stub（桩替换）ready check（就绪检查）、会话、审批和地图预览响应。
+
+CI 中 `CI=true` 且显式设置 `ZHIXING_FRONTEND_BROWSER_STRICT=1`，因此缺少 npm 依赖、Playwright 或 Chromium 时必须失败并输出安装提示，不能当作跳过通过。截图产物仍只写入 `.runtime/`，该目录不纳入提交。
 
 CI（持续集成）默认不连接真实 PostgreSQL（关系型数据库），也不执行 `alembic upgrade head`；迁移就绪只通过 `check_runtime_readiness.py` 的静态 `database_migrations` 区块验证。真实数据库迁移放到 staging（预生产）和 production（生产）发布步骤中执行。
 
