@@ -229,6 +229,104 @@ jobs:
           sys.exit(1)
           PY
 
+      - name: Ensure Evaluation User
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          import re
+          import sys
+          import urllib.error
+          import urllib.request
+
+          base_url = (os.getenv("BACKEND_BASE_URL") or "http://127.0.0.1:8000").rstrip("/")
+          username = (os.getenv("ZHIXING_EVAL_USERNAME") or "").strip()
+          password = os.getenv("ZHIXING_EVAL_PASSWORD") or ""
+
+          if not username or not password:
+              print("::error title=Evaluation credentials missing::ZHIXING_EVAL_USERNAME and ZHIXING_EVAL_PASSWORD are required.")
+              sys.exit(1)
+
+          def post_json(path, payload):
+              request = urllib.request.Request(
+                  f"{base_url}{path}",
+                  data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                  headers={"Content-Type": "application/json"},
+                  method="POST",
+              )
+              try:
+                  with urllib.request.urlopen(request, timeout=30) as response:
+                      body = response.read().decode("utf-8")
+                      return response.status, json.loads(body) if body else {}
+              except urllib.error.HTTPError as exc:
+                  body = exc.read().decode("utf-8", errors="replace")
+                  try:
+                      payload = json.loads(body) if body else {}
+                  except json.JSONDecodeError:
+                      payload = {}
+                  return exc.code, payload
+              except urllib.error.URLError as exc:
+                  print(f"::error title=Evaluation user API unavailable::{exc.reason}")
+                  sys.exit(1)
+
+          def token_present(payload):
+              token = payload.get("access_token")
+              return isinstance(token, str) and bool(token)
+
+          def error_code(payload):
+              detail = payload.get("detail")
+              if isinstance(detail, dict):
+                  code = detail.get("code")
+                  return code if isinstance(code, str) else ""
+              return ""
+
+          credentials = {"username": username, "password": password}
+          login_status, login_payload = post_json("/api/v1/users/login", credentials)
+          if login_status == 200 and token_present(login_payload):
+              print("Evaluation user login verified.")
+              sys.exit(0)
+          if login_status != 401:
+              print(f"::error title=Evaluation user login failed::Login returned HTTP {login_status}.")
+              sys.exit(1)
+
+          safe_username = re.sub(r"[^A-Za-z0-9]+", "-", username).strip("-").lower()
+          if not safe_username:
+              safe_username = "user"
+          email = f"staging-smoke-eval-{safe_username[:32]}@example.invalid"
+
+          print("Evaluation user login returned 401; attempting registration.")
+          register_status, register_payload = post_json(
+              "/api/v1/users/register",
+              {"username": username, "email": email, "password": password},
+          )
+          register_code = error_code(register_payload)
+          register_conflict = register_status == 400 and register_code in {"username_exists", "email_exists"}
+
+          if register_status in {200, 201}:
+              print("Evaluation user registration completed; verifying login.")
+          elif register_conflict:
+              print("Evaluation user already exists; verifying configured credentials.")
+          else:
+              print(f"::error title=Evaluation user registration failed::Register returned HTTP {register_status}.")
+              sys.exit(1)
+
+          verify_status, verify_payload = post_json("/api/v1/users/login", credentials)
+          if verify_status == 200 and token_present(verify_payload):
+              print("Evaluation user is ready.")
+              sys.exit(0)
+          if verify_status == 401 and register_conflict:
+              print("::error title=Evaluation user password mismatch::Evaluation username or email already exists, but login with the configured password returned 401. Update the secret or recreate the temporary database user; this workflow will not change passwords.")
+              sys.exit(1)
+          if verify_status == 401:
+              print("::error title=Evaluation user verification failed::Registration completed but login still returned 401.")
+              sys.exit(1)
+
+          print(f"::error title=Evaluation user verification failed::Login returned HTTP {verify_status}.")
+          sys.exit(1)
+          PY
+
       - name: Record Runtime Readiness
         shell: bash
         run: |

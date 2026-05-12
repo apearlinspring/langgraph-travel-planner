@@ -87,8 +87,9 @@ GitHub Actions（GitHub 自动化流水线）中的手动 staging smoke（预生
 2. 用 Docker（容器运行工具）启动 `pgvector/pgvector:pg17` PostgreSQL（关系型数据库）和 `redis:7-alpine` Redis（内存数据结构存储）。
 3. 执行 `python -m scripts.init_db --mode bootstrap` 和 `python -m scripts.init_rag`。
 4. 用 `python -m uvicorn app.main:app --host 127.0.0.1 --port 8000` 启动后端。
-5. 记录 `check_runtime_readiness.py --target acceptance --check-backend` 结果。
-6. 运行 `python scripts/run_evaluation_scenarios.py --acceptance-smoke --base-url http://127.0.0.1:8000 --summary-dir .runtime/acceptance-smoke --summary-prefix staging-smoke --json`。
+5. 通过后端用户 API（应用程序接口）确认或创建 `ZHIXING_EVAL_USERNAME` 对应的评估用户。
+6. 记录 `check_runtime_readiness.py --target acceptance --check-backend` 结果。
+7. 运行 `python scripts/run_evaluation_scenarios.py --acceptance-smoke --base-url http://127.0.0.1:8000 --summary-dir .runtime/acceptance-smoke --summary-prefix staging-smoke --json`。
 
 必需 Secrets（密钥管理项）清单：
 
@@ -104,6 +105,8 @@ GitHub Actions（GitHub 自动化流水线）中的手动 staging smoke（预生
 - `ZHIXING_EVAL_PASSWORD`
 
 可选 Secrets（密钥管理项）：`VARIFLIGHT_API_KEY`、`AIGOHOTEL_API_KEY`、`AIGOHOTEL_MCP_API`、`AIGOHOTEL_SECRET_KEY`、`LANGSMITH_API_KEY`、`LANGSMITH_PROJECT`。当前 `acceptance-smoke` 场景不强制航班或酒店密钥，但如果后续把相关场景加入 smoke（冒烟）集合，应同步提升为必需项。
+
+`Ensure Evaluation User` 步骤会先用 `ZHIXING_EVAL_USERNAME` / `ZHIXING_EVAL_PASSWORD` 登录；临时 PostgreSQL（关系型数据库）中没有该用户时，才用 `example.invalid` 安全域名生成邮箱并调用注册接口，再重新登录验证。该步骤不提交、不打印真实密码、JWT（JSON Web Token，令牌认证）或 `access_token`；如果用户名或邮箱已存在但密码不匹配，workflow（工作流）会明确失败，不会静默改密码或让 smoke（冒烟）假通过。
 
 失败 / blocked（环境阻塞）语义：
 
