@@ -47,7 +47,7 @@ python -m pytest --collect-only -q
 python -m pytest -q
 npm ci
 npx playwright install --with-deps chromium
-npm run verify:frontend-renderer
+node scripts\verify_frontend_report_renderer.js
 npm run verify:frontend-browser
 python scripts\check_runtime_readiness.py --target development --json
 ```

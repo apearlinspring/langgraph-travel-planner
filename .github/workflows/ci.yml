@@ -78,7 +78,7 @@ jobs:
         run: python -m pytest -q
 
       - name: Verify Frontend Report Renderer
-        run: npm run verify:frontend-renderer
+        run: node scripts/verify_frontend_report_renderer.js
 
       - name: Verify Frontend Browser Regression
         env:
