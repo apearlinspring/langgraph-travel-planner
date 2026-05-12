@@ -41,10 +41,14 @@ def _load_workflow(path: Path) -> dict:
 def test_staging_smoke_workflow_is_manual_only_and_starts_local_stack():
     workflow = _load_workflow(STAGING_SMOKE_WORKFLOW)
     text = STAGING_SMOKE_WORKFLOW.read_text(encoding="utf-8")
+    step_names = [step["name"] for step in workflow["jobs"]["staging-smoke"]["steps"]]
 
     assert set(workflow["on"]) == {"workflow_dispatch"}
     assert "pull_request" not in workflow["on"]
     assert "push" not in workflow["on"]
+    assert "Ensure Evaluation User" in step_names
+    assert step_names.index("Wait For Backend Readiness") < step_names.index("Ensure Evaluation User")
+    assert step_names.index("Ensure Evaluation User") < step_names.index("Run Acceptance Smoke")
 
     for expected in [
         "docker run -d",
@@ -54,6 +58,11 @@ def test_staging_smoke_workflow_is_manual_only_and_starts_local_stack():
         "python -m scripts.init_rag",
         "python -m uvicorn app.main:app",
         "python scripts/check_runtime_readiness.py",
+        "/api/v1/users/login",
+        "/api/v1/users/register",
+        "example.invalid",
+        "username_exists",
+        "email_exists",
         "--acceptance-smoke",
     ]:
         assert expected in text
@@ -69,6 +78,11 @@ def test_staging_smoke_requires_github_secrets_without_hardcoded_credentials():
         assert f'"{secret_name}"' in text
 
     for marker in [
+        "test / 000000",
+        '"username": "test"',
+        "'username': 'test'",
+        "ZHIXING_EVAL_USERNAME: test",
+        "ZHIXING_EVAL_PASSWORD: 000000",
         "test-key",
         "dev-only",
         "change-me",
