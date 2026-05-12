@@ -11,7 +11,7 @@
 3. Redis（内存数据结构存储）可连接，`SESSION_LOCK_BACKEND=auto` 或 `redis` 时不能降级为本地锁。
 4. LLM（大语言模型）密钥是真实值，模型 profile（用途档位）仍统一通过 `app/utils/llm_factory.py` 创建。
 5. Auth（认证）/ JWT（JSON Web Token，令牌认证）必须设置真实 `JWT_SECRET_KEY`，不能使用默认开发密钥、空值或 placeholder（占位）值。
-6. RAG（检索增强生成）向量库已初始化，默认路径为 `data/vectorstore`，并且能只读打开 `chroma.sqlite3` 元数据和 `RAG_COLLECTION_NAME` 对应 collection（集合）。
+6. RAG（检索增强生成）向量库已初始化，公开攻略默认路径为 `data/vectorstore`，内部知识库默认路径为 `data/vectorstore_internal`；两者都必须能只读打开 `chroma.sqlite3` 元数据并找到对应 collection（集合）。
 7. 地图能力的 `AMAP_API_KEY` 是真实值；酒店、航班、搜索等可选能力如果缺失，用户侧必须保留“待二次核实”边界。
 8. 至少有一个审批操作者或管理员账号，用户对象 `role` 或 `preferences.role` 为 `approver` / `admin`，普通用户不能批准、拒绝或手动过期审批。
 9. `/health/ready` 返回 `ready` 或经确认可接受的 `degraded`；生产发布不接受 `not_ready`。
@@ -68,10 +68,12 @@ docker compose up -d postgres redis
 .\.venv\Scripts\python -m scripts.init_rag
 .\.venv\Scripts\alembic upgrade head
 .\.venv\Scripts\alembic current
-.\.venv\Scripts\python scripts\check_runtime_readiness.py --target staging --json
+.\.venv\Scripts\python scripts\check_runtime_readiness.py --target staging --check-docker --json
 .\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-core --preflight-only --base-url https://staging.example.com --json
 .\.venv\Scripts\python scripts\check_runtime_readiness.py --target acceptance --check-backend --base-url https://staging.example.com --json
 ```
+
+如果 Docker Desktop（Docker 桌面运行环境）未运行，`--check-docker` 必须返回 blocked（环境阻塞）；此时不要继续宣称 PostgreSQL（关系型数据库）和 Redis（内存数据结构存储）已完成本地启动闭环。
 
 只有 preflight（预检）通过后，才手动运行 live acceptance（在线验收）：
 
@@ -118,7 +120,9 @@ curl http://127.0.0.1:8000/health/ready
 
 - `Dockerfile` 和 `deploy/Dockerfile.runtime` 默认 `APP_ENV=production`，镜像内置 `/health/live` liveness（存活检查）。
 - `docker-compose.yml` 默认按 `APP_ENV=staging` 启动本地预生产拓扑，显式暴露后端所需的 LLM（大语言模型）、PostgreSQL（关系型数据库）、Redis（内存数据结构存储）、RAG（检索增强生成）、MCP（模型上下文协议）/外部 API（应用程序接口）、Auth（认证）/JWT（JSON Web Token，令牌认证）和启动超时变量名。
+- RAG 初始化入口会读取 `RAG_VECTORSTORE_PATH`、`RAG_COLLECTION_NAME`、`RAG_INTERNAL_VECTORSTORE_PATH` 和 `RAG_INTERNAL_COLLECTION_NAME`，因此本地 staging（预生产）和容器运行时应保持这些路径一致。
 - Compose（容器编排配置）后端健康检查使用 `/health/ready`，因此必需依赖缺失时 `backend` 不会被标记为 healthy（健康）。
+- Compose 同时发布 `${POSTGRES_HOST_PORT:-5432}:5432` 和 `${REDIS_HOST_PORT:-6379}:6379`，保证宿主机上的 `scripts.init_db`、`scripts.init_rag` 和健康检查脚本能连到真实本地依赖。
 - 后端同时映射 `${BACKEND_PORT:-8000}:${APP_PORT:-8000}`，即使 `/health/ready` 因真实密钥或外部依赖缺失返回 `not_ready`，也应能通过 `/health/live` 验证进程没有卡在 application startup（应用启动）。
 - `.env` 在 Compose 中是可选文件，方便 CI（持续集成）解析配置；真实部署必须通过 `.env`、平台 secret（密钥）或托管配置系统覆盖占位默认值。
 - Caddy（反向代理服务器）站点地址可通过 `ZHIXING_SITE_ADDRESS` 覆盖，本地可用 `:80`，生产可用真实域名。

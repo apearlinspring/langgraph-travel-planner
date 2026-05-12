@@ -21,6 +21,7 @@ def test_runtime_readiness_script_imports_cleanly():
     module = importlib.import_module("scripts.check_runtime_readiness")
     assert hasattr(module, "build_runtime_readiness_report")
     assert hasattr(module, "build_database_migration_readiness_report")
+    assert hasattr(module, "build_docker_compose_readiness_report")
 
 
 def test_init_db_script_exposes_migration_modes_without_running_database():
@@ -31,7 +32,20 @@ def test_init_db_script_exposes_migration_modes_without_running_database():
 
     assert "--mode" in source
     assert "--legacy-create-all" in source
+    assert "_BOOTSTRAP_IMPORT_ERROR" in source
+    assert "Docker Desktop 是否正在运行" in source
     assert "staging/production 不允许使用 legacy create_all" in source
+
+
+def test_init_rag_script_exposes_actionable_failure_guidance():
+    module = importlib.import_module("scripts.init_rag")
+    source = Path(module.__file__).read_text(encoding="utf-8")
+
+    assert "_RAG_IMPORT_ERROR" in source
+    assert "RAG_INTERNAL_VECTORSTORE_PATH" in source
+    assert "validate_rag_knowledge.py --json" in source
+    assert "DASHSCOPE_API_KEY" in source
+    assert "sentence-transformers" in source
 
 
 def test_alembic_business_migration_covers_owned_tables_only():
@@ -112,10 +126,14 @@ def test_docker_compose_exposes_runtime_readiness_contract():
         "POSTGRES_DB",
         "POSTGRES_USER",
         "POSTGRES_PASSWORD",
+        "POSTGRES_HOST_PORT",
         "REDIS_HOST",
         "REDIS_PORT",
+        "REDIS_HOST_PORT",
         "RAG_VECTORSTORE_PATH",
         "RAG_COLLECTION_NAME",
+        "RAG_INTERNAL_VECTORSTORE_PATH",
+        "RAG_INTERNAL_COLLECTION_NAME",
         "AMAP_API_KEY",
         "VARIFLIGHT_API_KEY",
         "AIGOHOTEL_API_KEY",
@@ -128,6 +146,8 @@ def test_docker_compose_exposes_runtime_readiness_contract():
     assert "SESSION_LOCK_BACKEND" in compose
     assert "SESSION_LOCK_REDIS_FALLBACK_TO_LOCAL" in compose
     assert "service_healthy" in compose
+    assert '"${POSTGRES_HOST_PORT:-5432}:5432"' in compose
+    assert '"${REDIS_HOST_PORT:-6379}:6379"' in compose
 
 
 def test_container_files_keep_liveness_and_proxy_configurable():

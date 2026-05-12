@@ -20,7 +20,7 @@
 | PostgreSQL（关系型数据库） | required | optional | required | required | 业务表、checkpoint（执行检查点）、Store（长期存储）、审批审计 |
 | Redis（内存数据结构存储） | optional | optional | required | required | 会话锁；开发可降级本地锁 |
 | LLM（大语言模型） | required | optional | required | required | 主 Agent（智能体）、Router（路由器）、RAG 查询优化和报告 |
-| RAG（检索增强生成）向量库 | optional | optional | required | required | `data/vectorstore` 或 `RAG_VECTORSTORE_PATH`，需可读 Chroma metadata（元数据） |
+| RAG（检索增强生成）向量库 | optional | optional | required | required | `RAG_VECTORSTORE_PATH` 和 `RAG_INTERNAL_VECTORSTORE_PATH` 对应公开攻略与内部知识库；两者都需可读 Chroma metadata（元数据）和对应 collection（集合） |
 | MCP（模型上下文协议）服务池 | optional | optional | optional | optional | 服务级降级，不拖垮核心会话 |
 | 地图 / 高德 | optional | optional | required | required | 路线预览、地理编码、部分天气能力 |
 | 搜索 / Tavily | optional | optional | optional | optional | 缺少时搜索能力降级 |
@@ -47,7 +47,7 @@
 
 - 必需依赖缺失、Checkpointer 或 Store 未初始化、生产 Redis 会话锁不可用、审批治理无法持久化时，返回 `not_ready`。
 - `staging` 和 `production` 下，`JWT_SECRET_KEY` 为空、仍是默认开发密钥或明显 placeholder（占位）值时，Auth/JWT 依赖进入 `missing_required`。
-- `staging` 和 `production` 下，RAG 向量库必须能只读打开 `chroma.sqlite3` 并找到 `RAG_COLLECTION_NAME` 对应 collection（集合），仅目录存在或非空不算 ready。
+- `staging` 和 `production` 下，公开攻略与内部知识 RAG 向量库必须能只读打开各自的 `chroma.sqlite3` 并找到 `RAG_COLLECTION_NAME` / `RAG_INTERNAL_COLLECTION_NAME` 对应 collection（集合），仅目录存在或非空不算 ready。
 - MCP 服务池或开发 Redis 降级时，核心依赖已就绪则返回 `degraded`。
 - 可选外部 API 缺少密钥不会阻塞核心 ready，但会在依赖明细里显示 `not_configured`。
 
@@ -62,6 +62,10 @@ RUNTIME_MCP_OPTIONAL_STARTUP_TIMEOUT_SECONDS=25
 POSTGRES_CONNECT_TIMEOUT_SECONDS=5
 POSTGRES_POOL_TIMEOUT_SECONDS=5
 POSTGRES_STATEMENT_TIMEOUT_SECONDS=10
+RAG_VECTORSTORE_PATH=data/vectorstore
+RAG_COLLECTION_NAME=travel_guides
+RAG_INTERNAL_VECTORSTORE_PATH=data/vectorstore_internal
+RAG_INTERNAL_COLLECTION_NAME=agency_internal_knowledge
 ```
 
 ## 命令入口
@@ -69,11 +73,12 @@ POSTGRES_STATEMENT_TIMEOUT_SECONDS=10
 ```powershell
 .\.venv\Scripts\python scripts\check_runtime_readiness.py --json
 .\.venv\Scripts\python scripts\check_runtime_readiness.py --target staging --json
+.\.venv\Scripts\python scripts\check_runtime_readiness.py --target staging --check-docker --json
 .\.venv\Scripts\python scripts\check_runtime_readiness.py --target production --json
 .\.venv\Scripts\python scripts\check_runtime_readiness.py --target acceptance --check-backend --base-url http://127.0.0.1:8000 --json
 ```
 
-`check_runtime_readiness.py` 不输出密钥值，只输出变量名、状态和修复方向。
+`check_runtime_readiness.py` 不输出密钥值，只输出变量名、状态和修复方向。带 `--check-docker` 时会额外检查 Docker Desktop（Docker 桌面运行环境）、Docker daemon（后台服务）和 Docker Compose（容器编排）插件；如果 Docker Desktop 未运行，报告必须是 blocked（环境阻塞），不能把本地依赖启动伪装成通过。
 
 ## CI/CD 与环境命令分层
 
@@ -81,6 +86,7 @@ POSTGRES_STATEMENT_TIMEOUT_SECONDS=10
 |---|---|---|---|
 | 本地 development（开发） | `scripts\check_runtime_readiness.py --target development --json` | 可使用占位值或本地 `.env`，但必需变量名要配置 | 开发机快速发现缺核心配置 |
 | CI（持续集成） | `python scripts/check_runtime_readiness.py --target development --json` | 只使用测试占位值，不读取真实密钥 | 合并前证明配置契约和脚本入口可重复运行 |
+| 本地 staging（预生产）依赖启动 | `scripts\check_runtime_readiness.py --target staging --check-docker --json` | 真实值通过本地 `.env` 注入；Docker Desktop 未运行必须 blocked | 启动 PostgreSQL 和 Redis 前确认 Docker 闭环 |
 | acceptance（验收）preflight（预检） | `scripts\run_evaluation_scenarios.py --acceptance-core --preflight-only --json` | 必需项必须是真实值；缺失返回 blocked（环境阻塞） | 不消耗真实对话配额地检查验收条件 |
 | staging（预生产）live acceptance（在线验收） | `scripts\run_evaluation_scenarios.py --acceptance-core --base-url <staging-url>` | 真实密钥通过部署环境注入 | 手动触发真实链路验收 |
 | production（生产）readiness（就绪） | `scripts\check_runtime_readiness.py --target production --json` | 必需项必须是真实值，不允许 placeholder（占位） | 发布前检查配置、RAG（检索增强生成）向量库和安全边界 |
