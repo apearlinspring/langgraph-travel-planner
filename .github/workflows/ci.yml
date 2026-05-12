@@ -53,9 +53,17 @@ jobs:
         uses: actions/setup-node@v5
         with:
           node-version: "22"
+          cache: npm
+          cache-dependency-path: package-lock.json
 
       - name: Install Python Dependencies
         run: python -m pip install --disable-pip-version-check -r requirements.txt
+
+      - name: Install Frontend Dependencies
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
 
       - name: Compile Python Sources
         run: python -m compileall app tests scripts
@@ -70,7 +78,12 @@ jobs:
         run: python -m pytest -q
 
       - name: Verify Frontend Report Renderer
-        run: node scripts/verify_frontend_report_renderer.js
+        run: npm run verify:frontend-renderer
+
+      - name: Verify Frontend Browser Regression
+        env:
+          ZHIXING_FRONTEND_BROWSER_STRICT: "1"
+        run: npm run verify:frontend-browser
 
       - name: Check Development Runtime Readiness
         run: python scripts/check_runtime_readiness.py --target development --json
