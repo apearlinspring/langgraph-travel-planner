@@ -44,6 +44,7 @@ def test_init_rag_script_exposes_actionable_failure_guidance():
     assert "_RAG_IMPORT_ERROR" in source
     assert "RAG_INTERNAL_VECTORSTORE_PATH" in source
     assert "validate_rag_knowledge.py --json" in source
+    assert "DASHSCOPE_API_KEY" in source
     assert "sentence-transformers" in source
 
 

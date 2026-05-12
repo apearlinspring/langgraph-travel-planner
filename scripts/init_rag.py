@@ -70,9 +70,10 @@ def _actionable_rag_error(error: Exception) -> str:
         "RAG 初始化失败，已停止。请检查："
         "1) data/documents/destinations/ 是否有公开目的地 Markdown 文档；"
         "2) data/documents/internal/ 的 metadata 是否通过 scripts/validate_rag_knowledge.py；"
-        "3) sentence-transformers 模型依赖是否已安装并可下载；"
-        "4) RAG_VECTORSTORE_PATH 与 RAG_INTERNAL_VECTORSTORE_PATH 指向的目录是否可写；"
-        "5) 如果在离线环境运行，请先准备 embedding（嵌入向量）模型缓存。"
+        "3) DASHSCOPE_API_KEY 是否已配置，当前 embedding（嵌入向量）创建依赖 DashScope；"
+        "4) sentence-transformers 模型依赖是否已安装并可下载；"
+        "5) RAG_VECTORSTORE_PATH 与 RAG_INTERNAL_VECTORSTORE_PATH 指向的目录是否可写；"
+        "6) 如果在离线环境运行，请先准备 embedding（嵌入向量）模型缓存。"
         f" 原始错误类型：{error.__class__.__name__}，摘要：{message}"
     )
 
