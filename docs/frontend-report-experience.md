@@ -40,9 +40,20 @@ node scripts\verify_frontend_report_renderer.js
 
 浏览器验证建议：
 
-- 打开 `frontend/zhixing.html`。
-- 跑自由规划和旅行社顾问方案各一轮最终报告。
-- 检查报告第一屏规划模式标签、预算置信度、待核验清单、每日路线草图。
-- 点击“导出报告”，打开导出的 HTML 文件，确认预算置信度和待核验章节仍在。
+- 轻量静态回归继续运行 `node scripts\verify_frontend_report_renderer.js`，用于确认 `renderAssistantText` 对结构化 `report_data` 的 HTML 输出仍包含关键章节。
+- 真实浏览器 E2E（端到端）回归运行 `node scripts\verify_frontend_browser_regression.js`。脚本使用 Playwright（浏览器自动化测试框架）启动 Chromium（谷歌开源浏览器内核）无头浏览器，分别覆盖 `1440x1000` 桌面视口和 `390x900` 移动视口。
+- 浏览器脚本会加载真实 `frontend/zhixing.html`，模拟 ready check（就绪检查）成功、会话列表和审批治理数据，验证登录入口、主界面、治理台、报告卡片、导出报告按钮和地图预览入口。
+- 脚本会收集 console error（控制台错误）和页面异常；如果缺少 Playwright 或 Chromium，会明确输出 skip（跳过）与安装命令，不会静默当作通过。
+- 截图产物输出到 `.runtime/`，当前包括 `frontend-browser-regression-desktop.png`、`frontend-browser-regression-mobile.png` 和 `frontend-browser-regression-mobile-governance.png`，属于本地临时验证文件，不纳入提交。
 
-本次模块 H 自审还额外生成了 `.runtime/frontend-report-preview.html` 预览页，并用 Chrome headless（无界面浏览器模式）截图检查桌面和移动宽度。截图产物位于 `.runtime/`，属于本地临时验证文件，不纳入提交。
+首次运行前如果本机没有依赖，可执行：
+
+```powershell
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+chcp 65001 | Out-Null
+npm install
+npx playwright install chromium
+```
+
+如果只想让缺失浏览器依赖在持续集成中直接失败，可设置 `ZHIXING_FRONTEND_BROWSER_STRICT=1` 后再运行浏览器脚本。

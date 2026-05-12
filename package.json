@@ -1,0 +1,10 @@
+{
+  "private": true,
+  "scripts": {
+    "verify:frontend-renderer": "node scripts/verify_frontend_report_renderer.js",
+    "verify:frontend-browser": "node scripts/verify_frontend_browser_regression.js"
+  },
+  "devDependencies": {
+    "playwright": "^1.59.1"
+  }
+}
