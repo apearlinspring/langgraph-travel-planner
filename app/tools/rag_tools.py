@@ -16,6 +16,7 @@ from app.rag.vectorstore import VectorStoreManager
 from app.tools.execution_guard import execute_guarded_call
 from app.tools.guardrails import validate_rag_query_args
 from app.tools.result_validation import validate_rag_result
+from app.config import settings
 from app.utils.logger import app_logger
 
 
@@ -130,8 +131,8 @@ async def _get_rag_pipeline() -> AdvancedRAGPipeline:
 
         _rag_pipeline, _parent_splitter = _create_pipeline(
             documents=documents,
-            persist_directory="data/vectorstore",
-            collection_name="travel_guides",
+            persist_directory=settings.rag_vectorstore_path,
+            collection_name=settings.rag_collection_name,
             label="公开攻略 RAG",
             query_strategy="original",
         )
@@ -156,8 +157,8 @@ async def _get_internal_rag_pipeline() -> AdvancedRAGPipeline:
 
         _internal_rag_pipeline, _internal_parent_splitter = _create_pipeline(
             documents=documents,
-            persist_directory="data/vectorstore_internal",
-            collection_name="agency_internal_knowledge",
+            persist_directory=settings.rag_internal_vectorstore_path,
+            collection_name=settings.rag_internal_collection_name,
             label="旅行社内部知识库 RAG",
             query_strategy="original",
         )

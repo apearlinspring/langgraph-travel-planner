@@ -592,6 +592,14 @@ class Settings(BaseSettings):
 
     rag_vectorstore_path: str = Field(default="data/vectorstore", alias="RAG_VECTORSTORE_PATH")
     rag_collection_name: str = Field(default="travel_guides", alias="RAG_COLLECTION_NAME")
+    rag_internal_vectorstore_path: str = Field(
+        default="data/vectorstore_internal",
+        alias="RAG_INTERNAL_VECTORSTORE_PATH",
+    )
+    rag_internal_collection_name: str = Field(
+        default="agency_internal_knowledge",
+        alias="RAG_INTERNAL_COLLECTION_NAME",
+    )
 
     # ============== 会话一致性配置 ==============
     session_lock_backend: str = Field(default="auto", alias="SESSION_LOCK_BACKEND")

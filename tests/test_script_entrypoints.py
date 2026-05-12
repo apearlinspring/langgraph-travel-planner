@@ -32,7 +32,19 @@ def test_init_db_script_exposes_migration_modes_without_running_database():
 
     assert "--mode" in source
     assert "--legacy-create-all" in source
+    assert "_BOOTSTRAP_IMPORT_ERROR" in source
+    assert "Docker Desktop 是否正在运行" in source
     assert "staging/production 不允许使用 legacy create_all" in source
+
+
+def test_init_rag_script_exposes_actionable_failure_guidance():
+    module = importlib.import_module("scripts.init_rag")
+    source = Path(module.__file__).read_text(encoding="utf-8")
+
+    assert "_RAG_IMPORT_ERROR" in source
+    assert "RAG_INTERNAL_VECTORSTORE_PATH" in source
+    assert "scripts\\validate_rag_knowledge.py --json" in source
+    assert "sentence-transformers" in source
 
 
 def test_alembic_business_migration_covers_owned_tables_only():
@@ -119,6 +131,8 @@ def test_docker_compose_exposes_runtime_readiness_contract():
         "REDIS_HOST_PORT",
         "RAG_VECTORSTORE_PATH",
         "RAG_COLLECTION_NAME",
+        "RAG_INTERNAL_VECTORSTORE_PATH",
+        "RAG_INTERNAL_COLLECTION_NAME",
         "AMAP_API_KEY",
         "VARIFLIGHT_API_KEY",
         "AIGOHOTEL_API_KEY",

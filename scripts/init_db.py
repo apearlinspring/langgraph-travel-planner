@@ -3,6 +3,7 @@ import asyncio
 import argparse
 import sys
 from pathlib import Path
+from typing import Any
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -11,19 +12,69 @@ if str(PROJECT_ROOT) not in sys.path:
 if sys.platform.startswith("win"):
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-from alembic import command
-from alembic.config import Config
-from psycopg_pool import AsyncConnectionPool
-from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-from langgraph.store.postgres import AsyncPostgresStore
-from app.config import settings
-from app.config import normalize_runtime_environment
-from app.utils.logger import app_logger
-import app.models  # noqa: F401
-from app.models.base import init_db as create_business_tables_legacy
+_BOOTSTRAP_IMPORT_ERROR: ImportError | None = None
+command: Any = None
+Config: Any = None
+AsyncConnectionPool: Any = None
+AsyncPostgresSaver: Any = None
+AsyncPostgresStore: Any = None
+settings: Any = None
+normalize_runtime_environment: Any = None
+app_logger: Any = None
+create_business_tables_legacy: Any = None
+
+try:
+    from alembic import command
+    from alembic.config import Config
+    from psycopg_pool import AsyncConnectionPool
+    from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+    from langgraph.store.postgres import AsyncPostgresStore
+    from app.config import settings
+    from app.config import normalize_runtime_environment
+    from app.utils.logger import app_logger
+    import app.models  # noqa: F401
+    from app.models.base import init_db as create_business_tables_legacy
+except ImportError as exc:
+    _BOOTSTRAP_IMPORT_ERROR = exc
 
 
 ALEMBIC_INI_PATH = PROJECT_ROOT / "alembic.ini"
+
+
+def _log_info(message: str) -> None:
+    if app_logger is not None:
+        app_logger.info(message)
+    else:
+        print(message)
+
+
+def _log_warning(message: str) -> None:
+    if app_logger is not None:
+        app_logger.warning(message)
+    else:
+        print(message, file=sys.stderr)
+
+
+def _log_error(message: str) -> None:
+    if app_logger is not None:
+        app_logger.error(message)
+    else:
+        print(message, file=sys.stderr)
+
+
+def _missing_dependency_error(error: ImportError) -> str:
+    missing = getattr(error, "name", None) or str(error)
+    return (
+        "数据库初始化尚未开始，因为 Python 运行依赖缺失："
+        f"{missing}。请先安装项目依赖，例如执行 uv sync，"
+        "或在已创建的虚拟环境中执行 .\\.venv\\Scripts\\python -m pip install -r requirements.txt。"
+        "依赖安装完成后再运行 .\\.venv\\Scripts\\python -m scripts.init_db --mode bootstrap。"
+    )
+
+
+def _ensure_runtime_imports() -> None:
+    if _BOOTSTRAP_IMPORT_ERROR is not None:
+        raise RuntimeError(_missing_dependency_error(_BOOTSTRAP_IMPORT_ERROR)) from _BOOTSTRAP_IMPORT_ERROR
 
 
 async def _probe_postgres_tcp() -> None:
@@ -49,10 +100,11 @@ def _actionable_database_error(error: Exception) -> str:
     message = str(error).strip() or error.__class__.__name__
     return (
         "数据库初始化失败，已停止。请按顺序检查："
-        "1) docker compose up -d postgres；"
-        "2) .env 或环境变量中的 POSTGRES_HOST/PORT/DB/USER/PASSWORD；"
-        "3) pgvector/pgvector 镜像是否支持 CREATE EXTENSION vector；"
-        "4) 业务表迁移可用时执行 alembic upgrade head。"
+        "1) Docker Desktop 是否正在运行；"
+        "2) docker compose up -d postgres 是否成功，必要时查看 docker compose ps postgres；"
+        "3) .env 或环境变量中的 POSTGRES_HOST/PORT/DB/USER/PASSWORD；"
+        "4) pgvector/pgvector 镜像是否支持 CREATE EXTENSION vector；"
+        "5) 业务表迁移可用时执行 alembic upgrade head。"
         f" 原始错误类型：{error.__class__.__name__}，摘要：{message}"
     )
 
@@ -60,6 +112,7 @@ def _actionable_database_error(error: Exception) -> str:
 def build_alembic_config() -> Config:
     """Build Alembic config without exposing database credentials in alembic.ini."""
 
+    _ensure_runtime_imports()
     config = Config(str(ALEMBIC_INI_PATH))
     config.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
     return config
@@ -68,29 +121,32 @@ def build_alembic_config() -> Config:
 def run_business_migrations(revision: str = "head") -> None:
     """Apply versioned business-table migrations."""
 
-    app_logger.info(f"执行业务表 Alembic 迁移到 revision={revision}")
+    _ensure_runtime_imports()
+    _log_info(f"执行业务表 Alembic 迁移到 revision={revision}")
     command.upgrade(build_alembic_config(), revision)
-    app_logger.info("[ok] 业务表 Alembic 迁移完成")
+    _log_info("[ok] 业务表 Alembic 迁移完成")
 
 
 async def _init_langgraph_tables(db_url: str) -> None:
     """Initialize LangGraph-owned Checkpointer and Store tables."""
 
-    app_logger.info("初始化 LangGraph Checkpointer 表...")
+    _ensure_runtime_imports()
+    _log_info("初始化 LangGraph Checkpointer 表...")
     async with AsyncPostgresSaver.from_conn_string(db_url) as checkpointer:
         await checkpointer.setup()
-    app_logger.info("[ok] LangGraph Checkpointer 表创建/迁移成功")
+    _log_info("[ok] LangGraph Checkpointer 表创建/迁移成功")
 
-    app_logger.info("初始化 LangGraph Store 表...")
+    _log_info("初始化 LangGraph Store 表...")
     async with AsyncPostgresStore.from_conn_string(db_url) as store:
         await store.setup()
-    app_logger.info("[ok] LangGraph Store 表创建/迁移成功")
+    _log_info("[ok] LangGraph Store 表创建/迁移成功")
 
 
 async def _enable_pgvector(db_url: str) -> None:
     """Enable pgvector extension for LangGraph Store vector indexing."""
 
-    app_logger.info("启用 pgvector 扩展...")
+    _ensure_runtime_imports()
+    _log_info("启用 pgvector 扩展...")
     async with AsyncConnectionPool(
         conninfo=db_url,
         min_size=1,
@@ -102,7 +158,7 @@ async def _enable_pgvector(db_url: str) -> None:
             async with conn.cursor() as cur:
                 await cur.execute("CREATE EXTENSION IF NOT EXISTS vector;")
                 await conn.commit()
-    app_logger.info("[ok] pgvector 扩展启用成功")
+    _log_info("[ok] pgvector 扩展启用成功")
 
 
 async def init_database(
@@ -115,8 +171,9 @@ async def init_database(
 ) -> None:
     """Initialize or migrate database objects according to explicit boundaries."""
 
+    _ensure_runtime_imports()
     db_url = settings.database_url
-    app_logger.info(f"连接数据库: {settings.postgres_host}:{settings.postgres_port}/{settings.postgres_db}")
+    _log_info(f"连接数据库: {settings.postgres_host}:{settings.postgres_port}/{settings.postgres_db}")
 
     try:
         await _probe_postgres_tcp()
@@ -125,9 +182,9 @@ async def init_database(
             runtime_env = normalize_runtime_environment(settings.app_env)
             if runtime_env in {"staging", "production"}:
                 raise RuntimeError("staging/production 不允许使用 legacy create_all 初始化业务表")
-            app_logger.warning("使用 legacy create_all 创建业务表，仅限本地一次性调试")
+            _log_warning("使用 legacy create_all 创建业务表，仅限本地一次性调试")
             await create_business_tables_legacy()
-            app_logger.info("[ok] legacy 业务表 create_all 完成")
+            _log_info("[ok] legacy 业务表 create_all 完成")
         elif apply_business_migrations:
             run_business_migrations(revision)
 
@@ -137,9 +194,9 @@ async def init_database(
         if enable_pgvector:
             await _enable_pgvector(db_url)
 
-        app_logger.info("数据库初始化/迁移完成")
+        _log_info("数据库初始化/迁移完成")
     except Exception as e:
-        app_logger.error(f"[failed] 数据库初始化失败: {e}")
+        _log_error(f"[failed] 数据库初始化失败: {e}")
         raise
 
 
@@ -170,6 +227,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     try:
+        _ensure_runtime_imports()
         mode = args.mode
         asyncio.run(
             init_database(
@@ -181,7 +239,7 @@ def main() -> int:
             )
         )
     except Exception as error:
-        app_logger.error(_actionable_database_error(error))
+        _log_error(_actionable_database_error(error))
         return 1
     return 0
 

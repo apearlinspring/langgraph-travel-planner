@@ -11,7 +11,7 @@
 3. Redis（内存数据结构存储）可连接，`SESSION_LOCK_BACKEND=auto` 或 `redis` 时不能降级为本地锁。
 4. LLM（大语言模型）密钥是真实值，模型 profile（用途档位）仍统一通过 `app/utils/llm_factory.py` 创建。
 5. Auth（认证）/ JWT（JSON Web Token，令牌认证）必须设置真实 `JWT_SECRET_KEY`，不能使用默认开发密钥、空值或 placeholder（占位）值。
-6. RAG（检索增强生成）向量库已初始化，默认路径为 `data/vectorstore`，并且能只读打开 `chroma.sqlite3` 元数据和 `RAG_COLLECTION_NAME` 对应 collection（集合）。
+6. RAG（检索增强生成）向量库已初始化，公开攻略默认路径为 `data/vectorstore`，内部知识库默认路径为 `data/vectorstore_internal`；公开库必须能只读打开 `chroma.sqlite3` 元数据和 `RAG_COLLECTION_NAME` 对应 collection（集合）。
 7. 地图能力的 `AMAP_API_KEY` 是真实值；酒店、航班、搜索等可选能力如果缺失，用户侧必须保留“待二次核实”边界。
 8. 至少有一个审批操作者或管理员账号，用户对象 `role` 或 `preferences.role` 为 `approver` / `admin`，普通用户不能批准、拒绝或手动过期审批。
 9. `/health/ready` 返回 `ready` 或经确认可接受的 `degraded`；生产发布不接受 `not_ready`。
@@ -120,6 +120,7 @@ curl http://127.0.0.1:8000/health/ready
 
 - `Dockerfile` 和 `deploy/Dockerfile.runtime` 默认 `APP_ENV=production`，镜像内置 `/health/live` liveness（存活检查）。
 - `docker-compose.yml` 默认按 `APP_ENV=staging` 启动本地预生产拓扑，显式暴露后端所需的 LLM（大语言模型）、PostgreSQL（关系型数据库）、Redis（内存数据结构存储）、RAG（检索增强生成）、MCP（模型上下文协议）/外部 API（应用程序接口）、Auth（认证）/JWT（JSON Web Token，令牌认证）和启动超时变量名。
+- RAG 初始化入口会读取 `RAG_VECTORSTORE_PATH`、`RAG_COLLECTION_NAME`、`RAG_INTERNAL_VECTORSTORE_PATH` 和 `RAG_INTERNAL_COLLECTION_NAME`，因此本地 staging（预生产）和容器运行时应保持这些路径一致。
 - Compose（容器编排配置）后端健康检查使用 `/health/ready`，因此必需依赖缺失时 `backend` 不会被标记为 healthy（健康）。
 - Compose 同时发布 `${POSTGRES_HOST_PORT:-5432}:5432` 和 `${REDIS_HOST_PORT:-6379}:6379`，保证宿主机上的 `scripts.init_db`、`scripts.init_rag` 和健康检查脚本能连到真实本地依赖。
 - 后端同时映射 `${BACKEND_PORT:-8000}:${APP_PORT:-8000}`，即使 `/health/ready` 因真实密钥或外部依赖缺失返回 `not_ready`，也应能通过 `/health/live` 验证进程没有卡在 application startup（应用启动）。

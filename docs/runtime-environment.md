@@ -20,7 +20,7 @@
 | PostgreSQL（关系型数据库） | required | optional | required | required | 业务表、checkpoint（执行检查点）、Store（长期存储）、审批审计 |
 | Redis（内存数据结构存储） | optional | optional | required | required | 会话锁；开发可降级本地锁 |
 | LLM（大语言模型） | required | optional | required | required | 主 Agent（智能体）、Router（路由器）、RAG 查询优化和报告 |
-| RAG（检索增强生成）向量库 | optional | optional | required | required | `data/vectorstore` 或 `RAG_VECTORSTORE_PATH`，需可读 Chroma metadata（元数据） |
+| RAG（检索增强生成）向量库 | optional | optional | required | required | `RAG_VECTORSTORE_PATH` 和 `RAG_INTERNAL_VECTORSTORE_PATH` 对应公开攻略与内部知识库；公开库需可读 Chroma metadata（元数据） |
 | MCP（模型上下文协议）服务池 | optional | optional | optional | optional | 服务级降级，不拖垮核心会话 |
 | 地图 / 高德 | optional | optional | required | required | 路线预览、地理编码、部分天气能力 |
 | 搜索 / Tavily | optional | optional | optional | optional | 缺少时搜索能力降级 |
@@ -62,6 +62,10 @@ RUNTIME_MCP_OPTIONAL_STARTUP_TIMEOUT_SECONDS=25
 POSTGRES_CONNECT_TIMEOUT_SECONDS=5
 POSTGRES_POOL_TIMEOUT_SECONDS=5
 POSTGRES_STATEMENT_TIMEOUT_SECONDS=10
+RAG_VECTORSTORE_PATH=data/vectorstore
+RAG_COLLECTION_NAME=travel_guides
+RAG_INTERNAL_VECTORSTORE_PATH=data/vectorstore_internal
+RAG_INTERNAL_COLLECTION_NAME=agency_internal_knowledge
 ```
 
 ## 命令入口
