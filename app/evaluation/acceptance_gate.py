@@ -805,6 +805,40 @@ def _acceptance_runtime_totals(results: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _acceptance_evidence_totals(results: list[dict[str, Any]]) -> dict[str, Any]:
+    closures = []
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        closure = _as_dict(result.get("evidence_closure"))
+        if closure:
+            closures.append(closure)
+    check_keys = [
+        "snapshot",
+        "report_data",
+        "budget",
+        "budget_confidence",
+        "risk",
+        "verification_items",
+        "agency_business_evidence",
+    ]
+    counts = {
+        key: sum(1 for closure in closures if _as_dict(closure.get("checks")).get(key) is True)
+        for key in check_keys
+    }
+    return {
+        "version": "acceptance_evidence_closure_summary.v1",
+        "result_count": len(closures),
+        "passed_count": sum(1 for closure in closures if closure.get("passed") is True),
+        "counts": counts,
+        "missing_by_scenario": {
+            str(closure.get("scenario_id")): _as_list(closure.get("missing"))
+            for closure in closures
+            if _as_list(closure.get("missing"))
+        },
+    }
+
+
 def build_acceptance_run_summary(
     *,
     results: list[dict[str, Any]],
@@ -877,6 +911,7 @@ def build_acceptance_run_summary(
         if isinstance(_as_dict(gate.get("dimensions")).get("agent_quality", {}).get("score"), (int, float))
     ]
     runtime_totals = _acceptance_runtime_totals(results)
+    evidence_totals = _acceptance_evidence_totals(results)
     preflight_status = _as_dict(preflight).get("status")
     if preflight_status == "blocked":
         run_status = "blocked"
@@ -917,6 +952,7 @@ def build_acceptance_run_summary(
         "passed": run_status == "passed",
         "average_agent_score": round(sum(scores) / len(scores), 2) if scores else None,
         "runtime_totals": runtime_totals,
+        "evidence_closure": evidence_totals,
         "tool_counts": runtime_totals["tool_counts"],
         "results": results,
         "failures": failures,
@@ -948,6 +984,7 @@ def render_acceptance_markdown(summary: dict[str, Any]) -> str:
         f"- 总耗时: {_as_dict(summary.get('runtime_totals')).get('elapsed_seconds')} 秒",
         f"- 工具调用: {_as_dict(summary.get('runtime_totals')).get('tool_call_count')} 次",
         f"- 估算 token（文本令牌）: {_as_dict(summary.get('runtime_totals')).get('estimated_total_tokens')}",
+        f"- 证据闭环: {_as_dict(_as_dict(summary.get('evidence_closure')).get('counts'))}",
         f"- 生成时间: {summary.get('created_at')}",
         f"- 后端地址: {summary.get('base_url')}",
         "",

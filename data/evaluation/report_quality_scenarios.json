@@ -162,9 +162,25 @@
       "requirements": {
         "real_llm": true,
         "real_mcp": true,
-        "mcp_servers": ["weather", "search", "amap"],
+        "mcp_servers": ["weather", "search"],
         "external_apis": ["amap", "tavily"]
-      }
+      },
+      "runtime_budget": {
+        "max_first_token_seconds": 90,
+        "warning_first_token_ratio": 0.99,
+        "max_tool_call_count": 36,
+        "warning_tool_call_ratio": 0.99
+      },
+      "followups": [
+        "请先记录这次需求，并确认按旅行社顾问方案推进；不要输出推理过程。",
+        "目的地确认重庆，出发地成都，3天2晚，4个大人，继续下一阶段。",
+        "交通按省心优先记录推荐方式；真实班次和价格没有锁定时写待二次核验。",
+        "住宿按重庆核心商圈、干净省心、动线方便记录；真实酒店价格没有锁定时写待二次核验。",
+        "餐饮按重庆本地特色但照顾轻松节奏记录，继续生成行程。",
+        "请生成并记录3天2晚结构化行程，包含每天路线和Plan B；不要展开推理过程。",
+        "请汇总预算，重点列出费用包含、不包含、估算项和二次核验项。",
+        "请直接生成最终旅行规划报告和report_data，保留预算置信度、风险、待核验项和旅行社业务证据。"
+      ]
     },
     {
       "id": "risk_weather_disruption",

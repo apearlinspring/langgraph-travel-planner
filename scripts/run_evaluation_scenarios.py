@@ -144,6 +144,23 @@ def _status_from_results(
     return "skipped"
 
 
+def _status_with_preflight_guard(
+    status: str,
+    *,
+    preflight: dict[str, Any] | None,
+) -> str:
+    """Keep machine JSON from ever reporting passed when preflight says otherwise."""
+
+    preflight_status = str((preflight or {}).get("status") or "")
+    if preflight_status == "blocked":
+        return "blocked"
+    if preflight_status == "skipped":
+        return "skipped"
+    if preflight_status == "degraded" and status == "passed":
+        return "degraded"
+    return status
+
+
 def build_cli_json_payload(
     *,
     results: list[dict[str, Any]],
@@ -151,11 +168,12 @@ def build_cli_json_payload(
     summary_paths: dict[str, str] | None,
     preflight: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    status = (
+    raw_status = (
         str(acceptance_summary.get("status"))
         if isinstance(acceptance_summary, dict) and acceptance_summary.get("status")
         else _status_from_results(results, preflight=preflight)
     )
+    status = _status_with_preflight_guard(raw_status, preflight=preflight)
     payload = {
         "status": status,
         "passed": status == "passed",
