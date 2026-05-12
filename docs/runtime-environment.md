@@ -102,4 +102,4 @@ RAG_INTERNAL_COLLECTION_NAME=agency_internal_knowledge
 
 它适合放在默认 CI（持续集成）中，阻断缺 metadata（元数据）、过期 `last_reviewed`、错误分类、内部知识误标为 `public` 以及疑似密钥片段进入知识库。该脚本只校验知识治理契约，不初始化向量库、不调用 LLM（大语言模型）、不访问 MCP（模型上下文协议）或外部 API（应用程序接口）。
 
-GitHub Actions（GitHub 自动化流水线）的默认 CI（持续集成）门禁覆盖 development（开发）级配置预检和内部 RAG 知识库治理校验。`workflow_dispatch`（手动触发）入口会先运行 acceptance（验收）preflight（预检）；只有显式设置 `run_live_acceptance=true` 才运行真实 live acceptance（在线验收）场景。
+GitHub Actions（GitHub 自动化流水线）的默认 CI（持续集成）门禁覆盖 development（开发）级配置预检和内部 RAG 知识库治理校验。手动 staging smoke（预生产冒烟）入口位于 `.github/workflows/staging-smoke.yml`，通过 `workflow_dispatch`（手动触发）启动 runner（流水线执行机）内的 PostgreSQL（关系型数据库）、Redis（内存数据结构存储）和后端，再运行 `acceptance-smoke`（验收冒烟）。缺少必需 GitHub Secrets（密钥管理项）、真实密钥仍为占位值或 `/health/ready` 返回 `not_ready` 时，结果必须失败或 blocked（环境阻塞）。

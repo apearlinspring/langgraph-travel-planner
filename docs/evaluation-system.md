@@ -126,7 +126,7 @@ LLM（大语言模型）创建统一走 `app/utils/llm_factory.py` 的 `build_ch
 .\.venv\Scripts\python.exe scripts\check_runtime_readiness.py --target acceptance --json
 ```
 
-在 CI/CD（持续集成/持续交付）中，默认 GitHub Actions（GitHub 自动化流水线）不会运行本节的真实链路跑批。`.github/workflows/ci.yml` 的 push（推送）和 pull request（合并请求）门禁执行单元测试、测试收集、Python 编译、内部 RAG 知识库治理校验、前端报告渲染验证和 development（开发）运行配置预检。
+在 CI/CD（持续集成/持续交付）中，默认 GitHub Actions（GitHub 自动化流水线）不会运行本节的真实链路跑批。`.github/workflows/ci.yml` 的 push（推送）和 pull request（合并请求）门禁执行单元测试、测试收集、Python 编译、内部 RAG 知识库治理校验、前端报告渲染验证、workflow（工作流）契约测试和 development（开发）运行配置预检。
 
 默认 CI 现在还会运行内部 RAG（检索增强生成）知识库治理校验：
 
@@ -138,12 +138,17 @@ LLM（大语言模型）创建统一走 `app/utils/llm_factory.py` 的 `build_ch
 
 GraphRAG（图检索增强生成）不作为当前门禁的必选实现。后续只有在内部知识需要稳定维护“产品、供应商、城市、季节、人群、风险”这类实体关系时，再评估把图谱作为可选增强层；当前阶段仍以可校验 metadata、可追溯证据和确定性质量门禁为主。
 
-真实验收通过 `workflow_dispatch`（手动触发）保留两个层级：
+手动 staging smoke（预生产冒烟）门禁通过 `.github/workflows/staging-smoke.yml` 的 `workflow_dispatch`（手动触发）运行。它不使用外部 staging URL（预生产地址）作为前置条件，而是在 GitHub runner（流水线执行机）内启动 PostgreSQL（关系型数据库）、Redis（内存数据结构存储）和后端，然后对 `http://127.0.0.1:8000` 运行最小真实链路：
 
-- `Manual Acceptance Preflight`：默认执行，只跑 `--acceptance-core --preflight-only`，缺真实密钥、后端健康检查失败或 RAG（检索增强生成）向量库不可用时返回 blocked（环境阻塞）。
-- `Manual Live Acceptance`：只有 `run_live_acceptance=true` 时执行，会对 `acceptance_base_url` 发起真实 SSE（服务器发送事件）对话并消耗真实 LLM（大语言模型）和外部 API（应用程序接口）配额。
+```powershell
+python scripts\run_evaluation_scenarios.py --acceptance-smoke --base-url http://127.0.0.1:8000 --summary-dir .runtime\acceptance-smoke --summary-prefix staging-smoke --json
+```
 
-这意味着没有真实密钥时，验收入口应失败为 blocked（环境阻塞），而不是用 mock（模拟）数据假通过；默认 CI（持续集成）也不会意外消耗真实 API（应用程序接口）额度。
+该门禁的必需 GitHub Secrets（密钥管理项）是：`POSTGRES_DB`、`POSTGRES_USER`、`POSTGRES_PASSWORD`、`REDIS_PASSWORD`、`DASHSCOPE_API_KEY`、`AMAP_API_KEY`、`TAVILY_API_KEY`、`JWT_SECRET_KEY`、`ZHIXING_EVAL_USERNAME`、`ZHIXING_EVAL_PASSWORD`。可选 Secrets（密钥管理项）包括 `VARIFLIGHT_API_KEY`、`AIGOHOTEL_API_KEY`、`AIGOHOTEL_MCP_API`、`AIGOHOTEL_SECRET_KEY`、`LANGSMITH_API_KEY` 和 `LANGSMITH_PROJECT`。
+
+这意味着没有真实密钥时，验收入口应失败或返回 blocked（环境阻塞），而不是用 mock（模拟）数据假通过；默认 CI（持续集成）也不会意外消耗真实 API（应用程序接口）额度。`Validate Required Secrets` 步骤会在服务启动前拦截空值；如果密钥存在但仍是占位值、后端健康检查失败、RAG（检索增强生成）向量库不可用，或 smoke（冒烟）场景声明的真实 LLM（大语言模型）/MCP（模型上下文协议）能力不可用，`run_evaluation_scenarios.py` 必须以 blocked（环境阻塞）或失败退出。
+
+workflow（工作流）总是上传 `.runtime/acceptance-smoke` 作为 artifact（构建产物），包含 smoke（冒烟）摘要、runtime readiness（运行时就绪）JSON（JavaScript 对象表示法）、后端日志和服务日志。该目录由 `.gitignore` 忽略，只作为 GitHub Actions（GitHub 自动化流水线）运行产物保留，不进入提交。手动 staging smoke（预生产冒烟）不做服务器部署，也不触碰真实 production（生产）环境；完整 `acceptance-core`（核心验收）仍按本节本地命令或后续专门门禁执行。
 
 默认会在 `.runtime/evaluations/` 下生成两类整批摘要：
 

@@ -2,7 +2,7 @@
 
 本文面向上线前检查，和 `docs/runtime-environment.md` 的 Runtime Config Readiness（运行配置就绪）契约保持一致。
 
-本项目的 CI/CD（持续集成/持续交付）入口在 `.github/workflows/ci.yml`。默认 push（推送）和 pull request（合并请求）只运行不依赖真实密钥的静态检查、单元测试、前端报告渲染验证、Playwright（浏览器自动化测试框架）浏览器回归和 development（开发）运行配置预检；真实验收只通过 GitHub Actions（GitHub 自动化流水线）的 `workflow_dispatch`（手动触发）入口运行。
+本项目的 CI/CD（持续集成/持续交付）入口分为两层：`.github/workflows/ci.yml` 是默认 push（推送）和 pull request（合并请求）门禁，只运行不依赖真实密钥的静态检查、单元测试、前端报告渲染验证、Playwright（浏览器自动化测试框架）浏览器回归和 development（开发）运行配置预检；`.github/workflows/staging-smoke.yml` 是 GitHub Actions（GitHub 自动化流水线）的 `workflow_dispatch`（手动触发）staging smoke（预生产冒烟）门禁，会在 runner（流水线执行机）内启动 PostgreSQL（关系型数据库）、Redis（内存数据结构存储）和后端，再运行 `acceptance-smoke`（验收冒烟）。
 
 ## 上线前必须满足
 
@@ -39,7 +39,7 @@ npm run prepare:frontend-browser
 
 ### CI 默认门禁
 
-GitHub Actions（GitHub 自动化流水线）默认门禁等价于：
+GitHub Actions（GitHub 自动化流水线）默认 CI（持续集成）门禁等价于：
 
 ```powershell
 python -m compileall app tests scripts
@@ -81,7 +81,37 @@ docker compose up -d postgres redis
 .\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-core --base-url https://staging.example.com --summary-dir .runtime\acceptance
 ```
 
-GitHub Actions（GitHub 自动化流水线）中对应 `workflow_dispatch`（手动触发）：默认只跑 `Manual Acceptance Preflight`，只有把 `run_live_acceptance=true` 时才会运行真实场景。
+GitHub Actions（GitHub 自动化流水线）中的手动 staging smoke（预生产冒烟）门禁在 `.github/workflows/staging-smoke.yml`，触发方式是 Actions 页面选择 `Staging Smoke` 后点击 `Run workflow`。该 workflow（工作流）不会做服务器部署，不连接真实生产环境，只在 GitHub runner（流水线执行机）内完成以下步骤：
+
+1. 校验必需 GitHub Secrets（密钥管理项），缺少任意一项立即失败。
+2. 用 Docker（容器运行工具）启动 `pgvector/pgvector:pg17` PostgreSQL（关系型数据库）和 `redis:7-alpine` Redis（内存数据结构存储）。
+3. 执行 `python -m scripts.init_db --mode bootstrap` 和 `python -m scripts.init_rag`。
+4. 用 `python -m uvicorn app.main:app --host 127.0.0.1 --port 8000` 启动后端。
+5. 记录 `check_runtime_readiness.py --target acceptance --check-backend` 结果。
+6. 运行 `python scripts/run_evaluation_scenarios.py --acceptance-smoke --base-url http://127.0.0.1:8000 --summary-dir .runtime/acceptance-smoke --summary-prefix staging-smoke --json`。
+
+必需 Secrets（密钥管理项）清单：
+
+- `POSTGRES_DB`
+- `POSTGRES_USER`
+- `POSTGRES_PASSWORD`
+- `REDIS_PASSWORD`
+- `DASHSCOPE_API_KEY`
+- `AMAP_API_KEY`
+- `TAVILY_API_KEY`
+- `JWT_SECRET_KEY`
+- `ZHIXING_EVAL_USERNAME`
+- `ZHIXING_EVAL_PASSWORD`
+
+可选 Secrets（密钥管理项）：`VARIFLIGHT_API_KEY`、`AIGOHOTEL_API_KEY`、`AIGOHOTEL_MCP_API`、`AIGOHOTEL_SECRET_KEY`、`LANGSMITH_API_KEY`、`LANGSMITH_PROJECT`。当前 `acceptance-smoke` 场景不强制航班或酒店密钥，但如果后续把相关场景加入 smoke（冒烟）集合，应同步提升为必需项。
+
+失败 / blocked（环境阻塞）语义：
+
+- 必需 Secrets（密钥管理项）为空：`Validate Required Secrets` 步骤直接失败，后续服务不会启动。
+- Secrets 存在但仍是占位值、RAG（检索增强生成）向量库初始化失败、后端 `/health/ready` 返回 `not_ready`、真实 LLM（大语言模型）或外部 API（应用程序接口）不可用：验收 preflight（预检）或 smoke（冒烟）命令必须以 blocked（环境阻塞）/失败退出，不能静默通过。
+- 后端 `/health/ready` 因可选能力降级返回 `degraded` 时，workflow（工作流）允许继续进入 `acceptance-smoke`，由验收摘要保留降级证据；这不等同于 production（生产）发布通过。
+
+artifact（构建产物）位置：workflow（工作流）始终上传 `.runtime/acceptance-smoke`，artifact 名称为 `staging-smoke-${{ github.run_id }}`，包含 runtime readiness（运行时就绪）摘要、验收摘要、后端日志和服务日志。`.runtime/` 已在 `.gitignore` 中忽略，原始产物不得提交。
 
 本地复跑时，如果还没有 `.venv`，先用 `uv run python scripts\check_runtime_readiness.py --target development --json` 创建环境，再回到 `.venv\Scripts\python` 命令。真实验收前建议按这个顺序确认：
 

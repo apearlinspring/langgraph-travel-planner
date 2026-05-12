@@ -7,16 +7,6 @@ on:
       - main
       - "codex/**"
   workflow_dispatch:
-    inputs:
-      acceptance_base_url:
-        description: "Base URL for a running staging backend."
-        required: false
-        default: "https://travel.403edr.cn"
-      run_live_acceptance:
-        description: "Run live acceptance scenarios after preflight passes."
-        required: true
-        default: false
-        type: boolean
 
 permissions:
   contents: read
@@ -74,6 +64,9 @@ jobs:
       - name: Collect Pytest Suite
         run: python -m pytest --collect-only -q
 
+      - name: Validate Workflow Contracts
+        run: python -m pytest tests/test_ci_workflows.py -q
+
       - name: Run Default Pytest Regression
         run: python -m pytest -q
 
@@ -87,97 +80,3 @@ jobs:
 
       - name: Check Development Runtime Readiness
         run: python scripts/check_runtime_readiness.py --target development --json
-
-  acceptance-preflight:
-    name: Manual Acceptance Preflight
-    if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    env:
-      APP_ENV: staging
-      DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
-      POSTGRES_DB: ${{ secrets.POSTGRES_DB }}
-      POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
-      POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
-      REDIS_HOST: ${{ secrets.REDIS_HOST }}
-      REDIS_PORT: ${{ secrets.REDIS_PORT }}
-      REDIS_DB: ${{ secrets.REDIS_DB }}
-      AMAP_API_KEY: ${{ secrets.AMAP_API_KEY }}
-      TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
-      VARIFLIGHT_API_KEY: ${{ secrets.VARIFLIGHT_API_KEY }}
-      AIGOHOTEL_API_KEY: ${{ secrets.AIGOHOTEL_API_KEY }}
-      AIGOHOTEL_MCP_API: ${{ secrets.AIGOHOTEL_MCP_API }}
-      AIGOHOTEL_SECRET_KEY: ${{ secrets.AIGOHOTEL_SECRET_KEY }}
-      JWT_SECRET_KEY: ${{ secrets.JWT_SECRET_KEY }}
-      JWT_ALGORITHM: HS256
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-
-      - name: Set Up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          cache: pip
-          cache-dependency-path: requirements.txt
-
-      - name: Install Python Dependencies
-        run: python -m pip install --disable-pip-version-check -r requirements.txt
-
-      - name: Run Acceptance Preflight Only
-        run: >
-          python scripts/run_evaluation_scenarios.py
-          --acceptance-core
-          --preflight-only
-          --base-url "${{ inputs.acceptance_base_url }}"
-          --json
-
-  live-acceptance:
-    name: Manual Live Acceptance
-    if: github.event_name == 'workflow_dispatch' && inputs.run_live_acceptance
-    needs:
-      - acceptance-preflight
-    runs-on: ubuntu-latest
-    timeout-minutes: 180
-    env:
-      APP_ENV: staging
-      DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
-      POSTGRES_DB: ${{ secrets.POSTGRES_DB }}
-      POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
-      POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
-      REDIS_HOST: ${{ secrets.REDIS_HOST }}
-      REDIS_PORT: ${{ secrets.REDIS_PORT }}
-      REDIS_DB: ${{ secrets.REDIS_DB }}
-      AMAP_API_KEY: ${{ secrets.AMAP_API_KEY }}
-      TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
-      VARIFLIGHT_API_KEY: ${{ secrets.VARIFLIGHT_API_KEY }}
-      AIGOHOTEL_API_KEY: ${{ secrets.AIGOHOTEL_API_KEY }}
-      AIGOHOTEL_MCP_API: ${{ secrets.AIGOHOTEL_MCP_API }}
-      AIGOHOTEL_SECRET_KEY: ${{ secrets.AIGOHOTEL_SECRET_KEY }}
-      JWT_SECRET_KEY: ${{ secrets.JWT_SECRET_KEY }}
-      JWT_ALGORITHM: HS256
-      ZHIXING_EVAL_USERNAME: ${{ secrets.ZHIXING_EVAL_USERNAME }}
-      ZHIXING_EVAL_PASSWORD: ${{ secrets.ZHIXING_EVAL_PASSWORD }}
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-
-      - name: Set Up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          cache: pip
-          cache-dependency-path: requirements.txt
-
-      - name: Install Python Dependencies
-        run: python -m pip install --disable-pip-version-check -r requirements.txt
-
-      - name: Run Live Acceptance Scenarios
-        run: >
-          python scripts/run_evaluation_scenarios.py
-          --acceptance-core
-          --base-url "${{ inputs.acceptance_base_url }}"
-          --summary-dir .runtime/acceptance
-          --json

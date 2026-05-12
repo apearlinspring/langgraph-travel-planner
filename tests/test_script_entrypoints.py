@@ -95,18 +95,21 @@ def test_acceptance_comparison_script_imports_cleanly():
     assert "--fail-on-regression" in source
 
 
-def test_ci_workflow_has_default_and_manual_gates():
+def test_ci_workflow_has_default_gate_and_staging_smoke_dispatch():
     workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
+    staging_smoke = Path(".github/workflows/staging-smoke.yml").read_text(encoding="utf-8")
 
     assert "python -m compileall app tests scripts" in workflow
     assert "python scripts/validate_rag_knowledge.py" in workflow
     assert "python -m pytest --collect-only -q" in workflow
+    assert "python -m pytest tests/test_ci_workflows.py -q" in workflow
     assert "python -m pytest -q" in workflow
     assert "node scripts/verify_frontend_report_renderer.js" in workflow
     assert "scripts/check_runtime_readiness.py --target development --json" in workflow
     assert "workflow_dispatch" in workflow
-    assert "--preflight-only" in workflow
-    assert "run_live_acceptance" in workflow
+    assert "workflow_dispatch" in staging_smoke
+    assert "--acceptance-smoke" in staging_smoke
+    assert "actions/upload-artifact@v4" in staging_smoke
 
 
 def test_ci_default_gate_uses_only_non_real_placeholder_values():
@@ -182,6 +185,7 @@ def test_readiness_docs_cover_ci_staging_and_production_layers():
     assert "默认不连接真实 PostgreSQL" in db_migration
     assert "AsyncPostgresSaver.setup()" in db_migration
     assert "tool_audit_event" in db_migration
-    assert "run_live_acceptance=true" in evaluation
+    assert "staging-smoke.yml" in evaluation
+    assert "acceptance-smoke" in evaluation
     assert "blocked（环境阻塞）" in runtime
     assert "Docker" in deployment

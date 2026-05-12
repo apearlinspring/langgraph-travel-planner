@@ -1,0 +1,280 @@
+name: Staging Smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      smoke_timeout_seconds:
+        description: "HTTP timeout seconds per request for acceptance-smoke."
+        required: false
+        default: "900"
+      enable_llm_judge:
+        description: "Run the optional LLM-as-Judge supplemental review."
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: staging-smoke-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  PYTHON_VERSION: "3.12"
+  APP_ENV: staging
+  APP_HOST: 127.0.0.1
+  APP_PORT: "8000"
+  BACKEND_BASE_URL: http://127.0.0.1:8000
+  RUNTIME_STARTUP_DEPENDENCY_TIMEOUT_SECONDS: "20"
+  RUNTIME_MCP_STARTUP_TIMEOUT_SECONDS: "12"
+  RUNTIME_MCP_OPTIONAL_STARTUP_TIMEOUT_SECONDS: "35"
+  POSTGRES_HOST: 127.0.0.1
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: ${{ secrets.POSTGRES_DB }}
+  POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
+  POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+  POSTGRES_CONNECT_TIMEOUT_SECONDS: "8"
+  POSTGRES_POOL_TIMEOUT_SECONDS: "8"
+  POSTGRES_STATEMENT_TIMEOUT_SECONDS: "20"
+  REDIS_HOST: 127.0.0.1
+  REDIS_PORT: "6379"
+  REDIS_DB: "0"
+  REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
+  SESSION_LOCK_BACKEND: redis
+  SESSION_LOCK_REDIS_FALLBACK_TO_LOCAL: "false"
+  RAG_VECTORSTORE_PATH: data/vectorstore
+  RAG_COLLECTION_NAME: travel_guides
+  DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+  AMAP_API_KEY: ${{ secrets.AMAP_API_KEY }}
+  TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+  VARIFLIGHT_API_KEY: ${{ secrets.VARIFLIGHT_API_KEY }}
+  AIGOHOTEL_API_KEY: ${{ secrets.AIGOHOTEL_API_KEY }}
+  AIGOHOTEL_MCP_API: ${{ secrets.AIGOHOTEL_MCP_API }}
+  AIGOHOTEL_SECRET_KEY: ${{ secrets.AIGOHOTEL_SECRET_KEY }}
+  LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }}
+  LANGSMITH_PROJECT: ${{ secrets.LANGSMITH_PROJECT }}
+  LANGSMITH_TRACING: "false"
+  JWT_SECRET_KEY: ${{ secrets.JWT_SECRET_KEY }}
+  JWT_ALGORITHM: HS256
+  ACCESS_TOKEN_EXPIRE_MINUTES: "10080"
+  LANGGRAPH_RECURSION_LIMIT: "60"
+  ZHIXING_EVAL_USERNAME: ${{ secrets.ZHIXING_EVAL_USERNAME }}
+  ZHIXING_EVAL_PASSWORD: ${{ secrets.ZHIXING_EVAL_PASSWORD }}
+  ZHIXING_EVAL_BASE_URL: http://127.0.0.1:8000
+
+jobs:
+  staging-smoke:
+    name: Manual Staging Smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Prepare Runtime Directory
+        run: mkdir -p .runtime/acceptance-smoke
+
+      - name: Validate Required Secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          import sys
+
+          required = [
+              "POSTGRES_DB",
+              "POSTGRES_USER",
+              "POSTGRES_PASSWORD",
+              "REDIS_PASSWORD",
+              "DASHSCOPE_API_KEY",
+              "AMAP_API_KEY",
+              "TAVILY_API_KEY",
+              "JWT_SECRET_KEY",
+              "ZHIXING_EVAL_USERNAME",
+              "ZHIXING_EVAL_PASSWORD",
+          ]
+          missing = [name for name in required if not (os.getenv(name) or "").strip()]
+          if missing:
+              Path(".runtime/acceptance-smoke/blocked-secrets.txt").write_text(
+                  "Missing required GitHub Secrets:\n"
+                  + "\n".join(f"- {name}" for name in missing)
+                  + "\n",
+                  encoding="utf-8",
+              )
+              print(
+                  "::error title=Missing staging smoke secrets::Configure GitHub Secrets: "
+                  + ", ".join(missing)
+              )
+              sys.exit(1)
+          PY
+
+      - name: Set Up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Cache RAG Vector Stores
+        uses: actions/cache@v4
+        with:
+          path: |
+            data/vectorstore
+            data/vectorstore_internal
+            ~/.cache/huggingface
+          key: ${{ runner.os }}-rag-${{ hashFiles('requirements.txt', 'data/documents/**/*.md') }}
+
+      - name: Install Python Dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+
+      - name: Start PostgreSQL And Redis
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker rm -f zhixing-smoke-postgres zhixing-smoke-redis >/dev/null 2>&1 || true
+          docker run -d \
+            --name zhixing-smoke-postgres \
+            -e POSTGRES_DB="$POSTGRES_DB" \
+            -e POSTGRES_USER="$POSTGRES_USER" \
+            -e POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
+            -p 5432:5432 \
+            pgvector/pgvector:pg17
+          docker run -d \
+            --name zhixing-smoke-redis \
+            -p 6379:6379 \
+            redis:7-alpine \
+            redis-server --appendonly yes --requirepass "$REDIS_PASSWORD"
+
+          for attempt in {1..60}; do
+            if docker exec zhixing-smoke-postgres pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" >/dev/null 2>&1; then
+              break
+            fi
+            if [ "$attempt" -eq 60 ]; then
+              docker logs zhixing-smoke-postgres > .runtime/acceptance-smoke/postgres.log 2>&1 || true
+              echo "::error title=PostgreSQL did not become ready::See staging smoke artifact logs."
+              exit 1
+            fi
+            sleep 2
+          done
+
+          for attempt in {1..60}; do
+            if docker exec -e REDISCLI_AUTH="$REDIS_PASSWORD" zhixing-smoke-redis redis-cli ping >/dev/null 2>&1; then
+              break
+            fi
+            if [ "$attempt" -eq 60 ]; then
+              docker logs zhixing-smoke-redis > .runtime/acceptance-smoke/redis.log 2>&1 || true
+              echo "::error title=Redis did not become ready::See staging smoke artifact logs."
+              exit 1
+            fi
+            sleep 2
+          done
+
+      - name: Initialize PostgreSQL
+        run: python -m scripts.init_db --mode bootstrap
+
+      - name: Initialize RAG Vector Stores
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -f data/vectorstore/chroma.sqlite3 && -f data/vectorstore_internal/chroma.sqlite3 ]]; then
+            echo "RAG vector store cache restored."
+          else
+            python -m scripts.init_rag
+          fi
+
+      - name: Start Backend
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m uvicorn app.main:app --host "$APP_HOST" --port "$APP_PORT" \
+            > .runtime/acceptance-smoke/backend.log 2>&1 &
+          echo "$!" > .runtime/acceptance-smoke/backend.pid
+
+      - name: Wait For Backend Readiness
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import sys
+          import time
+          import urllib.error
+          import urllib.request
+
+          live_url = "http://127.0.0.1:8000/health/live"
+          ready_url = "http://127.0.0.1:8000/health/ready"
+          last_error = ""
+          for _ in range(90):
+              try:
+                  with urllib.request.urlopen(live_url, timeout=3) as live:
+                      if live.status >= 300:
+                          last_error = f"live returned HTTP {live.status}"
+                          time.sleep(2)
+                          continue
+                  with urllib.request.urlopen(ready_url, timeout=5) as ready:
+                      payload = json.loads(ready.read().decode("utf-8") or "{}")
+                  status = str(payload.get("status") or "")
+                  if status in {"ready", "degraded"}:
+                      print(f"Backend readiness status: {status}")
+                      sys.exit(0)
+                  last_error = f"ready status is {status or 'unknown'}"
+              except (OSError, urllib.error.URLError, json.JSONDecodeError) as exc:
+                  last_error = str(exc)
+              time.sleep(2)
+          print(f"::error title=Backend readiness timed out::{last_error}")
+          sys.exit(1)
+          PY
+
+      - name: Record Runtime Readiness
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/check_runtime_readiness.py \
+            --target acceptance \
+            --check-backend \
+            --base-url "$BACKEND_BASE_URL" \
+            --json | tee .runtime/acceptance-smoke/runtime-readiness.json
+
+      - name: Run Acceptance Smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(
+            --acceptance-smoke
+            --base-url "$BACKEND_BASE_URL"
+            --summary-dir .runtime/acceptance-smoke
+            --summary-prefix staging-smoke
+            --output-dir .runtime/acceptance-smoke/live-runs
+            --timeout "${{ inputs.smoke_timeout_seconds }}"
+            --json
+          )
+          if [[ "${{ inputs.enable_llm_judge }}" == "true" ]]; then
+            args+=(--llm-judge)
+          fi
+          python scripts/run_evaluation_scenarios.py "${args[@]}" \
+            | tee .runtime/acceptance-smoke/staging-smoke-result.json
+
+      - name: Collect Runtime Logs
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p .runtime/acceptance-smoke
+          if [[ -f .runtime/acceptance-smoke/backend.pid ]]; then
+            kill "$(cat .runtime/acceptance-smoke/backend.pid)" >/dev/null 2>&1 || true
+          fi
+          docker logs zhixing-smoke-postgres > .runtime/acceptance-smoke/postgres.log 2>&1 || true
+          docker logs zhixing-smoke-redis > .runtime/acceptance-smoke/redis.log 2>&1 || true
+          docker rm -f zhixing-smoke-postgres zhixing-smoke-redis >/dev/null 2>&1 || true
+
+      - name: Upload Acceptance Smoke Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-smoke-${{ github.run_id }}
+          path: .runtime/acceptance-smoke
+          if-no-files-found: error
+          retention-days: 14
