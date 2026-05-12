@@ -201,7 +201,7 @@ def test_acceptance_preflight_blocks_missing_real_external_credentials(tmp_path:
     assert "report_quality" in preflight.skipped_metrics
 
 
-def test_runtime_readiness_report_covers_development_acceptance_and_production(tmp_path: Path):
+def test_runtime_readiness_report_covers_development_staging_acceptance_and_production(tmp_path: Path):
     report = build_runtime_readiness_report(
         environ={},
         dotenv_path=tmp_path / "missing.env",
@@ -209,8 +209,9 @@ def test_runtime_readiness_report_covers_development_acceptance_and_production(t
     )
 
     assert report["status"] == "blocked"
-    assert set(report["targets"]) == {"development", "acceptance", "production"}
+    assert set(report["targets"]) == {"development", "staging", "acceptance", "production"}
     assert report["targets"]["development"]["status"] == "blocked"
+    assert report["targets"]["staging"]["status"] == "blocked"
     assert report["targets"]["acceptance"]["status"] == "blocked"
     assert report["targets"]["production"]["status"] == "blocked"
     assert "dependency_matrix" in report

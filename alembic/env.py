@@ -47,6 +47,9 @@ def run_migrations_online() -> None:
         configuration,
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        connect_args={
+            "connect_timeout": int(settings.postgres_connect_timeout_seconds),
+        },
     )
 
     with connectable.connect() as connection:

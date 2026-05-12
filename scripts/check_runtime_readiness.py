@@ -31,7 +31,7 @@ from app.models.migration_contract import (  # noqa: E402
 
 READINESS_REPORT_VERSION = "runtime_readiness_report.v1"
 DATABASE_MIGRATION_READINESS_VERSION = "database_migration_readiness.v1"
-READINESS_TARGETS = ("development", "acceptance", "production")
+READINESS_TARGETS = ("development", "staging", "acceptance", "production")
 ALEMBIC_CONFIG_PATH = PROJECT_ROOT / "alembic.ini"
 ALEMBIC_SCRIPT_PATH = PROJECT_ROOT / "alembic"
 ALEMBIC_VERSION_PATH = ALEMBIC_SCRIPT_PATH / "versions"
@@ -167,6 +167,13 @@ def build_runtime_readiness_report(
             environ=environ,
             dotenv_path=resolved_dotenv,
             require_real_values=False,
+        )
+    if "staging" in selected_targets:
+        target_results["staging"] = _configuration_target(
+            target="staging",
+            environ=environ,
+            dotenv_path=resolved_dotenv,
+            require_real_values=True,
         )
     if "acceptance" in selected_targets:
         target_results["acceptance"] = _acceptance_target(

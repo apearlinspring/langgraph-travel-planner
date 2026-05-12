@@ -36,8 +36,10 @@
 
 - `status`：`ready`、`degraded` 或 `not_ready`。
 - `environment`：归一化后的运行档位。
+- `startup`：后台启动任务状态和每个启动步骤耗时，不包含密钥值。
 - `dependencies`：按依赖矩阵列出每项 `requirement`、`status`、`env_vars`、`findings` 和无密钥值的 `details`。
 - `missing_required`：阻塞当前档位的必需依赖。
+- `blocking_items`：当前导致 `not_ready` 的配置或服务项，例如 `postgresql`、`checkpointer`、`store`、`session_lock`、`approval_governance`。
 - `degraded_optional`：可选但不可用或未配置的能力。
 - `services`：底层服务快照，保留 `checkpointer`、`store`、`mcp`、`session_lock`、`approval_governance`。
 
@@ -49,10 +51,24 @@
 - MCP 服务池或开发 Redis 降级时，核心依赖已就绪则返回 `degraded`。
 - 可选外部 API 缺少密钥不会阻塞核心 ready，但会在依赖明细里显示 `not_configured`。
 
+`GET /health/live` 是纯 liveness（存活检查）：应用进程进入 ASGI（异步服务器网关接口）服务状态后即可返回 `{"status":"alive"}`。PostgreSQL（关系型数据库）、Redis（内存数据结构存储）、MCP（模型上下文协议）或外部 API（应用程序接口）初始化改为后台执行；这些依赖失败只影响 `/health/ready`，不能把应用启动阶段卡死。
+
+启动相关超时通过 `.env` 或部署环境配置：
+
+```powershell
+RUNTIME_STARTUP_DEPENDENCY_TIMEOUT_SECONDS=12
+RUNTIME_MCP_STARTUP_TIMEOUT_SECONDS=8
+RUNTIME_MCP_OPTIONAL_STARTUP_TIMEOUT_SECONDS=25
+POSTGRES_CONNECT_TIMEOUT_SECONDS=5
+POSTGRES_POOL_TIMEOUT_SECONDS=5
+POSTGRES_STATEMENT_TIMEOUT_SECONDS=10
+```
+
 ## 命令入口
 
 ```powershell
 .\.venv\Scripts\python scripts\check_runtime_readiness.py --json
+.\.venv\Scripts\python scripts\check_runtime_readiness.py --target staging --json
 .\.venv\Scripts\python scripts\check_runtime_readiness.py --target production --json
 .\.venv\Scripts\python scripts\check_runtime_readiness.py --target acceptance --check-backend --base-url http://127.0.0.1:8000 --json
 ```
