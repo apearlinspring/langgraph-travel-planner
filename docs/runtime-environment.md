@@ -20,7 +20,7 @@
 | PostgreSQL（关系型数据库） | required | optional | required | required | 业务表、checkpoint（执行检查点）、Store（长期存储）、审批审计 |
 | Redis（内存数据结构存储） | optional | optional | required | required | 会话锁；开发可降级本地锁 |
 | LLM（大语言模型） | required | optional | required | required | 主 Agent（智能体）、Router（路由器）、RAG 查询优化和报告 |
-| RAG（检索增强生成）向量库 | optional | optional | required | required | `RAG_VECTORSTORE_PATH` 和 `RAG_INTERNAL_VECTORSTORE_PATH` 对应公开攻略与内部知识库；公开库需可读 Chroma metadata（元数据） |
+| RAG（检索增强生成）向量库 | optional | optional | required | required | `RAG_VECTORSTORE_PATH` 和 `RAG_INTERNAL_VECTORSTORE_PATH` 对应公开攻略与内部知识库；两者都需可读 Chroma metadata（元数据）和对应 collection（集合） |
 | MCP（模型上下文协议）服务池 | optional | optional | optional | optional | 服务级降级，不拖垮核心会话 |
 | 地图 / 高德 | optional | optional | required | required | 路线预览、地理编码、部分天气能力 |
 | 搜索 / Tavily | optional | optional | optional | optional | 缺少时搜索能力降级 |
@@ -47,7 +47,7 @@
 
 - 必需依赖缺失、Checkpointer 或 Store 未初始化、生产 Redis 会话锁不可用、审批治理无法持久化时，返回 `not_ready`。
 - `staging` 和 `production` 下，`JWT_SECRET_KEY` 为空、仍是默认开发密钥或明显 placeholder（占位）值时，Auth/JWT 依赖进入 `missing_required`。
-- `staging` 和 `production` 下，RAG 向量库必须能只读打开 `chroma.sqlite3` 并找到 `RAG_COLLECTION_NAME` 对应 collection（集合），仅目录存在或非空不算 ready。
+- `staging` 和 `production` 下，公开攻略与内部知识 RAG 向量库必须能只读打开各自的 `chroma.sqlite3` 并找到 `RAG_COLLECTION_NAME` / `RAG_INTERNAL_COLLECTION_NAME` 对应 collection（集合），仅目录存在或非空不算 ready。
 - MCP 服务池或开发 Redis 降级时，核心依赖已就绪则返回 `degraded`。
 - 可选外部 API 缺少密钥不会阻塞核心 ready，但会在依赖明细里显示 `not_configured`。
 

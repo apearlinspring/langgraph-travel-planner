@@ -38,7 +38,10 @@ def _scenario() -> EvaluationScenario:
     )
 
 
-def _required_runtime_env(vectorstore_path: Path | None = None) -> dict[str, str]:
+def _required_runtime_env(
+    vectorstore_path: Path | None = None,
+    internal_vectorstore_path: Path | None = None,
+) -> dict[str, str]:
     env = {
         "DASHSCOPE_API_KEY": "real-ish-dashscope",
         "POSTGRES_DB": "travel_planner_db",
@@ -53,17 +56,23 @@ def _required_runtime_env(vectorstore_path: Path | None = None) -> dict[str, str
     }
     if vectorstore_path is not None:
         env["RAG_VECTORSTORE_PATH"] = str(vectorstore_path)
+    if internal_vectorstore_path is not None:
+        env["RAG_INTERNAL_VECTORSTORE_PATH"] = str(internal_vectorstore_path)
     return env
 
 
 def _write_minimal_chroma_metadata(path: Path, collection_name: str = "travel_guides") -> None:
     path.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(path / "chroma.sqlite3") as connection:
+    connection = sqlite3.connect(path / "chroma.sqlite3")
+    try:
         connection.execute("CREATE TABLE collections (id TEXT PRIMARY KEY, name TEXT NOT NULL)")
         connection.execute(
             "INSERT INTO collections (id, name) VALUES (?, ?)",
             ("collection-id", collection_name),
         )
+        connection.commit()
+    finally:
+        connection.close()
 
 
 def test_runtime_environment_aliases_resolve_to_four_tiers():
@@ -168,8 +177,14 @@ def test_rag_vectorstore_requires_readable_chroma_collection(tmp_path: Path):
     )
 
     valid_vectorstore = tmp_path / "valid-vectorstore"
+    valid_internal_vectorstore = tmp_path / "valid-internal-vectorstore"
     _write_minimal_chroma_metadata(valid_vectorstore)
+    _write_minimal_chroma_metadata(
+        valid_internal_vectorstore,
+        collection_name="agency_internal_knowledge",
+    )
     env["RAG_VECTORSTORE_PATH"] = str(valid_vectorstore)
+    env["RAG_INTERNAL_VECTORSTORE_PATH"] = str(valid_internal_vectorstore)
     valid_snapshot = runtime_configuration_snapshot(
         app_env="production",
         environ=env,
@@ -183,6 +198,49 @@ def test_rag_vectorstore_requires_readable_chroma_collection(tmp_path: Path):
         valid_snapshot["dependencies"]["rag_vector_store"]["details"]["collection_name"]
         == "travel_guides"
     )
+    assert (
+        valid_snapshot["dependencies"]["rag_vector_store"]["details"]["stores"]["internal"][
+            "collection_name"
+        ]
+        == "agency_internal_knowledge"
+    )
+
+
+def test_rag_vectorstore_requires_internal_chroma_collection(tmp_path: Path):
+    public_vectorstore = tmp_path / "public-vectorstore"
+    missing_internal_vectorstore = tmp_path / "missing-internal-vectorstore"
+    valid_internal_vectorstore = tmp_path / "valid-internal-vectorstore"
+    _write_minimal_chroma_metadata(public_vectorstore)
+
+    env = _required_runtime_env(public_vectorstore, missing_internal_vectorstore)
+    blocked_snapshot = runtime_configuration_snapshot(
+        app_env="production",
+        environ=env,
+        dotenv_path=tmp_path / "missing.env",
+        require_real_values=True,
+    )
+
+    assert "rag_vector_store" in blocked_snapshot["missing_required"]
+    assert blocked_snapshot["dependencies"]["rag_vector_store"]["status"] == "blocked"
+    assert any(
+        "Internal RAG vector store directory does not exist" in finding
+        for finding in blocked_snapshot["dependencies"]["rag_vector_store"]["findings"]
+    )
+
+    _write_minimal_chroma_metadata(
+        valid_internal_vectorstore,
+        collection_name="agency_internal_knowledge",
+    )
+    env["RAG_INTERNAL_VECTORSTORE_PATH"] = str(valid_internal_vectorstore)
+    configured_snapshot = runtime_configuration_snapshot(
+        app_env="production",
+        environ=env,
+        dotenv_path=tmp_path / "missing.env",
+        require_real_values=True,
+    )
+
+    assert "rag_vector_store" not in configured_snapshot["missing_required"]
+    assert configured_snapshot["dependencies"]["rag_vector_store"]["status"] == "configured"
 
 
 def test_acceptance_preflight_blocks_missing_real_external_credentials(tmp_path: Path):

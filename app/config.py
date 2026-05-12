@@ -376,6 +376,60 @@ def _status_for_env_group(
     return "not_configured", findings
 
 
+def _resolve_project_path(configured_path: str) -> Path:
+    path = Path(configured_path)
+    if path.is_absolute():
+        return path
+    return PROJECT_ROOT / path
+
+
+def _check_chroma_collection(
+    *,
+    configured_path: str,
+    collection_name: str,
+    label: str,
+) -> tuple[str | None, dict[str, Any]]:
+    vectorstore_path = _resolve_project_path(configured_path)
+    details: dict[str, Any] = {
+        "path": str(vectorstore_path),
+        "collection_name": collection_name,
+    }
+
+    if not vectorstore_path.exists():
+        return f"{label} directory does not exist.", details
+    if not vectorstore_path.is_dir():
+        return f"{label} path is not a directory.", details
+
+    metadata_path = vectorstore_path / "chroma.sqlite3"
+    details["metadata_path"] = str(metadata_path)
+    if not metadata_path.exists():
+        return f"{label} metadata file chroma.sqlite3 is missing.", details
+
+    connection: sqlite3.Connection | None = None
+    try:
+        uri = metadata_path.as_posix()
+        connection = sqlite3.connect(f"file:{uri}?mode=ro", uri=True)
+        table = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'collections'"
+        ).fetchone()
+        if table is None:
+            return f"{label} metadata has no collections table.", details
+        collection = connection.execute(
+            "SELECT 1 FROM collections WHERE name = ? LIMIT 1",
+            (collection_name,),
+        ).fetchone()
+        if collection is None:
+            return f"{label} collection {collection_name!r} is missing.", details
+    except sqlite3.Error as exc:
+        details["error_type"] = exc.__class__.__name__
+        return f"{label} metadata is not readable: {exc}", details
+    finally:
+        if connection is not None:
+            connection.close()
+
+    return None, details
+
+
 def _filesystem_dependency_status(
     spec: RuntimeDependencySpec,
     env: Mapping[str, str],
@@ -387,47 +441,41 @@ def _filesystem_dependency_status(
 
     configured_path = env.get("RAG_VECTORSTORE_PATH") or "data/vectorstore"
     collection_name = env.get("RAG_COLLECTION_NAME") or "travel_guides"
+    internal_configured_path = env.get("RAG_INTERNAL_VECTORSTORE_PATH") or "data/vectorstore_internal"
+    internal_collection_name = env.get("RAG_INTERNAL_COLLECTION_NAME") or "agency_internal_knowledge"
     vectorstore_path = Path(configured_path)
     if not vectorstore_path.is_absolute():
         vectorstore_path = PROJECT_ROOT / vectorstore_path
     details = {
         "path": str(vectorstore_path),
         "collection_name": collection_name,
+        "stores": {},
     }
 
-    def unavailable(finding: str) -> tuple[str, list[str], dict[str, Any]]:
+    findings: list[str] = []
+    public_finding, public_details = _check_chroma_collection(
+        configured_path=configured_path,
+        collection_name=collection_name,
+        label="Public RAG vector store",
+    )
+    details["stores"]["public"] = public_details
+    if public_details.get("metadata_path"):
+        details["metadata_path"] = public_details["metadata_path"]
+    if public_finding:
+        findings.append(public_finding)
+
+    internal_finding, internal_details = _check_chroma_collection(
+        configured_path=internal_configured_path,
+        collection_name=internal_collection_name,
+        label="Internal RAG vector store",
+    )
+    details["stores"]["internal"] = internal_details
+    if internal_finding:
+        findings.append(internal_finding)
+
+    if findings:
         status = "blocked" if requirement == "required" else "not_configured"
-        return status, [finding], details
-
-    if not vectorstore_path.exists():
-        return unavailable("RAG vector store directory does not exist.")
-    if not vectorstore_path.is_dir():
-        return unavailable("RAG vector store path is not a directory.")
-
-    metadata_path = vectorstore_path / "chroma.sqlite3"
-    details["metadata_path"] = str(metadata_path)
-    if not metadata_path.exists():
-        return unavailable("RAG vector store metadata file chroma.sqlite3 is missing.")
-
-    try:
-        uri = metadata_path.as_posix()
-        with sqlite3.connect(f"file:{uri}?mode=ro", uri=True) as connection:
-            table = connection.execute(
-                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'collections'"
-            ).fetchone()
-            if table is None:
-                return unavailable("RAG vector store metadata has no collections table.")
-            collection = connection.execute(
-                "SELECT 1 FROM collections WHERE name = ? LIMIT 1",
-                (collection_name,),
-            ).fetchone()
-            if collection is None:
-                return unavailable(
-                    f"RAG vector store collection {collection_name!r} is missing."
-                )
-    except sqlite3.Error as exc:
-        details["error_type"] = exc.__class__.__name__
-        return unavailable(f"RAG vector store metadata is not readable: {exc}")
+        return status, findings, details
 
     return "configured", [], details
 
