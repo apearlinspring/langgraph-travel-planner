@@ -353,6 +353,29 @@ def acceptance_core_scenarios(
     return selected
 
 
+def _has_smoke_quote_coverage(scenario: EvaluationScenario) -> bool:
+    tags = set(scenario.tags)
+    searchable_text = " ".join(
+        [
+            scenario.name,
+            scenario.prompt,
+            scenario.notes,
+            *scenario.focus,
+            *scenario.tags,
+        ]
+    ).lower()
+    has_agency_mode = scenario.expected_mode == "agency_plan" and "agency" in tags
+    has_carefree_plan = "省心" in searchable_text or "agency" in searchable_text
+    has_quote_signal = (
+        "pricing" in tags
+        or "budget" in tags
+        or "报价" in searchable_text
+        or "费用" in searchable_text
+        or "quote" in searchable_text
+    )
+    return has_agency_mode and has_carefree_plan and has_quote_signal
+
+
 def acceptance_smoke_scenarios(
     scenarios: Iterable[EvaluationScenario] | None = None,
     *,
@@ -369,6 +392,11 @@ def acceptance_smoke_scenarios(
         raise ValueError(
             "Acceptance smoke scenario set must contain at least "
             f"{min_count} scenarios tagged {ACCEPTANCE_SMOKE_TAG!r}; found {len(selected)}"
+        )
+    if not any(_has_smoke_quote_coverage(scenario) for scenario in selected):
+        raise ValueError(
+            "Acceptance smoke scenario set must include at least one agency-plan "
+            "scenario covering a carefree plan and quote or budget explanation."
         )
     return selected
 

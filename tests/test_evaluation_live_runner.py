@@ -14,6 +14,7 @@ from app.evaluation.acceptance_gate import (
 from app.evaluation.preflight import required_capabilities_for_scenarios, run_acceptance_preflight
 from app.evaluation.live_runner import (
     _classify_live_error_status,
+    build_acceptance_evidence_closure,
     build_quality_summary,
     build_snapshot_payload,
     infer_tool_policy_from_scenario,
@@ -122,6 +123,7 @@ def test_build_snapshot_payload_contains_report_and_evaluation_summary():
     assert payload["llm_judge"]["status"] == "blocked"
     assert payload["summary"]["has_turn_observability"] is True
     assert payload["quality_summary"]["aggregate"]["normalized_score"] == 90
+    assert payload["evidence_closure"]["checks"]["report_data"] is True
     assert payload["turn_observability"] == [
         {"degradation_status": "ok", "last_error": "联系 [REDACTED]"}
     ]
@@ -272,6 +274,45 @@ def test_build_quality_summary_contains_agent_scores():
     assert summary["runtime_governance"]["status"] == "pass"
 
 
+def test_acceptance_evidence_closure_tracks_live_report_requirements():
+    scenario = _scenario("agency_couple")
+
+    closure = build_acceptance_evidence_closure(
+        scenario=scenario,
+        report_data=_valid_report_data(),
+        snapshot_path=".runtime/evaluations/snapshot.json",
+    )
+
+    assert closure["passed"] is True
+    assert closure["checks"]["report_data"] is True
+    assert closure["checks"]["budget"] is True
+    assert closure["checks"]["risk"] is True
+    assert closure["checks"]["verification_items"] is True
+    assert closure["checks"]["agency_business_evidence"] is True
+    assert {"products", "pricing", "risk"}.issubset(
+        set(closure["agency_evidence_categories"])
+    )
+
+
+def test_acceptance_evidence_closure_blocks_missing_real_report_evidence():
+    scenario = _scenario("agency_couple")
+    report_data = _valid_report_data()
+    report_data["risks"] = []
+    report_data["budget_confidence"]["verification_items"] = []
+    report_data["quote_policy"]["verification_required"] = []
+    report_data["tool_audit_summary"]["pending_checks"] = []
+
+    closure = build_acceptance_evidence_closure(
+        scenario=scenario,
+        report_data=report_data,
+        snapshot_path=".runtime/evaluations/snapshot.json",
+    )
+
+    assert closure["passed"] is False
+    assert "risk" in closure["missing"]
+    assert "verification_items" in closure["missing"]
+
+
 def test_build_quality_summary_fails_aggregate_when_runtime_budget_fails():
     scenario = _scenario("agency_couple")
     report_evaluation = {
@@ -395,6 +436,7 @@ def test_acceptance_gate_passes_valid_quality_summary(tmp_path: Path):
 
     assert gate["passed"] is True
     assert run_summary["passed"] is True
+    assert run_summary["evidence_closure"]["result_count"] == 0
     assert "RAG（检索增强生成）" in markdown
     assert Path(paths["json"]).exists()
     assert Path(paths["markdown"]).exists()
@@ -694,6 +736,27 @@ def test_acceptance_smoke_scenarios_select_minimal_live_contract():
     assert all(scenario.expected_mode == "agency_plan" for scenario in scenarios)
     assert all(scenario.requirements.get("real_llm") is True for scenario in scenarios)
     assert all(scenario.requirements.get("real_mcp") is True for scenario in scenarios)
+    assert any(
+        "省心" in scenario.prompt and ("费用" in scenario.prompt or "报价" in scenario.name)
+        for scenario in scenarios
+    )
+
+
+def test_acceptance_smoke_scenarios_require_agency_quote_coverage():
+    scenario = EvaluationScenario(
+        id="smoke_without_quote",
+        name="Smoke without quote",
+        category="free_planning",
+        prompt="周末自由行两天。",
+        expected_mode="free_planning",
+        min_score=80,
+        focus=["route"],
+        tags=[ACCEPTANCE_SMOKE_TAG, "free"],
+        requirements={"real_llm": True, "real_mcp": True},
+    )
+
+    with pytest.raises(ValueError, match="quote or budget explanation"):
+        acceptance_smoke_scenarios([scenario], min_count=1)
 
 
 def test_cli_json_payload_surfaces_preflight_blockers_and_health_checks():
@@ -759,6 +822,32 @@ def test_cli_json_payload_keeps_degraded_preflight_from_passing_without_summary(
 
     assert payload["status"] == "degraded"
     assert payload["passed"] is False
+
+
+def test_cli_json_payload_preflight_blocked_overrides_stale_passed_summary():
+    payload = build_cli_json_payload(
+        results=[{"scenario_id": "smoke", "status": "passed", "passed": True}],
+        acceptance_summary={"status": "passed", "passed": True},
+        summary_paths=None,
+        preflight={
+            "status": "blocked",
+            "missing_required": ["real_llm"],
+            "degraded_optional": [],
+            "checks": [
+                {
+                    "key": "real_llm",
+                    "label": "Real LLM provider",
+                    "status": "blocked",
+                    "required": True,
+                    "findings": ["Missing real value for one of: DASHSCOPE_API_KEY"],
+                }
+            ],
+        },
+    )
+
+    assert payload["status"] == "blocked"
+    assert payload["passed"] is False
+    assert payload["missing_required"] == ["real_llm"]
 
 
 def test_acceptance_artifact_dirs_must_stay_under_runtime(tmp_path: Path):

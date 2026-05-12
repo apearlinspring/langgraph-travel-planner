@@ -101,6 +101,7 @@ class LiveScenarioResult:
     runtime_findings: list[str] | None = None
     runtime_metrics: dict[str, Any] | None = None
     tool_counts: dict[str, int] | None = None
+    evidence_closure: dict[str, Any] | None = None
     acceptance_gate: dict[str, Any] | None = None
     error: str | None = None
 
@@ -136,6 +137,90 @@ def parse_sse_event_line(line: bytes) -> dict[str, Any] | None:
     if not payload:
         return None
     return json.loads(payload)
+
+
+def _as_dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _as_list(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else []
+
+
+def _has_text(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _agency_evidence_categories(report_data: dict[str, Any] | None) -> list[str]:
+    report = _as_dict(report_data)
+    agency_context = _as_dict(report.get("agency_context"))
+    categories: set[str] = set()
+    for item in _as_list(agency_context.get("evidence")):
+        evidence = _as_dict(item)
+        if evidence.get("source_type") == "agency_internal" and _has_text(evidence.get("category")):
+            categories.add(str(evidence["category"]).strip())
+    for category, value in _as_dict(agency_context.get("categories")).items():
+        if _has_text(category) and value:
+            categories.add(str(category).strip())
+    bundle_categories = _as_dict(_as_dict(report.get("evidence_bundle")).get("agency_categories"))
+    for category, value in bundle_categories.items():
+        if _has_text(category) and isinstance(value, (int, float)) and value > 0:
+            categories.add(str(category).strip())
+    return sorted(categories)
+
+
+def build_acceptance_evidence_closure(
+    *,
+    scenario: EvaluationScenario,
+    report_data: dict[str, Any] | None,
+    snapshot_path: str | None = None,
+    require_snapshot: bool = True,
+) -> dict[str, Any]:
+    """Summarize the live evidence that makes an acceptance result auditable."""
+
+    report = _as_dict(report_data)
+    budget = _as_dict(report.get("budget"))
+    budget_confidence = _as_dict(report.get("budget_confidence"))
+    quote_policy = _as_dict(report.get("quote_policy"))
+    tool_audit = _as_dict(report.get("tool_audit_summary"))
+    agency_categories = _agency_evidence_categories(report_data)
+    verification_items = [
+        *_as_list(budget_confidence.get("verification_items")),
+        *_as_list(quote_policy.get("verification_required")),
+        *_as_list(tool_audit.get("pending_checks")),
+    ]
+
+    checks = {
+        "snapshot": bool(snapshot_path) if require_snapshot else True,
+        "report_data": bool(report),
+        "budget": bool(_as_list(budget.get("items"))) or bool(budget.get("total")),
+        "budget_confidence": (
+            _has_text(budget_confidence.get("level"))
+            and bool(
+                _as_list(budget_confidence.get("confirmed_items"))
+                or _as_list(budget_confidence.get("estimated_items"))
+            )
+        ),
+        "risk": bool(_as_list(report.get("risks"))),
+        "verification_items": bool(verification_items),
+        "agency_business_evidence": (
+            len(agency_categories) >= 3
+            if scenario.expected_mode == "agency_plan"
+            else True
+        ),
+    }
+    missing = [key for key, passed in checks.items() if not passed]
+    return {
+        "version": "acceptance_evidence_closure.v1",
+        "scenario_id": scenario.id,
+        "expected_mode": scenario.expected_mode,
+        "passed": not missing,
+        "checks": checks,
+        "missing": missing,
+        "agency_evidence_categories": agency_categories,
+        "verification_item_count": len(verification_items),
+        "snapshot_path": snapshot_path,
+    }
 
 
 def build_snapshot_payload(
@@ -191,6 +276,12 @@ def build_snapshot_payload(
         "turn_observability": observability_events,
         "quality_summary": quality_summary,
         "llm_judge": llm_judge_evaluation,
+        "evidence_closure": build_acceptance_evidence_closure(
+            scenario=scenario,
+            report_data=report_data,
+            snapshot_path=None,
+            require_snapshot=False,
+        ),
         "observability_events": observability_events,
         "events": events,
     }
@@ -620,6 +711,11 @@ def run_live_scenario(
             snapshot_path=str(path),
             llm_judge_evaluation=llm_judge_evaluation,
         )
+        evidence_closure = build_acceptance_evidence_closure(
+            scenario=scenario,
+            report_data=report_data,
+            snapshot_path=str(path),
+        )
 
         return LiveScenarioResult(
             scenario_id=scenario.id,
@@ -640,6 +736,7 @@ def run_live_scenario(
             ][:5],
             runtime_metrics=quality_summary["runtime_metrics"],
             tool_counts=quality_summary["tool_quality"]["tool_counts"],
+            evidence_closure=evidence_closure,
             acceptance_gate=acceptance_gate,
         )
     except (urllib.error.URLError, OSError, RuntimeError, ValueError) as exc:
@@ -677,6 +774,11 @@ def run_live_scenario(
             snapshot_path=snapshot_path,
             elapsed_seconds=round(elapsed_seconds, 2),
             status=str(acceptance_gate["status"]),
+            evidence_closure=build_acceptance_evidence_closure(
+                scenario=scenario,
+                report_data=report_data,
+                snapshot_path=snapshot_path,
+            ),
             acceptance_gate=acceptance_gate,
             error=redact_sensitive_text(str(exc)),
         )
