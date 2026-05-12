@@ -2,6 +2,20 @@
 
 这是一个基于 `FastAPI + LangGraph + LangChain + RAG + MCP` 的多智能体旅行规划项目。
 
+## 面试演示包
+
+如果需要把项目能力整理成可讲述、可复跑的 AI-Agent（人工智能智能体）面试材料，优先看：
+
+- [docs/interview-demo-pack.md](docs/interview-demo-pack.md)：演示包主入口，覆盖本地讲解、acceptance-smoke（验收烟测）和前端报告三条路径。
+- [docs/interview-answer-map.md](docs/interview-answer-map.md)：AI-Agent 面试问题、架构回答、代码定位和验证命令。
+- [docs/demo-script.md](docs/demo-script.md)：现场演示脚本。
+
+生成脱敏演示包目录：
+
+```powershell
+.\.venv\Scripts\python scripts\build_interview_demo_pack.py --output .runtime\interview-demo-pack
+```
+
 当前仓库已经把测试体系分成了两层：
 
 - 默认本地回归测试：不依赖真实 LLM、真实 MCP、外网服务，适合日常改代码后快速验证。

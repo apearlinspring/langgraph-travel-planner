@@ -98,3 +98,43 @@ def test_build_demo_pack_rejects_sensitive_source_document(tmp_path: Path):
 def test_build_demo_pack_requires_all_source_documents(tmp_path: Path):
     with pytest.raises(FileNotFoundError, match="Missing interview demo source documents"):
         demo_pack.build_demo_pack(tmp_path / "pack", repo_root=tmp_path)
+
+
+def test_committed_interview_docs_build_without_sensitive_content(tmp_path: Path):
+    manifest = demo_pack.build_demo_pack(tmp_path / "pack", repo_root=Path.cwd())
+
+    assert manifest["output_policy"]["reads_env_files"] is False
+    assert manifest["output_policy"]["copies_runtime_snapshots"] is False
+    assert (tmp_path / "pack" / "manifest.json").exists()
+    assert "NO_SENSITIVE_FINDINGS" in (tmp_path / "pack" / "redaction-check.txt").read_text(
+        encoding="utf-8"
+    )
+
+
+def test_interview_docs_cover_required_capabilities_and_demo_paths():
+    combined = "\n".join(
+        [
+            Path("docs/interview-demo-pack.md").read_text(encoding="utf-8"),
+            Path("docs/interview-answer-map.md").read_text(encoding="utf-8"),
+            Path("docs/demo-script.md").read_text(encoding="utf-8"),
+            Path("README.md").read_text(encoding="utf-8"),
+        ]
+    )
+
+    for phrase in [
+        "多智能体编排",
+        "状态机",
+        "工具调用",
+        "RAG（检索增强生成）",
+        "MCP（模型上下文协议）",
+        "HITL（人类在环）",
+        "治理",
+        "可观测性",
+        "验收门禁",
+        "CI/CD（持续集成/持续交付）",
+        "本地纯讲解路径",
+        "acceptance-smoke",
+        "前端报告路径",
+        "report_data",
+    ]:
+        assert phrase in combined
