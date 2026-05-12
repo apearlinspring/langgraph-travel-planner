@@ -1,5 +1,6 @@
 from pathlib import Path
 import sqlite3
+import subprocess
 
 import pytest
 
@@ -12,6 +13,7 @@ from app.config import (
 from app.evaluation.preflight import run_acceptance_preflight
 from app.evaluation.scenarios import EvaluationScenario
 from scripts.check_runtime_readiness import (
+    build_docker_compose_readiness_report,
     build_database_migration_readiness_report,
     build_runtime_readiness_report,
 )
@@ -216,6 +218,7 @@ def test_runtime_readiness_report_covers_development_staging_acceptance_and_prod
     assert report["targets"]["production"]["status"] == "blocked"
     assert "dependency_matrix" in report
     assert report["database_migrations"]["status"] == "passed"
+    assert report["docker_compose"]["status"] == "not_checked"
 
 
 def test_database_migration_readiness_is_static_and_separates_langgraph():
@@ -243,3 +246,56 @@ def test_runtime_readiness_report_rejects_unknown_target(tmp_path: Path):
             targets=["moonbase"],
             dotenv_path=tmp_path / "missing.env",
         )
+
+
+def test_docker_compose_readiness_is_not_checked_by_default():
+    report = build_docker_compose_readiness_report()
+
+    assert report["status"] == "not_checked"
+    assert report["checked"] is False
+    assert "docker compose up -d postgres redis" in report["commands"]["start_dependencies"]
+
+
+def test_docker_compose_readiness_passes_when_cli_and_daemon_are_available(monkeypatch):
+    def fake_run(args, *, timeout_seconds=8):
+        if args[:3] == ["docker", "compose", "version"]:
+            return subprocess.CompletedProcess(args, 0, stdout="2.29.1\n", stderr="")
+        if args[:2] == ["docker", "info"]:
+            return subprocess.CompletedProcess(args, 0, stdout="27.3.1\n", stderr="")
+        raise AssertionError(args)
+
+    monkeypatch.setattr("scripts.check_runtime_readiness._run_command", fake_run)
+
+    report = build_docker_compose_readiness_report(check=True)
+
+    assert report["status"] == "passed"
+    assert report["compose_version"] == "2.29.1"
+    assert report["server_version"] == "27.3.1"
+
+
+def test_docker_compose_readiness_blocks_when_docker_desktop_is_not_running(monkeypatch):
+    def fake_run(args, *, timeout_seconds=8):
+        if args[:3] == ["docker", "compose", "version"]:
+            return subprocess.CompletedProcess(args, 0, stdout="2.29.1\n", stderr="")
+        if args[:2] == ["docker", "info"]:
+            return subprocess.CompletedProcess(
+                args,
+                1,
+                stdout="",
+                stderr="error during connect: open //./pipe/docker_engine: The system cannot find the file specified.",
+            )
+        raise AssertionError(args)
+
+    monkeypatch.setattr("scripts.check_runtime_readiness._run_command", fake_run)
+
+    report = build_runtime_readiness_report(
+        targets=["staging"],
+        environ=_required_runtime_env(),
+        dotenv_path=Path("missing.env"),
+        check_docker=True,
+    )
+
+    assert report["status"] == "blocked"
+    assert report["docker_compose"]["status"] == "blocked"
+    assert "Docker daemon" in report["docker_compose"]["findings"][0]
+    assert "Docker Desktop" in report["docker_compose"]["findings"][0]

@@ -69,11 +69,12 @@ POSTGRES_STATEMENT_TIMEOUT_SECONDS=10
 ```powershell
 .\.venv\Scripts\python scripts\check_runtime_readiness.py --json
 .\.venv\Scripts\python scripts\check_runtime_readiness.py --target staging --json
+.\.venv\Scripts\python scripts\check_runtime_readiness.py --target staging --check-docker --json
 .\.venv\Scripts\python scripts\check_runtime_readiness.py --target production --json
 .\.venv\Scripts\python scripts\check_runtime_readiness.py --target acceptance --check-backend --base-url http://127.0.0.1:8000 --json
 ```
 
-`check_runtime_readiness.py` 不输出密钥值，只输出变量名、状态和修复方向。
+`check_runtime_readiness.py` 不输出密钥值，只输出变量名、状态和修复方向。带 `--check-docker` 时会额外检查 Docker Desktop（Docker 桌面运行环境）、Docker daemon（后台服务）和 Docker Compose（容器编排）插件；如果 Docker Desktop 未运行，报告必须是 blocked（环境阻塞），不能把本地依赖启动伪装成通过。
 
 ## CI/CD 与环境命令分层
 
@@ -81,6 +82,7 @@ POSTGRES_STATEMENT_TIMEOUT_SECONDS=10
 |---|---|---|---|
 | 本地 development（开发） | `scripts\check_runtime_readiness.py --target development --json` | 可使用占位值或本地 `.env`，但必需变量名要配置 | 开发机快速发现缺核心配置 |
 | CI（持续集成） | `python scripts/check_runtime_readiness.py --target development --json` | 只使用测试占位值，不读取真实密钥 | 合并前证明配置契约和脚本入口可重复运行 |
+| 本地 staging（预生产）依赖启动 | `scripts\check_runtime_readiness.py --target staging --check-docker --json` | 真实值通过本地 `.env` 注入；Docker Desktop 未运行必须 blocked | 启动 PostgreSQL 和 Redis 前确认 Docker 闭环 |
 | acceptance（验收）preflight（预检） | `scripts\run_evaluation_scenarios.py --acceptance-core --preflight-only --json` | 必需项必须是真实值；缺失返回 blocked（环境阻塞） | 不消耗真实对话配额地检查验收条件 |
 | staging（预生产）live acceptance（在线验收） | `scripts\run_evaluation_scenarios.py --acceptance-core --base-url <staging-url>` | 真实密钥通过部署环境注入 | 手动触发真实链路验收 |
 | production（生产）readiness（就绪） | `scripts\check_runtime_readiness.py --target production --json` | 必需项必须是真实值，不允许 placeholder（占位） | 发布前检查配置、RAG（检索增强生成）向量库和安全边界 |

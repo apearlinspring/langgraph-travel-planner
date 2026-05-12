@@ -21,6 +21,7 @@ def test_runtime_readiness_script_imports_cleanly():
     module = importlib.import_module("scripts.check_runtime_readiness")
     assert hasattr(module, "build_runtime_readiness_report")
     assert hasattr(module, "build_database_migration_readiness_report")
+    assert hasattr(module, "build_docker_compose_readiness_report")
 
 
 def test_init_db_script_exposes_migration_modes_without_running_database():

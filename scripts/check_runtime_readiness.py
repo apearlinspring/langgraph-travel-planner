@@ -3,9 +3,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -31,10 +32,101 @@ from app.models.migration_contract import (  # noqa: E402
 
 READINESS_REPORT_VERSION = "runtime_readiness_report.v1"
 DATABASE_MIGRATION_READINESS_VERSION = "database_migration_readiness.v1"
+DOCKER_COMPOSE_READINESS_VERSION = "docker_compose_readiness.v1"
 READINESS_TARGETS = ("development", "staging", "acceptance", "production")
 ALEMBIC_CONFIG_PATH = PROJECT_ROOT / "alembic.ini"
 ALEMBIC_SCRIPT_PATH = PROJECT_ROOT / "alembic"
 ALEMBIC_VERSION_PATH = ALEMBIC_SCRIPT_PATH / "versions"
+DOCKER_TIMEOUT_SECONDS = 8
+
+
+def _run_command(
+    args: Sequence[str],
+    *,
+    timeout_seconds: float = DOCKER_TIMEOUT_SECONDS,
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        list(args),
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=timeout_seconds,
+        check=False,
+    )
+
+
+def _summarize_process_failure(result: subprocess.CompletedProcess[str]) -> str:
+    output = "\n".join(part.strip() for part in (result.stdout, result.stderr) if part.strip())
+    summary = output.splitlines()[0] if output else f"exit code {result.returncode}"
+    return summary[:400]
+
+
+def build_docker_compose_readiness_report(*, check: bool = False) -> dict[str, Any]:
+    """Check whether local Docker Compose dependencies can be started."""
+
+    commands = {
+        "check": "python scripts/check_runtime_readiness.py --target staging --check-docker --json",
+        "start_dependencies": "docker compose up -d postgres redis",
+        "inspect": "docker compose ps postgres redis",
+    }
+    report: dict[str, Any] = {
+        "version": DOCKER_COMPOSE_READINESS_VERSION,
+        "status": "not_checked",
+        "checked": check,
+        "requires_docker_desktop": True,
+        "commands": commands,
+        "findings": [],
+        "services": ["postgres", "redis"],
+    }
+    if not check:
+        return report
+
+    try:
+        compose_version = _run_command(["docker", "compose", "version", "--short"])
+    except FileNotFoundError:
+        report["status"] = "blocked"
+        report["findings"].append(
+            "Docker CLI（命令行工具）不可用。请先安装并启动 Docker Desktop，再重试。"
+        )
+        return report
+    except subprocess.TimeoutExpired:
+        report["status"] = "blocked"
+        report["findings"].append(
+            "docker compose version 超时。请确认 Docker Desktop 已启动且命令行可访问。"
+        )
+        return report
+
+    if compose_version.returncode != 0:
+        report["status"] = "blocked"
+        report["findings"].append(
+            "Docker Compose（容器编排）插件不可用："
+            + _summarize_process_failure(compose_version)
+        )
+        return report
+    report["compose_version"] = compose_version.stdout.strip()
+
+    try:
+        docker_info = _run_command(["docker", "info", "--format", "{{.ServerVersion}}"])
+    except subprocess.TimeoutExpired:
+        report["status"] = "blocked"
+        report["findings"].append(
+            "docker info 超时。请确认 Docker Desktop 正在运行，再执行 docker compose up -d postgres redis。"
+        )
+        return report
+
+    if docker_info.returncode != 0:
+        report["status"] = "blocked"
+        report["findings"].append(
+            "Docker daemon（后台服务）不可达；Docker Desktop 可能未运行："
+            + _summarize_process_failure(docker_info)
+        )
+        return report
+
+    report["status"] = "passed"
+    report["server_version"] = docker_info.stdout.strip()
+    return report
 
 
 def _dependency_status_counts(dependencies: Mapping[str, dict[str, Any]]) -> dict[str, int]:
@@ -151,6 +243,7 @@ def build_runtime_readiness_report(
     environ: Mapping[str, str] | None = None,
     dotenv_path: Path | None = None,
     check_backend: bool = False,
+    check_docker: bool = False,
 ) -> dict[str, Any]:
     """Build a redacted readiness report for development, acceptance, and production."""
 
@@ -192,9 +285,12 @@ def build_runtime_readiness_report(
 
     statuses = {key: value["status"] for key, value in target_results.items()}
     database_migrations = build_database_migration_readiness_report()
+    docker_compose = build_docker_compose_readiness_report(check=check_docker)
     if any(status == "blocked" for status in statuses.values()):
         overall_status = "blocked"
     elif database_migrations["status"] == "blocked":
+        overall_status = "blocked"
+    elif docker_compose["status"] == "blocked":
         overall_status = "blocked"
     elif any(status == "skipped" for status in statuses.values()):
         overall_status = "skipped"
@@ -211,6 +307,7 @@ def build_runtime_readiness_report(
         "targets": target_results,
         "target_statuses": statuses,
         "database_migrations": database_migrations,
+        "docker_compose": docker_compose,
         "dependency_matrix": {
             key: spec.to_dict(settings.runtime_environment)
             for key, spec in dependency_specs_by_key().items()
@@ -236,6 +333,14 @@ def _render_human(report: dict[str, Any]) -> str:
         "- LangGraph-owned: "
         + ", ".join((database_migrations.get("boundaries") or {}).get("externally_managed") or [])
     )
+    lines.append("")
+    docker_compose = report.get("docker_compose") or {}
+    lines.append(f"## docker compose: {docker_compose.get('status')}")
+    if docker_compose.get("checked"):
+        findings = docker_compose.get("findings") or []
+        lines.append("- Findings: " + ("; ".join(findings) if findings else "-"))
+    else:
+        lines.append("- Findings: not checked; add --check-docker for local/staging bootstrap.")
     lines.append("")
     for target, result in report["targets"].items():
         lines.append(f"## {target}: {result['status']}")
@@ -281,6 +386,11 @@ def main() -> int:
         help="Also require backend /health/live and /health/ready for acceptance.",
     )
     parser.add_argument(
+        "--check-docker",
+        action="store_true",
+        help="Also require Docker Desktop and Docker Compose for local/staging dependency bootstrap.",
+    )
+    parser.add_argument(
         "--json",
         action="store_true",
         help="Print machine-readable JSON.",
@@ -292,6 +402,7 @@ def main() -> int:
         base_url=args.base_url,
         dotenv_path=args.env_file,
         check_backend=args.check_backend,
+        check_docker=args.check_docker,
     )
     if args.json:
         print(json.dumps(report, ensure_ascii=False, indent=2))

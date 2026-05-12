@@ -68,10 +68,12 @@ docker compose up -d postgres redis
 .\.venv\Scripts\python -m scripts.init_rag
 .\.venv\Scripts\alembic upgrade head
 .\.venv\Scripts\alembic current
-.\.venv\Scripts\python scripts\check_runtime_readiness.py --target staging --json
+.\.venv\Scripts\python scripts\check_runtime_readiness.py --target staging --check-docker --json
 .\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-core --preflight-only --base-url https://staging.example.com --json
 .\.venv\Scripts\python scripts\check_runtime_readiness.py --target acceptance --check-backend --base-url https://staging.example.com --json
 ```
+
+如果 Docker Desktop（Docker 桌面运行环境）未运行，`--check-docker` 必须返回 blocked（环境阻塞）；此时不要继续宣称 PostgreSQL（关系型数据库）和 Redis（内存数据结构存储）已完成本地启动闭环。
 
 只有 preflight（预检）通过后，才手动运行 live acceptance（在线验收）：
 
@@ -119,6 +121,7 @@ curl http://127.0.0.1:8000/health/ready
 - `Dockerfile` 和 `deploy/Dockerfile.runtime` 默认 `APP_ENV=production`，镜像内置 `/health/live` liveness（存活检查）。
 - `docker-compose.yml` 默认按 `APP_ENV=staging` 启动本地预生产拓扑，显式暴露后端所需的 LLM（大语言模型）、PostgreSQL（关系型数据库）、Redis（内存数据结构存储）、RAG（检索增强生成）、MCP（模型上下文协议）/外部 API（应用程序接口）、Auth（认证）/JWT（JSON Web Token，令牌认证）和启动超时变量名。
 - Compose（容器编排配置）后端健康检查使用 `/health/ready`，因此必需依赖缺失时 `backend` 不会被标记为 healthy（健康）。
+- Compose 同时发布 `${POSTGRES_HOST_PORT:-5432}:5432` 和 `${REDIS_HOST_PORT:-6379}:6379`，保证宿主机上的 `scripts.init_db`、`scripts.init_rag` 和健康检查脚本能连到真实本地依赖。
 - 后端同时映射 `${BACKEND_PORT:-8000}:${APP_PORT:-8000}`，即使 `/health/ready` 因真实密钥或外部依赖缺失返回 `not_ready`，也应能通过 `/health/live` 验证进程没有卡在 application startup（应用启动）。
 - `.env` 在 Compose 中是可选文件，方便 CI（持续集成）解析配置；真实部署必须通过 `.env`、平台 secret（密钥）或托管配置系统覆盖占位默认值。
 - Caddy（反向代理服务器）站点地址可通过 `ZHIXING_SITE_ADDRESS` 覆盖，本地可用 `:80`，生产可用真实域名。
