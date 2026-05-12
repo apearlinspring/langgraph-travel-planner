@@ -85,6 +85,7 @@ def test_staging_smoke_uploads_runtime_artifact_without_committing_outputs():
 
     assert "actions/upload-artifact@v4" in text
     assert "path: .runtime/acceptance-smoke" in text
+    assert "blocked-secrets.txt" in text
     assert "if-no-files-found: error" in text
     assert ".runtime/" in gitignore
 

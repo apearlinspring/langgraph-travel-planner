@@ -73,12 +73,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
+      - name: Prepare Runtime Directory
+        run: mkdir -p .runtime/acceptance-smoke
+
       - name: Validate Required Secrets
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY'
           import os
+          from pathlib import Path
           import sys
 
           required = [
@@ -95,6 +99,12 @@ jobs:
           ]
           missing = [name for name in required if not (os.getenv(name) or "").strip()]
           if missing:
+              Path(".runtime/acceptance-smoke/blocked-secrets.txt").write_text(
+                  "Missing required GitHub Secrets:\n"
+                  + "\n".join(f"- {name}" for name in missing)
+                  + "\n",
+                  encoding="utf-8",
+              )
               print(
                   "::error title=Missing staging smoke secrets::Configure GitHub Secrets: "
                   + ", ".join(missing)
@@ -120,9 +130,6 @@ jobs:
 
       - name: Install Python Dependencies
         run: python -m pip install --disable-pip-version-check -r requirements.txt
-
-      - name: Prepare Runtime Directory
-        run: mkdir -p .runtime/acceptance-smoke
 
       - name: Start PostgreSQL And Redis
         shell: bash
