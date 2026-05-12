@@ -28,4 +28,3 @@ EXTERNALLY_MANAGED_DATABASE_OBJECTS: tuple[str, ...] = (
     *LANGGRAPH_STORE_TABLES,
     "vector extension",
 )
-
