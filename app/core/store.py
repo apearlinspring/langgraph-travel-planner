@@ -65,17 +65,19 @@ class StoreManager:
                 conninfo=settings.database_url,
                 min_size=2,
                 max_size=20,
-                timeout=30,
+                timeout=settings.postgres_pool_timeout_seconds,
                 kwargs={
                     "autocommit": True,
+                    "connect_timeout": settings.postgres_connect_timeout_seconds,
                     "prepare_threshold": 0,
                     "row_factory": dict_row,
                 },
             )
             await self.pool.open()
 
-            self.store = AsyncPostgresStore(self.pool)
-            await self.store.setup()
+            store = AsyncPostgresStore(self.pool)
+            await store.setup()
+            self.store = store
 
             app_logger.info("PostgreSQL store is ready")
         except Exception:

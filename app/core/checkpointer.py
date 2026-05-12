@@ -57,17 +57,19 @@ class CheckpointerManager:
                 conninfo=settings.database_url,
                 min_size=2,
                 max_size=20,
-                timeout=30,
+                timeout=settings.postgres_pool_timeout_seconds,
                 kwargs={
                     "autocommit": True,
+                    "connect_timeout": settings.postgres_connect_timeout_seconds,
                     "prepare_threshold": 0,
                     "row_factory": dict_row,
                 },
             )
             await self.pool.open()
 
-            self.checkpointer = AsyncPostgresSaver(self.pool)
-            await self.checkpointer.setup()
+            checkpointer = AsyncPostgresSaver(self.pool)
+            await checkpointer.setup()
+            self.checkpointer = checkpointer
 
             app_logger.info("PostgreSQL checkpointer is ready")
         except Exception:

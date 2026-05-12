@@ -25,7 +25,11 @@ engine = create_async_engine(
     settings.database_url.replace("postgresql://", "postgresql+asyncpg://"),
     echo=settings.sql_echo,
     pool_size=10,
-    max_overflow=20
+    max_overflow=20,
+    connect_args={
+        "timeout": settings.postgres_connect_timeout_seconds,
+        "command_timeout": settings.postgres_statement_timeout_seconds,
+    },
 )
 
 # 创建异步会话工厂

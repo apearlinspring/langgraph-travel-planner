@@ -3,8 +3,10 @@ FastAPI application entrypoint.
 """
 import asyncio
 import sys
-from contextlib import asynccontextmanager
+import time
+from contextlib import asynccontextmanager, suppress
 from copy import deepcopy
+from typing import Any, Awaitable, Callable
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,6 +20,7 @@ from app.config import (
 )
 from app.core.approval import ApprovalGovernanceManager
 from app.core.checkpointer import CheckpointerManager
+from app.core.resilience import capture_runtime_step
 from app.core.session_lock import session_lock_manager
 from app.core.store import StoreManager
 from app.mcp_core.client import MCPClientManager
@@ -245,12 +248,26 @@ def build_readiness_payload(startup_complete: bool) -> tuple[dict, int]:
         overall_status = "not_ready"
         status_code = 503
 
+    blocking_items = list(runtime_payload["missing_required"])
+    if not startup_complete:
+        blocking_items.append("startup")
+    if not checkpointer_status["initialized"]:
+        blocking_items.append("checkpointer")
+    if not store_status["initialized"]:
+        blocking_items.append("store")
+    if session_lock_status["status"] == "unavailable":
+        blocking_items.append("session_lock")
+    if not approval_governance_status["ready"]:
+        blocking_items.append("approval_governance")
+
     payload = {
         "version": RUNTIME_READINESS_VERSION,
         "status": overall_status,
         "environment": runtime_payload["environment"],
         "startup_complete": startup_complete,
+        "startup": getattr(app.state, "startup", None),
         "missing_required": runtime_payload["missing_required"],
+        "blocking_items": sorted(dict.fromkeys(blocking_items)),
         "degraded_optional": runtime_payload["degraded_optional"],
         "dependencies": runtime_payload["dependencies"],
         "services": {
@@ -264,103 +281,234 @@ def build_readiness_payload(startup_complete: bool) -> tuple[dict, int]:
     return payload, status_code
 
 
+def _new_startup_state() -> dict[str, Any]:
+    return {
+        "status": "running",
+        "started_at": time.time(),
+        "finished_at": None,
+        "steps": {},
+    }
+
+
+def _set_startup_step(
+    app: FastAPI,
+    step: str,
+    status: str,
+    *,
+    elapsed_seconds: float | None = None,
+    timeout_seconds: float | None = None,
+    error_type: str | None = None,
+    error: str | None = None,
+) -> None:
+    startup = getattr(app.state, "startup", None)
+    if startup is None:
+        startup = _new_startup_state()
+        app.state.startup = startup
+    payload: dict[str, Any] = {"status": status}
+    if elapsed_seconds is not None:
+        payload["elapsed_seconds"] = elapsed_seconds
+    if timeout_seconds is not None:
+        payload["timeout_seconds"] = timeout_seconds
+    if error_type is not None:
+        payload["error_type"] = error_type
+    if error is not None:
+        payload["error"] = error
+    startup.setdefault("steps", {})[step] = payload
+
+
+async def _startup_step(
+    app: FastAPI,
+    step: str,
+    operation: Callable[[], Awaitable[Any]],
+    *,
+    timeout_seconds: float | None,
+) -> Any | None:
+    _set_startup_step(app, step, "running", timeout_seconds=timeout_seconds)
+    result, snapshot = await capture_runtime_step(
+        step,
+        operation,
+        timeout_seconds=timeout_seconds,
+    )
+    _set_startup_step(app, step, **snapshot.to_dict())
+    if snapshot.status == "ready":
+        app_logger.info(
+            "Runtime startup step ready: "
+            f"{step} in {snapshot.elapsed_seconds:.3f}s"
+        )
+    else:
+        app_logger.warning(
+            "Runtime startup step did not become ready: "
+            f"{step} status={snapshot.status} error={snapshot.error}"
+        )
+    return result
+
+
+async def _warmup_mcp_servers(
+    *,
+    servers: list[str],
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    mcp = await MCPClientManager.get_instance()
+    return await mcp.warmup(
+        servers=servers,
+        timeout_overrides={server: timeout_seconds for server in servers},
+    )
+
+
+async def _run_runtime_startup(app: FastAPI) -> None:
+    """Initialize slow dependencies in the background after liveness is available."""
+
+    app.state.startup = _new_startup_state()
+    app.state.startup_complete = False
+    ApprovalGovernanceManager.configure_uninitialized(settings.app_env)
+
+    dependency_timeout = settings.runtime_startup_dependency_timeout_seconds
+
+    checkpointer_task = asyncio.create_task(
+        _startup_step(
+            app,
+            "checkpointer",
+            CheckpointerManager.get_instance,
+            timeout_seconds=dependency_timeout,
+        ),
+        name="startup:checkpointer",
+    )
+    store_task = asyncio.create_task(
+        _startup_step(
+            app,
+            "store",
+            StoreManager.get_instance,
+            timeout_seconds=dependency_timeout,
+        ),
+        name="startup:store",
+    )
+    approval_task = asyncio.create_task(
+        _startup_step(
+            app,
+            "approval_governance",
+            ApprovalGovernanceManager.verify_database,
+            timeout_seconds=dependency_timeout,
+        ),
+        name="startup:approval_governance",
+    )
+
+    MCPClientManager.refresh_server_configs()
+    startup_servers = MCPClientManager.get_startup_server_names()
+    if startup_servers:
+        mcp_task = asyncio.create_task(
+            _startup_step(
+                app,
+                "mcp_startup_servers",
+                lambda: _warmup_mcp_servers(
+                    servers=startup_servers,
+                    timeout_seconds=settings.runtime_mcp_startup_timeout_seconds,
+                ),
+                timeout_seconds=(
+                    max(len(startup_servers), 1)
+                    * settings.runtime_mcp_startup_timeout_seconds
+                    + 1.0
+                ),
+            ),
+            name="startup:mcp_startup_servers",
+        )
+    else:
+        _set_startup_step(app, "mcp_startup_servers", "skipped")
+        mcp_task = None
+
+    checkpointer_manager, store_manager, approval_snapshot = await asyncio.gather(
+        checkpointer_task,
+        store_task,
+        approval_task,
+    )
+    if checkpointer_manager is None:
+        manager = getattr(CheckpointerManager, "_instance", None)
+        if manager is not None:
+            await manager.close()
+    if store_manager is None:
+        manager = getattr(StoreManager, "_instance", None)
+        if manager is not None:
+            await manager.close()
+    app.state.startup_complete = (
+        checkpointer_manager is not None
+        and store_manager is not None
+        and isinstance(approval_snapshot, dict)
+        and approval_snapshot.get("status") == "ready"
+    )
+
+    optional_servers = [
+        server
+        for server in MCPClientManager.OPTIONAL_STARTUP_SERVERS
+        if server in MCPClientManager.SERVER_CONFIGS
+    ]
+    if optional_servers:
+        await _startup_step(
+            app,
+            "mcp_optional_servers",
+            lambda: _warmup_mcp_servers(
+                servers=optional_servers,
+                timeout_seconds=settings.runtime_mcp_optional_startup_timeout_seconds,
+            ),
+            timeout_seconds=(
+                max(len(optional_servers), 1)
+                * settings.runtime_mcp_optional_startup_timeout_seconds
+                + 1.0
+            ),
+        )
+    else:
+        _set_startup_step(app, "mcp_optional_servers", "skipped")
+
+    if mcp_task is not None:
+        await mcp_task
+
+    startup = app.state.startup
+    startup["finished_at"] = time.time()
+    startup["status"] = "ready" if app.state.startup_complete else "not_ready"
+
+
+def _consume_startup_task_result(task: asyncio.Task) -> None:
+    with suppress(asyncio.CancelledError):
+        exc = task.exception()
+        if exc is not None:
+            app_logger.error(f"Runtime background startup task failed: {exc}")
+
+
+async def _close_runtime_manager_singletons() -> None:
+    mcp = getattr(MCPClientManager, "_instance", None)
+    store_manager = getattr(StoreManager, "_instance", None)
+    checkpointer_manager = getattr(CheckpointerManager, "_instance", None)
+    if mcp is not None:
+        await mcp.close()
+        app_logger.info("MCP manager closed")
+    if store_manager is not None:
+        await store_manager.close()
+    if checkpointer_manager is not None:
+        await checkpointer_manager.close()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manage core dependency startup and shutdown."""
-    import asyncio
-
     app.state.startup_complete = False
 
     loop = asyncio.get_running_loop()
     app_logger.info(f"FastAPI event loop: {type(loop).__name__}")
     app_logger.info("Starting application")
 
-    checkpointer_manager = None
-    store_manager = None
-    mcp = None
-    optional_warmup_task = None
+    startup_task = asyncio.create_task(
+        _run_runtime_startup(app),
+        name="runtime-background-startup",
+    )
+    startup_task.add_done_callback(_consume_startup_task_result)
 
     try:
-        try:
-            checkpointer_manager = await CheckpointerManager.get_instance()
-            app_logger.info("Checkpointer ready")
-        except Exception as exc:
-            app_logger.exception("Checkpointer startup blocked readiness: %s", exc)
-
-        try:
-            store_manager = await StoreManager.get_instance()
-            app_logger.info("Store ready")
-        except Exception as exc:
-            app_logger.exception("Store startup blocked readiness: %s", exc)
-
-        try:
-            mcp = await MCPClientManager.get_instance()
-            startup_servers = MCPClientManager.get_startup_server_names()
-            if len(startup_servers) != len(MCPClientManager.SERVER_CONFIGS):
-                app_logger.info(
-                    "Skipping optional MCP startup warmup for: "
-                    + ", ".join(
-                        server
-                        for server in MCPClientManager.SERVER_CONFIGS
-                        if server not in startup_servers
-                    )
-                )
-            mcp_snapshot = await mcp.warmup(servers=startup_servers)
-            if mcp_snapshot["status"] == "healthy":
-                app_logger.info("MCP warmup completed with all servers healthy")
-            else:
-                app_logger.warning(
-                    "MCP warmup completed in degraded mode: "
-                    f"{mcp_snapshot['healthy_servers']} healthy, "
-                    f"{mcp_snapshot['unavailable_servers']} unavailable"
-                )
-        except Exception as exc:
-            app_logger.exception("MCP startup degraded readiness: %s", exc)
-
-        approval_governance_snapshot = await ApprovalGovernanceManager.verify_database()
-        if approval_governance_snapshot["status"] == "ready":
-            app_logger.info("Approval governance persistence ready")
-        else:
-            app_logger.warning(
-                "Approval governance is not fully ready: "
-                f"{approval_governance_snapshot}"
-            )
-
-        app.state.startup_complete = (
-            checkpointer_manager is not None
-            and store_manager is not None
-            and approval_governance_snapshot["status"] == "ready"
-        )
-
-        optional_servers = [
-            server
-            for server in MCPClientManager.OPTIONAL_STARTUP_SERVERS
-            if server in MCPClientManager.SERVER_CONFIGS
-        ]
-        if mcp is not None and optional_servers:
-            app_logger.info(
-                "Starting optional MCP background warmup for: "
-                + ", ".join(optional_servers)
-            )
-            optional_warmup_task = asyncio.create_task(
-                mcp.warmup(
-                    servers=optional_servers,
-                    timeout_overrides={server: 180.0 for server in optional_servers},
-                )
-            )
-
         yield
     finally:
         app.state.startup_complete = False
-        if optional_warmup_task is not None and not optional_warmup_task.done():
-            optional_warmup_task.cancel()
-        if mcp is not None:
-            await mcp.close()
-            app_logger.info("MCP manager closed")
-        if store_manager is not None:
-            await store_manager.close()
-        if checkpointer_manager is not None:
-            await checkpointer_manager.close()
+        if not startup_task.done():
+            startup_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await startup_task
+        await _close_runtime_manager_singletons()
 
     app_logger.info("Application stopped")
 
