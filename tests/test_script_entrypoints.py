@@ -165,6 +165,7 @@ def test_readiness_docs_cover_ci_staging_and_production_layers():
     assert "默认不连接真实 PostgreSQL" in db_migration
     assert "AsyncPostgresSaver.setup()" in db_migration
     assert "tool_audit_event" in db_migration
-    assert "run_live_acceptance=true" in evaluation
+    assert "staging-smoke.yml" in evaluation
+    assert "acceptance-smoke" in evaluation
     assert "blocked（环境阻塞）" in runtime
     assert "Docker" in deployment
