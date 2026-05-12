@@ -3,6 +3,7 @@ State transition tools for the travel-planning workflow.
 """
 from datetime import datetime
 from math import ceil
+import re
 from typing import Any, Optional
 from uuid import uuid4
 
@@ -1620,6 +1621,53 @@ def _infer_planning_mode(requirement: dict, state: TravelState | None = None) ->
     return agency_product_rules.infer_report_planning_mode(requirement, state)
 
 
+def _agency_signal_mode(requirement: dict, state: TravelState | None = None) -> str | None:
+    inferred = agency_product_rules.infer_report_planning_mode(requirement, state)
+    return inferred if inferred == "agency_plan" else None
+
+
+def _coerce_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, dict):
+        for key in ("name", "title", "summary", "description", "content", "text"):
+            if value.get(key):
+                return str(value[key]).strip()
+        return "；".join(
+            f"{key}:{item}"
+            for key, item in value.items()
+            if item is not None and str(item).strip()
+        )
+    if isinstance(value, (list, tuple, set)):
+        return "；".join(_coerce_text(item) for item in value if _coerce_text(item))
+    return str(value).strip()
+
+
+def _coerce_attractions(value: Any) -> list[str]:
+    if value is None:
+        return []
+    items = value if isinstance(value, list) else [value]
+    attractions: list[str] = []
+    for item in items:
+        text = _coerce_text(item)
+        if text:
+            attractions.append(text)
+    return attractions
+
+
+def _coerce_optional_float(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    match = re.search(r"\d+(?:\.\d+)?", str(value))
+    if not match:
+        return None
+    return float(match.group(0))
+
+
 def _pick_highlight(lines: list[str], keywords: tuple[str, ...], fallback_index: int = 0) -> str | None:
     return agency_product_rules._pick_highlight(lines, keywords, fallback_index)
 
@@ -1787,6 +1835,7 @@ def record_requirement_tool(
     mode_seed = {
         "special_needs": special_needs or "",
         "travel_styles": travel_styles,
+        "destination": destination or "",
     }
     mode_seed_text = " ".join(
         [str(mode_seed["special_needs"]), " ".join(str(item) for item in travel_styles)]
@@ -1796,18 +1845,25 @@ def record_requirement_tool(
         keyword in mode_seed_text
         for keyword in ("省心", "旅行社", "成熟路线", "定制游", "跟团", "小包团", "私家团", "团建", "亲子", "银发", "兜底", "自由行", "自由规划", "自助游", "自己玩", "不跟团", "自己订")
     ):
-        inferred_text_mode = _infer_planning_mode(mode_seed)
+        inferred_text_mode = _infer_planning_mode(mode_seed, runtime.state if runtime else None)
+    inferred_state_agency_mode = _agency_signal_mode(
+        mode_seed,
+        runtime.state if runtime else None,
+    )
     tool_planning_mode = _normalize_planning_mode(planning_mode)
-    if tool_planning_mode == "free_planning" and inferred_text_mode == "agency_plan":
+    if tool_planning_mode == "free_planning" and (
+        inferred_text_mode == "agency_plan" or inferred_state_agency_mode == "agency_plan"
+    ):
         tool_planning_mode = None
         planning_mode_reason = (
             planning_mode_reason
-            or "已按用户提出的住宿兜底方案诉求修正为旅行社顾问方案"
+            or "已按用户提出的省心方案诉求修正为旅行社顾问方案"
         )
     state_mode = _state_planning_mode(runtime.state if runtime else None)
     normalized_planning_mode = (
         tool_planning_mode
         or inferred_text_mode
+        or inferred_state_agency_mode
         or state_mode
         or "free_planning"
     )
@@ -1866,10 +1922,10 @@ def record_requirement_tool(
 @tool
 def select_destination_tool(
     destination: str,
-    description: Optional[str] = None,
-    weather_info: Optional[str] = None,
-    attractions: Optional[list[str]] = None,
-    estimated_cost: Optional[float] = None,
+    description: Optional[Any] = None,
+    weather_info: Optional[Any] = None,
+    attractions: Optional[Any] = None,
+    estimated_cost: Optional[Any] = None,
     runtime: ToolRuntime[None, TravelState] = None,
 ) -> Command:
     """Persist the chosen destination and optional destination context, then move to transport planning."""
@@ -1879,13 +1935,24 @@ def select_destination_tool(
         "selected_destination": destination,
         "current_step": "transport_planning",
     }
-    if any([description, weather_info, attractions, estimated_cost]):
+    normalized_description = _coerce_text(description)
+    normalized_weather_info = _coerce_text(weather_info)
+    normalized_attractions = _coerce_attractions(attractions)
+    normalized_estimated_cost = _coerce_optional_float(estimated_cost)
+    if any(
+        [
+            normalized_description,
+            normalized_weather_info,
+            normalized_attractions,
+            normalized_estimated_cost is not None,
+        ]
+    ):
         destination_info = {
             "name": destination,
-            "description": description or "",
-            "weather_info": weather_info,
-            "attractions": attractions or [],
-            "estimated_cost": estimated_cost,
+            "description": normalized_description,
+            "weather_info": normalized_weather_info,
+            "attractions": normalized_attractions,
+            "estimated_cost": normalized_estimated_cost,
         }
         state_update["destination_options"] = [destination_info]
 

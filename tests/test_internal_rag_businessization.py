@@ -13,6 +13,7 @@ from app.rag.contracts import (
 from app.rag.agency_retrieval import document_to_evidence, format_evidence_response
 from app.rag.pipeline import AdvancedRAGPipeline
 from app.rag.query_optimizer import AdvancedQueryOptimizer
+from app.rag.text_splitter import AdvancedParentDocumentSplitter
 from app.tools import rag_tools
 
 
@@ -235,6 +236,49 @@ async def test_internal_pricing_tool_uses_internal_pipeline(monkeypatch):
     assert "待二次核实" in result
 
 
+async def _fake_internal_pipeline_with_category_filter():
+    class FakePipeline:
+        def retrieve(self, query, metadata_filter=None):
+            assert metadata_filter == {"category": "pricing"}
+            return [
+                Document(
+                    page_content=f"报价规则命中：{query}",
+                    metadata={
+                        "source": "internal/pricing/pricing_rules.md",
+                        "category": "pricing",
+                        "visibility": "internal",
+                    },
+                ),
+                Document(
+                    page_content="内部产品模板，不应该被报价工具返回。",
+                    metadata={
+                        "source": "internal/products/route_templates.md",
+                        "category": "products",
+                        "visibility": "internal",
+                    },
+                ),
+            ]
+
+    return FakePipeline()
+
+
+@pytest.mark.asyncio
+async def test_internal_pricing_tool_prefilters_by_category(monkeypatch):
+    monkeypatch.setattr(
+        rag_tools,
+        "_get_internal_rag_pipeline",
+        _fake_internal_pipeline_with_category_filter,
+    )
+
+    result = await rag_tools.search_agency_pricing_rules.ainvoke(
+        {"query": "省心方案费用包含不包含"}
+    )
+
+    assert "报价规则命中" in result
+    assert "内部产品模板" not in result
+    assert '"category": "pricing"' in result
+
+
 async def _fake_internal_pipeline_with_wrong_category():
     class FakePipeline:
         def retrieve(self, query):
@@ -267,6 +311,35 @@ async def test_internal_rag_tool_blocks_cross_category_results(monkeypatch):
     assert "暂未命中" in result
     assert "pricing" in result
     assert "内部产品模板" not in result
+
+
+def test_parent_document_ids_are_stable_across_worktrees():
+    splitter = AdvancedParentDocumentSplitter()
+    source = (
+        r"D:\Users\Administrator\PycharmProjects\ZhiXing\langgraph-travel-planner"
+        r"\data\documents\internal\pricing\pricing_rules.md"
+    )
+    legacy_source = (
+        r"D:\Users\Administrator\PycharmProjects\ZhiXing\other-worktree"
+        r"\data\documents\internal\pricing\pricing_rules.md"
+    )
+    parent_docs, child_docs = splitter.split_documents(
+        [Document(page_content="报价规则：费用包含和不包含需要拆开说明。", metadata={"source": source})]
+    )
+
+    assert parent_docs[0].metadata["parent_id"] == (
+        "data/documents/internal/pricing/pricing_rules.md__parent_0"
+    )
+    legacy_child = Document(
+        page_content=child_docs[0].page_content,
+        metadata={
+            "parent_id": (
+                f"{legacy_source}__parent_0"
+            )
+        },
+    )
+
+    assert splitter.get_parent_context([legacy_child]) == [parent_docs[0]]
 
 
 def test_rag_pipeline_respects_disabled_llm_reranker(monkeypatch):

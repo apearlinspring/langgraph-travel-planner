@@ -323,7 +323,17 @@ async def _retrieve_internal(
     expected_category: str | None = None,
 ) -> str:
     pipeline = await _get_internal_rag_pipeline()
-    documents = pipeline.retrieve(enhanced_query or query)
+    retrieval_query = enhanced_query or query
+    if expected_category:
+        try:
+            documents = pipeline.retrieve(
+                retrieval_query,
+                metadata_filter={"category": expected_category},
+            )
+        except TypeError:
+            documents = pipeline.retrieve(retrieval_query)
+    else:
+        documents = pipeline.retrieve(retrieval_query)
     documents = filter_documents_by_category(documents, expected_category)
     empty_message = None
     if expected_category and not documents:

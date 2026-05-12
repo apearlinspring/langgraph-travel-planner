@@ -1,10 +1,23 @@
 """
 文本切分：父文档 + 子文档策略（优化版）
 """
+from pathlib import Path
 from typing import List, Tuple, Dict
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from app.utils.logger import app_logger
+
+
+def _stable_source_id(source: str | None) -> str:
+    """Return a worktree-independent source id for persisted RAG chunks."""
+
+    raw_source = str(source or "unknown").replace("\\", "/")
+    path = Path(raw_source)
+    parts = path.parts
+    for index in range(len(parts) - 1):
+        if parts[index] == "data" and parts[index + 1] == "documents":
+            return "/".join(parts[index:])
+    return raw_source
 
 
 class AdvancedParentDocumentSplitter:
@@ -59,7 +72,7 @@ class AdvancedParentDocumentSplitter:
 
             # 2. 为每个父文档生成 ID 并切分子文档
             for i, parent_chunk in enumerate(parent_chunks):
-                parent_id = f"{doc.metadata.get('source', 'unknown')}__parent_{i}"
+                parent_id = f"{_stable_source_id(doc.metadata.get('source'))}__parent_{i}"
                 parent_chunk.metadata["parent_id"] = parent_id
                 parent_chunk.metadata["chunk_type"] = "parent"
                 parent_docs.append(parent_chunk)
@@ -105,12 +118,15 @@ class AdvancedParentDocumentSplitter:
 
         for child_doc in child_docs:
             parent_id = child_doc.metadata.get("parent_id")
+            normalized_parent_id = _stable_source_id(parent_id)
 
-            if parent_id and parent_id not in parent_ids:
-                parent_ids.add(parent_id)
+            if parent_id and normalized_parent_id not in parent_ids:
+                parent_ids.add(normalized_parent_id)
 
                 # 从映射表获取父文档
-                parent_doc = self.parent_docs.get(parent_id)
+                parent_doc = self.parent_docs.get(parent_id) or self.parent_docs.get(
+                    normalized_parent_id
+                )
                 if parent_doc:
                     parent_contexts.append(parent_doc)
 

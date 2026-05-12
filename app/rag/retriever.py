@@ -1,7 +1,7 @@
 """
 混合检索器：BM25 + Dense + RRF 融合（优化版）
 """
-from typing import List, Tuple
+from typing import Any, List, Tuple
 from collections import defaultdict
 from langchain_core.documents import Document
 from langchain_chroma import Chroma
@@ -52,13 +52,43 @@ class AdvancedHybridRetriever:
 
         app_logger.info("✅ BM25 索引初始化完成")
 
-    def _bm25_search(self, query: str, k: int) -> List[Document]:
-        """BM25 检索"""
-        return self.bm25_retriever.invoke(query)[:k]
+    def _filter_documents(self, metadata_filter: dict[str, Any] | None) -> List[Document]:
+        if not metadata_filter:
+            return self.documents
+        return [
+            doc
+            for doc in self.documents
+            if all((doc.metadata or {}).get(key) == value for key, value in metadata_filter.items())
+        ]
 
-    def _dense_search(self, query: str, k: int) -> List[Tuple[Document, float]]:
+    def _bm25_search(
+        self,
+        query: str,
+        k: int,
+        metadata_filter: dict[str, Any] | None = None,
+    ) -> List[Document]:
+        """BM25 检索"""
+        if not metadata_filter:
+            return self.bm25_retriever.invoke(query)[:k]
+
+        documents = self._filter_documents(metadata_filter)
+        if not documents:
+            return []
+        retriever = BM25Retriever.from_documents(documents)
+        retriever.k = k
+        return retriever.invoke(query)[:k]
+
+    def _dense_search(
+        self,
+        query: str,
+        k: int,
+        metadata_filter: dict[str, Any] | None = None,
+    ) -> List[Tuple[Document, float]]:
         """Dense 检索（向量相似度）"""
-        results = self.vectorstore.similarity_search_with_score(query, k=k)
+        kwargs: dict[str, Any] = {"k": k}
+        if metadata_filter:
+            kwargs["filter"] = metadata_filter
+        results = self.vectorstore.similarity_search_with_score(query, **kwargs)
         #Chroma中默认使用L2距离，这样输出的distance是无上限的，而我们希望把其控制在0到1之间，也就是相似度
         # Chroma 返回的是 (doc, distance)，需要转换为 (doc, similarity)
         similarity_results = [
@@ -104,7 +134,12 @@ class AdvancedHybridRetriever:
 
         return [doc_map[doc_id] for doc_id, _ in sorted_docs[:self.k]]
 
-    def retrieve(self, query: str, queries: List[str] = None) -> List[Document]:
+    def retrieve(
+        self,
+        query: str,
+        queries: List[str] = None,
+        metadata_filter: dict[str, Any] | None = None,
+    ) -> List[Document]:
         """
         混合检索
 
@@ -117,9 +152,10 @@ class AdvancedHybridRetriever:
         """
 
         # 检查缓存
-        if self.use_cache and query in self._cache:
+        cache_key = (query, tuple(sorted((metadata_filter or {}).items())))
+        if self.use_cache and cache_key in self._cache:
             app_logger.info("命中缓存")
-            return self._cache[query]
+            return self._cache[cache_key]
 
         # 如果提供了查询变体，合并结果
         if queries and len(queries) > 1:
@@ -127,7 +163,7 @@ class AdvancedHybridRetriever:
             all_results = []
 
             for q in queries:
-                results = self._single_retrieve(q)
+                results = self._single_retrieve(q, metadata_filter=metadata_filter)
                 all_results.extend(results)
 
             # 去重并重新排序
@@ -141,23 +177,35 @@ class AdvancedHybridRetriever:
 
             final_results = unique_results[:self.k]
         else:
-            final_results = self._single_retrieve(query)
+            final_results = self._single_retrieve(query, metadata_filter=metadata_filter)
 
         # 缓存结果
         if self.use_cache:
-            self._cache[query] = final_results
+            self._cache[cache_key] = final_results
 
         return final_results
 
-    def _single_retrieve(self, query: str) -> List[Document]:
+    def _single_retrieve(
+        self,
+        query: str,
+        metadata_filter: dict[str, Any] | None = None,
+    ) -> List[Document]:
         """单个查询的检索"""
 
         # BM25 检索
-        bm25_results = self._bm25_search(query, k=self.k * 2)
+        bm25_results = self._bm25_search(
+            query,
+            k=self.k * 2,
+            metadata_filter=metadata_filter,
+        )
         app_logger.debug(f"BM25 检索到 {len(bm25_results)} 个候选")
 
         # Dense 检索
-        dense_results = self._dense_search(query, k=self.k * 2)
+        dense_results = self._dense_search(
+            query,
+            k=self.k * 2,
+            metadata_filter=metadata_filter,
+        )
         app_logger.debug(f"Dense 检索到 {len(dense_results)} 个候选")
 
         # RRF 融合
