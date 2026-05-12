@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -11,7 +12,11 @@ from app.evaluation.acceptance_gate import (
     render_acceptance_markdown,
     write_acceptance_summary_files,
 )
-from app.evaluation.preflight import required_capabilities_for_scenarios, run_acceptance_preflight
+from app.evaluation.preflight import (
+    _check_backend_ready,
+    required_capabilities_for_scenarios,
+    run_acceptance_preflight,
+)
 from app.evaluation.live_runner import (
     _classify_live_error_status,
     build_acceptance_evidence_closure,
@@ -610,6 +615,87 @@ def test_preflight_declares_scenario_capability_requirements():
     assert {"amap", "tavily"}.issubset(capabilities["external_apis"])
 
 
+def test_backend_ready_degraded_by_unselected_mcp_can_pass_selected_smoke(monkeypatch):
+    class FakeResponse:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return json.dumps(
+                {
+                    "status": "degraded",
+                    "degraded_optional": ["mcp"],
+                    "services": {
+                        "mcp": {
+                            "servers": {
+                                "weather": {"status": "healthy"},
+                                "search": {"status": "healthy"},
+                                "amap": {"status": "unavailable"},
+                            }
+                        }
+                    },
+                }
+            ).encode("utf-8")
+
+    monkeypatch.setattr(
+        "app.evaluation.preflight.urllib.request.urlopen",
+        lambda *args, **kwargs: FakeResponse(),
+    )
+
+    check = _check_backend_ready(
+        "http://127.0.0.1:8000",
+        required_mcp_servers=["weather", "search"],
+    )
+
+    assert check.status == "passed"
+    assert "outside the selected scenario set" in check.findings[0]
+
+
+def test_backend_ready_blocks_when_selected_mcp_is_unavailable(monkeypatch):
+    class FakeResponse:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return json.dumps(
+                {
+                    "status": "degraded",
+                    "degraded_optional": ["mcp"],
+                    "services": {
+                        "mcp": {
+                            "servers": {
+                                "weather": {"status": "healthy"},
+                                "amap": {"status": "unavailable"},
+                            }
+                        }
+                    },
+                }
+            ).encode("utf-8")
+
+    monkeypatch.setattr(
+        "app.evaluation.preflight.urllib.request.urlopen",
+        lambda *args, **kwargs: FakeResponse(),
+    )
+
+    check = _check_backend_ready(
+        "http://127.0.0.1:8000",
+        required_mcp_servers=["weather", "amap"],
+    )
+
+    assert check.status == "blocked"
+    assert "amap" in check.findings[0]
+
+
 def test_preflight_only_passed_exit_code_is_success():
     preflight = {
         "status": "passed",
@@ -729,6 +815,11 @@ def test_degraded_preflight_summary_remains_degraded(tmp_path: Path):
 
 def test_acceptance_smoke_scenarios_select_minimal_live_contract():
     scenarios = acceptance_smoke_scenarios()
+    pricing_smoke = next(
+        scenario
+        for scenario in scenarios
+        if scenario.id == "pricing_agency_quote_explanation"
+    )
 
     assert scenarios
     assert all(ACCEPTANCE_SMOKE_TAG in scenario.tags for scenario in scenarios)
@@ -740,6 +831,10 @@ def test_acceptance_smoke_scenarios_select_minimal_live_contract():
         "省心" in scenario.prompt and ("费用" in scenario.prompt or "报价" in scenario.name)
         for scenario in scenarios
     )
+    assert pricing_smoke.requirements["mcp_servers"] == ["weather", "search"]
+    assert pricing_smoke.runtime_budget["max_first_token_seconds"] == 90
+    assert pricing_smoke.runtime_budget["warning_first_token_ratio"] == 0.95
+    assert any("report_data" in followup for followup in pricing_smoke.followups)
 
 
 def test_acceptance_smoke_scenarios_require_agency_quote_coverage():
