@@ -64,6 +64,18 @@ CI（持续集成）默认不连接真实 PostgreSQL（关系型数据库），�
 
 GitHub Actions（GitHub 自动化流水线）中对应 `workflow_dispatch`（手动触发）：默认只跑 `Manual Acceptance Preflight`，只有把 `run_live_acceptance=true` 时才会运行真实场景。
 
+本地复跑时，如果还没有 `.venv`，先用 `uv run python scripts\check_runtime_readiness.py --target development --json` 创建环境，再回到 `.venv\Scripts\python` 命令。真实验收前建议按这个顺序确认：
+
+```powershell
+.\.venv\Scripts\python -m scripts.init_db
+.\.venv\Scripts\python -m scripts.init_rag
+.\.venv\Scripts\python main.py
+.\.venv\Scripts\python scripts\check_runtime_readiness.py --target acceptance --check-backend --base-url http://127.0.0.1:8000 --json
+.\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-core --preflight-only --base-url http://127.0.0.1:8000 --json --no-summary
+```
+
+2026-05-11 本地复跑结果是 `blocked（环境阻塞）`：缺真实 PostgreSQL（关系型数据库）、Redis（内存数据结构存储）、LLM（大语言模型）、RAG（检索增强生成）向量库元数据、MCP（模型上下文协议）上游 API（应用程序接口）凭据和后端健康端点。完整记录见 `docs/live-acceptance-runbook.md`。
+
 ### Production 生产
 
 生产发布前使用真实部署密钥系统注入环境变量，然后执行：
@@ -101,6 +113,7 @@ GitHub Actions（GitHub 自动化流水线）中对应 `workflow_dispatch`（手
 ## 安全边界
 
 - `.env.example` 只保留变量名、默认值和说明，不写真实密钥。
+- `.runtime/` 仅用于本地 live acceptance（在线验收）快照、blocked（环境阻塞）摘要和启动日志；不得提交原始产物，只能把脱敏后的结论写入文档。
 - 验收摘要、测试快照和提交说明不能包含真实密钥或真实个人信息；验收 live snapshot（真实链路快照）写盘前会做递归脱敏。
 - SSE（服务器发送事件）、工具审计、审批理由、审批备注和错误响应不得暴露手机号、邮箱、身份证号、API Key（应用程序接口密钥）、token（令牌）或 secret（密钥）。
 - 酒店、航班、火车、地图等外部能力失败时，报告只能写待核验和兜底估算，不能编造真实库存、锁价、余位、支付或客服信息。

@@ -96,6 +96,22 @@ blocked（环境阻塞）不再只表现为“场景 skipped（跳过）”。�
 - RAG（检索增强生成）向量库目录
 - 后端 `GET /health/live` 和 `GET /health/ready`
 
+## 2026-05-11 本地阻塞复跑追加
+
+本轮在 `codex/live-acceptance-runbook` 分支重新执行了真实入口，不只更新文档。初始 `.venv` 不存在，先用 `uv run python scripts\check_runtime_readiness.py --target development --json` 创建虚拟环境并安装依赖；development（开发）配置矩阵返回 `blocked`。
+
+补充执行结果：
+
+- `.\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-core --dry-run`：退出码 0，确认 9 个核心场景。
+- `.\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-core --preflight-only --json --no-summary`：退出码 1，9 个核心场景均为 `blocked`。
+- 尝试 `.\.venv\Scripts\python main.py` 启动后端并等待 25 秒：进程停留在 application startup（应用启动）阶段，`/health/live` 与 `/health/ready` 均不可达。
+- `.\.venv\Scripts\python scripts\check_runtime_readiness.py --target acceptance --base-url http://127.0.0.1:8000 --check-backend --json`：退出码 1，缺 `runtime_config`、`real_llm`、真实外部 API（应用程序接口）、真实 MCP（模型上下文协议）和后端健康检查。
+- `.\.venv\Scripts\python -m scripts.init_db`：退出码 1，`localhost:5432` PostgreSQL（关系型数据库）连接拒绝。
+- `.\.venv\Scripts\python -m scripts.init_rag`：退出码 1，文档加载和切分成功，但缺 `DASHSCOPE_API_KEY`，无法创建 DashScope Embeddings（通义千问向量模型）；当前 `data/vectorstore` 缺 `chroma.sqlite3`。
+- `.\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-core --base-url http://127.0.0.1:8000 --json`：退出码 1，在 preflight（预检）阶段阻断，未调用真实对话场景，生成 `.runtime\evaluations\20260511-151720-acceptance-summary.*` blocked 摘要。
+
+最新可复现流程和完整阻塞证据见 `docs/live-acceptance-runbook.md`。本次仍没有降低门禁阈值，也没有提交 `.runtime/` 原始摘要、日志或任何真实密钥。
+
 ## 复跑步骤
 
 1. 准备 `.env` 中的真实验收配置和 RAG（检索增强生成）向量库，不提交真实密钥。

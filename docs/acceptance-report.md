@@ -207,3 +207,15 @@ uv run --frozen python scripts\run_evaluation_scenarios.py --acceptance-core --d
 ```
 
 结果：非零退出，`status=blocked`，`scenario_count=9`。
+
+## 2026-05-11 live acceptance（在线验收）runbook（运行手册）复跑
+
+本轮继续在本地真实执行验收入口，详见 `docs/live-acceptance-runbook.md`。结论仍为 `blocked（环境阻塞）`，但阻塞证据更完整：
+
+- 实际尝试启动后端：进程进入 application startup（应用启动）阶段，25 秒内 `/health/live` 和 `/health/ready` 都不可达。
+- 实际跑了 preflight（预检）：`--acceptance-core --preflight-only --json --no-summary` 返回非零退出，9 个核心场景均为 `blocked`。
+- 实际尝试完整入口：`--acceptance-core --base-url http://127.0.0.1:8000 --json` 返回非零退出，在 preflight（预检）阶段阻断，没有进入真实对话场景调用。
+- 实际尝试 `scripts.init_db`：本机 `localhost:5432` PostgreSQL（关系型数据库）连接拒绝。
+- 实际尝试 `scripts.init_rag`：文档加载和切分成功，但缺 `DASHSCOPE_API_KEY`，无法创建 DashScope Embeddings（通义千问向量模型），当前 RAG（检索增强生成）向量库缺 `chroma.sqlite3` 元数据。
+
+完整入口生成了 `.runtime\evaluations\20260511-151720-acceptance-summary.json` 和 `.runtime\evaluations\20260511-151720-acceptance-summary.md` blocked 摘要。`.runtime/` 产物不提交，只把脱敏结论写入文档。
