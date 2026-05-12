@@ -2,7 +2,7 @@
 完整的 Advanced RAG 管道
 整合所有优化策略
 """
-from typing import List
+from typing import Any, List
 from dotenv import load_dotenv
 from langchain_core.documents import Document
 from langchain_chroma import Chroma
@@ -97,7 +97,11 @@ class AdvancedRAGPipeline:
             doc.metadata = metadata
         return documents
 
-    def retrieve(self, query: str) -> List[Document]:
+    def retrieve(
+        self,
+        query: str,
+        metadata_filter: dict[str, Any] | None = None,
+    ) -> List[Document]:
         """
         完整检索流程
 
@@ -109,7 +113,12 @@ class AdvancedRAGPipeline:
         """
 
         # 尝试从缓存获取
-        cached_result = self.cache.get(query, self.top_k)
+        cache_query = (
+            query
+            if not metadata_filter
+            else f"{query} || filter={sorted(metadata_filter.items())}"
+        )
+        cached_result = self.cache.get(cache_query, self.top_k)
         if cached_result:
             return cached_result
 
@@ -120,10 +129,17 @@ class AdvancedRAGPipeline:
         app_logger.info(f"1️. 查询优化完成，生成 {len(optimized_queries)} 个查询")
 
         # ========== 阶段 2：混合检索 ==========
-        child_docs = self.retriever.retrieve(
-            query=query,
-            queries=optimized_queries
-        )
+        if metadata_filter:
+            child_docs = self.retriever.retrieve(
+                query=query,
+                queries=optimized_queries,
+                metadata_filter=metadata_filter,
+            )
+        else:
+            child_docs = self.retriever.retrieve(
+                query=query,
+                queries=optimized_queries,
+            )
         app_logger.info(f"2️. 混合检索完成，获得 {len(child_docs)} 个候选文档")
 
         # ========== 阶段 3：重排序 ==========
@@ -151,6 +167,6 @@ class AdvancedRAGPipeline:
         app_logger.info(f"✅ RAG 检索完成，最终返回 {len(final_docs)} 个文档")
 
         # 缓存结果
-        self.cache.set(query, self.top_k, final_docs)
+        self.cache.set(cache_query, self.top_k, final_docs)
 
         return final_docs

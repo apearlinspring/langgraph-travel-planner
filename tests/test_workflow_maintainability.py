@@ -315,6 +315,36 @@ def test_record_requirement_persists_planning_mode():
     assert "规划模式：旅行社顾问方案" in command.update["messages"][0].content
 
 
+def test_record_requirement_uses_recent_user_agency_signal_when_tool_args_are_plain():
+    state = create_initial_state(user_id="user-1", session_id="session-1")
+    state["messages"] = [
+        HumanMessage(
+            content="我们4个大人从成都去重庆3天2晚，想要省心方案，费用包含和不包含都要说明。"
+        )
+    ]
+
+    command = record_requirement_tool.invoke(
+        {
+            "departure_city": "成都",
+            "destination": "重庆",
+            "departure_date": "2026-06-01",
+            "travel_days": 3,
+            "adult_count": 4,
+            "children_count": 0,
+            "budget_min": 1500.0,
+            "budget_max": 3500.0,
+            "travel_styles": ["relaxation"],
+            "special_needs": "",
+            "planning_mode": "free_planning",
+            "runtime": _build_runtime(state),
+        }
+    )
+
+    assert command.update["planning_mode"] == "agency_plan"
+    assert command.update["user_requirement"]["planning_mode"] == "agency_plan"
+    assert "省心方案" in command.update["planning_mode_reason"]
+
+
 def test_record_requirement_treats_hotel_fallback_as_agency_plan():
     state = create_initial_state(user_id="user-1", session_id="session-1")
 
@@ -406,6 +436,32 @@ def test_select_destination_tool_can_persist_destination_context():
     assert command.update["current_step"] == "transport_planning"
     assert command.update["destination_options"][0]["weather_info"] == "可能有阵雨，建议准备室内备选"
     assert "上海博物馆" in command.update["destination_options"][0]["attractions"]
+
+
+def test_select_destination_tool_accepts_structured_attraction_payloads():
+    from app.tools.state_transition import select_destination_tool
+
+    state = create_initial_state(user_id="user-1", session_id="session-1")
+
+    command = select_destination_tool.invoke(
+        {
+            "destination": "重庆",
+            "description": {"summary": "短途省心，适合轻松节奏。"},
+            "weather_info": ["天气需出发前二次核验"],
+            "attractions": [
+                {"name": "洪崖洞", "reason": "夜景"},
+                "解放碑",
+            ],
+            "estimated_cost": "约 2500 元/人",
+            "runtime": _build_runtime(state),
+        }
+    )
+
+    option = command.update["destination_options"][0]
+    assert option["description"] == "短途省心，适合轻松节奏。"
+    assert option["weather_info"] == "天气需出发前二次核验"
+    assert option["attractions"] == ["洪崖洞", "解放碑"]
+    assert option["estimated_cost"] == 2500.0
 
 
 def test_select_transport_tool_normalizes_common_chinese_labels():
