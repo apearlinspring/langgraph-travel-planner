@@ -219,3 +219,52 @@ uv run --frozen python scripts\run_evaluation_scenarios.py --acceptance-core --d
 - 实际尝试 `scripts.init_rag`：文档加载和切分成功，但缺 `DASHSCOPE_API_KEY`，无法创建 DashScope Embeddings（通义千问向量模型），当前 RAG（检索增强生成）向量库缺 `chroma.sqlite3` 元数据。
 
 完整入口生成了 `.runtime\evaluations\20260511-151720-acceptance-summary.json` 和 `.runtime\evaluations\20260511-151720-acceptance-summary.md` blocked 摘要。`.runtime/` 产物不提交，只把脱敏结论写入文档。
+
+## 2026-05-12 R2 live acceptance（在线验收）收口
+
+本轮目标是让 R2 从 blocked（环境阻塞）走向“可复跑、可判定、可留证”。代码层已完成：
+
+- `--json` 模式的 stdout（标准输出）只输出机器可读 JSON（JavaScript 对象表示法）；导入期日志保留到 stderr（标准错误）。
+- preflight（预检）顶层输出 `missing_required`、`health_checks` 和 `blocking_reasons`，方便 CI（持续集成）或人工脚本直接判定。
+- 新增 `acceptance-smoke`（验收冒烟）最小场景，当前选择 `pricing_agency_quote_explanation`，用于后端 ready（就绪）后至少跑一个真实对话。
+- 验收摘要和 Markdown（标记文本）在写入前做敏感文本脱敏，避免保存 API（应用程序接口）密钥、手机号、邮箱或 JWT（JSON Web Token，令牌认证）。
+- 验收脚本要求 `--output-dir` 和 `--summary-dir` 位于 `.runtime/` 下，避免把本地原始产物提交到仓库。
+
+本轮实际环境结论仍为 `blocked（环境阻塞）`。原因不是判定逻辑失败，而是本地缺真实依赖，且后端健康检查不可达；因此没有进入真实聊天 API（应用程序接口）对话，也没有生成有效 `report_data`。
+
+本轮验证摘要：
+
+```powershell
+.\.venv\Scripts\python -m pytest tests\test_evaluation_live_runner.py -q
+```
+
+结果：`28 passed`。
+
+```powershell
+.\.venv\Scripts\python -m compileall app tests scripts
+```
+
+结果：退出码 0。
+
+```powershell
+.\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-core --preflight-only --json --no-summary
+```
+
+结果：退出码 2，stdout 可被 `ConvertFrom-Json` 解析，`status=blocked`、`passed=false`、`missing_required=9`、`health_checks=2`、`blocking_reasons=9`。
+
+```powershell
+.\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-smoke --preflight-only --json --no-summary
+```
+
+结果：退出码 2，`status=blocked`、`passed=false`、`scenario_count=1`，最小场景为 `pricing_agency_quote_explanation`。
+
+```powershell
+.\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-core --base-url http://127.0.0.1:8000 --json
+```
+
+结果：退出码 2，`status=blocked`、`passed=false`、`scenario_count=9`，生成本地 blocked 摘要：
+
+- `.runtime\evaluations\20260512-064458-acceptance-summary.json`
+- `.runtime\evaluations\20260512-064458-acceptance-summary.md`
+
+这些 `.runtime/` 原始产物不提交。可提交的证据只保留在本报告、`docs/live-acceptance-runbook.md` 和 `docs/round-live-acceptance.md`。

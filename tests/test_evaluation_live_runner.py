@@ -24,7 +24,11 @@ from app.evaluation.live_runner import (
     snapshot_path_for,
 )
 from app.evaluation.scenarios import EvaluationScenario
+from app.evaluation.scenarios import ACCEPTANCE_SMOKE_TAG, acceptance_smoke_scenarios
 from scripts.run_evaluation_scenarios import (
+    RUNTIME_ARTIFACT_ROOT,
+    _require_runtime_artifact_dir,
+    build_cli_json_payload,
     _preflight_only_exit_code,
     _preflight_skip_reason,
 )
@@ -679,3 +683,132 @@ def test_degraded_preflight_summary_remains_degraded(tmp_path: Path):
     assert summary["status"] == "degraded"
     assert summary["degraded_count"] == 0
     assert summary["degradations"][0]["dimension"] == "environment_dependencies"
+
+
+def test_acceptance_smoke_scenarios_select_minimal_live_contract():
+    scenarios = acceptance_smoke_scenarios()
+
+    assert scenarios
+    assert all(ACCEPTANCE_SMOKE_TAG in scenario.tags for scenario in scenarios)
+    assert any(scenario.id == "pricing_agency_quote_explanation" for scenario in scenarios)
+    assert all(scenario.expected_mode == "agency_plan" for scenario in scenarios)
+    assert all(scenario.requirements.get("real_llm") is True for scenario in scenarios)
+    assert all(scenario.requirements.get("real_mcp") is True for scenario in scenarios)
+
+
+def test_cli_json_payload_surfaces_preflight_blockers_and_health_checks():
+    preflight = {
+        "status": "blocked",
+        "missing_required": ["runtime_config", "backend_ready"],
+        "degraded_optional": [],
+        "checks": [
+            {
+                "key": "runtime_config",
+                "label": "Runtime config readiness matrix",
+                "status": "blocked",
+                "required": True,
+                "findings": ["Missing api_key=sk-testvalue123456789 for test@example.com"],
+                "env_vars": ["DASHSCOPE_API_KEY"],
+                "suggestion": "Set real credentials.",
+            },
+            {
+                "key": "backend_ready",
+                "label": "Backend ready health endpoint",
+                "status": "blocked",
+                "required": True,
+                "findings": ["Bearer eyJabcdefgh.ijklmnopqr.stuvwxyz12 rejected"],
+                "env_vars": [],
+                "suggestion": "Start backend.",
+            },
+        ],
+    }
+
+    payload = build_cli_json_payload(
+        results=[],
+        acceptance_summary=None,
+        summary_paths=None,
+        preflight=preflight,
+    )
+    serialized = str(payload)
+
+    assert payload["status"] == "blocked"
+    assert payload["passed"] is False
+    assert payload["missing_required"] == ["runtime_config", "backend_ready"]
+    assert [item["key"] for item in payload["health_checks"]] == ["backend_ready"]
+    assert [item["key"] for item in payload["blocking_reasons"]] == [
+        "runtime_config",
+        "backend_ready",
+    ]
+    assert "test@example.com" not in serialized
+    assert "sk-testvalue123456789" not in serialized
+    assert "eyJabcdefgh.ijklmnopqr.stuvwxyz12" not in serialized
+
+
+def test_cli_json_payload_keeps_degraded_preflight_from_passing_without_summary():
+    payload = build_cli_json_payload(
+        results=[{"scenario_id": "smoke", "status": "passed", "passed": True}],
+        acceptance_summary=None,
+        summary_paths=None,
+        preflight={
+            "status": "degraded",
+            "missing_required": [],
+            "degraded_optional": ["backend_ready"],
+            "checks": [],
+        },
+    )
+
+    assert payload["status"] == "degraded"
+    assert payload["passed"] is False
+
+
+def test_acceptance_artifact_dirs_must_stay_under_runtime(tmp_path: Path):
+    inside = Path(".runtime") / "evaluations"
+
+    assert _require_runtime_artifact_dir(inside, flag_name="--output-dir") == inside
+    assert _require_runtime_artifact_dir(
+        RUNTIME_ARTIFACT_ROOT / "smoke",
+        flag_name="--summary-dir",
+    ) == RUNTIME_ARTIFACT_ROOT / "smoke"
+    with pytest.raises(ValueError, match="inside"):
+        _require_runtime_artifact_dir(tmp_path, flag_name="--output-dir")
+
+
+def test_acceptance_summary_redacts_sensitive_report_text(tmp_path: Path):
+    scenario = EvaluationScenario(
+        id="sensitive_summary",
+        name="Sensitive Summary",
+        category="agency_plan",
+        prompt="请联系 test@example.com，手机号 13800138000",
+        expected_mode="agency_plan",
+        min_score=80,
+        focus=["contract"],
+        tags=["agency"],
+    )
+    gate = build_error_acceptance_gate_result(
+        scenario=scenario,
+        error="authorization=Bearer eyJabcdefgh.ijklmnopqr.stuvwxyz12 failed",
+        status="blocked",
+    )
+
+    summary = build_acceptance_run_summary(
+        results=[
+            {
+                "scenario_id": scenario.id,
+                "scenario_name": scenario.name,
+                "status": "blocked",
+                "passed": False,
+                "runtime_metrics": {"estimated_total_tokens": 120},
+                "acceptance_gate": gate,
+            }
+        ],
+        scenarios=[scenario],
+        base_url="http://127.0.0.1:8000",
+        output_dir=tmp_path,
+    )
+    markdown = render_acceptance_markdown(summary)
+    serialized = str(summary) + markdown
+
+    assert summary["runtime_totals"]["estimated_total_tokens"] == 120
+    assert "test@example.com" not in serialized
+    assert "13800138000" not in serialized
+    assert "eyJabcdefgh.ijklmnopqr.stuvwxyz12" not in serialized

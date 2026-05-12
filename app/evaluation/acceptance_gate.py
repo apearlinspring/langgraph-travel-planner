@@ -9,6 +9,7 @@ from typing import Any, Iterable
 
 from app.evaluation.preflight import ACCEPTANCE_STATUSES
 from app.evaluation.scenarios import ACCEPTANCE_CORE_TAG, EvaluationScenario
+from app.utils.security import redact_sensitive_text
 
 
 ACCEPTANCE_GATE_VERSION = "acceptance_quality_gate.v1"
@@ -174,6 +175,31 @@ def _as_int(value: Any) -> int | None:
 
 def _has_text(value: Any) -> bool:
     return isinstance(value, str) and bool(value.strip())
+
+
+def _redact_acceptance_artifact(value: Any, *, max_depth: int = 12) -> Any:
+    """Redact sensitive string values without hiding non-secret token metrics."""
+
+    if max_depth < 0:
+        return "[REDACTED]"
+    if isinstance(value, dict):
+        return {
+            key: _redact_acceptance_artifact(item, max_depth=max_depth - 1)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [
+            _redact_acceptance_artifact(item, max_depth=max_depth - 1)
+            for item in value
+        ]
+    if isinstance(value, tuple):
+        return tuple(
+            _redact_acceptance_artifact(item, max_depth=max_depth - 1)
+            for item in value
+        )
+    if isinstance(value, str):
+        return redact_sensitive_text(value)
+    return value
 
 
 def _score_bool(parts: Iterable[bool]) -> float:
@@ -869,7 +895,7 @@ def build_acceptance_run_summary(
     else:
         run_status = "passed"
 
-    return {
+    summary = {
         "version": ACCEPTANCE_SUMMARY_VERSION,
         "created_at": created.isoformat(),
         "base_url": base_url,
@@ -896,11 +922,13 @@ def build_acceptance_run_summary(
         "failures": failures,
         "degradations": degradations,
     }
+    return _redact_acceptance_artifact(summary)
 
 
 def render_acceptance_markdown(summary: dict[str, Any]) -> str:
     """Render a human-readable Markdown acceptance summary."""
 
+    summary = _redact_acceptance_artifact(summary)
     status = str(summary.get("status") or ("passed" if summary.get("passed") else "failed"))
     status_label = {
         "passed": "passed（通过）",
@@ -1043,6 +1071,7 @@ def write_acceptance_summary_files(
     """Write JSON and Markdown summary artifacts and return their paths."""
 
     output_dir.mkdir(parents=True, exist_ok=True)
+    summary = _redact_acceptance_artifact(summary)
     created = created_at or datetime.now(timezone.utc)
     timestamp = created.strftime("%Y%m%d-%H%M%S")
     safe_prefix = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "-" for ch in prefix)

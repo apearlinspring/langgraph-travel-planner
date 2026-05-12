@@ -12,6 +12,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+_JSON_MODE_REQUESTED = "--json" in sys.argv
+_ORIGINAL_STDOUT = sys.stdout
+if _JSON_MODE_REQUESTED:
+    sys.stdout = sys.stderr
+
 from app.evaluation.live_runner import (  # noqa: E402
     DEFAULT_BASE_URL,
     DEFAULT_OUTPUT_DIR,
@@ -28,7 +33,142 @@ from app.evaluation.acceptance_gate import (  # noqa: E402
 )
 from app.evaluation.preflight import run_acceptance_preflight  # noqa: E402
 from app.evaluation.runtime_metrics import runtime_budget_from_dict  # noqa: E402
-from app.evaluation.scenarios import acceptance_core_scenarios, load_scenarios  # noqa: E402
+from app.evaluation.scenarios import (  # noqa: E402
+    acceptance_core_scenarios,
+    acceptance_smoke_scenarios,
+    load_scenarios,
+)
+from app.utils.security import redact_sensitive_text  # noqa: E402
+
+
+RUNTIME_ARTIFACT_ROOT = PROJECT_ROOT / ".runtime"
+
+
+def _redact_cli_payload(value: Any, *, max_depth: int = 12) -> Any:
+    if max_depth < 0:
+        return "[REDACTED]"
+    if isinstance(value, dict):
+        return {
+            key: _redact_cli_payload(item, max_depth=max_depth - 1)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [
+            _redact_cli_payload(item, max_depth=max_depth - 1)
+            for item in value
+        ]
+    if isinstance(value, tuple):
+        return tuple(
+            _redact_cli_payload(item, max_depth=max_depth - 1)
+            for item in value
+        )
+    if isinstance(value, str):
+        return redact_sensitive_text(value)
+    return value
+
+
+def _require_runtime_artifact_dir(path: Path, *, flag_name: str) -> Path:
+    resolved_path = (PROJECT_ROOT / path if not path.is_absolute() else path).resolve()
+    runtime_root = RUNTIME_ARTIFACT_ROOT.resolve()
+    if resolved_path != runtime_root and runtime_root not in resolved_path.parents:
+        raise ValueError(
+            f"{flag_name} must point inside {RUNTIME_ARTIFACT_ROOT} for live acceptance artifacts"
+        )
+    return path
+
+
+def _preflight_health_checks(preflight: dict[str, Any]) -> list[dict[str, Any]]:
+    checks = preflight.get("checks") or []
+    return [
+        check
+        for check in checks
+        if isinstance(check, dict)
+        and (
+            str(check.get("key") or "").startswith("backend_")
+            or "health" in str(check.get("label") or "").lower()
+        )
+    ]
+
+
+def _preflight_blocking_reasons(preflight: dict[str, Any]) -> list[dict[str, Any]]:
+    checks = preflight.get("checks") or []
+    reasons = []
+    for check in checks:
+        if not isinstance(check, dict) or check.get("status") not in {"blocked", "skipped"}:
+            continue
+        reasons.append(
+            {
+                "key": check.get("key"),
+                "label": check.get("label"),
+                "status": check.get("status"),
+                "required": check.get("required"),
+                "env_vars": check.get("env_vars") or [],
+                "findings": check.get("findings") or [],
+                "suggestion": check.get("suggestion") or "",
+            }
+        )
+    return reasons
+
+
+def _status_from_results(
+    results: list[dict[str, Any]],
+    *,
+    preflight: dict[str, Any] | None = None,
+) -> str:
+    preflight_status = str((preflight or {}).get("status") or "")
+    if preflight_status == "blocked":
+        return "blocked"
+    if preflight_status == "skipped":
+        return "skipped"
+
+    statuses = [
+        str(
+            result.get("status")
+            or (result.get("acceptance_gate") or {}).get("status")
+            or ("passed" if result.get("passed") else "failed")
+        )
+        for result in results
+    ]
+    if not statuses:
+        return "skipped"
+    if "blocked" in statuses:
+        return "blocked"
+    if "failed" in statuses:
+        return "failed"
+    if "degraded" in statuses:
+        return "degraded"
+    if preflight_status == "degraded":
+        return "degraded"
+    if all(status == "passed" for status in statuses):
+        return "passed"
+    return "skipped"
+
+
+def build_cli_json_payload(
+    *,
+    results: list[dict[str, Any]],
+    acceptance_summary: dict[str, Any] | None,
+    summary_paths: dict[str, str] | None,
+    preflight: dict[str, Any] | None,
+) -> dict[str, Any]:
+    status = (
+        str(acceptance_summary.get("status"))
+        if isinstance(acceptance_summary, dict) and acceptance_summary.get("status")
+        else _status_from_results(results, preflight=preflight)
+    )
+    payload = {
+        "status": status,
+        "passed": status == "passed",
+        "preflight": preflight,
+        "missing_required": (preflight or {}).get("missing_required") or [],
+        "degraded_optional": (preflight or {}).get("degraded_optional") or [],
+        "health_checks": _preflight_health_checks(preflight or {}),
+        "blocking_reasons": _preflight_blocking_reasons(preflight or {}),
+        "results": results,
+        "acceptance_summary": acceptance_summary,
+        "summary_paths": summary_paths,
+    }
+    return _redact_cli_payload(payload)
 
 
 def _print_plan(scenarios: list[Any]) -> None:
@@ -87,6 +227,16 @@ def _print_results(results: list[dict[str, Any]]) -> None:
                 f"{'; '.join(str(item) for item in (failure.get('findings') or [])[:2])}"
             )
             print(f"  next={failure.get('suggestion')}")
+
+
+def _print_json(payload: dict[str, Any]) -> None:
+    text = json.dumps(payload, ensure_ascii=False, indent=2)
+    if _JSON_MODE_REQUESTED:
+        _ORIGINAL_STDOUT.write(text)
+        _ORIGINAL_STDOUT.write("\n")
+        _ORIGINAL_STDOUT.flush()
+    else:
+        print(text)
 
 
 def _preflight_skip_reason(preflight: dict[str, Any]) -> str:
@@ -205,6 +355,11 @@ def main() -> int:
         help="Run the first-stage core acceptance scenario set tagged acceptance-core.",
     )
     parser.add_argument(
+        "--acceptance-smoke",
+        action="store_true",
+        help="Run the minimal live acceptance smoke scenario set tagged acceptance-smoke.",
+    )
+    parser.add_argument(
         "--continue-on-error",
         action="store_true",
         help="Continue running remaining scenarios after a failed scenario",
@@ -277,13 +432,29 @@ def main() -> int:
         help="Supplemental LLM judge pass threshold. Does not override deterministic gates.",
     )
     args = parser.parse_args()
+    if args.acceptance_core and args.acceptance_smoke:
+        parser.error("--acceptance-core and --acceptance-smoke are mutually exclusive")
+
+    try:
+        args.output_dir = _require_runtime_artifact_dir(
+            args.output_dir,
+            flag_name="--output-dir",
+        )
+        if args.summary_dir is not None:
+            args.summary_dir = _require_runtime_artifact_dir(
+                args.summary_dir,
+                flag_name="--summary-dir",
+            )
+    except ValueError as exc:
+        parser.error(str(exc))
 
     catalog = load_scenarios(args.scenarios_file)
-    scenarios = (
-        acceptance_core_scenarios(catalog)
-        if args.acceptance_core and not args.scenario
-        else select_scenarios(catalog, args.scenario)
-    )
+    if args.acceptance_core and not args.scenario:
+        scenarios = acceptance_core_scenarios(catalog)
+    elif args.acceptance_smoke and not args.scenario:
+        scenarios = acceptance_smoke_scenarios(catalog)
+    else:
+        scenarios = select_scenarios(catalog, args.scenario)
     if args.dry_run:
         _print_plan(scenarios)
         return 0
@@ -311,15 +482,12 @@ def main() -> int:
             prefix=args.summary_prefix,
         )
         if args.json:
-            print(
-                json.dumps(
-                    {
-                        "results": results,
-                        "acceptance_summary": summary,
-                        "summary_paths": summary_paths,
-                    },
-                    ensure_ascii=False,
-                    indent=2,
+            _print_json(
+                build_cli_json_payload(
+                    results=results,
+                    acceptance_summary=summary,
+                    summary_paths=summary_paths,
+                    preflight=preflight,
                 )
             )
         else:
@@ -356,7 +524,7 @@ def main() -> int:
         llm_judge_threshold=args.llm_judge_threshold,
     )
     results = []
-    continue_on_error = args.continue_on_error or args.acceptance_core
+    continue_on_error = args.continue_on_error or args.acceptance_core or args.acceptance_smoke
     for scenario in scenarios:
         result = run_live_scenario(scenario, config)
         results.append(result.to_dict())
@@ -381,15 +549,12 @@ def main() -> int:
         )
 
     if args.json:
-        print(
-            json.dumps(
-                {
-                    "results": results,
-                    "acceptance_summary": summary,
-                    "summary_paths": summary_paths,
-                },
-                ensure_ascii=False,
-                indent=2,
+        _print_json(
+            build_cli_json_payload(
+                results=results,
+                acceptance_summary=summary,
+                summary_paths=summary_paths,
+                preflight=preflight,
             )
         )
     else:
