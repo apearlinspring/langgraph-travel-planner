@@ -81,18 +81,21 @@ def test_acceptance_comparison_script_imports_cleanly():
     assert "--fail-on-regression" in source
 
 
-def test_ci_workflow_has_default_and_manual_gates():
+def test_ci_workflow_has_default_gate_and_staging_smoke_dispatch():
     workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
+    staging_smoke = Path(".github/workflows/staging-smoke.yml").read_text(encoding="utf-8")
 
     assert "python -m compileall app tests scripts" in workflow
     assert "python scripts/validate_rag_knowledge.py" in workflow
     assert "python -m pytest --collect-only -q" in workflow
+    assert "python -m pytest tests/test_ci_workflows.py -q" in workflow
     assert "python -m pytest -q" in workflow
     assert "node scripts/verify_frontend_report_renderer.js" in workflow
     assert "scripts/check_runtime_readiness.py --target development --json" in workflow
     assert "workflow_dispatch" in workflow
-    assert "--preflight-only" in workflow
-    assert "run_live_acceptance" in workflow
+    assert "workflow_dispatch" in staging_smoke
+    assert "--acceptance-smoke" in staging_smoke
+    assert "actions/upload-artifact@v4" in staging_smoke
 
 
 def test_ci_default_gate_uses_only_non_real_placeholder_values():
