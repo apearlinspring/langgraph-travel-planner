@@ -69,6 +69,8 @@
 | staging（预生产）live acceptance（在线验收） | `scripts\run_evaluation_scenarios.py --acceptance-core --base-url <staging-url>` | 真实密钥通过部署环境注入 | 手动触发真实链路验收 |
 | production（生产）readiness（就绪） | `scripts\check_runtime_readiness.py --target production --json` | 必需项必须是真实值，不允许 placeholder（占位） | 发布前检查配置、RAG（检索增强生成）向量库和安全边界 |
 
+数据库迁移另见 `docs/db-migration-readiness.md`。默认 CI（持续集成）不连接真实 PostgreSQL（关系型数据库），只通过 `check_runtime_readiness.py` 静态检查 Alembic（数据库迁移工具）配置、迁移文件和业务表边界；staging（预生产）和 production（生产）发布才执行 `alembic upgrade head` 与 `alembic current`。
+
 内部 RAG（检索增强生成）知识库还有一个不依赖真实密钥的治理入口：
 
 ```powershell

@@ -11,7 +11,10 @@ from app.config import (
 )
 from app.evaluation.preflight import run_acceptance_preflight
 from app.evaluation.scenarios import EvaluationScenario
-from scripts.check_runtime_readiness import build_runtime_readiness_report
+from scripts.check_runtime_readiness import (
+    build_database_migration_readiness_report,
+    build_runtime_readiness_report,
+)
 
 
 def _scenario() -> EvaluationScenario:
@@ -211,6 +214,26 @@ def test_runtime_readiness_report_covers_development_acceptance_and_production(t
     assert report["targets"]["acceptance"]["status"] == "blocked"
     assert report["targets"]["production"]["status"] == "blocked"
     assert "dependency_matrix" in report
+    assert report["database_migrations"]["status"] == "passed"
+
+
+def test_database_migration_readiness_is_static_and_separates_langgraph():
+    report = build_database_migration_readiness_report()
+
+    assert report["status"] == "passed"
+    assert report["requires_database_connection"] is False
+    assert set(report["managed_tables"]["business"]) == {
+        "user",
+        "conversation",
+        "message",
+        "approval_request",
+        "approval_event",
+        "tool_audit_event",
+    }
+    assert "checkpoints" in report["managed_tables"]["langgraph_checkpointer"]
+    assert "store_vectors" in report["managed_tables"]["langgraph_store"]
+    assert "alembic upgrade head" in report["commands"]["incremental_migration"]
+    assert "AsyncPostgresSaver.setup()" in report["boundaries"]["langgraph"]
 
 
 def test_runtime_readiness_report_rejects_unknown_target(tmp_path: Path):

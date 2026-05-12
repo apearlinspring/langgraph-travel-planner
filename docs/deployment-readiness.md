@@ -7,7 +7,7 @@
 ## 上线前必须满足
 
 1. `APP_ENV=production`，并确认 `.env` 或部署密钥系统没有使用 `your-*`、`change-me`、`test-key`、`dummy` 等占位值。
-2. PostgreSQL（关系型数据库）可连接，业务表、LangGraph（图式智能体编排框架）Checkpointer（执行检查点）、Store（长期存储）和审批治理表已初始化。
+2. PostgreSQL（关系型数据库）可连接，业务表已通过 Alembic（数据库迁移工具）迁移到 `head`；LangGraph（图式智能体编排框架）Checkpointer（执行检查点）、Store（长期存储）和审批治理表已按 `docs/db-migration-readiness.md` 的边界初始化。
 3. Redis（内存数据结构存储）可连接，`SESSION_LOCK_BACKEND=auto` 或 `redis` 时不能降级为本地锁。
 4. LLM（大语言模型）密钥是真实值，模型 profile（用途档位）仍统一通过 `app/utils/llm_factory.py` 创建。
 5. Auth（认证）/ JWT（JSON Web Token，令牌认证）必须设置真实 `JWT_SECRET_KEY`，不能使用默认开发密钥、空值或 placeholder（占位）值。
@@ -43,11 +43,15 @@ python scripts\check_runtime_readiness.py --target development --json
 
 这组命令只使用测试占位配置，不读取真实外部 API（应用程序接口）密钥，不发起真实 LLM（大语言模型）、MCP（模型上下文协议）或供应链调用。
 
+CI（持续集成）默认不连接真实 PostgreSQL（关系型数据库），也不执行 `alembic upgrade head`；迁移就绪只通过 `check_runtime_readiness.py` 的静态 `database_migrations` 区块验证。真实数据库迁移放到 staging（预生产）和 production（生产）发布步骤中执行。
+
 ### Staging 预生产
 
 预生产先跑 preflight（预检），不消耗真实对话配额：
 
 ```powershell
+.\.venv\Scripts\alembic upgrade head
+.\.venv\Scripts\alembic current
 .\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-core --preflight-only --base-url https://staging.example.com --json
 .\.venv\Scripts\python scripts\check_runtime_readiness.py --target acceptance --check-backend --base-url https://staging.example.com --json
 ```
@@ -65,6 +69,8 @@ GitHub Actions（GitHub 自动化流水线）中对应 `workflow_dispatch`（手
 生产发布前使用真实部署密钥系统注入环境变量，然后执行：
 
 ```powershell
+.\.venv\Scripts\alembic upgrade head
+.\.venv\Scripts\alembic current
 .\.venv\Scripts\python scripts\check_runtime_readiness.py --target production --json
 .\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-core --preflight-only --json
 ```
