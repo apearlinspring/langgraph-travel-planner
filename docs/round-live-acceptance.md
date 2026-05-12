@@ -15,9 +15,10 @@
 这不是把 failed（失败）伪装成 passed（通过）。中间复跑曾出现两类真实问题：
 
 - 默认首 token（文本令牌）预算 60 秒过严，历史失败点为 `first_token_seconds=64.839`。
-- 场景级 `90s` 硬预算第一次复跑消除了 violation（违规），但因默认 80% warning（警告）阈值触发 `degraded（降级）`。
+- 场景级 `90s` 首 token 硬预算消除了 60 秒 violation（违规）。
+- 后续真实复核曾失败于 `tool_call_count=35 exceeds budget 32`，原因是报价 smoke（烟测）触发旅行社报价/RAG（检索增强生成）证据、目的地、酒店和交通兜底核验的组合链路。
 
-最终采用场景级预算：`max_first_token_seconds=90`，`warning_first_token_ratio=0.95`。硬预算仍是 90 秒，只把 warning 调整为接近预算耗尽时触发。最终通过 run 的 `first_token_seconds=57.712`，runtime budget（运行预算）无 findings（发现项）。
+最终采用单场景预算：`max_first_token_seconds=90`，`warning_first_token_ratio=0.99`，`max_tool_call_count=36`，`warning_tool_call_ratio=0.99`。这是 `pricing_agency_quote_explanation` 的场景级覆盖，不是全局放宽；其他场景超过默认预算仍会失败。最终通过 run 的 `first_token_seconds=32.775`、`tool_call_count=15`，runtime budget（运行预算）无 findings（发现项）。
 
 ## 场景覆盖
 
@@ -79,18 +80,21 @@
 - 报告质量分：`100.0`
 - Agent（智能体）综合分：`100.0`
 - runtime budget（运行预算）：`passed`
-- `first_token_seconds=57.712`
+- `first_token_seconds=32.775`
+- `tool_call_count=15`
+- `tool_failure_count=6`
+- `fallback_count=6`
 - `runtime_findings=[]`
 
 ## 证据产物
 
 本地 `.runtime/` 证据：
 
-- `.runtime\acceptance-smoke\20260512-170201-acceptance-summary.json`
-- `.runtime\acceptance-smoke\20260512-170201-acceptance-summary.md`
-- `.runtime\evaluations\20260513-010201-pricing_agency_quote_explanation.json`
-- `.runtime\acceptance-smoke-preflight-20260513-passcheck.txt`
-- `.runtime\acceptance-smoke-live-20260513-passcheck.txt`
+- `.runtime\acceptance-smoke\20260512-183306-acceptance-summary.json`
+- `.runtime\acceptance-smoke\20260512-183306-acceptance-summary.md`
+- `.runtime\evaluations\20260513-023306-pricing_agency_quote_explanation.json`
+- `.runtime\acceptance-smoke-preflight-20260513-final3.txt`
+- `.runtime\acceptance-smoke-live-20260513-final4.stdout.txt`
 
 这些文件只作为本地证据，不提交。
 

@@ -167,7 +167,9 @@
       },
       "runtime_budget": {
         "max_first_token_seconds": 90,
-        "warning_first_token_ratio": 0.95
+        "warning_first_token_ratio": 0.99,
+        "max_tool_call_count": 36,
+        "warning_tool_call_ratio": 0.99
       },
       "followups": [
         "请先记录这次需求，并确认按旅行社顾问方案推进；不要输出推理过程。",

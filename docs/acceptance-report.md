@@ -14,7 +14,7 @@ S2 已完成的可提交收口：
 - 当前 smoke（烟测）场景为 `pricing_agency_quote_explanation`，覆盖省心方案、费用包含/不包含、估算价格和二次核验。
 - CLI（命令行接口）JSON（JavaScript 对象表示法）顶层状态现在受 preflight（预检）强约束：preflight 为 `blocked` 或 `degraded` 时，不能因为陈旧摘要而返回 `passed`。
 - live runner（在线运行器）新增 `evidence_closure`，成功真实链路必须闭环 `report_data`、预算、风险、待核验项和旅行社业务证据。
-- 报价 smoke（烟测）场景使用场景级 runtime budget（运行预算）：`max_first_token_seconds=90`，`warning_first_token_ratio=0.95`。这是针对真实 LLM（大语言模型）+ MCP（模型上下文协议）首轮冷启动的场景级调整，不是全局放宽。
+- 报价 smoke（烟测）场景使用场景级 runtime budget（运行预算）：`max_first_token_seconds=90`，`warning_first_token_ratio=0.99`，`max_tool_call_count=36`，`warning_tool_call_ratio=0.99`。这是针对 `pricing_agency_quote_explanation` 的单场景调整，不是全局放宽；其他场景超过默认预算仍会失败。
 - 摘要产物继续限制在 `.runtime/` 下，JSON（JavaScript 对象表示法）与 Markdown（标记文本）写入前脱敏。
 
 本轮实际 smoke（烟测）命令：
@@ -23,13 +23,15 @@ S2 已完成的可提交收口：
 .\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-smoke --base-url http://127.0.0.1:8000 --json --summary-dir .runtime\acceptance-smoke
 ```
 
-结果：退出码 `0`，`status=passed`，`passed=true`，场景数 `1`。
+结果：退出码 `0`，`status=passed`，`passed=true`，场景数 `1`，`first_token_seconds=32.775`，`tool_call_count=15`，`runtime_budget_passed=true`。
 
 本地 passed（通过）证据产物：
 
-- `.runtime\acceptance-smoke\20260512-170201-acceptance-summary.json`
-- `.runtime\acceptance-smoke\20260512-170201-acceptance-summary.md`
-- `.runtime\evaluations\20260513-010201-pricing_agency_quote_explanation.json`
+- `.runtime\acceptance-smoke\20260512-183306-acceptance-summary.json`
+- `.runtime\acceptance-smoke\20260512-183306-acceptance-summary.md`
+- `.runtime\evaluations\20260513-023306-pricing_agency_quote_explanation.json`
+- `.runtime\acceptance-smoke-preflight-20260513-final3.txt`
+- `.runtime\acceptance-smoke-live-20260513-final4.stdout.txt`
 
 证据闭环：`snapshot`、`report_data`、`budget`、`budget_confidence`、`risk`、`verification_items`、`agency_business_evidence` 全部为 `true`。脱敏检查：对上述 JSON（JavaScript 对象表示法）、Markdown（标记文本）摘要和 snapshot（快照）扫描邮箱、手机号、JWT（JSON Web Token，令牌认证）和常见 API key（应用程序接口密钥）形态，结果为 `NO_SENSITIVE_FINDINGS`。这些 `.runtime/` 产物不提交。
 

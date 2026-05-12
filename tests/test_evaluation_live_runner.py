@@ -833,7 +833,13 @@ def test_acceptance_smoke_scenarios_select_minimal_live_contract():
     )
     assert pricing_smoke.requirements["mcp_servers"] == ["weather", "search"]
     assert pricing_smoke.runtime_budget["max_first_token_seconds"] == 90
-    assert pricing_smoke.runtime_budget["warning_first_token_ratio"] == 0.95
+    assert pricing_smoke.runtime_budget["warning_first_token_ratio"] == 0.99
+    assert pricing_smoke.runtime_budget["max_tool_call_count"] == 36
+    assert pricing_smoke.runtime_budget["warning_tool_call_ratio"] == 0.99
+    budget = runtime_budget_for_scenario(pricing_smoke)
+    assert budget.warning_first_token_ratio == 0.99
+    assert budget.max_tool_call_count == 36
+    assert budget.warning_tool_call_ratio == 0.99
     assert any("report_data" in followup for followup in pricing_smoke.followups)
 
 
