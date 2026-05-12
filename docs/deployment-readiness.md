@@ -106,7 +106,7 @@ GitHub Actions（GitHub 自动化流水线）中的手动 staging smoke（预生
 
 可选 Secrets（密钥管理项）：`VARIFLIGHT_API_KEY`、`AIGOHOTEL_API_KEY`、`AIGOHOTEL_MCP_API`、`AIGOHOTEL_SECRET_KEY`、`LANGSMITH_API_KEY`、`LANGSMITH_PROJECT`。当前 `acceptance-smoke` 场景不强制航班或酒店密钥，但如果后续把相关场景加入 smoke（冒烟）集合，应同步提升为必需项。
 
-`Ensure Evaluation User` 步骤会先用 `ZHIXING_EVAL_USERNAME` / `ZHIXING_EVAL_PASSWORD` 登录；临时 PostgreSQL（关系型数据库）中没有该用户时，才用 `example.invalid` 安全域名生成邮箱并调用注册接口，再重新登录验证。该步骤不提交、不打印真实密码、JWT（JSON Web Token，令牌认证）或 `access_token`；如果用户名或邮箱已存在但密码不匹配，workflow（工作流）会明确失败，不会静默改密码或让 smoke（冒烟）假通过。
+`Ensure Evaluation User` 步骤会先用 `ZHIXING_EVAL_USERNAME` / `ZHIXING_EVAL_PASSWORD` 登录；临时 PostgreSQL（关系型数据库）中没有该用户时，才用 `users.noreply.github.com` 非个人域名生成邮箱并调用注册接口，再重新登录验证。该步骤不提交、不打印真实密码、JWT（JSON Web Token，令牌认证）或 `access_token`；如果用户名或邮箱已存在但密码不匹配，workflow（工作流）会明确失败，不会静默改密码或让 smoke（冒烟）假通过。
 
 失败 / blocked（环境阻塞）语义：
 

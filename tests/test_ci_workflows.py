@@ -60,7 +60,7 @@ def test_staging_smoke_workflow_is_manual_only_and_starts_local_stack():
         "python scripts/check_runtime_readiness.py",
         "/api/v1/users/login",
         "/api/v1/users/register",
-        "example.invalid",
+        "users.noreply.github.com",
         "username_exists",
         "email_exists",
         "--acceptance-smoke",

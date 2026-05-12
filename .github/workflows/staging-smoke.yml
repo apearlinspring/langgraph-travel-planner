@@ -294,7 +294,7 @@ jobs:
           safe_username = re.sub(r"[^A-Za-z0-9]+", "-", username).strip("-").lower()
           if not safe_username:
               safe_username = "user"
-          email = f"staging-smoke-eval-{safe_username[:32]}@example.invalid"
+          email = f"staging-smoke-eval-{safe_username[:32]}@users.noreply.github.com"
 
           print("Evaluation user login returned 401; attempting registration.")
           register_status, register_payload = post_json(
