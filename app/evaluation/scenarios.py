@@ -14,7 +14,9 @@ RAG_SCENARIO_CATALOG_VERSION = "rag_quality_scenarios.v1"
 TOOL_SCENARIO_CATALOG_VERSION = "tool_call_scenarios.v1"
 VALID_PLANNING_MODES = {"agency_plan", "free_planning"}
 ACCEPTANCE_CORE_TAG = "acceptance-core"
+ACCEPTANCE_SMOKE_TAG = "acceptance-smoke"
 MIN_ACCEPTANCE_CORE_SCENARIOS = 8
+MIN_ACCEPTANCE_SMOKE_SCENARIOS = 1
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_SCENARIO_FILE = PROJECT_ROOT / "data" / "evaluation" / "report_quality_scenarios.json"
 DEFAULT_RAG_SCENARIO_FILE = PROJECT_ROOT / "data" / "evaluation" / "rag_quality_scenarios.json"
@@ -347,6 +349,26 @@ def acceptance_core_scenarios(
         raise ValueError(
             "Acceptance core scenario set must contain at least "
             f"{min_count} scenarios tagged {ACCEPTANCE_CORE_TAG!r}; found {len(selected)}"
+        )
+    return selected
+
+
+def acceptance_smoke_scenarios(
+    scenarios: Iterable[EvaluationScenario] | None = None,
+    *,
+    min_count: int = MIN_ACCEPTANCE_SMOKE_SCENARIOS,
+) -> list[EvaluationScenario]:
+    """Return the minimal live acceptance smoke scenarios in catalog order."""
+
+    selected = [
+        scenario
+        for scenario in (list(scenarios) if scenarios is not None else load_scenarios())
+        if ACCEPTANCE_SMOKE_TAG in scenario.tags
+    ]
+    if len(selected) < min_count:
+        raise ValueError(
+            "Acceptance smoke scenario set must contain at least "
+            f"{min_count} scenarios tagged {ACCEPTANCE_SMOKE_TAG!r}; found {len(selected)}"
         )
     return selected
 

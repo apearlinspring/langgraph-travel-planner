@@ -157,8 +157,8 @@
       "prompt": "我们4个大人想从成都去重庆3天2晚，想要省心方案。请重点说明费用包含、不包含、哪些价格是估算，哪些需要二次核验。",
       "expected_mode": "agency_plan",
       "min_score": 86,
-      "focus": ["price evidence", "included and excluded costs", "verification items", "agency quote policy"],
-      "tags": ["agency", "pricing", "budget", "acceptance-core"],
+      "focus": ["price evidence", "included and excluded costs", "verification items", "agency quote policy", "minimal live acceptance"],
+      "tags": ["agency", "pricing", "budget", "acceptance-core", "acceptance-smoke"],
       "requirements": {
         "real_llm": true,
         "real_mcp": true,
