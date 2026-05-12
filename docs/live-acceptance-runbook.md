@@ -1,68 +1,6 @@
 # Live Acceptance（在线验收）Runbook（运行手册）
 
-## 2026-05-12 R2 复跑入口
-
-当前工作树：`D:\Users\Administrator\PycharmProjects\ZhiXing\langgraph-travel-planner-live-acceptance-pass`。
-
-当前分支：`codex/live-acceptance-pass`。
-
-本轮新增 `acceptance-smoke`（验收冒烟）入口，用于后端 ready（就绪）后先跑一个最小真实对话场景，再扩展到 `acceptance-core`（核心验收）全集。
-
-推荐复跑顺序：
-
-```powershell
-[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
-$OutputEncoding = [System.Text.UTF8Encoding]::new($false)
-chcp 65001 | Out-Null
-
-.\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-core --preflight-only --json --no-summary
-.\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-smoke --base-url http://127.0.0.1:8000 --json
-.\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-core --base-url http://127.0.0.1:8000 --json
-```
-
-判定规则：
-
-- preflight（预检）为 `blocked` 时必须停止，不能把任何场景判定为 `passed`。
-- preflight（预检）为 `degraded` 时可以留证复跑，但整批结论不能是 `passed`。
-- 只有真实场景完成、`report_data` 存在，且报告质量、预算置信度、风险、待核验项、旅行社业务字段和运行时门禁均通过，才允许 `passed`。
-- 所有本地 JSON（JavaScript 对象表示法）、Markdown（标记文本）和快照产物必须写入 `.runtime/`，该目录不提交。
-
-本轮实际复跑结果：
-
-- `--acceptance-smoke --dry-run`：退出码 0，选择 1 个场景 `pricing_agency_quote_explanation`。
-- `--acceptance-smoke --preflight-only --json --no-summary`：退出码 2，`status=blocked`、`passed=false`、`missing_required=7`、`health_checks=2`、`blocking_reasons=7`。
-- `--acceptance-core --preflight-only --json --no-summary`：退出码 2，stdout（标准输出）可解析为 JSON，`status=blocked`、`passed=false`、`missing_required=9`、`health_checks=2`、`blocking_reasons=9`。
-- `--acceptance-core --base-url http://127.0.0.1:8000 --json`：退出码 2，preflight（预检）阶段阻断，未调用真实聊天接口；本地 blocked 摘要写入 `.runtime\evaluations\20260512-064458-acceptance-summary.json` 和 `.runtime\evaluations\20260512-064458-acceptance-summary.md`。
-
-本轮仍未解决的环境阻塞：
-
-- `.venv` 初始不可用；本轮先用 `uv run --frozen`（Python 依赖运行器）恢复依赖环境，随后按 `.venv\Scripts\python` 入口复跑通过编译、单测和 preflight（预检）命令。
-- 缺 PostgreSQL（关系型数据库）、Redis（内存数据结构存储）、真实 LLM（大语言模型）、RAG（检索增强生成）向量库、MCP（模型上下文协议）上游 API（应用程序接口）凭据和 Auth（认证）/ JWT（JSON Web Token，令牌认证）配置。
-- 后端 `/health/live` 与 `/health/ready` 不可达。
-
-## 本轮结论
-
-执行时间：2026-05-11 23:10-23:18，环境为本地 Windows PowerShell，工作树为 `D:\Users\Administrator\PycharmProjects\ZhiXing\langgraph-travel-planner-live-acceptance-runbook`，分支为 `codex/live-acceptance-runbook`。
-
-本轮真实尝试了 preflight（预检）、后端启动、数据库初始化、RAG（检索增强生成）初始化，以及完整 `acceptance-core` 验收入口。结果是 `blocked`（环境阻塞）：当前没有 `.env`，缺真实 PostgreSQL（关系型数据库）、Redis（内存数据结构存储）、LLM（大语言模型）、MCP（模型上下文协议）上游 API（应用程序接口）密钥和可读 RAG 向量库元数据，后端也未到达健康检查端点。
-
-因此本轮没有执行有效 live scenario（在线场景）对话调用，也没有宣称 passed（通过）。完整入口命令生成了 blocked 摘要文件，但 `.runtime/` 原始产物不提交。
-
-## 真实验收依赖
-
-`--acceptance-core` 当前选择 9 个核心场景，全部要求真实 LLM（大语言模型）和真实 MCP（模型上下文协议）。合并后的真实依赖如下：
-
-- PostgreSQL（关系型数据库）：业务表、LangGraph（图式智能体编排框架）Checkpointer（执行检查点）、Store（长期存储）和审批治理表。
-- Redis（内存数据结构存储）：staging（预生产）/ production（生产）会话锁和横向扩展缓存。
-- LLM（大语言模型）：`DASHSCOPE_API_KEY`，通过 `app/utils/llm_factory.py` 统一创建模型。
-- RAG（检索增强生成）向量库：默认 `data/vectorstore/chroma.sqlite3`，collection（集合）为 `travel_guides`；内部知识库还需要 `data/vectorstore_internal`。
-- MCP（模型上下文协议）：`weather`、`search`、`amap`、`12306-mcp`、`VariFlight-Aviation`、`aigohotel-mcp`。
-- 外部 API（应用程序接口）：`AMAP_API_KEY`、`TAVILY_API_KEY`、`VARIFLIGHT_API_KEY`，以及 `AIGOHOTEL_API_KEY` / `AIGOHOTEL_MCP_API` / `AIGOHOTEL_SECRET_KEY` 三者至少一个真实酒店凭据。
-- Auth（认证）/ JWT（JSON Web Token，令牌认证）：staging（预生产）/ production（生产）必须使用真实 `JWT_SECRET_KEY` 和 `JWT_ALGORITHM`。
-
-## 执行记录
-
-所有 PowerShell 命令均先设置 UTF-8 输出：
+本手册用于复跑 S2 `acceptance-smoke`（验收烟测）和后续 `acceptance-core`（核心验收）。所有命令在 Windows PowerShell 中先启用 UTF-8，避免中文输出损坏。
 
 ```powershell
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
@@ -70,138 +8,111 @@ $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 chcp 65001 | Out-Null
 ```
 
-1. 初始 `.venv` 检查
+## 当前分支
+
+- 工作树：`D:\Users\Administrator\PycharmProjects\ZhiXing\langgraph-travel-planner-live-smoke-evidence`
+- 分支：`codex/live-smoke-evidence`
+- 日期：2026-05-12
+
+## 状态判定
+
+- `blocked（环境阻塞）`：真实依赖、凭据、后端健康检查或配置缺失，不能运行真实链路。
+- `degraded（降级）`：核心链路可运行，但可选依赖、MCP（模型上下文协议）服务或运行预算降级，不能作为完全通过。
+- `failed（失败）`：真实链路已运行，但确定性门禁失败。
+- `passed（通过）`：真实链路已运行，产出 `report_data`，并通过报告、预算、风险、待核验项、旅行社证据、工具审计和运行时门禁。
+
+缺真实依赖时，任何命令都不能返回 `passed`。
+
+## 推荐复跑顺序
+
+1. 先确认最小 smoke（烟测）场景选择：
 
    ```powershell
-   .\.venv\Scripts\python scripts\check_runtime_readiness.py --target development --json
+   .\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-smoke --dry-run
    ```
 
-   结果：退出码 1，`.venv` 不存在，PowerShell 返回 `CommandNotFoundException`。随后使用 `uv run python ...` 创建虚拟环境，安装 191 个包。
+   预期至少包含 `pricing_agency_quote_explanation`，该场景覆盖旅行社省心方案和报价说明。
 
-2. development（开发）配置矩阵
+2. 跑 smoke preflight（预检）：
 
    ```powershell
-   uv run python scripts\check_runtime_readiness.py --target development --json
+   .\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-smoke --preflight-only --json --no-summary
    ```
 
-   结果：退出码 1，`status=blocked`。缺必需 `postgresql`、`llm`；可选降级包括 `redis`、`rag_vector_store`、`map`、`search`、`hotel`、`flight`、`langsmith`、`auth_jwt`。当时 `dotenv_present=false`，RAG 向量库目录不存在。
+   如果状态是 `blocked`，停止真实验收，只记录阻塞证据。
 
-3. acceptance-core（核心验收）场景计划
+3. 后端 ready（就绪）后跑 smoke 真实入口：
 
    ```powershell
-   .\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-core --dry-run
+   .\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-smoke --base-url http://127.0.0.1:8000 --json --summary-dir .runtime\acceptance-smoke
    ```
 
-   结果：退出码 0，列出 9 个核心场景：`free_weekend_nearby`、`free_city_three_days`、`agency_couple_relaxed`、`agency_family_parent_child`、`agency_senior_low_stress`、`edge_hotel_tool_fallback`、`pricing_agency_quote_explanation`、`risk_weather_disruption`、`edge_transport_tool_fallback`。
+   产物必须写入 `.runtime/`，不能写到仓库文档或测试快照目录。
 
-4. acceptance-core preflight（核心验收预检）
+4. smoke 通过后，再跑 core（核心验收）：
 
    ```powershell
-   .\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-core --preflight-only --json --no-summary
+   .\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-core --base-url http://127.0.0.1:8000 --json --summary-dir .runtime\acceptance-core
    ```
 
-   结果：退出码 1，9 个核心场景均为 `status=blocked`，`summary_paths=null`。阻塞项包括运行配置矩阵、真实 LLM、aigohotel、高德、Tavily、VariFlight、真实 MCP 服务，以及后端 `/health/live` 和 `/health/ready` 不可达。
+## 后端 ready 条件
 
-5. 后端启动尝试
+真实验收前必须确认：
 
-   ```powershell
-   $p = Start-Process -FilePath '.\.venv\Scripts\python.exe' -ArgumentList 'main.py' -WorkingDirectory (Get-Location) -RedirectStandardOutput '.runtime\backend-start.out.log' -RedirectStandardError '.runtime\backend-start.err.log' -PassThru
-   Start-Sleep -Seconds 25
-   Invoke-WebRequest -Uri http://127.0.0.1:8000/health/live -UseBasicParsing -TimeoutSec 8
-   Invoke-WebRequest -Uri http://127.0.0.1:8000/health/ready -UseBasicParsing -TimeoutSec 8
-   Stop-Process -Id $p.Id -Force
-   ```
+- `GET /health/live` 可达。
+- `GET /health/ready` 返回 `ready`，或经人工确认可接受的 `degraded`。
+- PostgreSQL（关系型数据库）可连通，业务表、Checkpointer（执行检查点）、Store（长期存储）已初始化。
+- Redis（内存数据结构存储）在目标环境要求下可用。
+- LLM（大语言模型）真实凭据存在，但不得写入文档或提交。
+- RAG（检索增强生成）向量库已初始化。
+- MCP（模型上下文协议）所需上游 API（应用程序接口）凭据存在。
 
-   结果：服务进程进入 `Waiting for application startup`，25 秒内 `/health/live` 与 `/health/ready` 都返回“无法连接到远程服务器”。启动日志仅保存在 `.runtime/`，不提交。
+## S2 本轮实际结果
 
-6. acceptance（验收）预检带后端健康检查
+本轮 S1 未 ready（就绪），所以 S2 记录为 `blocked（环境阻塞）`。
 
-   ```powershell
-   .\.venv\Scripts\python scripts\check_runtime_readiness.py --target acceptance --base-url http://127.0.0.1:8000 --check-backend --json
-   ```
+已运行：
 
-   结果：退出码 1，`status=blocked`，`scenario_count=9`。`missing_required` 为 `runtime_config`、`real_llm`、`external_api:aigohotel`、`external_api:amap`、`external_api:tavily`、`external_api:variflight`、`real_mcp`、`backend_live`、`backend_ready`。
+```powershell
+.\.venv\Scripts\python -m pytest tests\test_evaluation_live_runner.py -q
+```
 
-7. PostgreSQL 初始化
+结果：`32 passed`。
 
-   ```powershell
-   .\.venv\Scripts\python -m scripts.init_db
-   ```
+```powershell
+.\.venv\Scripts\python -m compileall app tests scripts
+```
 
-   结果：退出码 1，连接 `localhost:5432/travel_planner_db` 失败，`::1:5432` 与 `127.0.0.1:5432` 均 `Connect call failed`。没有创建业务表、Checkpointer 表、Store 表或 `pgvector` 扩展。
+结果：退出码 `0`。
 
-8. RAG 初始化
+```powershell
+.\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-smoke --preflight-only --json --no-summary
+```
 
-   ```powershell
-   .\.venv\Scripts\python -m scripts.init_rag
-   ```
+结果：退出码 `2`，`status=blocked`，`passed=false`，`missing_required=7`，`health_checks=2`，`blocking_reasons=7`。
 
-   结果：退出码 1。脚本成功加载 1 个 destination guide（目的地攻略）文档和 10 个 agency internal（旅行社内部知识）文档，并切分出 3 个父文档、18 个子文档；随后在创建 DashScope Embeddings（通义千问向量模型）时因缺 `DASHSCOPE_API_KEY` 失败。`data/vectorstore` 目录被创建，但缺 `chroma.sqlite3` 元数据，不能视为可用向量库。
+```powershell
+.\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-smoke --base-url http://127.0.0.1:8000 --json --summary-dir .runtime\acceptance-smoke
+```
 
-9. 完整 acceptance-core 入口
+结果：退出码 `2`，`status=blocked`，`passed=false`，场景数 `1`。
 
-   ```powershell
-   .\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-core --base-url http://127.0.0.1:8000 --json
-   ```
+本地证据：
 
-   结果：退出码 1。脚本在 preflight（预检）阶段阻断，未调用真实聊天场景；9 个核心场景均为 `status=blocked`，生成 blocked 摘要：
+- `.runtime\acceptance-smoke\20260512-134940-acceptance-summary.json`
+- `.runtime\acceptance-smoke\20260512-134940-acceptance-summary.md`
 
-   ```text
-   .runtime\evaluations\20260511-151720-acceptance-summary.json
-   .runtime\evaluations\20260511-151720-acceptance-summary.md
-   ```
+这些 `.runtime/` 文件不提交。
 
-   这些文件只作为本地证据，不提交。
+## 脱敏与提交规则
 
-## 阻塞项
+- 不提交 `.runtime/`。
+- 不提交 `.env`、真实密钥、手机号、邮箱、证件号、JWT（JSON Web Token，令牌认证）或供应商私密响应。
+- JSON（JavaScript 对象表示法）和 Markdown（标记文本）摘要写入前必须经过脱敏。
+- 可提交文档只记录状态、场景、阻塞项、命令结果和 `.runtime/` 相对路径。
 
-- `.env` 不存在，`dotenv_present=false`。
-- PostgreSQL（关系型数据库）未配置真实 `POSTGRES_DB`、`POSTGRES_USER`、`POSTGRES_PASSWORD`，且本机 `localhost:5432` 连接拒绝。
-- Redis（内存数据结构存储）缺 `REDIS_HOST`、`REDIS_PORT`、`REDIS_DB`；staging（预生产）验收要求它是必需依赖。
-- LLM（大语言模型）缺真实 `DASHSCOPE_API_KEY`。
-- RAG（检索增强生成）向量库缺 `chroma.sqlite3` 元数据；`scripts.init_rag` 因缺 DashScope 密钥无法创建。
-- 外部 API（应用程序接口）缺 `AMAP_API_KEY`、`TAVILY_API_KEY`、`VARIFLIGHT_API_KEY`、aigohotel 酒店凭据。
-- MCP（模型上下文协议）真实服务缺上游凭据：`weather`/`amap` 需要高德，`search` 需要 Tavily，`VariFlight-Aviation` 需要 VariFlight，`aigohotel-mcp` 需要 aigohotel。
-- Auth（认证）/ JWT（JSON Web Token，令牌认证）缺 staging（预生产）验收所需真实 `JWT_SECRET_KEY`、`JWT_ALGORITHM`。
-- 后端未在 25 秒内进入可访问健康端点，`/health/live` 和 `/health/ready` 均不可达。
-
-## 复现步骤
-
-1. 准备本地 `.env`，只从 `.env.example` 复制变量名，不提交真实值。
-2. 配置并确认 PostgreSQL（关系型数据库）和 Redis（内存数据结构存储）可连通。
-3. 初始化数据库：
-
-   ```powershell
-   .\.venv\Scripts\python -m scripts.init_db
-   ```
-
-4. 配置真实 `DASHSCOPE_API_KEY` 后初始化 RAG（检索增强生成）向量库：
-
-   ```powershell
-   .\.venv\Scripts\python -m scripts.init_rag
-   ```
-
-5. 启动后端：
-
-   ```powershell
-   .\.venv\Scripts\python main.py
-   ```
-
-6. 先跑预检：
-
-   ```powershell
-   .\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-core --preflight-only --json --no-summary
-   .\.venv\Scripts\python scripts\check_runtime_readiness.py --target acceptance --base-url http://127.0.0.1:8000 --check-backend --json
-   ```
-
-7. 只有预检为 `passed`（通过）或经确认可接受的 `degraded`（降级）时，才运行真实验收：
-
-   ```powershell
-   .\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-core --base-url http://127.0.0.1:8000 --json
-   ```
-
-8. 如果仍为 `blocked`（环境阻塞），只提交脱敏文档摘要，不提交 `.runtime/`、真实密钥、手机号、身份证、客户资料或供应商私密数据。
+本轮对 smoke summary（烟测摘要）执行敏感形态扫描，结果为 `NO_SENSITIVE_FINDINGS`。
 
 ## 下一步
 
-下一次推进应先补齐真实 staging（预生产）配置和服务连通性，再复跑 preflight（预检）。只有后端健康检查和真实依赖全部满足后，才有资格把 full acceptance（完整验收）结果判定为 `passed`、`degraded` 或 `failed`。
+下一轮先由 S1 补齐真实环境并让后端进入 ready（就绪）。S1 ready 后，按本手册先跑 `acceptance-smoke`，再扩展到 `acceptance-core`。

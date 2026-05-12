@@ -1,5 +1,50 @@
 # 第一阶段总体验收报告
 
+## 2026-05-12 S2 acceptance-smoke（验收烟测）追加结论
+
+当前工作树：`D:\Users\Administrator\PycharmProjects\ZhiXing\langgraph-travel-planner-live-smoke-evidence`。
+
+当前分支：`codex/live-smoke-evidence`。
+
+本轮实际验收状态：`blocked（环境阻塞）`。S1（环境准备阶段）未 ready（就绪），后端健康检查不可达，缺真实 LLM（大语言模型）、MCP（模型上下文协议）上游凭据、PostgreSQL（关系型数据库）、Redis（内存数据结构存储）、RAG（检索增强生成）向量库和 Auth（认证）/ JWT（JSON Web Token，令牌认证）配置，因此没有进入真实聊天 API（应用程序接口）对话，也没有生成有效 `report_data`。
+
+S2 已完成的可提交收口：
+
+- `acceptance-smoke` 程序化要求至少包含一个旅行社省心方案/报价说明场景。
+- 当前 smoke（烟测）场景为 `pricing_agency_quote_explanation`，覆盖省心方案、费用包含/不包含、估算价格和二次核验。
+- CLI（命令行接口）JSON（JavaScript 对象表示法）顶层状态现在受 preflight（预检）强约束：preflight 为 `blocked` 或 `degraded` 时，不能因为陈旧摘要而返回 `passed`。
+- live runner（在线运行器）新增 `evidence_closure`，成功真实链路必须闭环 `report_data`、预算、风险、待核验项和旅行社业务证据。
+- 摘要产物继续限制在 `.runtime/` 下，JSON（JavaScript 对象表示法）与 Markdown（标记文本）写入前脱敏。
+
+本轮实际 smoke（烟测）命令：
+
+```powershell
+.\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-smoke --base-url http://127.0.0.1:8000 --json --summary-dir .runtime\acceptance-smoke
+```
+
+结果：退出码 `2`，`status=blocked`，`passed=false`，场景数 `1`，`missing_required=7`，`health_checks=2`，`blocking_reasons=7`。
+
+本地 blocked（环境阻塞）证据产物：
+
+- `.runtime\acceptance-smoke\20260512-134940-acceptance-summary.json`
+- `.runtime\acceptance-smoke\20260512-134940-acceptance-summary.md`
+
+脱敏检查：对上述 JSON（JavaScript 对象表示法）和 Markdown（标记文本）摘要扫描邮箱、手机号、JWT（JSON Web Token，令牌认证）和常见 API key（应用程序接口密钥）形态，结果为 `NO_SENSITIVE_FINDINGS`。这些 `.runtime/` 产物不提交。
+
+本轮验证：
+
+```powershell
+.\.venv\Scripts\python -m pytest tests\test_evaluation_live_runner.py -q
+```
+
+结果：`32 passed`。
+
+```powershell
+.\.venv\Scripts\python -m compileall app tests scripts
+```
+
+结果：退出码 `0`。
+
 ## 结论
 
 本阶段已建立可重复运行、可审计的总体验收质量门禁。门禁不改核心 Agent（智能体）业务逻辑，只聚合真实链路快照中的结构化报告、RAG（检索增强生成）证据、工具调用事件和运行时指标，把“是否达成阶段目标”转成确定性评分和失败维度。
