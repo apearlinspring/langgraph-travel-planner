@@ -1,6 +1,8 @@
 {
   "private": true,
   "scripts": {
+    "prepare:frontend-browser": "playwright install chromium",
+    "verify:frontend": "npm run verify:frontend-renderer && npm run verify:frontend-browser",
     "verify:frontend-renderer": "node scripts/verify_frontend_report_renderer.js",
     "verify:frontend-browser": "node scripts/verify_frontend_browser_regression.js"
   },

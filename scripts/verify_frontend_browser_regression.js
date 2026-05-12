@@ -5,11 +5,15 @@ const { pathToFileURL } = require("url");
 const repoRoot = path.resolve(__dirname, "..");
 const frontendHtmlPath = path.join(repoRoot, "frontend", "zhixing.html");
 const runtimeDir = path.join(repoRoot, ".runtime");
+const runningInCi = ["1", "true"].includes(String(process.env.CI || "").toLowerCase());
 const strictMissingBrowser =
-  process.env.ZHIXING_FRONTEND_BROWSER_STRICT === "1";
+  process.env.ZHIXING_FRONTEND_BROWSER_STRICT === "1" || runningInCi;
 
-function finishSkip(message, details = []) {
-  const lines = ["frontend-browser-regression-skip", message, ...details];
+function finishMissingDependency(message, details = []) {
+  const header = strictMissingBrowser
+    ? "frontend-browser-regression-dependency-missing"
+    : "frontend-browser-regression-skip";
+  const lines = [header, message, ...details];
   const text = lines.filter(Boolean).join("\n");
   if (strictMissingBrowser) {
     console.error(text);
@@ -23,10 +27,10 @@ function loadPlaywright() {
   try {
     return require("playwright");
   } catch (error) {
-    finishSkip("Playwright is not installed in this checkout.", [
+    finishMissingDependency("Playwright is not installed in this checkout.", [
       "Install local browser test dependencies with: npm install",
       "Then install Chromium if needed with: npx playwright install chromium",
-      "Set ZHIXING_FRONTEND_BROWSER_STRICT=1 to make missing dependencies fail.",
+      "CI and ZHIXING_FRONTEND_BROWSER_STRICT=1 treat this as a failed gate.",
     ]);
   }
 }
@@ -496,6 +500,14 @@ async function runViewport(browser, viewport) {
     );
     await main.page.screenshot({ path: screenshotPath, fullPage: true });
     const viewportScreenshots = [screenshotPath];
+    const reportScreenshotPath = path.join(
+      runtimeDir,
+      `frontend-browser-regression-${viewport.name}-report.png`
+    );
+    await main.page
+      .locator('[data-report-source="structured"]')
+      .screenshot({ path: reportScreenshotPath });
+    viewportScreenshots.push(reportScreenshotPath);
     if (viewport.isMobile) {
       await main.page.locator("#governanceConsole").scrollIntoViewIfNeeded();
       const governanceScreenshotPath = path.join(
@@ -523,9 +535,9 @@ async function main() {
       message.includes("Executable doesn't exist") ||
       message.includes("Please run the following command")
     ) {
-      finishSkip("Chromium for Playwright is not installed.", [
+      finishMissingDependency("Chromium for Playwright is not installed.", [
         "Install it with: npx playwright install chromium",
-        "Set ZHIXING_FRONTEND_BROWSER_STRICT=1 to make missing browsers fail.",
+        "CI and ZHIXING_FRONTEND_BROWSER_STRICT=1 treat this as a failed gate.",
       ]);
     }
     throw error;
