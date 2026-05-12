@@ -112,8 +112,10 @@ def test_docker_compose_exposes_runtime_readiness_contract():
         "POSTGRES_DB",
         "POSTGRES_USER",
         "POSTGRES_PASSWORD",
+        "POSTGRES_HOST_PORT",
         "REDIS_HOST",
         "REDIS_PORT",
+        "REDIS_HOST_PORT",
         "RAG_VECTORSTORE_PATH",
         "RAG_COLLECTION_NAME",
         "AMAP_API_KEY",
@@ -128,6 +130,8 @@ def test_docker_compose_exposes_runtime_readiness_contract():
     assert "SESSION_LOCK_BACKEND" in compose
     assert "SESSION_LOCK_REDIS_FALLBACK_TO_LOCAL" in compose
     assert "service_healthy" in compose
+    assert '"${POSTGRES_HOST_PORT:-5432}:5432"' in compose
+    assert '"${REDIS_HOST_PORT:-6379}:6379"' in compose
 
 
 def test_container_files_keep_liveness_and_proxy_configurable():
