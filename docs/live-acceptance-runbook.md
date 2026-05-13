@@ -10,8 +10,8 @@ chcp 65001 | Out-Null
 
 ## 当前分支
 
-- 工作树：`D:\Users\Administrator\PycharmProjects\ZhiXing\langgraph-travel-planner-acceptance-core-evidence`
-- 分支：`codex/acceptance-core-evidence`
+- 工作树：`D:\Users\Administrator\PycharmProjects\ZhiXing\langgraph-travel-planner-acceptance-runtime-close-loop`
+- 分支：`codex/acceptance-runtime-close-loop`
 - 日期：2026-05-13
 
 ## 状态判定
@@ -25,38 +25,69 @@ chcp 65001 | Out-Null
 
 ## 推荐复跑顺序
 
-1. 启动依赖和后端。
+1. 确认 `.env` 存在但不要打印真实值；确认 `.env`、`.runtime/` 已被忽略。
+
+2. 启动或确认 PostgreSQL（关系型数据库）和 Redis（内存数据结构存储）。
 
    ```powershell
-   .\.venv\Scripts\python main.py
+   docker compose up -d postgres redis
    ```
 
-2. 确认最小 smoke（烟测）场景选择。
+   如果遇到同名容器冲突，先复核现有 `zhixing-postgres` 和 `zhixing-redis` 是否 `healthy`，不要为了复跑验收直接删除未知来源容器。
+
+3. 初始化数据库和 RAG（检索增强生成）向量库。
 
    ```powershell
-   .\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-smoke --dry-run
+   .\.venv\Scripts\python.exe -m scripts.init_db --mode bootstrap
+   .\.venv\Scripts\python.exe -m scripts.init_rag
+   ```
+
+4. 跑 runtime readiness（运行时就绪检查）。
+
+   ```powershell
+   .\.venv\Scripts\python.exe scripts\check_runtime_readiness.py --target staging --check-docker --json
+   ```
+
+5. 启动后端。
+
+   ```powershell
+   .\.venv\Scripts\python.exe main.py
+   ```
+
+   如果远端 MCP（模型上下文协议）冷启动在默认 8 秒内超时，可在本地 `.env` 设置非密钥配置：
+
+   ```text
+   RUNTIME_MCP_STARTUP_TIMEOUT_SECONDS=25
+   ```
+
+   设置后重启后端，再确认 `/health/ready`。
+
+6. 确认最小 smoke（烟测）场景选择。
+
+   ```powershell
+   .\.venv\Scripts\python.exe scripts\run_evaluation_scenarios.py --acceptance-smoke --dry-run
    ```
 
    预期包含 `pricing_agency_quote_explanation`。
 
-3. 跑 smoke preflight（预检）。
+7. 跑 smoke preflight（预检）。
 
    ```powershell
-   .\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-smoke --preflight-only --json --no-summary
+   .\.venv\Scripts\python.exe scripts\run_evaluation_scenarios.py --acceptance-smoke --preflight-only --json --no-summary
    ```
 
    注意：`--preflight-only` 不运行场景，因此 run status（运行状态）可能是 `skipped（跳过）`；应查看 JSON（JavaScript 对象表示法）里的 `preflight.status`。当前真实环境下应为 `passed`。
 
-4. 跑 smoke 真实入口。
+8. 跑 smoke 真实入口。
 
    ```powershell
-   .\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-smoke --base-url http://127.0.0.1:8000 --json --summary-dir .runtime\acceptance-smoke
+   .\.venv\Scripts\python.exe scripts\run_evaluation_scenarios.py --acceptance-smoke --base-url http://127.0.0.1:8000 --json --summary-dir .runtime\acceptance-smoke
    ```
 
-5. smoke 通过后，再扩展到 core（核心验收）。
+9. smoke 通过或有明确可接受的 degraded（降级）解释后，再扩展到 core（核心验收）。
 
    ```powershell
-   .\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-core --base-url http://127.0.0.1:8000 --json --summary-dir .runtime\acceptance-core
+   .\.venv\Scripts\python.exe scripts\run_evaluation_scenarios.py --acceptance-core --base-url http://127.0.0.1:8000 --json --summary-dir .runtime\acceptance-core
    ```
 
 ## acceptance-core 复跑步骤
@@ -77,14 +108,14 @@ uv sync --frozen
 先跑 preflight（预检），不要跳过 blocked（环境阻塞）判定：
 
 ```powershell
-.\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-core --preflight-only --json --no-summary
+.\.venv\Scripts\python.exe scripts\run_evaluation_scenarios.py --acceptance-core --preflight-only --json --no-summary
 ```
 
 再启动后端并跑完整入口：
 
 ```powershell
-.\.venv\Scripts\python main.py
-.\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-core --base-url http://127.0.0.1:8000 --json --summary-dir .runtime\acceptance-core
+.\.venv\Scripts\python.exe main.py
+.\.venv\Scripts\python.exe scripts\run_evaluation_scenarios.py --acceptance-core --base-url http://127.0.0.1:8000 --json --summary-dir .runtime\acceptance-core
 ```
 
 验收解释规则：
@@ -98,110 +129,81 @@ uv sync --frozen
 
 ## acceptance-core 当前真实结果
 
-2026-05-13 在 `codex/acceptance-core-evidence` 分支完成一次 acceptance-core 入口复核：
+2026-05-13 在 `codex/acceptance-runtime-close-loop` 分支完成一次 acceptance-core preflight 复核：
 
-- `preflight.status=blocked`
-- live health（存活检查）：`passed`
-- ready health（就绪检查）：`blocked`
-- ready 阻塞原因：PostgreSQL（关系型数据库）和 LLM（大语言模型）未就绪。
-- `.env` 存在：`false`
-- 场景状态：9 个 `blocked`，0 个 `passed`，0 个 `failed`，0 个 `degraded`。
+- `.env` 存在：`true`
+- runtime readiness：`passed`
+- live health（存活检查）：`alive`
+- ready health（就绪检查）：`ready`
+- MCP 服务：6 healthy，0 unavailable，37 tools
+- `acceptance-core --preflight-only`：退出码 `0`，`preflight.status=passed`
+- 9 个核心场景：未运行
+
+不运行 9 个核心场景的原因：后续 smoke 真实场景失败在 runtime budget（运行预算），不是 preflight blocked。
+
+## 当前 smoke 真实结果
+
+2026-05-13 已完成一次真实 smoke 闭环：
+
+- `preflight.status=passed`
+- live smoke status（在线烟测状态）：`failed`
+- 生成 `report_data`：是
+- evidence closure（证据闭环）：通过
+- `report_quality=passed`
+- `rag_quality=passed`
+- `tool_quality=passed`
+- `runtime_budget=failed`
+- `total_elapsed_seconds=1223.067`，预算 `900.0`
+- `tool_call_count=41`，预算 `36`
+- `tool_failure_count=19`
+- `fallback_count=19`
+- `first_token_seconds=42.404`
 
 本地证据：
 
-- `.runtime\acceptance-core\20260513-051811-acceptance-summary.json`
-- `.runtime\acceptance-core\20260513-051811-acceptance-summary.md`
-- `.runtime\acceptance-core-live-blocked.stdout.txt`
-- `.runtime\acceptance-core-backend-rerun.stdout.txt`
-- `.runtime\acceptance-core-backend-rerun.stderr.txt`
+- `.runtime\acceptance-smoke\20260513-072508-acceptance-summary.json`
+- `.runtime\acceptance-smoke\20260513-072508-acceptance-summary.md`
+- `.runtime\evaluations\20260513-152508-pricing_agency_quote_explanation.json`
 
-场景地图：
-
-| 场景 | 状态 |
-|---|---|
-| `free_weekend_nearby` | blocked |
-| `free_city_three_days` | blocked |
-| `agency_couple_relaxed` | blocked |
-| `agency_family_parent_child` | blocked |
-| `agency_senior_low_stress` | blocked |
-| `edge_hotel_tool_fallback` | blocked |
-| `pricing_agency_quote_explanation` | blocked |
-| `risk_weather_disruption` | blocked |
-| `edge_transport_tool_fallback` | blocked |
-
-本轮没有修改 evaluation gate（评估门禁）逻辑。阻塞属于本地真实环境缺配置、凭据和向量库，不是业务链路已运行后的失败。
-
-## S2 当前真实结果
-
-2026-05-13 已完成一次真实 smoke（烟测）闭环：
-
-- `preflight.status=passed`
-- live smoke status（在线烟测状态）：`passed`
-- 生成 `report_data`：是
-- evidence closure（证据闭环）：通过
-- runtime budget（运行预算）：通过
-- `first_token_seconds=32.775`
-- `tool_call_count=15`
-- `tool_failure_count=6`
-- `fallback_count=6`
-
-本轮 smoke 场景级预算：
-
-```json
-{
-  "max_first_token_seconds": 90,
-  "warning_first_token_ratio": 0.99,
-  "max_tool_call_count": 36,
-  "warning_tool_call_ratio": 0.99
-}
-```
-
-取舍说明：
-
-- 默认 60 秒硬预算对真实 LLM（大语言模型）+ MCP（模型上下文协议）首轮冷启动偏严。
-- 硬预算只在 `pricing_agency_quote_explanation` 场景级放宽到 90 秒，不影响全局默认预算。
-- 报价 smoke 真实复核曾出现 `tool_call_count=35 exceeds budget 32`，当时 `report_data` 和 evidence closure（证据闭环）均已通过；因此只给该场景设置 `max_tool_call_count=36`，不是全局放宽。
-- warning（警告）阈值设为 99%，避免低于硬预算的真实冷启动或工具调用被误标为 degraded（降级），但超出硬预算仍会 failed（失败）。
+结论：不要直接跑 9 个核心场景。先拆解 smoke 的耗时和工具调用来源，确认是工具慢、重复调用、外部服务波动，还是预算需要场景级说明。
 
 ## 本轮验证记录
 
 ```powershell
-.\.venv\Scripts\python -m compileall app tests scripts
+.\.venv\Scripts\python.exe -m compileall app tests scripts
 ```
 
 结果：退出码 `0`。
 
 ```powershell
-.\.venv\Scripts\python -m pytest tests\test_evaluation_live_runner.py -q
+.\.venv\Scripts\python.exe -m pytest tests\test_runtime_readiness.py tests\test_script_entrypoints.py tests\test_evaluation_live_runner.py -q
 ```
 
-结果：`34 passed`。
+结果：退出码 `0`，`66 passed`。
 
 ```powershell
-.\.venv\Scripts\python -m pytest -q
+.\.venv\Scripts\python.exe -m pytest -q
 ```
 
-结果：`364 passed, 24 deselected`。结束后 LangSmith（LangChain 可观测平台）上报返回 403，但 pytest（测试框架）退出码为 `0`。
+结果：退出码 `0`，`387 passed, 24 deselected`。结束后 LangSmith（LangChain 可观测平台）上报返回 403，但 pytest（测试框架）退出码为 `0`。
 
 ```powershell
-.\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-smoke --preflight-only --json --no-summary
+.\.venv\Scripts\python.exe scripts\run_evaluation_scenarios.py --acceptance-core --preflight-only --json --no-summary
 ```
 
 结果：退出码 `0`，`preflight.status=passed`，`backend_live=passed`，`backend_ready=passed`。
 
 ```powershell
-.\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-smoke --base-url http://127.0.0.1:8000 --json --summary-dir .runtime\acceptance-smoke
+.\.venv\Scripts\python.exe scripts\run_evaluation_scenarios.py --acceptance-smoke --base-url http://127.0.0.1:8000 --json --summary-dir .runtime\acceptance-smoke
 ```
 
-结果：退出码 `0`，`status=passed`，`passed=true`，场景数 `1`。
+结果：退出码 `1`，`status=failed`，`passed=false`，场景数 `1`。失败维度是 runtime budget（运行预算）：`total_elapsed_seconds=1223.067` 超过 `900.0`，`tool_call_count=41` 超过 `36`。
 
 本地证据：
 
-- `.runtime\acceptance-smoke\20260512-183306-acceptance-summary.json`
-- `.runtime\acceptance-smoke\20260512-183306-acceptance-summary.md`
-- `.runtime\evaluations\20260513-023306-pricing_agency_quote_explanation.json`
-- `.runtime\acceptance-smoke-preflight-20260513-final3.txt`
-- `.runtime\acceptance-smoke-live-20260513-final4.stdout.txt`
+- `.runtime\acceptance-smoke\20260513-072508-acceptance-summary.json`
+- `.runtime\acceptance-smoke\20260513-072508-acceptance-summary.md`
+- `.runtime\evaluations\20260513-152508-pricing_agency_quote_explanation.json`
 
 这些 `.runtime/` 文件不提交。
 
@@ -212,7 +214,7 @@ uv sync --frozen
 - JSON（JavaScript 对象表示法）和 Markdown（标记文本）摘要写入前必须经过脱敏。
 - 可提交文档只记录状态、场景、阻塞项、命令结果和 `.runtime/` 相对路径。
 
-本轮对最终 smoke summary（烟测摘要）和 snapshot（快照）执行敏感形态扫描，结果为 `NO_SENSITIVE_FINDINGS`。
+提交前只对可提交文档记录脱敏摘要；`.runtime/` 原始 summary（摘要）和 snapshot（快照）不提交。
 
 ## 下一步
 
