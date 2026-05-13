@@ -345,7 +345,7 @@ def test_record_requirement_uses_recent_user_agency_signal_when_tool_args_are_pl
     assert "省心方案" in command.update["planning_mode_reason"]
 
 
-def test_record_requirement_treats_hotel_fallback_as_agency_plan():
+def test_record_requirement_keeps_hotel_fallback_in_free_planning_without_agency_signal():
     state = create_initial_state(user_id="user-1", session_id="session-1")
 
     command = record_requirement_tool.invoke(
@@ -364,11 +364,11 @@ def test_record_requirement_treats_hotel_fallback_as_agency_plan():
         }
     )
 
-    assert command.update["planning_mode"] == "agency_plan"
-    assert command.update["user_requirement"]["planning_mode"] == "agency_plan"
+    assert command.update["planning_mode"] == "free_planning"
+    assert command.update["user_requirement"]["planning_mode"] == "free_planning"
 
 
-def test_record_requirement_corrects_weak_free_mode_when_hotel_fallback_is_requested():
+def test_record_requirement_keeps_weak_free_mode_when_hotel_fallback_is_requested():
     state = create_initial_state(user_id="user-1", session_id="session-1")
 
     command = record_requirement_tool.invoke(
@@ -388,8 +388,8 @@ def test_record_requirement_corrects_weak_free_mode_when_hotel_fallback_is_reque
         }
     )
 
-    assert command.update["planning_mode"] == "agency_plan"
-    assert "修正为旅行社顾问方案" in command.update["planning_mode_reason"]
+    assert command.update["planning_mode"] == "free_planning"
+    assert "修正为旅行社顾问方案" not in command.update["planning_mode_reason"]
 
 
 def test_select_transport_tool_can_persist_concrete_transport_option():

@@ -73,6 +73,8 @@ LLM（大语言模型）创建统一走 `app/utils/llm_factory.py` 的 `build_ch
 
 每个场景保存输入、期望模式、最低分、关键断言和真实链路输出。这样我们改提示词、模型分工或前端报告结构时，都可以快速判断有没有回退。
 
+规划模式边界另见 [planning-mode-boundary.md](./planning-mode-boundary.md)：自由行、亲子、银发、少走路、轻松、交通或住宿省心等弱偏好不会自动进入旅行社方案；只有明确省心方案、旅行社产品、报价、合同规则或服务标准诉求时，`agency_context.mode` 才应为 `agency_plan`。
+
 模块 G 还新增了两个专项目录：
 
 - `data/evaluation/rag_quality_scenarios.json`：检查省心方案是否覆盖产品、SOP（标准作业流程）、报价、风险、报告标准等证据类别；自由行场景则重点看模式适配和避免硬推旅行社表达。

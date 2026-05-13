@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from app.reports.contracts import (
+    REPORT_PLANNING_MODES,
     REPORT_VERSION,
     REQUIRED_REPORT_SECTION_IDS,
     REQUIRED_REPORT_TOP_LEVEL_KEYS,
@@ -373,7 +374,7 @@ def _criterion_agency_alignment(
         "agency_context.source_type must be agency_internal",
     )
     score += _score(
-        mode in {"agency_plan", "free_planning"},
+        mode in REPORT_PLANNING_MODES,
         2,
         findings,
         "agency_context.mode must be agency_plan or free_planning",

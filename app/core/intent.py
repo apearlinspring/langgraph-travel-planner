@@ -10,6 +10,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from app.agency.planning_mode import has_explicit_agency_signal, has_explicit_free_signal
+
 
 TravelPlanningMode = Literal["free_planning", "agency_plan"]
 
@@ -138,12 +140,16 @@ _FINAL_REPORT_KEYWORDS = (
 )
 
 _AGENCY_PLAN_KEYWORDS = (
-    "省心",
     "省心方案",
+    "省心安排",
+    "省心套餐",
     "旅行社方案",
+    "旅行社顾问方案",
     "旅行社帮我",
     "你们旅行社",
     "按你们的产品",
+    "旅行社产品",
+    "产品路线",
     "成熟路线",
     "定制游",
     "跟团",
@@ -159,11 +165,26 @@ _AGENCY_PLAN_KEYWORDS = (
     "包办",
     "管家式",
     "行程管家",
-    "少操心",
     "顾问方案",
     "亲子团",
     "银发团",
-    "团建",
+)
+
+_AGENCY_QUOTE_SERVICE_KEYWORDS = (
+    "报价",
+    "报价单",
+    "报价规则",
+    "合同",
+    "合同规则",
+    "服务标准",
+    "服务流程",
+    "费用包含",
+    "费用不含",
+    "儿童价",
+    "成人价",
+    "单房差",
+    "SOP",
+    "sop",
 )
 
 _FREE_PLANNING_KEYWORDS = (
@@ -303,10 +324,18 @@ def _detect_planning_mode_from_text(text: str) -> PlanningModeDecision:
         return PlanningModeDecision()
 
     lower_text = normalized.lower()
-    agency_score = _keyword_score(normalized, _AGENCY_PLAN_KEYWORDS)
+    explicit_agency = has_explicit_agency_signal(normalized)
+    explicit_free = has_explicit_free_signal(normalized)
+    agency_plan_score = _keyword_score(normalized, _AGENCY_PLAN_KEYWORDS)
+    agency_quote_service_score = _keyword_score(normalized, _AGENCY_QUOTE_SERVICE_KEYWORDS)
+    agency_score = agency_plan_score + agency_quote_service_score
     free_score = _keyword_score(normalized, _FREE_PLANNING_KEYWORDS)
     if "diy" in lower_text:
         free_score += 1
+    if explicit_agency and agency_score == 0:
+        agency_score = 1
+    if explicit_free and free_score == 0:
+        free_score = 1
 
     agency_rejected = bool(
         re.search(r"(不需要|无需|拒绝|别|(?<!要)不要|不想).{0,8}(旅行社|顾问方案|产品|推销|销售|省心方案)", normalized)
@@ -331,6 +360,15 @@ def _detect_planning_mode_from_text(text: str) -> PlanningModeDecision:
 
     if agency_score == 0 and free_score == 0:
         return PlanningModeDecision()
+
+    if explicit_free and agency_plan_score == 0 and agency_quote_service_score > 0:
+        return PlanningModeDecision(
+            "free_planning",
+            confidence=0.82,
+            source="latest_user",
+            reason="用户明确自由规划，同时询问预算或费用边界，保持自由规划并仅补充费用依据",
+            confirmed=True,
+        )
 
     if agency_score and free_score and abs(agency_score - free_score) <= 1:
         if uncertain_mode:

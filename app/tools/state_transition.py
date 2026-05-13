@@ -12,6 +12,11 @@ from langchain_core.messages import ToolMessage
 from langgraph.types import Command
 
 from app.agency import product_rules as agency_product_rules
+from app.agency.planning_mode import (
+    has_explicit_agency_plan_signal,
+    has_explicit_agency_signal,
+    has_explicit_free_signal,
+)
 from app.agency.pricing_rules import (
     budget_confidence_payload,
     build_adjustment_options,
@@ -1870,18 +1875,25 @@ def record_requirement_tool(
         [str(mode_seed["special_needs"]), " ".join(str(item) for item in travel_styles)]
     )
     inferred_text_mode = None
-    if any(
-        keyword in mode_seed_text
-        for keyword in ("省心", "旅行社", "成熟路线", "定制游", "跟团", "小包团", "私家团", "团建", "亲子", "银发", "兜底", "自由行", "自由规划", "自助游", "自己玩", "不跟团", "自己订")
-    ):
+    explicit_agency_signal = has_explicit_agency_signal(mode_seed_text)
+    explicit_agency_plan_signal = has_explicit_agency_plan_signal(mode_seed_text)
+    explicit_free_signal = has_explicit_free_signal(mode_seed_text)
+    if explicit_agency_signal or explicit_free_signal:
         inferred_text_mode = _infer_planning_mode(mode_seed, runtime.state if runtime else None)
     inferred_state_agency_mode = _agency_signal_mode(
         mode_seed,
         runtime.state if runtime else None,
     )
     tool_planning_mode = _normalize_planning_mode(planning_mode)
+    if tool_planning_mode == "agency_plan" and explicit_free_signal and not explicit_agency_plan_signal:
+        tool_planning_mode = "free_planning"
+        planning_mode_reason = (
+            planning_mode_reason
+            or "已按用户明确自由行/自助规划诉求修正为自由规划"
+        )
     if tool_planning_mode == "free_planning" and (
-        inferred_text_mode == "agency_plan" or inferred_state_agency_mode == "agency_plan"
+        inferred_text_mode == "agency_plan"
+        or (inferred_state_agency_mode == "agency_plan" and not explicit_free_signal)
     ):
         tool_planning_mode = None
         planning_mode_reason = (

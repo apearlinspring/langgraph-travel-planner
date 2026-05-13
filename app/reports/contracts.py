@@ -3,6 +3,7 @@ from __future__ import annotations
 
 
 REPORT_VERSION = "travel_report.v1"
+REPORT_PLANNING_MODES = ("free_planning", "agency_plan")
 
 REPORT_SECTIONS: tuple[dict[str, str], ...] = (
     {"id": "overview", "title": "行程概览"},
