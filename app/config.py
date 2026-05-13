@@ -100,7 +100,13 @@ RUNTIME_DEPENDENCY_SPECS: tuple[RuntimeDependencySpec, ...] = (
         key="postgresql",
         label="PostgreSQL（关系型数据库）",
         description="业务表、LangGraph checkpoint（执行检查点）、长期记忆和审批审计持久化。",
-        env_vars=("POSTGRES_DB", "POSTGRES_USER", "POSTGRES_PASSWORD"),
+        env_vars=(
+            "POSTGRES_HOST",
+            "POSTGRES_PORT",
+            "POSTGRES_DB",
+            "POSTGRES_USER",
+            "POSTGRES_PASSWORD",
+        ),
         requirements=_requirements(
             development="required",
             test="optional",

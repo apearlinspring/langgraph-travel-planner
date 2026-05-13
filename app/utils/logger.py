@@ -1,6 +1,7 @@
 """
 Application logging setup.
 """
+import os
 import sys
 
 from loguru import logger
@@ -19,18 +20,24 @@ def _safe_console_sink(message) -> None:
 def setup_logger():
     """Configure console and file logging."""
     logger.remove()
+    suppress_console = os.getenv("ZHIXING_SUPPRESS_CONSOLE_LOGS", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
 
-    logger.add(
-        _safe_console_sink,
-        colorize=True,
-        format=(
-            "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
-            "<level>{level: <8}</level> | "
-            "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - "
-            "<level>{message}</level>"
-        ),
-        level="DEBUG" if settings.debug else "INFO",
-    )
+    if not suppress_console:
+        logger.add(
+            _safe_console_sink,
+            colorize=True,
+            format=(
+                "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
+                "<level>{level: <8}</level> | "
+                "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - "
+                "<level>{message}</level>"
+            ),
+            level="DEBUG" if settings.debug else "INFO",
+        )
 
     logger.add(
         "logs/app.log",
@@ -51,7 +58,8 @@ def setup_logger():
         diagnose=True,
     )
 
-    logger.info("Log system initialized")
+    if not suppress_console:
+        logger.info("Log system initialized")
     return logger
 
 

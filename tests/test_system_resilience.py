@@ -6,6 +6,8 @@ import pytest
 
 os.environ.setdefault("DASHSCOPE_API_KEY", "test-dashscope-key")
 os.environ.setdefault("LANGSMITH_API_KEY", "test-langsmith-key")
+os.environ.setdefault("POSTGRES_HOST", "localhost")
+os.environ.setdefault("POSTGRES_PORT", "5432")
 os.environ.setdefault("POSTGRES_DB", "test_db")
 os.environ.setdefault("POSTGRES_USER", "test_user")
 os.environ.setdefault("POSTGRES_PASSWORD", "test_password")

@@ -1,5 +1,9 @@
 import importlib
+import asyncio
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 
 def test_init_db_script_imports_cleanly():
@@ -35,6 +39,75 @@ def test_init_db_script_exposes_migration_modes_without_running_database():
     assert "_BOOTSTRAP_IMPORT_ERROR" in source
     assert "Docker Desktop 是否正在运行" in source
     assert "staging/production 不允许使用 legacy create_all" in source
+
+
+def test_init_db_unreachable_postgres_failure_is_actionable(monkeypatch):
+    module = importlib.import_module("scripts.init_db")
+
+    async def fail_probe():
+        raise RuntimeError("PostgreSQL TCP 连接不可用：localhost:6543 在 0.1s 内未连通。")
+
+    monkeypatch.setattr(module, "_ensure_runtime_imports", lambda: None)
+    monkeypatch.setattr(module, "_probe_postgres_tcp", fail_probe)
+    monkeypatch.setattr(
+        module,
+        "settings",
+        SimpleNamespace(
+            database_url="postgresql://travel_user:secret@localhost:6543/travel_planner_db",
+            postgres_host="localhost",
+            postgres_port=6543,
+            postgres_db="travel_planner_db",
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="PostgreSQL TCP 连接不可用"):
+        asyncio.run(module.init_database())
+
+    guidance = module._actionable_database_error(RuntimeError("connection refused"))
+    assert "docker compose up -d postgres" in guidance
+    assert "POSTGRES_HOST/PORT/DB/USER/PASSWORD" in guidance
+
+
+def test_init_db_bootstrap_sequence_runs_when_dependencies_are_reachable(monkeypatch):
+    module = importlib.import_module("scripts.init_db")
+    events = []
+
+    async def ok_probe():
+        events.append("probe")
+
+    def run_migrations(revision="head"):
+        events.append(("migrate", revision))
+
+    async def init_langgraph(db_url):
+        events.append(("langgraph", db_url))
+
+    async def enable_pgvector(db_url):
+        events.append(("pgvector", db_url))
+
+    monkeypatch.setattr(module, "_ensure_runtime_imports", lambda: None)
+    monkeypatch.setattr(module, "_probe_postgres_tcp", ok_probe)
+    monkeypatch.setattr(module, "run_business_migrations", run_migrations)
+    monkeypatch.setattr(module, "_init_langgraph_tables", init_langgraph)
+    monkeypatch.setattr(module, "_enable_pgvector", enable_pgvector)
+    monkeypatch.setattr(
+        module,
+        "settings",
+        SimpleNamespace(
+            database_url="postgresql://travel_user:secret@localhost:5432/travel_planner_db",
+            postgres_host="localhost",
+            postgres_port=5432,
+            postgres_db="travel_planner_db",
+        ),
+    )
+
+    asyncio.run(module.init_database(revision="head"))
+
+    assert events == [
+        "probe",
+        ("migrate", "head"),
+        ("langgraph", "postgresql://travel_user:secret@localhost:5432/travel_planner_db"),
+        ("pgvector", "postgresql://travel_user:secret@localhost:5432/travel_planner_db"),
+    ]
 
 
 def test_init_rag_script_exposes_actionable_failure_guidance():
