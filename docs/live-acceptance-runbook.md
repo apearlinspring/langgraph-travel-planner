@@ -10,8 +10,8 @@ chcp 65001 | Out-Null
 
 ## 当前分支
 
-- 工作树：`D:\Users\Administrator\PycharmProjects\ZhiXing\langgraph-travel-planner-live-smoke-evidence`
-- 分支：`codex/live-smoke-evidence`
+- 工作树：`D:\Users\Administrator\PycharmProjects\ZhiXing\langgraph-travel-planner-core-preflight-readiness`
+- 分支：`codex/core-preflight-readiness`
 - 日期：2026-05-13
 
 ## 状态判定
@@ -54,13 +54,13 @@ chcp 65001 | Out-Null
    .\.venv\Scripts\python.exe main.py
    ```
 
-   如果远端 MCP（模型上下文协议）冷启动在默认 8 秒内超时，可在本地 `.env` 设置非密钥配置：
+   远端 MCP（模型上下文协议）服务冷启动可能超过 8 秒；当前默认非密钥配置为：
 
    ```text
    RUNTIME_MCP_STARTUP_TIMEOUT_SECONDS=25
    ```
 
-   设置后重启后端，再确认 `/health/ready`。
+   修改该值后需重启后端，再确认 `/health/ready`。core（核心验收）前应看到所需 MCP 服务均为 healthy。
 
 6. 确认最小 smoke（烟测）场景选择。
 
@@ -129,16 +129,17 @@ uv sync --frozen
 
 ## acceptance-core 当前真实结果
 
-2026-05-13 在 `codex/live-smoke-evidence` 分支、HEAD `c4487eb` 完成一次 acceptance-smoke（验收烟测）复核；本轮没有运行 9 个 acceptance-core 场景。
+2026-05-13 在 `codex/core-preflight-readiness` 分支完成一次 acceptance-core preflight（核心验收预检）复核；本轮没有运行 9 个 acceptance-core 场景。
 
 - `.env` 存在：`true`
 - runtime readiness：`passed`
 - live health（存活检查）：`alive`
-- ready health（就绪检查）：完整 `/health/ready` 为 `degraded`，但降级来自本 smoke 场景外的 MCP（模型上下文协议）服务。
-- smoke preflight（预检）：退出码 `0`，`preflight.status=passed`，`backend_live=passed`，`backend_ready=passed`
+- ready health（就绪检查）：`ready`
+- MCP（模型上下文协议）服务：6 healthy，0 unavailable，37 tools
+- core preflight（预检）：退出码 `0`，`preflight.status=passed`，`backend_live=passed`，`backend_ready=passed`
 - 9 个核心场景：未运行
 
-当前不把 smoke 结论替代 core（核心验收）结论。smoke 已通过，但最终健康复核仍显示 `12306-mcp` 降级；下一步先跑 acceptance-core preflight，确认 core 选中的 MCP 服务全部满足门禁后，再运行 9 个核心场景。
+当前不把 core preflight 结论替代 core 9 场景结论。preflight 已通过，下一步可以在同一真实环境下运行 9 个核心场景。
 
 ## 当前 smoke 真实结果
 
@@ -194,6 +195,12 @@ uv sync --frozen
 结果：退出码 `0`，`preflight.status=passed`，`backend_live=passed`，`backend_ready=passed`。
 
 ```powershell
+.\.venv\Scripts\python.exe scripts\run_evaluation_scenarios.py --acceptance-core --preflight-only --json --no-summary
+```
+
+结果：退出码 `0`，`preflight.status=passed`，`backend_live=passed`，`backend_ready=passed`。首次默认 8 秒 MCP 启动探测会导致 `amap`、`12306-mcp` 和 `VariFlight-Aviation` degraded；把 `RUNTIME_MCP_STARTUP_TIMEOUT_SECONDS` 调整为 25 秒后复测通过，并已把 25 秒同步为默认值。
+
+```powershell
 .\.venv\Scripts\python.exe scripts\run_evaluation_scenarios.py --acceptance-smoke --base-url http://127.0.0.1:8000 --json --summary-dir .runtime\acceptance-smoke
 ```
 
@@ -218,4 +225,4 @@ uv sync --frozen
 
 ## 下一步
 
-如果后续改动影响模型、RAG（检索增强生成）、MCP（模型上下文协议）或报告结构，先复跑 `acceptance-smoke`。当前 smoke 已通过；进入 `acceptance-core` 前先跑 core preflight，并确认 `12306-mcp` 等 core 所需服务不再降级。继续只提交脱敏摘要，不提交 `.runtime/` 原始产物。
+如果后续改动影响模型、RAG（检索增强生成）、MCP（模型上下文协议）或报告结构，先复跑 `acceptance-smoke`。当前 smoke 和 core preflight 均已通过；下一步运行 9 个 acceptance-core 场景，并继续只提交脱敏摘要，不提交 `.runtime/` 原始产物。

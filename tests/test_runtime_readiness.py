@@ -6,6 +6,7 @@ import pytest
 
 from app.config import (
     RUNTIME_ENVIRONMENTS,
+    Settings,
     normalize_runtime_environment,
     runtime_configuration_snapshot,
     runtime_dependency_matrix,
@@ -146,6 +147,14 @@ def test_runtime_environment_aliases_resolve_to_four_tiers():
     assert normalize_runtime_environment("testing") == "test"
     assert normalize_runtime_environment("prod") == "production"
     assert normalize_runtime_environment("unknown") == "development"
+
+
+def test_runtime_mcp_startup_timeout_default_matches_live_acceptance_baseline(monkeypatch):
+    monkeypatch.delenv("RUNTIME_MCP_STARTUP_TIMEOUT_SECONDS", raising=False)
+
+    settings = Settings(_env_file=None)
+
+    assert settings.runtime_mcp_startup_timeout_seconds == 25.0
 
 
 def test_dependency_matrix_marks_core_and_optional_boundaries():

@@ -81,6 +81,8 @@ S2 已完成的可提交收口：
 
 当前 S2 smoke（验收烟测）结论：passed（通过）。核心验收仍需按需单独运行 `acceptance-core`，不能由 smoke 结果自动替代；运行 9 个核心场景前应先确认 core preflight 通过，尤其是当前完整健康检查中曾降级的 `12306-mcp`。
 
+2026-05-13 追加 core preflight（核心预检）复核：`codex/core-preflight-readiness` 分支在真实 `.env`、PostgreSQL（关系型数据库）、Redis（内存数据结构存储）、RAG（检索增强生成）向量库和后端服务下完成复测。首次默认 8 秒 MCP（模型上下文协议）启动探测会让 `amap`、`12306-mcp` 和 `VariFlight-Aviation` 冷启动降级；将非密钥配置 `RUNTIME_MCP_STARTUP_TIMEOUT_SECONDS` 调整为 25 秒后，`/health/ready=ready`，MCP 服务 6 healthy、0 unavailable、37 tools，`acceptance-core --preflight-only` 退出码 `0`，`preflight.status=passed`。该结果只代表核心预检通过，不代表 9 个核心场景通过。
+
 核心验收命令：
 
 ```powershell

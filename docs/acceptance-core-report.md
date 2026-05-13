@@ -2,19 +2,19 @@
 
 ## 结论
 
-2026-05-13 在 `codex/live-smoke-evidence` 分支、HEAD `c4487eb` 完成 acceptance-smoke（验收烟测）真实链路复核。当前真实环境 runtime readiness（运行时就绪检查）、smoke preflight（预检）和 smoke 场景均为 `passed（通过）`，原先阻塞 9 个核心场景前置判断的 smoke runtime budget（运行预算）失败已关闭。
+2026-05-13 在 `codex/core-preflight-readiness` 分支完成 acceptance-core（核心验收）preflight（预检）真实环境复核。当前真实环境 runtime readiness（运行时就绪检查）和 core preflight 均为 `passed（通过）`，原先阻塞 9 个核心场景前置判断的 MCP（模型上下文协议）冷启动降级已关闭。
 
-本文件仍不把 smoke 结果等同于 9 个 acceptance-core（核心验收）场景通过。它只说明最小真实链路已经闭环，下一步应先复跑 acceptance-core preflight，确认 12306 等 core 所需 MCP 服务 healthy 后，再进入 9 个核心场景。
+本文件仍不把 preflight 结果等同于 9 个 acceptance-core 场景通过。它只说明真实环境依赖、后端 ready（就绪检查）和 core 所需 MCP 服务已经满足进入 9 场景跑批的前置条件。
 
 环境闭环历史见 [acceptance-runtime-close-loop.md](./acceptance-runtime-close-loop.md)，本轮 smoke 预算收口见本文后续记录。
 
 ## 基准与命令
 
-- 工作树：`D:\Users\Administrator\PycharmProjects\ZhiXing\langgraph-travel-planner-live-smoke-evidence`
-- 分支：`codex/live-smoke-evidence`
+- 工作树：`D:\Users\Administrator\PycharmProjects\ZhiXing\langgraph-travel-planner-core-preflight-readiness`
+- 分支：`codex/core-preflight-readiness`
 - 基准命令：`git fetch origin --prune; git merge --ff-only origin/main`
-- 结果：快进到最新主线 `c4487eb`。
-- 本地 Python（编程语言运行时）环境：`.venv` 已存在。
+- 结果：从最新主线 `0c80978` 创建工作树。
+- 本地 Python（编程语言运行时）环境：新工作树用 `uv sync --frozen` 按锁文件创建 `.venv`。
 
 执行过的核心门禁命令：
 
@@ -22,21 +22,21 @@
 .\.venv\Scripts\python.exe scripts\check_runtime_readiness.py --target staging --check-docker --json
 .\.venv\Scripts\python.exe -m scripts.init_db --mode bootstrap
 .\.venv\Scripts\python.exe -m scripts.init_rag
-.\.venv\Scripts\python.exe scripts\run_evaluation_scenarios.py --acceptance-smoke --preflight-only --json --no-summary
-.\.venv\Scripts\python.exe scripts\run_evaluation_scenarios.py --acceptance-smoke --base-url http://127.0.0.1:8000 --json --summary-dir .runtime\acceptance-smoke
+.\.venv\Scripts\python.exe scripts\run_evaluation_scenarios.py --acceptance-core --preflight-only --json --no-summary
 ```
 
 ## 环境闭环摘要
 
 - `.env` 存在：是，未提交。
-- `.env` 存在但未打印内容，未提交。
+- `.env` 存在但未打印内容，未提交；本轮不把真实密钥写入文档或提交说明。
 - PostgreSQL（关系型数据库）：`healthy`。
 - Redis（内存数据结构存储）：`healthy`。
 - `scripts.init_db --mode bootstrap`：退出码 `0`。
-- `scripts.init_rag`：退出码 `0`。当前本地 ignored 向量库已有内容，复跑后公开库和内部库 embedding（向量嵌入）计数翻倍；这是本地证据风险，不提交向量库原始产物。
+- `scripts.init_rag`：退出码 `0`。新工作树本地生成公开和内部 RAG（检索增强生成）向量库；这些 ignored（忽略）产物不提交。
 - runtime readiness（运行时就绪检查）：`status=passed`，`blocked_reasons=[]`。
 - `/health/live`：`alive`。
-- `/health/ready`：完整 ready 为 `degraded`，核心依赖 ready；降级来自本 smoke 场景外的 MCP（模型上下文协议）服务。smoke preflight 的 `backend_ready=passed`，因为所需 `search` 和 `weather` 均 healthy。
+- `/health/ready`：在 `RUNTIME_MCP_STARTUP_TIMEOUT_SECONDS=25` 下为 `ready`；MCP 服务 6 healthy、0 unavailable、37 tools。
+- 本轮已把默认 `RUNTIME_MCP_STARTUP_TIMEOUT_SECONDS` 从 8 秒调整为 25 秒，并同步 `.env.example` 与运行文档，避免远端 MCP 冷启动被误判为 degraded（降级）。
 
 ## Preflight 结果
 
@@ -46,7 +46,8 @@
 - `backend_ready=passed`
 - `missing_required=[]`
 - `degraded_optional=[]`
-- `backend_ready` finding（发现项）：后端 readiness 只因 selected scenario set（选中场景集合）外的 MCP 服务降级。
+- core 所需 MCP 服务：`12306-mcp`、`VariFlight-Aviation`、`aigohotel-mcp`、`amap`、`search`、`weather` 均满足 preflight。
+- 首次用默认 8 秒 MCP 启动超时启动后端时，`amap`、`12306-mcp`、`VariFlight-Aviation` 曾 degraded；提高到 25 秒后复测通过。
 
 ## 9 个核心场景状态
 
@@ -114,7 +115,7 @@ acceptance-smoke 真实运行结果：
 归因分类：
 
 - 环境/密钥/外部 API（应用程序接口）问题：已关闭到 smoke preflight passed。
-- MCP 启动探测问题：smoke 所需服务 healthy；最终复核时 `12306-mcp` 仍为 degraded，需要在 9 场景运行前恢复或通过 core preflight。
+- MCP 启动探测问题：已确认默认 8 秒对真实远端 MCP 冷启动偏短；默认值和 `.env.example` 已调整为 25 秒，core preflight 复测通过。
 - Agent（智能体）业务链路问题：已减少无效重试和跨交通方式扩散调用。
 - RAG 证据问题：smoke 通过。
 - `report_data`（结构化报告数据）契约问题：smoke 通过。
@@ -123,4 +124,4 @@ acceptance-smoke 真实运行结果：
 
 ## 下一步
 
-下一步先在同一真实环境下运行 acceptance-core preflight。只有 core preflight 通过，尤其是 `12306-mcp` 等 core 所需 MCP 服务恢复 healthy 后，再运行 9 个 acceptance-core 场景。若 core 场景失败，按失败维度拆解报告质量、RAG、MCP、工具治理、运行预算和旅行社业务证据；不要用 smoke 通过结果替代核心验收。
+下一步可以在同一真实环境下运行 9 个 acceptance-core 场景。若 core 场景失败，按失败维度拆解报告质量、RAG、MCP、工具治理、运行预算和旅行社业务证据；不要用 preflight 或 smoke 通过结果替代核心验收。

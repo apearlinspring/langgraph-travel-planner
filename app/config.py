@@ -563,7 +563,7 @@ class Settings(BaseSettings):
         alias="RUNTIME_STARTUP_DEPENDENCY_TIMEOUT_SECONDS",
     )
     runtime_mcp_startup_timeout_seconds: float = Field(
-        default=8.0,
+        default=25.0,
         alias="RUNTIME_MCP_STARTUP_TIMEOUT_SECONDS",
     )
     runtime_mcp_optional_startup_timeout_seconds: float = Field(
