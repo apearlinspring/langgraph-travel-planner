@@ -10,8 +10,8 @@ chcp 65001 | Out-Null
 
 ## 当前分支
 
-- 工作树：`D:\Users\Administrator\PycharmProjects\ZhiXing\langgraph-travel-planner-acceptance-runtime-close-loop`
-- 分支：`codex/acceptance-runtime-close-loop`
+- 工作树：`D:\Users\Administrator\PycharmProjects\ZhiXing\langgraph-travel-planner-smoke-runtime-budget`
+- 分支：`codex/smoke-runtime-budget`
 - 日期：2026-05-13
 
 ## 状态判定
@@ -129,7 +129,7 @@ uv sync --frozen
 
 ## acceptance-core 当前真实结果
 
-2026-05-13 在 `codex/acceptance-runtime-close-loop` 分支完成一次 acceptance-core preflight 复核：
+2026-05-13 在 `codex/smoke-runtime-budget` 分支完成一次 acceptance-core preflight 复核：
 
 - `.env` 存在：`true`
 - runtime readiness：`passed`
@@ -139,33 +139,34 @@ uv sync --frozen
 - `acceptance-core --preflight-only`：退出码 `0`，`preflight.status=passed`
 - 9 个核心场景：未运行
 
-不运行 9 个核心场景的原因：后续 smoke 真实场景失败在 runtime budget（运行预算），不是 preflight blocked。
+当前不把 smoke（烟测）结论替代 core（核心验收）结论。smoke 已通过，下一步可以运行 9 个核心场景。
 
 ## 当前 smoke 真实结果
 
-2026-05-13 已完成一次真实 smoke 闭环：
+2026-05-13 在当前真实环境完成一次新的 smoke 闭环：
 
 - `preflight.status=passed`
-- live smoke status（在线烟测状态）：`failed`
+- live smoke status（在线烟测状态）：`passed`
 - 生成 `report_data`：是
 - evidence closure（证据闭环）：通过
 - `report_quality=passed`
 - `rag_quality=passed`
 - `tool_quality=passed`
-- `runtime_budget=failed`
-- `total_elapsed_seconds=1223.067`，预算 `900.0`
-- `tool_call_count=41`，预算 `36`
-- `tool_failure_count=19`
-- `fallback_count=19`
-- `first_token_seconds=42.404`
+- `runtime_budget=passed`
+- `total_elapsed_seconds=521.809`，预算 `900.0`
+- `first_token_seconds=69.408`，场景预算 `90.0`
+- `tool_call_count=24`，场景预算 `36`
+- `tool_failure_count=10`
+- `fallback_count=10`
+- `error_event_count=0`
 
 本地证据：
 
-- `.runtime\acceptance-smoke\20260513-072508-acceptance-summary.json`
-- `.runtime\acceptance-smoke\20260513-072508-acceptance-summary.md`
-- `.runtime\evaluations\20260513-152508-pricing_agency_quote_explanation.json`
+- `.runtime\acceptance-smoke\20260513-084157-acceptance-summary.json`
+- `.runtime\acceptance-smoke\20260513-084157-acceptance-summary.md`
+- `.runtime\evaluations\20260513-164157-pricing_agency_quote_explanation.json`
 
-结论：不要直接跑 9 个核心场景。先拆解 smoke 的耗时和工具调用来源，确认是工具慢、重复调用、外部服务波动，还是预算需要场景级说明。
+结论：smoke 已经证明最小旅行社报价说明链路可进入真实聊天 API（应用程序接口）、生成 `report_data` 并通过确定性门禁。下一步应运行 9 个核心场景，不要用 smoke 通过结果直接代表核心验收通过。
 
 ## 本轮验证记录
 
@@ -179,13 +180,13 @@ uv sync --frozen
 .\.venv\Scripts\python.exe -m pytest tests\test_runtime_readiness.py tests\test_script_entrypoints.py tests\test_evaluation_live_runner.py -q
 ```
 
-结果：退出码 `0`，`66 passed`。
+结果：当前分支相关测试另见本轮验证；历史记录为 `66 passed`。
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-结果：退出码 `0`，`387 passed, 24 deselected`。结束后 LangSmith（LangChain 可观测平台）上报返回 403，但 pytest（测试框架）退出码为 `0`。
+结果：历史记录为 `387 passed, 24 deselected`。结束后 LangSmith（LangChain 可观测平台）上报返回 403，但 pytest（测试框架）退出码为 `0`。
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\run_evaluation_scenarios.py --acceptance-core --preflight-only --json --no-summary
@@ -197,13 +198,13 @@ uv sync --frozen
 .\.venv\Scripts\python.exe scripts\run_evaluation_scenarios.py --acceptance-smoke --base-url http://127.0.0.1:8000 --json --summary-dir .runtime\acceptance-smoke
 ```
 
-结果：退出码 `1`，`status=failed`，`passed=false`，场景数 `1`。失败维度是 runtime budget（运行预算）：`total_elapsed_seconds=1223.067` 超过 `900.0`，`tool_call_count=41` 超过 `36`。
+结果：退出码 `0`，`status=passed`，`passed=true`，场景数 `1`。`runtime_budget=passed`，`total_elapsed_seconds=521.809`，`first_token_seconds=69.408`，`tool_call_count=24`。
 
 本地证据：
 
-- `.runtime\acceptance-smoke\20260513-072508-acceptance-summary.json`
-- `.runtime\acceptance-smoke\20260513-072508-acceptance-summary.md`
-- `.runtime\evaluations\20260513-152508-pricing_agency_quote_explanation.json`
+- `.runtime\acceptance-smoke\20260513-084157-acceptance-summary.json`
+- `.runtime\acceptance-smoke\20260513-084157-acceptance-summary.md`
+- `.runtime\evaluations\20260513-164157-pricing_agency_quote_explanation.json`
 
 这些 `.runtime/` 文件不提交。
 

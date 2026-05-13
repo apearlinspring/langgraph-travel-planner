@@ -2,11 +2,11 @@
 
 ## 2026-05-13 S2 acceptance-smoke（验收烟测）追加结论
 
-当前工作树：`D:\Users\Administrator\PycharmProjects\ZhiXing\langgraph-travel-planner-live-smoke-evidence`。
+当前工作树：`D:\Users\Administrator\PycharmProjects\ZhiXing\langgraph-travel-planner-smoke-runtime-budget`。
 
-当前分支：`codex/live-smoke-evidence`。
+当前分支：`codex/smoke-runtime-budget`。
 
-本轮实际 smoke（烟测）状态：`passed（通过）`。main（主线）已包含 S1 环境修复，当前真实环境下 Docker、PostgreSQL（关系型数据库）、Redis（内存数据结构存储）、RAG（检索增强生成）向量库和后端服务可用；`acceptance-smoke` 已进入真实聊天 API（应用程序接口）链路并生成有效 `report_data`。
+本轮实际 smoke（烟测）状态：`passed（通过）`。main（主线）已包含真实环境修复，当前真实环境下 Docker、PostgreSQL（关系型数据库）、Redis（内存数据结构存储）、RAG（检索增强生成）向量库、MCP（模型上下文协议）服务池和后端服务可用；`acceptance-smoke` 已进入真实聊天 API（应用程序接口）链路并生成有效 `report_data`。
 
 S2 已完成的可提交收口：
 
@@ -23,15 +23,13 @@ S2 已完成的可提交收口：
 .\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-smoke --base-url http://127.0.0.1:8000 --json --summary-dir .runtime\acceptance-smoke
 ```
 
-结果：退出码 `0`，`status=passed`，`passed=true`，场景数 `1`，`first_token_seconds=32.775`，`tool_call_count=15`，`runtime_budget_passed=true`。
+结果：退出码 `0`，`status=passed`，`passed=true`，场景数 `1`，`total_elapsed_seconds=521.809`，`first_token_seconds=69.408`，`tool_call_count=24`，`runtime_budget_passed=true`。
 
 本地 passed（通过）证据产物：
 
-- `.runtime\acceptance-smoke\20260512-183306-acceptance-summary.json`
-- `.runtime\acceptance-smoke\20260512-183306-acceptance-summary.md`
-- `.runtime\evaluations\20260513-023306-pricing_agency_quote_explanation.json`
-- `.runtime\acceptance-smoke-preflight-20260513-final3.txt`
-- `.runtime\acceptance-smoke-live-20260513-final4.stdout.txt`
+- `.runtime\acceptance-smoke\20260513-084157-acceptance-summary.json`
+- `.runtime\acceptance-smoke\20260513-084157-acceptance-summary.md`
+- `.runtime\evaluations\20260513-164157-pricing_agency_quote_explanation.json`
 
 证据闭环：`snapshot`、`report_data`、`budget`、`budget_confidence`、`risk`、`verification_items`、`agency_business_evidence` 全部为 `true`。脱敏检查：对上述 JSON（JavaScript 对象表示法）、Markdown（标记文本）摘要和 snapshot（快照）扫描邮箱、手机号、JWT（JSON Web Token，令牌认证）和常见 API key（应用程序接口密钥）形态，结果为 `NO_SENSITIVE_FINDINGS`。这些 `.runtime/` 产物不提交。
 

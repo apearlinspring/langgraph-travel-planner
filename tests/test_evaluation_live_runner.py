@@ -906,6 +906,11 @@ def test_acceptance_smoke_scenarios_select_minimal_live_contract():
         "省心" in scenario.prompt and ("费用" in scenario.prompt or "报价" in scenario.name)
         for scenario in scenarios
     )
+    assert "2026-06-20" in pricing_smoke.prompt
+    assert "人均预算1500-2500元" in pricing_smoke.prompt
+    assert any("高铁" in followup for followup in pricing_smoke.followups)
+    assert any("舒适型酒店" in followup for followup in pricing_smoke.followups)
+    assert any("本地小吃加特色餐厅" in followup for followup in pricing_smoke.followups)
     assert pricing_smoke.requirements["mcp_servers"] == ["weather", "search"]
     assert pricing_smoke.runtime_budget["max_first_token_seconds"] == 90
     assert pricing_smoke.runtime_budget["warning_first_token_ratio"] == 0.99

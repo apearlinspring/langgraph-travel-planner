@@ -102,6 +102,11 @@ ACCOMMODATION_ALIASES = {
     "中高档酒店": "star_hotel",
     "高档酒店": "star_hotel",
     "舒适酒店": "star_hotel",
+    "舒适型": "star_hotel",
+    "舒适型酒店": "star_hotel",
+    "舒适住宿": "star_hotel",
+    "中档酒店": "star_hotel",
+    "中端酒店": "star_hotel",
     "经济酒店": "economy_hotel",
     "快捷酒店": "economy_hotel",
     "经济型酒店": "economy_hotel",
@@ -127,6 +132,8 @@ FOOD_ALIASES = {
     "打卡特色餐厅": "specialty",
     "本地小吃": "local",
     "本地小吃/夜市": "local",
+    "本地特色": "local",
+    "当地特色": "local",
     "夜市": "local",
     "小吃": "local",
     "小吃扫街": "local",
@@ -459,6 +466,21 @@ def _normalize_choice(value: str, valid_labels: dict[str, str], aliases: dict[st
     return normalized
 
 
+def _matching_choice_aliases(
+    value: str,
+    valid_labels: dict[str, str],
+    aliases: dict[str, str],
+) -> list[str]:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return []
+    matches: list[str] = []
+    for key, choice in {**aliases, **valid_labels}.items():
+        if key and key in normalized and choice in valid_labels and choice not in matches:
+            matches.append(choice)
+    return matches
+
+
 def _normalize_choices(
     values: list[str],
     valid_labels: dict[str, str],
@@ -467,7 +489,14 @@ def _normalize_choices(
     normalized = []
     for value in values:
         choice = _normalize_choice(value, valid_labels, aliases)
-        if choice not in normalized:
+        if choice in valid_labels and choice not in normalized:
+            normalized.append(choice)
+            continue
+        matched_choices = _matching_choice_aliases(value, valid_labels, aliases)
+        for matched_choice in matched_choices:
+            if matched_choice not in normalized:
+                normalized.append(matched_choice)
+        if not matched_choices and choice not in valid_labels and choice not in normalized:
             normalized.append(choice)
     return normalized
 

@@ -519,7 +519,7 @@ def test_select_accommodation_tool_normalizes_common_chinese_labels():
 
     command = select_accommodation_tool.invoke(
         {
-            "accommodation_types": ["酒店"],
+            "accommodation_types": ["重庆核心商圈的舒适型酒店"],
             "hotel_name": "上海城市酒店",
             "price_per_night": 1308.0,
             "runtime": _build_runtime(state),
@@ -536,12 +536,12 @@ def test_select_food_tool_normalizes_common_chinese_labels():
 
     command = select_food_tool.invoke(
         {
-            "food_types": ["本地小吃/夜市", "特色餐厅/名店"],
+            "food_types": ["本地小吃加特色餐厅，照顾轻松节奏"],
             "runtime": _build_runtime(state),
         }
     )
 
-    assert command.update["selected_food_types"] == ["local", "specialty"]
+    assert command.update["selected_food_types"] == ["specialty", "local"]
     assert command.update["current_step"] == "itinerary_generation"
 
 

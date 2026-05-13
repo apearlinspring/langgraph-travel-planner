@@ -15,7 +15,7 @@ class FakeCoordinator:
 
 
 @pytest.mark.asyncio
-async def test_query_transport_options_treats_transport_type_as_preference(monkeypatch):
+async def test_query_transport_options_respects_confirmed_transport_type(monkeypatch):
     coordinator = FakeCoordinator()
 
     async def fake_create_transport_coordinator():
@@ -42,8 +42,8 @@ async def test_query_transport_options_treats_transport_type_as_preference(monke
     assert command.update["tool_audit_events"][0]["status"] == "success"
     assert command.update["tool_audit_events"][0]["evidence_type"] == "live_transport_query"
     content = coordinator.calls[0]["messages"][0]["content"]
-    assert "更偏向 高铁" in content
-    assert "不要因为我提到了 高铁 就默认排除其他交通方式" in content
+    assert "已确认先按 高铁 查询" in content
+    assert "不要在同一轮额外查询其他交通方式" in content
 
 
 @pytest.mark.asyncio

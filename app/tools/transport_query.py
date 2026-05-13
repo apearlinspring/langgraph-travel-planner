@@ -110,13 +110,15 @@ async def query_transport_options(
                 "train": "高铁",
                 "driving": "自驾",
             }
+            type_label = type_labels.get(guarded_type, guarded_type)
             user_query = (
                 f"我想从 {guarded_origin} 去 {guarded_destination}，"
                 f"出发日期是 {guarded_date}，"
-                f"我当前更偏向 {type_labels.get(guarded_type, guarded_type)}，"
-                f"请优先给我这种方式的真实方案；"
-                f"如果同一天还有明显更省时、更省心或更省钱的替代方式，也请顺带对比 1-2 个，"
-                f"不要因为我提到了 {type_labels.get(guarded_type, guarded_type)} 就默认排除其他交通方式。"
+                f"本轮已确认先按 {type_label} 查询。"
+                f"请只调用 {type_label} 对应的真实查询工具，给出这种方式的可核验方案；"
+                "不要在同一轮额外查询其他交通方式。"
+                "如果你认为存在明显更合适的替代交通，只用一句话提示可另行发起对比，"
+                "不要编造未查询方式的班次、价格或库存。"
             )
         else:
             user_query = (

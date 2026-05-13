@@ -2,9 +2,9 @@
 
 日期：2026-05-13。
 
-工作树：`D:\Users\Administrator\PycharmProjects\ZhiXing\langgraph-travel-planner-live-smoke-evidence`。
+工作树：`D:\Users\Administrator\PycharmProjects\ZhiXing\langgraph-travel-planner-smoke-runtime-budget`。
 
-分支：`codex/live-smoke-evidence`。
+分支：`codex/smoke-runtime-budget`。
 
 ## 结论
 
@@ -18,7 +18,7 @@
 - 场景级 `90s` 首 token 硬预算消除了 60 秒 violation（违规）。
 - 后续真实复核曾失败于 `tool_call_count=35 exceeds budget 32`，原因是报价 smoke（烟测）触发旅行社报价/RAG（检索增强生成）证据、目的地、酒店和交通兜底核验的组合链路。
 
-最终采用单场景预算：`max_first_token_seconds=90`，`warning_first_token_ratio=0.99`，`max_tool_call_count=36`，`warning_tool_call_ratio=0.99`。这是 `pricing_agency_quote_explanation` 的场景级覆盖，不是全局放宽；其他场景超过默认预算仍会失败。最终通过 run 的 `first_token_seconds=32.775`、`tool_call_count=15`，runtime budget（运行预算）无 findings（发现项）。
+最终采用单场景预算：`max_first_token_seconds=90`，`warning_first_token_ratio=0.99`，`max_tool_call_count=36`，`warning_tool_call_ratio=0.99`。这是 `pricing_agency_quote_explanation` 的场景级覆盖，不是全局放宽；其他场景超过默认预算仍会失败。最新通过 run 的 `total_elapsed_seconds=521.809`、`first_token_seconds=69.408`、`tool_call_count=24`，runtime budget（运行预算）无 findings（发现项）。
 
 ## 场景覆盖
 
@@ -80,21 +80,20 @@
 - 报告质量分：`100.0`
 - Agent（智能体）综合分：`100.0`
 - runtime budget（运行预算）：`passed`
-- `first_token_seconds=32.775`
-- `tool_call_count=15`
-- `tool_failure_count=6`
-- `fallback_count=6`
+- `total_elapsed_seconds=521.809`
+- `first_token_seconds=69.408`
+- `tool_call_count=24`
+- `tool_failure_count=10`
+- `fallback_count=10`
 - `runtime_findings=[]`
 
 ## 证据产物
 
 本地 `.runtime/` 证据：
 
-- `.runtime\acceptance-smoke\20260512-183306-acceptance-summary.json`
-- `.runtime\acceptance-smoke\20260512-183306-acceptance-summary.md`
-- `.runtime\evaluations\20260513-023306-pricing_agency_quote_explanation.json`
-- `.runtime\acceptance-smoke-preflight-20260513-final3.txt`
-- `.runtime\acceptance-smoke-live-20260513-final4.stdout.txt`
+- `.runtime\acceptance-smoke\20260513-084157-acceptance-summary.json`
+- `.runtime\acceptance-smoke\20260513-084157-acceptance-summary.md`
+- `.runtime\evaluations\20260513-164157-pricing_agency_quote_explanation.json`
 
 这些文件只作为本地证据，不提交。
 
