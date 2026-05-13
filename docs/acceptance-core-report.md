@@ -4,6 +4,8 @@
 
 2026-05-13 在 `codex/core-preflight-readiness` 分支完成 acceptance-core（核心验收）preflight（预检）真实环境复核。当前真实环境 runtime readiness（运行时就绪检查）和 core preflight 均为 `passed（通过）`，原先阻塞 9 个核心场景前置判断的 MCP（模型上下文协议）冷启动降级已关闭。
 
+2026-05-14 在 `codex/acceptance-core-full-run` 分支启动 9 场景真实跑批，详见 [acceptance-core-full-run.md](./acceptance-core-full-run.md)。本轮确认 core preflight 通过且环境不再阻塞，但 9 场景未通过：5 个场景落盘，2 个 passed、3 个 failed/incomplete，剩余 4 个因第 6 场景长时间工具循环而未运行。
+
 本文件仍不把 preflight 结果等同于 9 个 acceptance-core 场景通过。它只说明真实环境依赖、后端 ready（就绪检查）和 core 所需 MCP 服务已经满足进入 9 场景跑批的前置条件。
 
 环境闭环历史见 [acceptance-runtime-close-loop.md](./acceptance-runtime-close-loop.md)，本轮 smoke 预算收口见本文后续记录。
@@ -51,27 +53,27 @@
 
 ## 9 个核心场景状态
 
-本轮没有运行 9 个 acceptance-core 场景，因此没有新的场景级 pass/fail 结论。preflight-only（仅预检）输出中场景状态为 `skipped（跳过）` 属于预期，不代表业务场景通过或失败。
+2026-05-14 已进入真实 9 场景跑批，但未完成整批。停止原因不是环境阻塞，而是第 6 个场景继续工具循环且整批已超过 75 分钟。原始快照保留在 `.runtime/`，不提交。
 
 | 场景 | 本轮状态 | 说明 |
 |---|---|---|
-| `free_weekend_nearby` | not_run | preflight 通过后未进入 9 场景跑批。 |
-| `free_city_three_days` | not_run | preflight 通过后未进入 9 场景跑批。 |
-| `agency_couple_relaxed` | not_run | preflight 通过后未进入 9 场景跑批。 |
-| `agency_family_parent_child` | not_run | preflight 通过后未进入 9 场景跑批。 |
-| `agency_senior_low_stress` | not_run | preflight 通过后未进入 9 场景跑批。 |
-| `edge_hotel_tool_fallback` | not_run | preflight 通过后未进入 9 场景跑批。 |
+| `free_weekend_nearby` | failed | 生成 `report_data`，但 runtime budget 失败：`tool_call_count=40 > 32`，`error_event_count=1 > 0`。 |
+| `free_city_three_days` | failed | 自由行场景误生成 `agency_context.mode=agency_plan`，报告和 RAG 模式对齐失败。 |
+| `agency_couple_relaxed` | passed | 综合分 100，证据闭环和 runtime budget 通过。 |
+| `agency_family_parent_child` | passed | 综合分 100，证据闭环和 runtime budget 通过。 |
+| `agency_senior_low_stress` | failed/incomplete | 第 8 回合超时 900 秒，未生成 `report_data`。 |
+| `edge_hotel_tool_fallback` | not_run | 第 6 场景工具循环后人工停止。 |
 | `pricing_agency_quote_explanation` | not_run / smoke_passed | 核心批未运行；最小 smoke 真实链路已通过。 |
-| `risk_weather_disruption` | not_run | preflight 通过后未进入 9 场景跑批。 |
-| `edge_transport_tool_fallback` | not_run | preflight 通过后未进入 9 场景跑批。 |
+| `risk_weather_disruption` | not_run | 第 6 场景工具循环后人工停止。 |
+| `edge_transport_tool_fallback` | not_run | 第 6 场景工具循环后人工停止。 |
 
 核心场景状态统计：
 
-- `passed`: 0
-- `failed`: 0
+- `passed`: 2
+- `failed/incomplete`: 3
 - `blocked`: 0
 - `degraded`: 0
-- `not_run`: 9
+- `not_run`: 4
 
 ## Smoke 后置判断
 
@@ -124,4 +126,4 @@ acceptance-smoke 真实运行结果：
 
 ## 下一步
 
-下一步可以在同一真实环境下运行 9 个 acceptance-core 场景。若 core 场景失败，按失败维度拆解报告质量、RAG、MCP、工具治理、运行预算和旅行社业务证据；不要用 preflight 或 smoke 通过结果替代核心验收。
+下一步先不要直接复跑 9 场景。先按 [acceptance-core-full-run.md](./acceptance-core-full-run.md) 拆分修复 runtime loop guard（运行时循环保护）、RAG runtime contract（RAG 运行时契约）、planning mode boundary（规划模式边界）和 acceptance runner resilience（验收运行器韧性）。修完后先复跑 `free_weekend_nearby`、`free_city_three_days`、`agency_senior_low_stress` 三个代表场景，再恢复完整 9 场景。
