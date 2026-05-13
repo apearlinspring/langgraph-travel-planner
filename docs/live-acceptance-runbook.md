@@ -10,8 +10,8 @@ chcp 65001 | Out-Null
 
 ## 当前分支
 
-- 工作树：`D:\Users\Administrator\PycharmProjects\ZhiXing\langgraph-travel-planner-smoke-runtime-budget`
-- 分支：`codex/smoke-runtime-budget`
+- 工作树：`D:\Users\Administrator\PycharmProjects\ZhiXing\langgraph-travel-planner-live-smoke-evidence`
+- 分支：`codex/live-smoke-evidence`
 - 日期：2026-05-13
 
 ## 状态判定
@@ -129,17 +129,16 @@ uv sync --frozen
 
 ## acceptance-core 当前真实结果
 
-2026-05-13 在 `codex/smoke-runtime-budget` 分支完成一次 acceptance-core preflight 复核：
+2026-05-13 在 `codex/live-smoke-evidence` 分支、HEAD `c4487eb` 完成一次 acceptance-smoke（验收烟测）复核；本轮没有运行 9 个 acceptance-core 场景。
 
 - `.env` 存在：`true`
 - runtime readiness：`passed`
 - live health（存活检查）：`alive`
-- ready health（就绪检查）：`ready`
-- MCP 服务：6 healthy，0 unavailable，37 tools
-- `acceptance-core --preflight-only`：退出码 `0`，`preflight.status=passed`
+- ready health（就绪检查）：完整 `/health/ready` 为 `degraded`，但降级来自本 smoke 场景外的 MCP（模型上下文协议）服务。
+- smoke preflight（预检）：退出码 `0`，`preflight.status=passed`，`backend_live=passed`，`backend_ready=passed`
 - 9 个核心场景：未运行
 
-当前不把 smoke（烟测）结论替代 core（核心验收）结论。smoke 已通过，下一步可以运行 9 个核心场景。
+当前不把 smoke 结论替代 core（核心验收）结论。smoke 已通过，下一步可以运行 9 个核心场景；运行前需注意完整 ready 中的非 smoke MCP 降级是否影响 core 选中的服务。
 
 ## 当前 smoke 真实结果
 
@@ -153,18 +152,18 @@ uv sync --frozen
 - `rag_quality=passed`
 - `tool_quality=passed`
 - `runtime_budget=passed`
-- `total_elapsed_seconds=521.809`，预算 `900.0`
-- `first_token_seconds=69.408`，场景预算 `90.0`
-- `tool_call_count=24`，场景预算 `36`
-- `tool_failure_count=10`
-- `fallback_count=10`
+- `total_elapsed_seconds=556.393`，预算 `900.0`
+- `first_token_seconds=84.103`，场景预算 `90.0`
+- `tool_call_count=21`，场景预算 `36`
+- `tool_failure_count=13`
+- `fallback_count=13`
 - `error_event_count=0`
 
 本地证据：
 
-- `.runtime\acceptance-smoke\20260513-084157-acceptance-summary.json`
-- `.runtime\acceptance-smoke\20260513-084157-acceptance-summary.md`
-- `.runtime\evaluations\20260513-164157-pricing_agency_quote_explanation.json`
+- `.runtime\acceptance-smoke\20260513-150047-acceptance-summary.json`
+- `.runtime\acceptance-smoke\20260513-150047-acceptance-summary.md`
+- `.runtime\evaluations\20260513-230047-pricing_agency_quote_explanation.json`
 
 结论：smoke 已经证明最小旅行社报价说明链路可进入真实聊天 API（应用程序接口）、生成 `report_data` 并通过确定性门禁。下一步应运行 9 个核心场景，不要用 smoke 通过结果直接代表核心验收通过。
 
@@ -177,19 +176,19 @@ uv sync --frozen
 结果：退出码 `0`。
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest tests\test_runtime_readiness.py tests\test_script_entrypoints.py tests\test_evaluation_live_runner.py -q
+.\.venv\Scripts\python.exe -m pytest tests\test_evaluation_live_runner.py tests\test_transport_query_tool.py tests\test_workflow_maintainability.py -q
 ```
 
-结果：当前分支相关测试另见本轮验证；历史记录为 `66 passed`。
+结果：退出码 `0`，`70 passed`。测试结束后 LangSmith（LangChain 可观测平台）上报返回 `403 Forbidden`，不影响 pytest（测试框架）退出码。
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-结果：历史记录为 `387 passed, 24 deselected`。结束后 LangSmith（LangChain 可观测平台）上报返回 403，但 pytest（测试框架）退出码为 `0`。
+结果：退出码 `0`，`387 passed, 24 deselected`。结束后 LangSmith（LangChain 可观测平台）上报返回 `403 Forbidden`，但 pytest（测试框架）退出码为 `0`。
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\run_evaluation_scenarios.py --acceptance-core --preflight-only --json --no-summary
+.\.venv\Scripts\python.exe scripts\run_evaluation_scenarios.py --acceptance-smoke --preflight-only --json --no-summary
 ```
 
 结果：退出码 `0`，`preflight.status=passed`，`backend_live=passed`，`backend_ready=passed`。
@@ -198,13 +197,13 @@ uv sync --frozen
 .\.venv\Scripts\python.exe scripts\run_evaluation_scenarios.py --acceptance-smoke --base-url http://127.0.0.1:8000 --json --summary-dir .runtime\acceptance-smoke
 ```
 
-结果：退出码 `0`，`status=passed`，`passed=true`，场景数 `1`。`runtime_budget=passed`，`total_elapsed_seconds=521.809`，`first_token_seconds=69.408`，`tool_call_count=24`。
+结果：退出码 `0`，`status=passed`，`passed=true`，场景数 `1`。`runtime_budget=passed`，`total_elapsed_seconds=556.393`，`first_token_seconds=84.103`，`tool_call_count=21`。
 
 本地证据：
 
-- `.runtime\acceptance-smoke\20260513-084157-acceptance-summary.json`
-- `.runtime\acceptance-smoke\20260513-084157-acceptance-summary.md`
-- `.runtime\evaluations\20260513-164157-pricing_agency_quote_explanation.json`
+- `.runtime\acceptance-smoke\20260513-150047-acceptance-summary.json`
+- `.runtime\acceptance-smoke\20260513-150047-acceptance-summary.md`
+- `.runtime\evaluations\20260513-230047-pricing_agency_quote_explanation.json`
 
 这些 `.runtime/` 文件不提交。
 

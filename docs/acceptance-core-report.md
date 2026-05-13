@@ -2,7 +2,7 @@
 
 ## 结论
 
-2026-05-13 在 `codex/smoke-runtime-budget` 分支完成 acceptance-smoke（验收烟测）真实链路复核。当前真实环境 readiness（就绪检查）、preflight（预检）和 smoke 场景均为 `passed（通过）`，原先阻塞 9 个核心场景前置判断的 smoke runtime budget（运行预算）失败已关闭。
+2026-05-13 在 `codex/live-smoke-evidence` 分支、HEAD `c4487eb` 完成 acceptance-smoke（验收烟测）真实链路复核。当前真实环境 runtime readiness（运行时就绪检查）、smoke preflight（预检）和 smoke 场景均为 `passed（通过）`，原先阻塞 9 个核心场景前置判断的 smoke runtime budget（运行预算）失败已关闭。
 
 本文件仍不把 smoke 结果等同于 9 个 acceptance-core（核心验收）场景通过。它只说明核心验收的前置环境和最小真实链路已经闭环，下一步可以在同一真实环境下运行 9 个核心场景。
 
@@ -10,17 +10,18 @@
 
 ## 基准与命令
 
-- 工作树：`D:\Users\Administrator\PycharmProjects\ZhiXing\langgraph-travel-planner-smoke-runtime-budget`
-- 分支：`codex/smoke-runtime-budget`
-- 基准命令：`git fetch origin --prune`
-- 结果：当前分支基于最新 `origin/main` 创建，并记录本轮 smoke 预算收口改动。
-- 本地 Python（编程语言运行时）环境：当前工作树原本缺 `.venv`，已用 `uv sync --frozen` 按 `uv.lock` 重建。
+- 工作树：`D:\Users\Administrator\PycharmProjects\ZhiXing\langgraph-travel-planner-live-smoke-evidence`
+- 分支：`codex/live-smoke-evidence`
+- 基准命令：`git fetch origin --prune; git merge --ff-only origin/main`
+- 结果：快进到最新主线 `c4487eb`。
+- 本地 Python（编程语言运行时）环境：`.venv` 已存在。
 
 执行过的核心门禁命令：
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\check_runtime_readiness.py --target staging --check-docker --json
-.\.venv\Scripts\python.exe scripts\run_evaluation_scenarios.py --acceptance-core --preflight-only --json --no-summary
+.\.venv\Scripts\python.exe -m scripts.init_db --mode bootstrap
+.\.venv\Scripts\python.exe -m scripts.init_rag
 .\.venv\Scripts\python.exe scripts\run_evaluation_scenarios.py --acceptance-smoke --preflight-only --json --no-summary
 .\.venv\Scripts\python.exe scripts\run_evaluation_scenarios.py --acceptance-smoke --base-url http://127.0.0.1:8000 --json --summary-dir .runtime\acceptance-smoke
 ```
@@ -28,31 +29,16 @@
 ## 环境闭环摘要
 
 - `.env` 存在：是，未提交。
-- `.env` 本地追加非密钥配置：`RUNTIME_MCP_STARTUP_TIMEOUT_SECONDS=25`。
+- `.env` 存在但未打印内容，未提交。
 - PostgreSQL（关系型数据库）：`healthy`。
 - Redis（内存数据结构存储）：`healthy`。
 - `scripts.init_db --mode bootstrap`：退出码 `0`。
-- `scripts.init_rag`：退出码 `0`。
+- `scripts.init_rag`：退出码 `0`。当前本地 ignored 向量库已有内容，复跑后公开库和内部库 embedding（向量嵌入）计数翻倍；这是本地证据风险，不提交向量库原始产物。
 - runtime readiness（运行时就绪检查）：`status=passed`，`blocked_reasons=[]`。
 - `/health/live`：`alive`。
-- `/health/ready`：重启后 `ready`，MCP（模型上下文协议）服务 6 healthy，0 unavailable，37 tools。
+- `/health/ready`：完整 ready 为 `degraded`，核心依赖 ready；降级来自本 smoke 场景外的 MCP（模型上下文协议）服务。smoke preflight 的 `backend_ready=passed`，因为所需 `search` 和 `weather` 均 healthy。
 
 ## Preflight 结果
-
-首次 preflight 在后端 ready 检查处 blocked：
-
-- `amap=degraded`
-- `12306-mcp=degraded`
-- `VariFlight-Aviation=degraded`
-- 共同原因：MCP service connection is unavailable。
-
-脱敏复测证明不是凭据缺失，而是默认 8 秒 MCP 启动探测超时偏短；25 秒超时下：
-
-- `amap`: healthy，15 tools
-- `12306-mcp`: healthy，8 tools
-- `VariFlight-Aviation`: healthy，9 tools
-
-调整本地非密钥超时配置并重启后：
 
 - `preflight.status=passed`
 - `preflight.blocked=false`
@@ -60,6 +46,7 @@
 - `backend_ready=passed`
 - `missing_required=[]`
 - `degraded_optional=[]`
+- `backend_ready` finding（发现项）：后端 readiness 只因 selected scenario set（选中场景集合）外的 MCP 服务降级。
 
 ## 9 个核心场景状态
 
@@ -104,11 +91,11 @@ acceptance-smoke 真实运行结果：
 
 关键通过指标：
 
-- `total_elapsed_seconds=521.809`，预算 `900.0`
-- `first_token_seconds=69.408`，场景预算 `90.0`
-- `tool_call_count=24`，场景预算 `36`
-- `tool_failure_count=10`
-- `fallback_count=10`
+- `total_elapsed_seconds=556.393`，预算 `900.0`
+- `first_token_seconds=84.103`，场景预算 `90.0`
+- `tool_call_count=21`，场景预算 `36`
+- `tool_failure_count=13`
+- `fallback_count=13`
 - `error_event_count=0`
 - `report_event_count=1`
 - `report_data=true`
@@ -116,9 +103,9 @@ acceptance-smoke 真实运行结果：
 
 本地原始产物只保留在 `.runtime/`，不提交：
 
-- `.runtime\acceptance-smoke\20260513-084157-acceptance-summary.json`
-- `.runtime\acceptance-smoke\20260513-084157-acceptance-summary.md`
-- `.runtime\evaluations\20260513-164157-pricing_agency_quote_explanation.json`
+- `.runtime\acceptance-smoke\20260513-150047-acceptance-summary.json`
+- `.runtime\acceptance-smoke\20260513-150047-acceptance-summary.md`
+- `.runtime\evaluations\20260513-230047-pricing_agency_quote_explanation.json`
 
 ## 失败归因
 
@@ -126,8 +113,8 @@ acceptance-smoke 真实运行结果：
 
 归因分类：
 
-- 环境/密钥/外部 API（应用程序接口）问题：已关闭到 preflight passed。
-- MCP 启动探测问题：通过本地非密钥超时配置关闭。
+- 环境/密钥/外部 API（应用程序接口）问题：已关闭到 smoke preflight passed。
+- MCP 启动探测问题：smoke 所需服务 healthy；部分 core 可能需要的 MCP 服务仍需在 9 场景运行前确认。
 - Agent（智能体）业务链路问题：已减少无效重试和跨交通方式扩散调用。
 - RAG 证据问题：smoke 通过。
 - `report_data`（结构化报告数据）契约问题：smoke 通过。

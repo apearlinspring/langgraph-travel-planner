@@ -2,9 +2,9 @@
 
 ## 2026-05-13 S2 acceptance-smoke（验收烟测）追加结论
 
-当前工作树：`D:\Users\Administrator\PycharmProjects\ZhiXing\langgraph-travel-planner-smoke-runtime-budget`。
+当前工作树：`D:\Users\Administrator\PycharmProjects\ZhiXing\langgraph-travel-planner-live-smoke-evidence`。
 
-当前分支：`codex/smoke-runtime-budget`。
+当前分支：`codex/live-smoke-evidence`。
 
 本轮实际 smoke（烟测）状态：`passed（通过）`。main（主线）已包含真实环境修复，当前真实环境下 Docker、PostgreSQL（关系型数据库）、Redis（内存数据结构存储）、RAG（检索增强生成）向量库、MCP（模型上下文协议）服务池和后端服务可用；`acceptance-smoke` 已进入真实聊天 API（应用程序接口）链路并生成有效 `report_data`。
 
@@ -23,13 +23,13 @@ S2 已完成的可提交收口：
 .\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-smoke --base-url http://127.0.0.1:8000 --json --summary-dir .runtime\acceptance-smoke
 ```
 
-结果：退出码 `0`，`status=passed`，`passed=true`，场景数 `1`，`total_elapsed_seconds=521.809`，`first_token_seconds=69.408`，`tool_call_count=24`，`runtime_budget_passed=true`。
+结果：退出码 `0`，`status=passed`，`passed=true`，场景数 `1`，`total_elapsed_seconds=556.393`，`first_token_seconds=84.103`，`tool_call_count=21`，`tool_failure_count=13`，`fallback_count=13`，`runtime_budget_passed=true`。
 
 本地 passed（通过）证据产物：
 
-- `.runtime\acceptance-smoke\20260513-084157-acceptance-summary.json`
-- `.runtime\acceptance-smoke\20260513-084157-acceptance-summary.md`
-- `.runtime\evaluations\20260513-164157-pricing_agency_quote_explanation.json`
+- `.runtime\acceptance-smoke\20260513-150047-acceptance-summary.json`
+- `.runtime\acceptance-smoke\20260513-150047-acceptance-summary.md`
+- `.runtime\evaluations\20260513-230047-pricing_agency_quote_explanation.json`
 
 证据闭环：`snapshot`、`report_data`、`budget`、`budget_confidence`、`risk`、`verification_items`、`agency_business_evidence` 全部为 `true`。脱敏检查：对上述 JSON（JavaScript 对象表示法）、Markdown（标记文本）摘要和 snapshot（快照）扫描邮箱、手机号、JWT（JSON Web Token，令牌认证）和常见 API key（应用程序接口密钥）形态，结果为 `NO_SENSITIVE_FINDINGS`。这些 `.runtime/` 产物不提交。
 
@@ -39,7 +39,7 @@ S2 已完成的可提交收口：
 .\.venv\Scripts\python -m pytest tests\test_evaluation_live_runner.py -q
 ```
 
-结果：`34 passed`。
+结果：本轮精简验证改为 `tests\test_evaluation_live_runner.py tests\test_transport_query_tool.py tests\test_workflow_maintainability.py`，见下方最新验证。
 
 ```powershell
 .\.venv\Scripts\python -m compileall app tests scripts
@@ -51,7 +51,27 @@ S2 已完成的可提交收口：
 .\.venv\Scripts\python -m pytest -q
 ```
 
-结果：`364 passed, 24 deselected`。结束后 LangSmith（LangChain 可观测平台）上报返回 403，但 pytest（测试框架）退出码为 `0`。
+结果：本轮完整默认回归见下方最新验证记录。
+
+本轮最新验证：
+
+```powershell
+.\.venv\Scripts\python.exe -m compileall app tests scripts
+```
+
+结果：退出码 `0`。
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests\test_evaluation_live_runner.py tests\test_transport_query_tool.py tests\test_workflow_maintainability.py -q
+```
+
+结果：退出码 `0`，`70 passed`。测试结束后 LangSmith（LangChain 可观测平台）上报返回 `403 Forbidden`，不影响 pytest（测试框架）退出码。
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q
+```
+
+结果：退出码 `0`，`387 passed, 24 deselected`。结束后 LangSmith（LangChain 可观测平台）上报返回 `403 Forbidden`，但 pytest（测试框架）退出码为 `0`。
 
 ## 结论
 
