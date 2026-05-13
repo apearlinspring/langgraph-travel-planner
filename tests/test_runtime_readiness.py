@@ -10,6 +10,7 @@ from app.config import (
     runtime_configuration_snapshot,
     runtime_dependency_matrix,
 )
+from app.rag.contracts import CONTRACT_VERSION
 from app.evaluation.preflight import run_acceptance_preflight
 from app.evaluation.scenarios import EvaluationScenario
 from scripts.check_runtime_readiness import (
@@ -61,15 +62,77 @@ def _required_runtime_env(
     return env
 
 
-def _write_minimal_chroma_metadata(path: Path, collection_name: str = "travel_guides") -> None:
+def _write_minimal_chroma_metadata(
+    path: Path,
+    collection_name: str = "travel_guides",
+    *,
+    visibility: str = "public",
+    bad_metadata: bool = False,
+) -> None:
     path.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(path / "chroma.sqlite3")
     try:
         connection.execute("CREATE TABLE collections (id TEXT PRIMARY KEY, name TEXT NOT NULL)")
+        connection.execute("CREATE TABLE segments (id TEXT PRIMARY KEY, collection TEXT NOT NULL)")
+        connection.execute(
+            "CREATE TABLE embeddings (id INTEGER PRIMARY KEY, segment_id TEXT, embedding_id TEXT)"
+        )
+        connection.execute(
+            """
+            CREATE TABLE embedding_metadata (
+                id INTEGER,
+                key TEXT,
+                string_value TEXT,
+                int_value INTEGER,
+                float_value REAL,
+                bool_value INTEGER
+            )
+            """
+        )
         connection.execute(
             "INSERT INTO collections (id, name) VALUES (?, ?)",
             ("collection-id", collection_name),
         )
+        connection.execute(
+            "INSERT INTO segments (id, collection) VALUES (?, ?)",
+            ("segment-id", "collection-id"),
+        )
+        connection.execute(
+            "INSERT INTO embeddings (id, segment_id, embedding_id) VALUES (?, ?, ?)",
+            (1, "segment-id", "embedding-1"),
+        )
+        metadata = {
+            "contract_version": CONTRACT_VERSION,
+            "knowledge_base": (
+                "agency_internal_knowledge"
+                if visibility == "internal"
+                else "public_destination_guides"
+            ),
+            "source": "data/documents/internal/pricing/pricing_rules.md"
+            if visibility == "internal"
+            else "data/documents/destinations/xian.md",
+            "source_type": "agency_internal" if visibility == "internal" else "destination_guide",
+            "category": "pricing" if visibility == "internal" else "destinations",
+            "visibility": visibility,
+            "evidence_level": "rule" if visibility == "internal" else "guide",
+            "applicable_modes": "agency_plan|free_planning",
+            "constraints": "必须标记待核验",
+            "last_reviewed": "2026-05-11",
+            "freshness_status": "current",
+            "requires_verification": "false",
+        }
+        if bad_metadata:
+            metadata.pop("contract_version")
+            metadata["visibility"] = "public" if visibility == "internal" else "internal"
+        for key, value in metadata.items():
+            connection.execute(
+                """
+                INSERT INTO embedding_metadata
+                    (id, key, string_value, int_value, float_value, bool_value)
+                VALUES (?, ?, ?, NULL, NULL, NULL)
+                """,
+                (1, key, value),
+            )
         connection.commit()
     finally:
         connection.close()
@@ -182,6 +245,7 @@ def test_rag_vectorstore_requires_readable_chroma_collection(tmp_path: Path):
     _write_minimal_chroma_metadata(
         valid_internal_vectorstore,
         collection_name="agency_internal_knowledge",
+        visibility="internal",
     )
     env["RAG_VECTORSTORE_PATH"] = str(valid_vectorstore)
     env["RAG_INTERNAL_VECTORSTORE_PATH"] = str(valid_internal_vectorstore)
@@ -230,6 +294,7 @@ def test_rag_vectorstore_requires_internal_chroma_collection(tmp_path: Path):
     _write_minimal_chroma_metadata(
         valid_internal_vectorstore,
         collection_name="agency_internal_knowledge",
+        visibility="internal",
     )
     env["RAG_INTERNAL_VECTORSTORE_PATH"] = str(valid_internal_vectorstore)
     configured_snapshot = runtime_configuration_snapshot(
@@ -241,6 +306,31 @@ def test_rag_vectorstore_requires_internal_chroma_collection(tmp_path: Path):
 
     assert "rag_vector_store" not in configured_snapshot["missing_required"]
     assert configured_snapshot["dependencies"]["rag_vector_store"]["status"] == "configured"
+
+
+def test_rag_vectorstore_blocks_missing_collection_and_bad_metadata(tmp_path: Path):
+    public_vectorstore = tmp_path / "public-vectorstore"
+    internal_vectorstore = tmp_path / "internal-vectorstore"
+    _write_minimal_chroma_metadata(public_vectorstore, collection_name="wrong_collection")
+    _write_minimal_chroma_metadata(
+        internal_vectorstore,
+        collection_name="agency_internal_knowledge",
+        visibility="internal",
+        bad_metadata=True,
+    )
+    env = _required_runtime_env(public_vectorstore, internal_vectorstore)
+
+    snapshot = runtime_configuration_snapshot(
+        app_env="production",
+        environ=env,
+        dotenv_path=tmp_path / "missing.env",
+        require_real_values=True,
+    )
+
+    findings = "\n".join(snapshot["dependencies"]["rag_vector_store"]["findings"])
+    assert "rag_vector_store" in snapshot["missing_required"]
+    assert "collection 'travel_guides' is missing" in findings
+    assert "missing metadata" in findings or "invalid metadata" in findings
 
 
 def test_acceptance_preflight_blocks_missing_real_external_credentials(tmp_path: Path):
