@@ -106,6 +106,28 @@ LLM（大语言模型）创建统一走 `app/utils/llm_factory.py` 的 `build_ch
 
 `--acceptance-core` 会选择 `data/evaluation/report_quality_scenarios.json` 中带 `acceptance-core` 标记的核心场景，目前覆盖自由行、旅行社省心方案、报价解释、天气风险、酒店兜底和交通兜底 9 个场景。该模式会自动继续执行全部核心场景，即使中途有失败，也会在最后给出完整失败清单。
 
+为避免 9 场景跑批被单场景长循环拖住，真实验收入口现在有两层运行预算：
+
+- `--scenario-timeout`：单个场景 wall-clock（挂钟时间）超时；省略时沿用 `--timeout`，也可用 `ZHIXING_EVAL_SCENARIO_TIMEOUT` 覆盖。
+- `--global-timeout`：整批已选场景的全局超时；也可用 `ZHIXING_EVAL_GLOBAL_TIMEOUT` 覆盖。
+- `--timeout`：单次 HTTP（超文本传输协议）请求或 SSE（服务器发送事件）读取的底层网络超时。
+
+推荐 core（核心验收）跑批显式写出预算：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\run_evaluation_scenarios.py --acceptance-core --base-url http://127.0.0.1:8000 --json --summary-dir .runtime\acceptance-core --scenario-timeout 900 --global-timeout 7200
+```
+
+运行器会在每个场景结束后立即刷新 run-level summary（整批摘要），所以单个场景失败、timeout（超时）或后续中断不会吞掉前面已完成场景的机器摘要。摘要里的 `run_context` 会标明是否是 partial summary（部分摘要）、已完成场景、待运行场景和失败分类计数。
+
+失败分类当前用于快速排查：
+
+- `timeout`：单场景超时或网络读取超时，通常看场景快照、后端日志和最后一个 SSE 事件。
+- `global_timeout`：整批运行预算耗尽，摘要保留已完成场景和未运行场景。
+- `conversation_busy`：后端返回 `session_busy`，表示同一会话仍被上一轮执行占用。
+- `runtime_budget`：场景产出 `report_data`，但运行预算门禁失败，例如总耗时、首 token（文本令牌）时间、工具调用数或估算 token 超阈值。
+- `evidence_closure`：证据闭环失败，例如缺少快照、预算、风险、待核验项或旅行社内部证据类别。
+
 脚本会先执行 preflight（预检）。预检会读取当前进程环境变量和 `.env`，但只输出环境变量名和状态，不输出真实密钥值。核心场景的 `requirements` 字段会声明它需要的真实能力：
 
 - `real_llm`：真实 LLM（大语言模型），当前对应 `DASHSCOPE_API_KEY`。
@@ -194,10 +216,11 @@ workflow（工作流）总是上传 `.runtime/acceptance-smoke` 作为 artifact�
 .\.venv\Scripts\python.exe scripts\run_evaluation_scenarios.py --scenario agency_couple_relaxed --dry-run
 ```
 
-运行单个场景：
+运行单个场景，或重复 `--scenario` 运行一个子集：
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\run_evaluation_scenarios.py --scenario agency_couple_relaxed --base-url http://127.0.0.1:8000
+.\.venv\Scripts\python.exe scripts\run_evaluation_scenarios.py --scenario agency_couple_relaxed --scenario risk_weather_disruption --base-url http://127.0.0.1:8000 --summary-dir .runtime\acceptance-subset
 ```
 
 覆盖运行预算阈值：

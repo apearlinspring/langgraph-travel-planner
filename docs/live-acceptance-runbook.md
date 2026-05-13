@@ -10,9 +10,9 @@ chcp 65001 | Out-Null
 
 ## 当前分支
 
-- 工作树：`D:\Users\Administrator\PycharmProjects\ZhiXing\langgraph-travel-planner-core-preflight-readiness`
-- 分支：`codex/core-preflight-readiness`
-- 日期：2026-05-13
+- 工作树：`D:\Users\Administrator\PycharmProjects\ZhiXing\langgraph-travel-planner-acceptance-runner-resilience`
+- 分支：`codex/acceptance-runner-resilience`
+- 日期：2026-05-14
 
 ## 状态判定
 
@@ -20,6 +20,14 @@ chcp 65001 | Out-Null
 - `degraded（降级）`：核心链路可运行，但可选依赖、MCP（模型上下文协议）服务或运行预算 warning（警告）触发，不能作为完全通过。
 - `failed（失败）`：真实链路已运行，但确定性门禁失败。
 - `passed（通过）`：真实链路已运行，产出 `report_data`，并通过报告、预算、风险、待核验项、旅行社证据、工具审计和运行时门禁。
+
+失败分类补充：
+
+- `timeout（超时）`：单场景或底层 SSE（服务器发送事件）读取超时。
+- `global_timeout（全局超时）`：整批运行预算耗尽。
+- `conversation_busy（会话占用）`：后端返回 `session_busy`，说明同一会话仍被占用。
+- `runtime_budget（运行预算）`：场景完成但运行预算门禁失败。
+- `evidence_closure（证据闭环）`：缺少快照、报告数据、预算、风险、待核验项或旅行社证据。
 
 缺真实依赖或缺 `report_data` 时，任何命令都不能返回 `passed`。
 
@@ -81,13 +89,13 @@ chcp 65001 | Out-Null
 8. 跑 smoke 真实入口。
 
    ```powershell
-   .\.venv\Scripts\python.exe scripts\run_evaluation_scenarios.py --acceptance-smoke --base-url http://127.0.0.1:8000 --json --summary-dir .runtime\acceptance-smoke
+   .\.venv\Scripts\python.exe scripts\run_evaluation_scenarios.py --acceptance-smoke --base-url http://127.0.0.1:8000 --json --summary-dir .runtime\acceptance-smoke --scenario-timeout 900 --global-timeout 1200
    ```
 
 9. smoke 通过或有明确可接受的 degraded（降级）解释后，再扩展到 core（核心验收）。
 
    ```powershell
-   .\.venv\Scripts\python.exe scripts\run_evaluation_scenarios.py --acceptance-core --base-url http://127.0.0.1:8000 --json --summary-dir .runtime\acceptance-core
+   .\.venv\Scripts\python.exe scripts\run_evaluation_scenarios.py --acceptance-core --base-url http://127.0.0.1:8000 --json --summary-dir .runtime\acceptance-core --scenario-timeout 900 --global-timeout 7200
    ```
 
 ## acceptance-core 复跑步骤
@@ -115,8 +123,17 @@ uv sync --frozen
 
 ```powershell
 .\.venv\Scripts\python.exe main.py
-.\.venv\Scripts\python.exe scripts\run_evaluation_scenarios.py --acceptance-core --base-url http://127.0.0.1:8000 --json --summary-dir .runtime\acceptance-core
+.\.venv\Scripts\python.exe scripts\run_evaluation_scenarios.py --acceptance-core --base-url http://127.0.0.1:8000 --json --summary-dir .runtime\acceptance-core --scenario-timeout 900 --global-timeout 7200
 ```
+
+如果需要缩小排查范围，可以显式指定一个场景或重复 `--scenario` 运行子集：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\run_evaluation_scenarios.py --scenario agency_couple_relaxed --base-url http://127.0.0.1:8000 --json --summary-dir .runtime\acceptance-subset --scenario-timeout 900
+.\.venv\Scripts\python.exe scripts\run_evaluation_scenarios.py --scenario agency_couple_relaxed --scenario risk_weather_disruption --base-url http://127.0.0.1:8000 --json --summary-dir .runtime\acceptance-subset --scenario-timeout 900 --global-timeout 1800
+```
+
+每完成一个场景，运行器都会刷新 JSON（JavaScript 对象表示法）和 Markdown（标记文本）summary（摘要）。如果发生 Ctrl+C 中断、timeout（超时）或 `global_timeout`，最新 summary 的 `run_context.partial=true`，并列出已完成场景、待运行场景和失败分类计数；敏感值会在写入前脱敏。
 
 验收解释规则：
 

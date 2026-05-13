@@ -10,11 +10,11 @@
 
 ## 基准与命令
 
-- 工作树：`D:\Users\Administrator\PycharmProjects\ZhiXing\langgraph-travel-planner-core-preflight-readiness`
-- 分支：`codex/core-preflight-readiness`
+- 工作树：`D:\Users\Administrator\PycharmProjects\ZhiXing\langgraph-travel-planner-acceptance-runner-resilience`
+- 分支：`codex/acceptance-runner-resilience`
 - 基准命令：`git fetch origin --prune; git merge --ff-only origin/main`
-- 结果：从最新主线 `0c80978` 创建工作树。
-- 本地 Python（编程语言运行时）环境：新工作树用 `uv sync --frozen` 按锁文件创建 `.venv`。
+- 结果：本分支从最新 `origin/main` 基线继续；本轮不推 `main`。
+- 本地 Python（编程语言运行时）环境：如缺少 `.venv`，用 `uv run --frozen ...` 或 `uv sync --frozen` 按锁文件创建。
 
 执行过的核心门禁命令：
 
@@ -24,6 +24,21 @@
 .\.venv\Scripts\python.exe -m scripts.init_rag
 .\.venv\Scripts\python.exe scripts\run_evaluation_scenarios.py --acceptance-core --preflight-only --json --no-summary
 ```
+
+后续运行 9 个 acceptance-core（核心验收）场景时，使用带韧性预算的入口，不写真实 `.env` 内容，不提交 `.runtime/` 原始产物：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\run_evaluation_scenarios.py --acceptance-core --base-url http://127.0.0.1:8000 --json --summary-dir .runtime\acceptance-core --scenario-timeout 900 --global-timeout 7200
+```
+
+单场景或子集复跑用于定位失败，不替代完整 core 结论：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\run_evaluation_scenarios.py --scenario agency_couple_relaxed --base-url http://127.0.0.1:8000 --json --summary-dir .runtime\acceptance-subset --scenario-timeout 900
+.\.venv\Scripts\python.exe scripts\run_evaluation_scenarios.py --scenario agency_couple_relaxed --scenario risk_weather_disruption --base-url http://127.0.0.1:8000 --json --summary-dir .runtime\acceptance-subset --scenario-timeout 900 --global-timeout 1800
+```
+
+若发生 timeout（超时）、global_timeout（全局超时）、conversation_busy（会话占用）、runtime budget（运行预算）或 evidence closure（证据闭环）失败，摘要会在 `run_context` 和每个场景结果中保留脱敏分类。每个场景结束后都会即时刷新 JSON（JavaScript 对象表示法）和 Markdown（标记文本）summary（摘要），因此已完成场景的机器结论不会被后续长循环吞掉。
 
 ## 环境闭环摘要
 
