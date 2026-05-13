@@ -39,6 +39,8 @@
 - `startup`：后台启动任务状态和每个启动步骤耗时，不包含密钥值。
 - `dependencies`：按依赖矩阵列出每项 `requirement`、`status`、`env_vars`、`findings` 和无密钥值的 `details`。
 - `missing_required`：阻塞当前档位的必需依赖。
+- `blocked_reasons`：机器可读的阻塞原因，包含依赖 `key`、中文 `label`、脱敏 `findings`、涉及的环境变量名和目标档位。
+- `repair_suggestions`：下一步修复建议，包含建议动作和可直接复跑的命令，不包含真实密钥值。
 - `blocking_items`：当前导致 `not_ready` 的配置或服务项，例如 `postgresql`、`checkpointer`、`store`、`session_lock`、`approval_governance`。
 - `degraded_optional`：可选但不可用或未配置的能力。
 - `services`：底层服务快照，保留 `checkpointer`、`store`、`mcp`、`session_lock`、`approval_governance`。
@@ -79,6 +81,24 @@ RAG_INTERNAL_COLLECTION_NAME=agency_internal_knowledge
 ```
 
 `check_runtime_readiness.py` 不输出密钥值，只输出变量名、状态和修复方向。带 `--check-docker` 时会额外检查 Docker Desktop（Docker 桌面运行环境）、Docker daemon（后台服务）和 Docker Compose（容器编排）插件；如果 Docker Desktop 未运行，报告必须是 blocked（环境阻塞），不能把本地依赖启动伪装成通过。
+
+## Local / Staging 基线
+
+真实 acceptance-core（核心验收）前，先把 `.env.example` 复制为本地 `.env`，只在 `.env` 或部署密钥系统中填真实值。不要把 `.env`、真实 API Key（应用程序接口密钥）、JWT（JSON Web Token，令牌认证）secret（密钥）或数据库密码写入文档、测试快照或提交说明。
+
+本地 development（开发）可以保留部分占位值做静态检查，但只要要跑真实验收，就按 staging（预生产）口径处理：
+
+| 依赖 | 必填变量 | 基线动作 |
+|---|---|---|
+| PostgreSQL（关系型数据库） | `POSTGRES_HOST`、`POSTGRES_PORT`、`POSTGRES_DB`、`POSTGRES_USER`、`POSTGRES_PASSWORD` | `docker compose up -d postgres` 后执行 `.\.venv\Scripts\python -m scripts.init_db --mode bootstrap`。脚本会先探测 TCP（传输控制协议）连通性，不可达时输出 Docker、端口和凭据修复建议。 |
+| Redis（内存数据结构存储） | `REDIS_HOST`、`REDIS_PORT`、`REDIS_DB`，如启用密码再填 `REDIS_PASSWORD` | `docker compose up -d redis`；staging/production 不应依赖本地锁降级。 |
+| LLM（大语言模型） | `DASHSCOPE_API_KEY` | 必须是真实 DashScope（阿里云灵积模型服务）密钥；`your-*`、`change-me`、`test-key`、`dummy` 等都会 blocked（环境阻塞）。 |
+| Auth/JWT（认证/令牌认证） | `JWT_SECRET_KEY`、`JWT_ALGORITHM` | `JWT_SECRET_KEY` 必须是长随机值；`JWT_ALGORITHM` 默认 `HS256`。 |
+| 地图 / 高德 | `AMAP_API_KEY` | staging/production readiness（就绪检查）硬性要求；路线预览和地理编码依赖它。 |
+| 搜索 / 航班 / 酒店 | `TAVILY_API_KEY`、`VARIFLIGHT_API_KEY`、`AIGOHOTEL_API_KEY` 或兼容酒店变量 | 默认是可选能力；当 selected acceptance scenario（已选择验收场景）声明需要对应外部 API 时，preflight（预检）会升级为 blocked。 |
+| RAG（检索增强生成）向量库 | `RAG_VECTORSTORE_PATH`、`RAG_COLLECTION_NAME`、`RAG_INTERNAL_VECTORSTORE_PATH`、`RAG_INTERNAL_COLLECTION_NAME` | 执行 `.\.venv\Scripts\python -m scripts.init_rag`，并确认公开与内部 Chroma（向量库）metadata（元数据）都可读。 |
+
+`scripts/check_runtime_readiness.py --target staging --json` 的顶层输出会汇总 `blocked_reasons` 和 `repair_suggestions`，方便 CI（持续集成）或人工 runbook（运行手册）直接展示“卡在哪里”和“下一步命令”。`--target acceptance --check-backend` 还会把 acceptance preflight（验收预检）的 backend（后端服务）和外部能力阻塞原因合并进同一个结构。
 
 ## CI/CD 与环境命令分层
 

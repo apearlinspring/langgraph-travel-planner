@@ -64,16 +64,20 @@ CI（持续集成）默认不连接真实 PostgreSQL（关系型数据库），�
 
 ```powershell
 docker compose up -d postgres redis
+.\.venv\Scripts\python scripts\check_runtime_readiness.py --target staging --check-docker --json
 .\.venv\Scripts\python -m scripts.init_db --mode bootstrap
 .\.venv\Scripts\python -m scripts.init_rag
 .\.venv\Scripts\alembic upgrade head
 .\.venv\Scripts\alembic current
-.\.venv\Scripts\python scripts\check_runtime_readiness.py --target staging --check-docker --json
 .\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-core --preflight-only --base-url https://staging.example.com --json
 .\.venv\Scripts\python scripts\check_runtime_readiness.py --target acceptance --check-backend --base-url https://staging.example.com --json
 ```
 
 如果 Docker Desktop（Docker 桌面运行环境）未运行，`--check-docker` 必须返回 blocked（环境阻塞）；此时不要继续宣称 PostgreSQL（关系型数据库）和 Redis（内存数据结构存储）已完成本地启动闭环。
+
+`check_runtime_readiness.py` 的 JSON（JavaScript Object Notation，结构化数据格式）输出包含顶层 `blocked_reasons` 和 `repair_suggestions`。发布或验收 runbook（运行手册）应优先展示这两个字段：`missing_required` 只说明缺了哪些依赖，`blocked_reasons` 会说明缺变量、占位值、RAG（检索增强生成）metadata（元数据）不可读或 Docker daemon（后台服务）不可达等具体原因，`repair_suggestions` 给出下一步命令。
+
+`scripts.init_db --mode bootstrap` 会先探测 PostgreSQL（关系型数据库）TCP（传输控制协议）端口，再执行业务 Alembic（数据库迁移工具）迁移、LangGraph（图式智能体编排框架）Checkpointer（执行检查点）/Store（长期存储）初始化和 pgvector（向量扩展）启用。依赖不可达时必须失败并输出可操作建议，例如启动 Docker Desktop、执行 `docker compose up -d postgres`、检查 `POSTGRES_HOST/PORT/DB/USER/PASSWORD` 和 pgvector 镜像；依赖可达时才允许宣称 bootstrap（引导初始化）完成。
 
 只有 preflight（预检）通过后，才手动运行 live acceptance（在线验收）：
 
@@ -142,6 +146,8 @@ curl http://127.0.0.1:8000/health/ready
 ```
 
 缺真实密钥、缺 RAG（检索增强生成）向量库、`JWT_SECRET_KEY` 仍是 placeholder（占位）或 `/health/ready` 返回 `not_ready` 时，命令必须返回 blocked（环境阻塞），不能当作通过。
+
+生产和预生产共同要求：PostgreSQL（关系型数据库）必须显式配置 `POSTGRES_HOST`、`POSTGRES_PORT`、`POSTGRES_DB`、`POSTGRES_USER`、`POSTGRES_PASSWORD`；Redis（内存数据结构存储）必须显式配置 `REDIS_HOST`、`REDIS_PORT`、`REDIS_DB`；LLM（大语言模型）、AMAP（高德地图）、JWT（JSON Web Token，令牌认证）必须使用真实值。搜索、航班、酒店等外部 API（应用程序接口）默认可降级，但一旦进入 acceptance-core（核心验收）场景需求，就会由 preflight（预检）升级为 hard blocker（硬阻塞项）。
 
 如果生产或预生产后端已经启动，再增加：
 

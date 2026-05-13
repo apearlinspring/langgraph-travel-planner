@@ -3,10 +3,18 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+
+for stream in (sys.stdout, sys.stderr):
+    if hasattr(stream, "reconfigure"):
+        stream.reconfigure(encoding="utf-8", errors="replace")
+
+if "--json" in sys.argv:
+    os.environ.setdefault("ZHIXING_SUPPRESS_CONSOLE_LOGS", "1")
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -19,7 +27,6 @@ from app.config import (  # noqa: E402
     runtime_configuration_snapshot,
     settings,
 )
-from app.evaluation.live_runner import DEFAULT_BASE_URL  # noqa: E402
 from app.evaluation.preflight import run_acceptance_preflight  # noqa: E402
 from app.evaluation.scenarios import acceptance_core_scenarios, load_scenarios  # noqa: E402
 from app.models.migration_contract import (  # noqa: E402
@@ -33,11 +40,61 @@ from app.models.migration_contract import (  # noqa: E402
 READINESS_REPORT_VERSION = "runtime_readiness_report.v1"
 DATABASE_MIGRATION_READINESS_VERSION = "database_migration_readiness.v1"
 DOCKER_COMPOSE_READINESS_VERSION = "docker_compose_readiness.v1"
+DEFAULT_BASE_URL = "http://127.0.0.1:8000"
 READINESS_TARGETS = ("development", "staging", "acceptance", "production")
 ALEMBIC_CONFIG_PATH = PROJECT_ROOT / "alembic.ini"
 ALEMBIC_SCRIPT_PATH = PROJECT_ROOT / "alembic"
 ALEMBIC_VERSION_PATH = ALEMBIC_SCRIPT_PATH / "versions"
 DOCKER_TIMEOUT_SECONDS = 8
+
+DEPENDENCY_REPAIR_SUGGESTIONS: dict[str, dict[str, str]] = {
+    "postgresql": {
+        "action": (
+            "Set POSTGRES_HOST/POSTGRES_PORT/POSTGRES_DB/POSTGRES_USER/POSTGRES_PASSWORD, "
+            "start PostgreSQL, then run database bootstrap."
+        ),
+        "command": (
+            "docker compose up -d postgres; "
+            ".\\.venv\\Scripts\\python -m scripts.init_db --mode bootstrap"
+        ),
+    },
+    "redis": {
+        "action": (
+            "Set REDIS_HOST/REDIS_PORT/REDIS_DB and start Redis; staging/production should "
+            "not rely on local in-process session locks."
+        ),
+        "command": "docker compose up -d redis",
+    },
+    "llm": {
+        "action": (
+            "Set a real DASHSCOPE_API_KEY and keep model creation through app/utils/llm_factory.py."
+        ),
+        "command": ".\\.venv\\Scripts\\python scripts\\check_runtime_readiness.py --target staging --json",
+    },
+    "rag_vector_store": {
+        "action": (
+            "Initialize both public and internal RAG vector stores so chroma.sqlite3 contains "
+            "the configured collections."
+        ),
+        "command": ".\\.venv\\Scripts\\python -m scripts.init_rag",
+    },
+    "map": {
+        "action": "Set a real AMAP_API_KEY before running staging, production, or map-backed acceptance.",
+        "command": ".\\.venv\\Scripts\\python scripts\\check_runtime_readiness.py --target staging --json",
+    },
+    "auth_jwt": {
+        "action": (
+            "Set a long non-default JWT_SECRET_KEY and keep JWT_ALGORITHM=HS256 unless deployment "
+            "policy changes."
+        ),
+        "command": ".\\.venv\\Scripts\\python scripts\\check_runtime_readiness.py --target production --json",
+    },
+}
+
+GENERIC_REPAIR_SUGGESTION = {
+    "action": "Set the listed environment variables to real values or confirm the dependency can degrade.",
+    "command": ".\\.venv\\Scripts\\python scripts\\check_runtime_readiness.py --json",
+}
 
 
 def _run_command(
@@ -63,6 +120,155 @@ def _summarize_process_failure(result: subprocess.CompletedProcess[str]) -> str:
     return summary[:400]
 
 
+def _finding_summary(findings: Sequence[Any]) -> str:
+    text = "; ".join(str(item) for item in findings if str(item).strip())
+    return text or "required dependency is not configured"
+
+
+def _dependency_repair_suggestion(
+    key: str,
+    dependency: Mapping[str, Any],
+    *,
+    target: str,
+) -> dict[str, Any]:
+    template = DEPENDENCY_REPAIR_SUGGESTIONS.get(key, GENERIC_REPAIR_SUGGESTION)
+    return {
+        "target": target,
+        "key": key,
+        "label": dependency.get("label") or key,
+        "action": template["action"],
+        "command": template["command"],
+        "env_vars": list(dependency.get("env_vars") or []),
+    }
+
+
+def _dependency_issue(
+    key: str,
+    dependency: Mapping[str, Any],
+    *,
+    target: str,
+) -> dict[str, Any]:
+    findings = list(dependency.get("findings") or [])
+    return {
+        "target": target,
+        "key": key,
+        "label": dependency.get("label") or key,
+        "reason": _finding_summary(findings),
+        "findings": findings,
+        "env_vars": list(dependency.get("env_vars") or []),
+        "status": dependency.get("status"),
+        "requirement": dependency.get("requirement"),
+    }
+
+
+def _configuration_issues(
+    snapshot: Mapping[str, Any],
+    keys: Sequence[str],
+    *,
+    target: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    dependencies = snapshot.get("dependencies") or {}
+    issues: list[dict[str, Any]] = []
+    suggestions: list[dict[str, Any]] = []
+    for key in keys:
+        dependency = dependencies.get(key) or {}
+        issues.append(_dependency_issue(str(key), dependency, target=target))
+        suggestions.append(_dependency_repair_suggestion(str(key), dependency, target=target))
+    return issues, suggestions
+
+
+def _preflight_issues(preflight: Mapping[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    issues: list[dict[str, Any]] = []
+    suggestions: list[dict[str, Any]] = []
+    for check in preflight.get("checks") or []:
+        if not isinstance(check, Mapping) or check.get("status") != "blocked":
+            continue
+        key = str(check.get("key") or "acceptance")
+        label = str(check.get("label") or key)
+        findings = list(check.get("findings") or [])
+        suggestion = str(check.get("suggestion") or "").strip()
+        issues.append(
+            {
+                "target": "acceptance",
+                "key": key,
+                "label": label,
+                "reason": _finding_summary(findings),
+                "findings": findings,
+                "env_vars": list(check.get("env_vars") or []),
+                "status": check.get("status"),
+                "requirement": "required" if check.get("required") else "optional",
+            }
+        )
+        if suggestion:
+            suggestions.append(
+                {
+                    "target": "acceptance",
+                    "key": key,
+                    "label": label,
+                    "action": suggestion,
+                    "command": (
+                        ".\\.venv\\Scripts\\python scripts\\run_evaluation_scenarios.py "
+                        "--acceptance-core --preflight-only --json"
+                    ),
+                    "env_vars": list(check.get("env_vars") or []),
+                }
+            )
+    return issues, suggestions
+
+
+def _dedupe_dicts(items: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[tuple[Any, ...]] = set()
+    unique: list[dict[str, Any]] = []
+    for item in items:
+        key = (
+            item.get("target"),
+            item.get("key"),
+            item.get("label"),
+            item.get("reason"),
+            item.get("action"),
+            item.get("command"),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(dict(item))
+    return unique
+
+
+def _append_blocker(
+    report: dict[str, Any],
+    *,
+    key: str,
+    label: str,
+    reason: str,
+    action: str,
+    command: str,
+    target: str,
+) -> None:
+    report.setdefault("blocked_reasons", []).append(
+        {
+            "target": target,
+            "key": key,
+            "label": label,
+            "reason": reason,
+            "findings": [reason],
+            "env_vars": [],
+            "status": "blocked",
+            "requirement": "required",
+        }
+    )
+    report.setdefault("repair_suggestions", []).append(
+        {
+            "target": target,
+            "key": key,
+            "label": label,
+            "action": action,
+            "command": command,
+            "env_vars": [],
+        }
+    )
+
+
 def build_docker_compose_readiness_report(*, check: bool = False) -> dict[str, Any]:
     """Check whether local Docker Compose dependencies can be started."""
 
@@ -78,6 +284,8 @@ def build_docker_compose_readiness_report(*, check: bool = False) -> dict[str, A
         "requires_docker_desktop": True,
         "commands": commands,
         "findings": [],
+        "blocked_reasons": [],
+        "repair_suggestions": [],
         "services": ["postgres", "redis"],
     }
     if not check:
@@ -87,22 +295,45 @@ def build_docker_compose_readiness_report(*, check: bool = False) -> dict[str, A
         compose_version = _run_command(["docker", "compose", "version", "--short"])
     except FileNotFoundError:
         report["status"] = "blocked"
-        report["findings"].append(
-            "Docker CLI（命令行工具）不可用。请先安装并启动 Docker Desktop，再重试。"
+        finding = "Docker CLI（命令行工具）不可用。请先安装并启动 Docker Desktop，再重试。"
+        report["findings"].append(finding)
+        _append_blocker(
+            report,
+            key="docker_cli",
+            label="Docker CLI（命令行工具）",
+            reason=finding,
+            action="Install Docker Desktop and make the docker command available on PATH.",
+            command="docker compose version",
+            target="docker_compose",
         )
         return report
     except subprocess.TimeoutExpired:
         report["status"] = "blocked"
-        report["findings"].append(
-            "docker compose version 超时。请确认 Docker Desktop 已启动且命令行可访问。"
+        finding = "docker compose version 超时。请确认 Docker Desktop 已启动且命令行可访问。"
+        report["findings"].append(finding)
+        _append_blocker(
+            report,
+            key="docker_compose_timeout",
+            label="Docker Compose（容器编排）",
+            reason=finding,
+            action="Start Docker Desktop and retry the readiness command.",
+            command="docker compose version --short",
+            target="docker_compose",
         )
         return report
 
     if compose_version.returncode != 0:
         report["status"] = "blocked"
-        report["findings"].append(
-            "Docker Compose（容器编排）插件不可用："
-            + _summarize_process_failure(compose_version)
+        finding = "Docker Compose（容器编排）插件不可用：" + _summarize_process_failure(compose_version)
+        report["findings"].append(finding)
+        _append_blocker(
+            report,
+            key="docker_compose_plugin",
+            label="Docker Compose（容器编排）",
+            reason=finding,
+            action="Install or repair the Docker Compose plugin, then retry local/staging dependency bootstrap.",
+            command="docker compose version --short",
+            target="docker_compose",
         )
         return report
     report["compose_version"] = compose_version.stdout.strip()
@@ -111,16 +342,34 @@ def build_docker_compose_readiness_report(*, check: bool = False) -> dict[str, A
         docker_info = _run_command(["docker", "info", "--format", "{{.ServerVersion}}"])
     except subprocess.TimeoutExpired:
         report["status"] = "blocked"
-        report["findings"].append(
-            "docker info 超时。请确认 Docker Desktop 正在运行，再执行 docker compose up -d postgres redis。"
+        finding = "docker info 超时。请确认 Docker Desktop 正在运行，再执行 docker compose up -d postgres redis。"
+        report["findings"].append(finding)
+        _append_blocker(
+            report,
+            key="docker_daemon_timeout",
+            label="Docker daemon（后台服务）",
+            reason=finding,
+            action="Start Docker Desktop and wait until docker info responds.",
+            command="docker info --format {{.ServerVersion}}",
+            target="docker_compose",
         )
         return report
 
     if docker_info.returncode != 0:
         report["status"] = "blocked"
-        report["findings"].append(
+        finding = (
             "Docker daemon（后台服务）不可达；Docker Desktop 可能未运行："
             + _summarize_process_failure(docker_info)
+        )
+        report["findings"].append(finding)
+        _append_blocker(
+            report,
+            key="docker_daemon",
+            label="Docker daemon（后台服务）",
+            reason=finding,
+            action="Start Docker Desktop, then run docker compose up -d postgres redis.",
+            command="docker compose up -d postgres redis",
+            target="docker_compose",
         )
         return report
 
@@ -161,6 +410,19 @@ def _configuration_target(
     snapshot["target"] = target
     snapshot["status"] = _resolve_target_status(snapshot)
     snapshot["status_counts"] = _dependency_status_counts(snapshot["dependencies"])
+    blocked_reasons, repair_suggestions = _configuration_issues(
+        snapshot,
+        snapshot.get("missing_required") or [],
+        target=target,
+    )
+    degraded_reasons, _ = _configuration_issues(
+        snapshot,
+        snapshot.get("degraded_optional") or [],
+        target=target,
+    )
+    snapshot["blocked_reasons"] = blocked_reasons
+    snapshot["degraded_reasons"] = degraded_reasons
+    snapshot["repair_suggestions"] = repair_suggestions
     return snapshot
 
 
@@ -179,6 +441,7 @@ def _acceptance_target(
         dotenv_path=dotenv_path,
         check_backend=check_backend,
     ).to_dict()
+    blocked_reasons, repair_suggestions = _preflight_issues(preflight)
     return {
         "target": "acceptance",
         "status": preflight["status"],
@@ -186,6 +449,8 @@ def _acceptance_target(
         "check_backend": check_backend,
         "scenario_count": len(scenarios),
         "preflight": preflight,
+        "blocked_reasons": blocked_reasons,
+        "repair_suggestions": repair_suggestions,
     }
 
 
@@ -202,11 +467,39 @@ def build_database_migration_readiness_report() -> dict[str, Any]:
         missing.append("alembic/versions/*.py")
 
     status = "blocked" if missing else "passed"
+    blocked_reasons: list[dict[str, Any]] = []
+    repair_suggestions: list[dict[str, Any]] = []
+    if missing:
+        reason = "Missing migration contract files: " + ", ".join(missing)
+        blocked_reasons.append(
+            {
+                "target": "database_migrations",
+                "key": "alembic_static_contract",
+                "label": "Alembic（数据库迁移工具）static contract",
+                "reason": reason,
+                "findings": [reason],
+                "env_vars": [],
+                "status": "blocked",
+                "requirement": "required",
+            }
+        )
+        repair_suggestions.append(
+            {
+                "target": "database_migrations",
+                "key": "alembic_static_contract",
+                "label": "Alembic（数据库迁移工具）static contract",
+                "action": "Restore alembic.ini, alembic/env.py, and at least one migration revision before deployment.",
+                "command": "git status --short; Get-ChildItem alembic\\versions",
+                "env_vars": [],
+            }
+        )
     return {
         "version": DATABASE_MIGRATION_READINESS_VERSION,
         "status": status,
         "requires_database_connection": False,
         "missing_required": missing,
+        "blocked_reasons": blocked_reasons,
+        "repair_suggestions": repair_suggestions,
         "alembic": {
             "config_path": str(ALEMBIC_CONFIG_PATH),
             "script_path": str(ALEMBIC_SCRIPT_PATH),
@@ -234,6 +527,53 @@ def build_database_migration_readiness_report() -> dict[str, Any]:
             "acceptance_check": "python scripts/check_runtime_readiness.py --target production --json",
         },
     }
+
+
+def _collect_report_blockers(
+    *,
+    target_results: Mapping[str, Mapping[str, Any]],
+    database_migrations: Mapping[str, Any],
+    docker_compose: Mapping[str, Any],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    blocked_reasons: list[dict[str, Any]] = []
+    repair_suggestions: list[dict[str, Any]] = []
+
+    for target, result in target_results.items():
+        for issue in result.get("blocked_reasons") or []:
+            payload = dict(issue)
+            payload.setdefault("target", target)
+            blocked_reasons.append(payload)
+        for suggestion in result.get("repair_suggestions") or []:
+            payload = dict(suggestion)
+            payload.setdefault("target", target)
+            repair_suggestions.append(payload)
+
+    for section_name, section in (
+        ("database_migrations", database_migrations),
+        ("docker_compose", docker_compose),
+    ):
+        for issue in section.get("blocked_reasons") or []:
+            payload = dict(issue)
+            payload.setdefault("target", section_name)
+            blocked_reasons.append(payload)
+        for suggestion in section.get("repair_suggestions") or []:
+            payload = dict(suggestion)
+            payload.setdefault("target", section_name)
+            repair_suggestions.append(payload)
+
+    return _dedupe_dicts(blocked_reasons), _dedupe_dicts(repair_suggestions)
+
+
+def _render_issue(issue: Mapping[str, Any]) -> str:
+    label = issue.get("label") or issue.get("key") or "unknown"
+    reason = issue.get("reason") or _finding_summary(issue.get("findings") or [])
+    return f"{label}: {reason}"
+
+
+def _render_suggestion(suggestion: Mapping[str, Any]) -> str:
+    action = suggestion.get("action") or "Review and repair this blocker."
+    command = suggestion.get("command")
+    return f"{action} Command: {command}" if command else str(action)
 
 
 def build_runtime_readiness_report(
@@ -298,12 +638,19 @@ def build_runtime_readiness_report(
         overall_status = "degraded"
     else:
         overall_status = "passed"
+    blocked_reasons, repair_suggestions = _collect_report_blockers(
+        target_results=target_results,
+        database_migrations=database_migrations,
+        docker_compose=docker_compose,
+    )
 
     return {
         "version": READINESS_REPORT_VERSION,
         "status": overall_status,
         "current_environment": settings.runtime_environment,
         "dotenv_path": str(resolved_dotenv),
+        "blocked_reasons": blocked_reasons,
+        "repair_suggestions": repair_suggestions,
         "targets": target_results,
         "target_statuses": statuses,
         "database_migrations": database_migrations,
@@ -325,6 +672,11 @@ def _render_human(report: dict[str, Any]) -> str:
     ]
     database_migrations = report.get("database_migrations") or {}
     lines.append(f"## database migrations: {database_migrations.get('status')}")
+    if database_migrations.get("blocked_reasons"):
+        lines.append(
+            "- Blocked reasons: "
+            + " | ".join(_render_issue(item) for item in database_migrations["blocked_reasons"])
+        )
     lines.append(
         "- Business tables: "
         + ", ".join((database_migrations.get("managed_tables") or {}).get("business") or [])
@@ -339,6 +691,14 @@ def _render_human(report: dict[str, Any]) -> str:
     if docker_compose.get("checked"):
         findings = docker_compose.get("findings") or []
         lines.append("- Findings: " + ("; ".join(findings) if findings else "-"))
+        if docker_compose.get("repair_suggestions"):
+            lines.append(
+                "- Next steps: "
+                + " | ".join(
+                    _render_suggestion(item)
+                    for item in docker_compose.get("repair_suggestions") or []
+                )
+            )
     else:
         lines.append("- Findings: not checked; add --check-docker for local/staging bootstrap.")
     lines.append("")
@@ -350,6 +710,16 @@ def _render_human(report: dict[str, Any]) -> str:
             lines.append(f"- Backend checked: {result.get('check_backend')}")
             missing = ", ".join(preflight.get("missing_required") or []) or "-"
             lines.append("- Missing required: " + missing)
+            if result.get("blocked_reasons"):
+                lines.append(
+                    "- Blocked reasons: "
+                    + " | ".join(_render_issue(item) for item in result["blocked_reasons"])
+                )
+            if result.get("repair_suggestions"):
+                lines.append(
+                    "- Next steps: "
+                    + " | ".join(_render_suggestion(item) for item in result["repair_suggestions"])
+                )
             continue
 
         missing = result.get("missing_required") or []
@@ -357,6 +727,16 @@ def _render_human(report: dict[str, Any]) -> str:
         lines.append("- Missing required: " + (", ".join(missing) if missing else "-"))
         lines.append("- Optional degraded/not configured: " + (", ".join(degraded) if degraded else "-"))
         lines.append(f"- Status counts: {result.get('status_counts')}")
+        if result.get("blocked_reasons"):
+            lines.append(
+                "- Blocked reasons: "
+                + " | ".join(_render_issue(item) for item in result["blocked_reasons"])
+            )
+        if result.get("repair_suggestions"):
+            lines.append(
+                "- Next steps: "
+                + " | ".join(_render_suggestion(item) for item in result["repair_suggestions"])
+            )
     lines.append("")
     return "\n".join(lines)
 

@@ -44,6 +44,8 @@ def _required_runtime_env(
 ) -> dict[str, str]:
     env = {
         "DASHSCOPE_API_KEY": "real-ish-dashscope",
+        "POSTGRES_HOST": "localhost",
+        "POSTGRES_PORT": "5432",
         "POSTGRES_DB": "travel_planner_db",
         "POSTGRES_USER": "travel_user",
         "POSTGRES_PASSWORD": "real-ish-password",
@@ -89,6 +91,8 @@ def test_dependency_matrix_marks_core_and_optional_boundaries():
     test = runtime_dependency_matrix("test")
 
     assert production["postgresql"]["requirement"] == "required"
+    assert "POSTGRES_HOST" in production["postgresql"]["env_vars"]
+    assert "POSTGRES_PORT" in production["postgresql"]["env_vars"]
     assert production["redis"]["requirement"] == "required"
     assert production["llm"]["requirement"] == "required"
     assert production["map"]["requirement"] == "required"
@@ -103,6 +107,8 @@ def test_runtime_configuration_allows_test_mocks_but_blocks_production_placehold
     env = {
         "APP_ENV": "production",
         "DASHSCOPE_API_KEY": "test-key-dashscope",
+        "POSTGRES_HOST": "localhost",
+        "POSTGRES_PORT": "5432",
         "POSTGRES_DB": "travel_planner_db",
         "POSTGRES_USER": "travel_user",
         "POSTGRES_PASSWORD": "change-me",
@@ -275,6 +281,10 @@ def test_runtime_readiness_report_covers_development_staging_acceptance_and_prod
     assert report["targets"]["acceptance"]["status"] == "blocked"
     assert report["targets"]["production"]["status"] == "blocked"
     assert "dependency_matrix" in report
+    assert report["blocked_reasons"]
+    assert report["repair_suggestions"]
+    assert any(item["key"] == "postgresql" for item in report["blocked_reasons"])
+    assert any("scripts.init_db" in item["command"] for item in report["repair_suggestions"])
     assert report["database_migrations"]["status"] == "passed"
     assert report["docker_compose"]["status"] == "not_checked"
 
@@ -357,3 +367,6 @@ def test_docker_compose_readiness_blocks_when_docker_desktop_is_not_running(monk
     assert report["docker_compose"]["status"] == "blocked"
     assert "Docker daemon" in report["docker_compose"]["findings"][0]
     assert "Docker Desktop" in report["docker_compose"]["findings"][0]
+    assert report["docker_compose"]["blocked_reasons"][0]["key"] == "docker_daemon"
+    assert "docker compose up -d postgres redis" in report["docker_compose"]["repair_suggestions"][0]["command"]
+    assert any(item["target"] == "docker_compose" for item in report["blocked_reasons"])
