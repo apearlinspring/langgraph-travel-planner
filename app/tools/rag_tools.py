@@ -9,14 +9,21 @@ from app.rag.agency_retrieval import (
     filter_documents_by_category,
     format_evidence_response,
 )
+from app.rag.contracts import CONTRACT_VERSION
 from app.rag.pipeline import AdvancedRAGPipeline
+from app.rag.readiness import (
+    INTERNAL_VECTORSTORE_CONTRACT,
+    PUBLIC_VECTORSTORE_CONTRACT,
+    RagReadinessError,
+    check_chroma_collection_readiness,
+)
 from app.rag.document_loader import DocumentManager
 from app.rag.text_splitter import AdvancedParentDocumentSplitter
 from app.rag.vectorstore import VectorStoreManager
 from app.tools.execution_guard import execute_guarded_call
 from app.tools.guardrails import validate_rag_query_args
 from app.tools.result_validation import validate_rag_result
-from app.config import settings
+from app.config import PROJECT_ROOT, settings
 from app.utils.logger import app_logger
 
 
@@ -78,6 +85,29 @@ def _has_existing_vectorstore(persist_directory: str) -> bool:
     return path.exists() and any(path.iterdir())
 
 
+def _ensure_vectorstore_ready(
+    *,
+    persist_directory: str,
+    collection_name: str,
+    contract: dict,
+) -> None:
+    check = check_chroma_collection_readiness(
+        configured_path=persist_directory,
+        collection_name=collection_name,
+        label=contract["label"],
+        expected_metadata={
+            "contract_version": CONTRACT_VERSION,
+            "knowledge_base": contract["knowledge_base"],
+            "visibility": contract["visibility"],
+        },
+        required_metadata=contract["required_metadata"],
+        retrieval_probes=contract["retrieval_probes"],
+        project_root=PROJECT_ROOT,
+    )
+    if not check.ready:
+        raise RagReadinessError(check.finding or "RAG vector store is not ready", check.details)
+
+
 def _create_pipeline(
     *,
     documents: list,
@@ -120,6 +150,11 @@ async def _get_rag_pipeline() -> AdvancedRAGPipeline:
 
     if _rag_pipeline is None:
         app_logger.info("🔧 初始化 RAG 管道...")
+        _ensure_vectorstore_ready(
+            persist_directory=settings.rag_vectorstore_path,
+            collection_name=settings.rag_collection_name,
+            contract=PUBLIC_VECTORSTORE_CONTRACT,
+        )
 
         # 1. 加载文档
         doc_manager = DocumentManager()
@@ -148,6 +183,11 @@ async def _get_internal_rag_pipeline() -> AdvancedRAGPipeline:
 
     if _internal_rag_pipeline is None:
         app_logger.info("🔧 初始化旅行社内部知识库 RAG 管道...")
+        _ensure_vectorstore_ready(
+            persist_directory=settings.rag_internal_vectorstore_path,
+            collection_name=settings.rag_internal_collection_name,
+            contract=INTERNAL_VECTORSTORE_CONTRACT,
+        )
 
         doc_manager = DocumentManager()
         documents = doc_manager.load_internal_documents()
@@ -241,8 +281,14 @@ def _format_retrieval_failure(
     expected_category: str | None = None,
 ) -> str:
     category_hint = f"「{expected_category}」类" if expected_category else ""
+    finding_code = getattr(exc, "finding_code", type(exc).__name__)
+    finding = getattr(exc, "finding", str(exc))
+    details = getattr(exc, "details", {})
+    probe = (details.get("retrieval_probe_gap") or {}).get("probe", {}) if isinstance(details, dict) else {}
+    probe_hint = f"，probe={probe.get('name')}" if probe else ""
     message = (
-        f"{label}{category_hint}检索暂时不可用（{type(exc).__name__}）。"
+        f"{label}{category_hint}检索暂时不可用（reason={finding_code}{probe_hint}）。"
+        f"诊断信息：{finding}。"
         "本轮不要把它视为业务失败；请基于已确认信息给出保守建议，"
         "并把价格、库存、开放时间、预约、天气等动态信息标注为待二次核实。"
     )
@@ -268,7 +314,16 @@ async def _guarded_rag_retrieval(
     )
 
     async def _call(_: dict) -> str:
-        return await retrieve_call()
+        try:
+            return await retrieve_call()
+        except RagReadinessError as exc:
+            return _format_retrieval_failure(
+                query,
+                label=label,
+                visibility=visibility,
+                exc=exc,
+                expected_category=expected_category,
+            )
 
     guarded = await execute_guarded_call(
         tool_name,

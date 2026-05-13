@@ -31,6 +31,18 @@ PUBLIC_VECTORSTORE_CONTRACT = {
         "constraints",
         "last_reviewed",
     ),
+    "retrieval_probes": (
+        {
+            "name": "destination_guide",
+            "metadata": {"category": "destinations", "visibility": "public"},
+            "terms_any": ("西安", "兵马俑", "destination_guide"),
+        },
+        {
+            "name": "food_recommendations",
+            "metadata": {"category": "destinations", "visibility": "public"},
+            "terms_any": ("美食", "肉夹馍", "回民街"),
+        },
+    ),
 }
 
 INTERNAL_VECTORSTORE_CONTRACT = {
@@ -53,6 +65,33 @@ INTERNAL_VECTORSTORE_CONTRACT = {
         "freshness_status",
         "requires_verification",
     ),
+    "retrieval_probes": (
+        {
+            "name": "agency_products",
+            "metadata": {"category": "products", "visibility": "internal"},
+            "terms_any": ("路线", "产品", "适合人群"),
+        },
+        {
+            "name": "agency_sop",
+            "metadata": {"category": "sop", "visibility": "internal"},
+            "terms_any": ("服务", "顾问", "流程"),
+        },
+        {
+            "name": "agency_pricing",
+            "metadata": {"category": "pricing", "visibility": "internal"},
+            "terms_any": ("报价", "预算", "待核验"),
+        },
+        {
+            "name": "agency_risk",
+            "metadata": {"category": "risk", "visibility": "internal"},
+            "terms_any": ("风险", "避坑", "Plan B"),
+        },
+        {
+            "name": "agency_report",
+            "metadata": {"category": "report", "visibility": "internal"},
+            "terms_any": ("报告", "交付", "章节"),
+        },
+    ),
 }
 
 
@@ -66,6 +105,16 @@ class ChromaCollectionReadiness:
     @property
     def ready(self) -> bool:
         return self.finding is None
+
+
+class RagReadinessError(RuntimeError):
+    """Raised when runtime code tries to use a non-ready RAG collection."""
+
+    def __init__(self, finding: str, details: Mapping[str, Any]):
+        super().__init__(finding)
+        self.finding = finding
+        self.details = dict(details)
+        self.finding_code = str(self.details.get("finding_code") or "rag_not_ready")
 
 
 def rag_vectorstore_contract_details() -> dict[str, Any]:
@@ -114,6 +163,56 @@ def _metadata_values_for_embedding(
         if value is not None:
             metadata[str(key)] = str(value)
     return metadata
+
+
+def _metadata_rows_for_embeddings(
+    connection: sqlite3.Connection,
+    embedding_ids: Iterable[object],
+) -> list[dict[str, str]]:
+    return [
+        _metadata_values_for_embedding(connection, embedding_id)
+        for embedding_id in embedding_ids
+    ]
+
+
+def _document_text(metadata: Mapping[str, str]) -> str:
+    return " ".join(
+        str(value or "")
+        for key, value in metadata.items()
+        if key in {"chroma:document", "document", "source", "title", "category"}
+    )
+
+
+def _probe_matches(metadata: Mapping[str, str], probe: Mapping[str, Any]) -> bool:
+    expected_metadata = probe.get("metadata") or {}
+    for key, expected in expected_metadata.items():
+        if metadata.get(str(key)) != str(expected):
+            return False
+
+    terms = tuple(str(term) for term in probe.get("terms_any") or () if str(term))
+    if not terms:
+        return True
+    haystack = _document_text(metadata)
+    return any(term.lower() in haystack.lower() for term in terms)
+
+
+def _find_retrieval_probe_gap(
+    metadata_rows: Iterable[Mapping[str, str]],
+    retrieval_probes: Iterable[Mapping[str, Any]] | None,
+) -> dict[str, Any] | None:
+    rows = list(metadata_rows)
+    for probe in retrieval_probes or ():
+        if not any(_probe_matches(row, probe) for row in rows):
+            return {
+                "probe": dict(probe),
+                "available_categories": sorted(
+                    {row.get("category", "") for row in rows if row.get("category")}
+                ),
+                "available_visibilities": sorted(
+                    {row.get("visibility", "") for row in rows if row.get("visibility")}
+                ),
+            }
+    return None
 
 
 def _embedding_ids_for_collection(
@@ -181,6 +280,18 @@ def _embedding_ids_for_collection(
     )
 
 
+def _all_embedding_ids_for_collection(
+    connection: sqlite3.Connection,
+    collection_id: object,
+) -> list[object]:
+    _count, embedding_ids = _embedding_ids_for_collection(
+        connection,
+        collection_id,
+        sample_size=2_000_000,
+    )
+    return embedding_ids
+
+
 def check_chroma_collection_readiness(
     *,
     configured_path: str,
@@ -190,6 +301,7 @@ def check_chroma_collection_readiness(
     required_metadata: Iterable[str],
     project_root: Path | None = None,
     sample_size: int = 5,
+    retrieval_probes: Iterable[Mapping[str, Any]] | None = None,
 ) -> ChromaCollectionReadiness:
     """Validate one persisted Chroma collection and its evidence metadata."""
 
@@ -204,11 +316,13 @@ def check_chroma_collection_readiness(
     }
 
     if not vectorstore_path.exists():
+        details["finding_code"] = "vectorstore_missing"
         return ChromaCollectionReadiness(
             f"{label} directory does not exist.",
             details,
         )
     if not vectorstore_path.is_dir():
+        details["finding_code"] = "vectorstore_path_not_directory"
         return ChromaCollectionReadiness(
             f"{label} path is not a directory.",
             details,
@@ -217,6 +331,7 @@ def check_chroma_collection_readiness(
     metadata_path = vectorstore_path / "chroma.sqlite3"
     details["metadata_path"] = str(metadata_path)
     if not metadata_path.exists():
+        details["finding_code"] = "vectorstore_missing"
         return ChromaCollectionReadiness(
             f"{label} metadata file chroma.sqlite3 is missing.",
             details,
@@ -226,6 +341,7 @@ def check_chroma_collection_readiness(
     try:
         connection = sqlite3.connect(f"file:{metadata_path.as_posix()}?mode=ro", uri=True)
         if not _has_table(connection, "collections"):
+            details["finding_code"] = "metadata_schema_missing"
             return ChromaCollectionReadiness(
                 f"{label} metadata has no collections table.",
                 details,
@@ -235,6 +351,7 @@ def check_chroma_collection_readiness(
             (collection_name,),
         ).fetchone()
         if collection is None:
+            details["finding_code"] = "collection_missing"
             return ChromaCollectionReadiness(
                 f"{label} collection {collection_name!r} is missing.",
                 details,
@@ -244,6 +361,7 @@ def check_chroma_collection_readiness(
         details["collection_id"] = str(collection_id)
         for table_name in ("embeddings", "embedding_metadata"):
             if not _has_table(connection, table_name):
+                details["finding_code"] = "metadata_schema_missing"
                 return ChromaCollectionReadiness(
                     f"{label} metadata has no {table_name} table.",
                     details,
@@ -257,6 +375,7 @@ def check_chroma_collection_readiness(
         details["embedding_count"] = embedding_count
         details["metadata_sample_size"] = len(sample_embedding_ids)
         if embedding_count <= 0:
+            details["finding_code"] = "retrieval_no_hit"
             return ChromaCollectionReadiness(
                 f"{label} collection {collection_name!r} has no embeddings.",
                 details,
@@ -269,6 +388,7 @@ def check_chroma_collection_readiness(
             if missing_keys:
                 details["bad_embedding_id"] = str(embedding_id)
                 details["missing_metadata"] = missing_keys
+                details["finding_code"] = "metadata_missing"
                 return ChromaCollectionReadiness(
                     f"{label} collection {collection_name!r} has documents missing metadata: "
                     + ", ".join(missing_keys),
@@ -283,13 +403,31 @@ def check_chroma_collection_readiness(
                         "expected": expected,
                         "actual": actual,
                     }
+                    details["finding_code"] = "metadata_mismatch"
                     return ChromaCollectionReadiness(
                         f"{label} collection {collection_name!r} has invalid metadata "
                         f"{key}={actual!r}; expected {expected!r}.",
                         details,
                     )
+        all_embedding_ids = _all_embedding_ids_for_collection(connection, collection_id)
+        probes = tuple(retrieval_probes or ())
+        details["retrieval_probe_count"] = len(probes)
+        probe_gap = _find_retrieval_probe_gap(
+            _metadata_rows_for_embeddings(connection, all_embedding_ids),
+            probes,
+        )
+        if probe_gap:
+            details["finding_code"] = "retrieval_no_hit"
+            details["retrieval_probe_gap"] = probe_gap
+            probe_name = (probe_gap.get("probe") or {}).get("name") or "unknown"
+            return ChromaCollectionReadiness(
+                f"{label} collection {collection_name!r} has no runtime retrieval hit "
+                f"for probe {probe_name!r}.",
+                details,
+            )
     except sqlite3.Error as exc:
         details["error_type"] = exc.__class__.__name__
+        details["finding_code"] = "metadata_unreadable"
         return ChromaCollectionReadiness(
             f"{label} metadata is not readable: {exc}",
             details,

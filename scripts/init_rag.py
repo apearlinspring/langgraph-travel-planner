@@ -151,6 +151,7 @@ def _verify_vectorstore_ready(
             "visibility": contract["visibility"],
         },
         required_metadata=contract["required_metadata"],
+        retrieval_probes=contract["retrieval_probes"],
         project_root=PROJECT_ROOT,
     )
     if not check.ready:

@@ -428,6 +428,7 @@ def _filesystem_dependency_status(
             "visibility": PUBLIC_VECTORSTORE_CONTRACT["visibility"],
         },
         required_metadata=PUBLIC_VECTORSTORE_CONTRACT["required_metadata"],
+        retrieval_probes=PUBLIC_VECTORSTORE_CONTRACT["retrieval_probes"],
         project_root=PROJECT_ROOT,
     )
     public_finding = public_check.finding
@@ -448,6 +449,7 @@ def _filesystem_dependency_status(
             "visibility": INTERNAL_VECTORSTORE_CONTRACT["visibility"],
         },
         required_metadata=INTERNAL_VECTORSTORE_CONTRACT["required_metadata"],
+        retrieval_probes=INTERNAL_VECTORSTORE_CONTRACT["retrieval_probes"],
         project_root=PROJECT_ROOT,
     )
     internal_finding = internal_check.finding
