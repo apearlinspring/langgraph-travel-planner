@@ -4,7 +4,7 @@
 
 2026-05-13 在 `codex/live-smoke-evidence` 分支、HEAD `c4487eb` 完成 acceptance-smoke（验收烟测）真实链路复核。当前真实环境 runtime readiness（运行时就绪检查）、smoke preflight（预检）和 smoke 场景均为 `passed（通过）`，原先阻塞 9 个核心场景前置判断的 smoke runtime budget（运行预算）失败已关闭。
 
-本文件仍不把 smoke 结果等同于 9 个 acceptance-core（核心验收）场景通过。它只说明核心验收的前置环境和最小真实链路已经闭环，下一步可以在同一真实环境下运行 9 个核心场景。
+本文件仍不把 smoke 结果等同于 9 个 acceptance-core（核心验收）场景通过。它只说明最小真实链路已经闭环，下一步应先复跑 acceptance-core preflight，确认 12306 等 core 所需 MCP 服务 healthy 后，再进入 9 个核心场景。
 
 环境闭环历史见 [acceptance-runtime-close-loop.md](./acceptance-runtime-close-loop.md)，本轮 smoke 预算收口见本文后续记录。
 
@@ -114,7 +114,7 @@ acceptance-smoke 真实运行结果：
 归因分类：
 
 - 环境/密钥/外部 API（应用程序接口）问题：已关闭到 smoke preflight passed。
-- MCP 启动探测问题：smoke 所需服务 healthy；部分 core 可能需要的 MCP 服务仍需在 9 场景运行前确认。
+- MCP 启动探测问题：smoke 所需服务 healthy；最终复核时 `12306-mcp` 仍为 degraded，需要在 9 场景运行前恢复或通过 core preflight。
 - Agent（智能体）业务链路问题：已减少无效重试和跨交通方式扩散调用。
 - RAG 证据问题：smoke 通过。
 - `report_data`（结构化报告数据）契约问题：smoke 通过。
@@ -123,4 +123,4 @@ acceptance-smoke 真实运行结果：
 
 ## 下一步
 
-下一步在同一真实环境下运行 9 个 acceptance-core 场景。若 core 场景失败，按失败维度拆解报告质量、RAG、MCP、工具治理、运行预算和旅行社业务证据；不要用 smoke 通过结果替代核心验收。
+下一步先在同一真实环境下运行 acceptance-core preflight。只有 core preflight 通过，尤其是 `12306-mcp` 等 core 所需 MCP 服务恢复 healthy 后，再运行 9 个 acceptance-core 场景。若 core 场景失败，按失败维度拆解报告质量、RAG、MCP、工具治理、运行预算和旅行社业务证据；不要用 smoke 通过结果替代核心验收。

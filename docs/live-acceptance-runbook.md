@@ -138,7 +138,7 @@ uv sync --frozen
 - smoke preflight（预检）：退出码 `0`，`preflight.status=passed`，`backend_live=passed`，`backend_ready=passed`
 - 9 个核心场景：未运行
 
-当前不把 smoke 结论替代 core（核心验收）结论。smoke 已通过，下一步可以运行 9 个核心场景；运行前需注意完整 ready 中的非 smoke MCP 降级是否影响 core 选中的服务。
+当前不把 smoke 结论替代 core（核心验收）结论。smoke 已通过，但最终健康复核仍显示 `12306-mcp` 降级；下一步先跑 acceptance-core preflight，确认 core 选中的 MCP 服务全部满足门禁后，再运行 9 个核心场景。
 
 ## 当前 smoke 真实结果
 
@@ -218,4 +218,4 @@ uv sync --frozen
 
 ## 下一步
 
-如果后续改动影响模型、RAG（检索增强生成）、MCP（模型上下文协议）或报告结构，先复跑 `acceptance-smoke`。smoke 通过后再运行 `acceptance-core`，并继续只提交脱敏摘要，不提交 `.runtime/` 原始产物。
+如果后续改动影响模型、RAG（检索增强生成）、MCP（模型上下文协议）或报告结构，先复跑 `acceptance-smoke`。当前 smoke 已通过；进入 `acceptance-core` 前先跑 core preflight，并确认 `12306-mcp` 等 core 所需服务不再降级。继续只提交脱敏摘要，不提交 `.runtime/` 原始产物。

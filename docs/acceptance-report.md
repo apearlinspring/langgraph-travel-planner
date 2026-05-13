@@ -79,7 +79,7 @@ S2 已完成的可提交收口：
 
 已新增可选 LLM-as-Judge（大模型评审）补充层。它只提供人工质感反馈，不参与确定性门禁通过或失败判断。
 
-当前 S2 smoke（验收烟测）结论：passed（通过）。核心验收仍需按需单独运行 `acceptance-core`，不能由 smoke 结果自动替代。
+当前 S2 smoke（验收烟测）结论：passed（通过）。核心验收仍需按需单独运行 `acceptance-core`，不能由 smoke 结果自动替代；运行 9 个核心场景前应先确认 core preflight 通过，尤其是当前完整健康检查中曾降级的 `12306-mcp`。
 
 核心验收命令：
 
