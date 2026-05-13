@@ -1,4 +1,5 @@
 import json
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -18,12 +19,16 @@ from app.evaluation.preflight import (
     run_acceptance_preflight,
 )
 from app.evaluation.live_runner import (
+    DEFAULT_BASE_URL,
+    LiveRunConfig,
     _classify_live_error_status,
     build_acceptance_evidence_closure,
     build_quality_summary,
     build_snapshot_payload,
+    classify_live_failure_category,
     infer_tool_policy_from_scenario,
     parse_sse_event_line,
+    run_live_scenario,
     runtime_budget_for_scenario,
     scenario_message_sequence,
     select_scenarios,
@@ -33,6 +38,9 @@ from app.evaluation.scenarios import EvaluationScenario
 from app.evaluation.scenarios import ACCEPTANCE_SMOKE_TAG, acceptance_smoke_scenarios
 from scripts.run_evaluation_scenarios import (
     RUNTIME_ARTIFACT_ROOT,
+    _build_and_optionally_write_summary,
+    _build_live_error_result,
+    _failure_classification_counts,
     _require_runtime_artifact_dir,
     build_cli_json_payload,
     _preflight_only_exit_code,
@@ -806,6 +814,128 @@ def test_live_dependency_errors_are_classified_as_blocked():
 
     assert _classify_live_error_status(error, events=[]) == "blocked"
     assert _classify_live_error_status(RuntimeError("report_data missing"), events=[{"type": "token"}]) == "failed"
+
+
+def test_live_timeout_writes_redacted_partial_snapshot(monkeypatch, tmp_path: Path):
+    scenario = _scenario("slow_timeout")
+
+    class SlowClient:
+        def __init__(self, base_url: str, timeout_seconds: float = 900.0):
+            self.base_url = base_url
+            self.timeout_seconds = timeout_seconds
+
+        def post_json(self, path, payload, *, token=None, timeout_seconds=None):
+            if path.endswith("/login"):
+                return {"access_token": "token"}
+            return {"id": "conversation-id"}
+
+        def stream_json_events(self, path, payload, *, token, timeout_seconds=None):
+            time.sleep(0.02)
+            yield {"type": "token", "content": "hello 13800138000"}
+
+    monkeypatch.setattr("app.evaluation.live_runner.EvaluationApiClient", SlowClient)
+
+    result = run_live_scenario(
+        scenario,
+        LiveRunConfig(
+            base_url=DEFAULT_BASE_URL,
+            output_dir=tmp_path,
+            timeout_seconds=1.0,
+            scenario_timeout_seconds=0.001,
+        ),
+    )
+
+    assert result.status == "failed"
+    assert result.failure_category == "timeout"
+    assert result.snapshot_path is not None
+    snapshot_text = Path(result.snapshot_path).read_text(encoding="utf-8")
+    assert "13800138000" not in snapshot_text
+    assert "[REDACTED]" in snapshot_text
+
+
+def test_live_session_busy_is_classified_without_waiting_for_all_followups(monkeypatch, tmp_path: Path):
+    scenario = _scenario("busy_conversation")
+
+    class BusyClient:
+        def __init__(self, base_url: str, timeout_seconds: float = 900.0):
+            self.base_url = base_url
+            self.timeout_seconds = timeout_seconds
+
+        def post_json(self, path, payload, *, token=None, timeout_seconds=None):
+            if path.endswith("/login"):
+                return {"access_token": "token"}
+            return {"id": "conversation-id"}
+
+        def stream_json_events(self, path, payload, *, token, timeout_seconds=None):
+            yield {
+                "type": "session_busy",
+                "message": "Conversation is busy for test@example.com",
+            }
+
+    monkeypatch.setattr("app.evaluation.live_runner.EvaluationApiClient", BusyClient)
+
+    result = run_live_scenario(
+        scenario,
+        LiveRunConfig(
+            output_dir=tmp_path,
+            timeout_seconds=1.0,
+            scenario_timeout_seconds=1.0,
+        ),
+    )
+
+    assert result.status == "failed"
+    assert result.failure_category == "conversation_busy"
+    assert result.snapshot_path is not None
+    assert "test@example.com" not in Path(result.snapshot_path).read_text(encoding="utf-8")
+
+
+def test_failure_category_prefers_runtime_budget_and_evidence_closure():
+    runtime_gate = {
+        "passed": False,
+        "dimensions": {
+            "runtime_budget": {"passed": False},
+        },
+        "failures": [{"dimension": "runtime_budget", "findings": ["too slow"]}],
+    }
+    evidence_closure = {
+        "passed": False,
+        "missing": ["verification_items"],
+        "checks": {"verification_items": False},
+    }
+
+    assert classify_live_failure_category(acceptance_gate=runtime_gate) == "runtime_budget"
+    assert classify_live_failure_category(evidence_closure=evidence_closure) == "evidence_closure"
+
+
+def test_partial_summary_files_include_run_context_and_failure_categories(tmp_path: Path):
+    scenarios = [_scenario("finished"), _scenario("pending")]
+    result = _build_live_error_result(
+        scenarios[0],
+        error="Global timeout after api_key=sk-testvalue123456789",
+        failure_category="global_timeout",
+    )
+
+    summary, paths = _build_and_optionally_write_summary(
+        results=[result],
+        scenarios=scenarios,
+        base_url=DEFAULT_BASE_URL,
+        output_dir=tmp_path,
+        preflight={"status": "passed", "checks": []},
+        write_files=True,
+        prefix="partial",
+        partial_reason="global_timeout",
+    )
+    serialized = json.dumps(summary, ensure_ascii=False)
+    markdown = Path(paths["markdown"]).read_text(encoding="utf-8")
+
+    assert summary["run_context"]["partial"] is True
+    assert summary["run_context"]["partial_reason"] == "global_timeout"
+    assert summary["run_context"]["pending_scenario_ids"] == ["pending"]
+    assert summary["run_context"]["failure_classification_counts"] == {"global_timeout": 1}
+    assert _failure_classification_counts([result]) == {"global_timeout": 1}
+    assert Path(paths["json"]).exists()
+    assert "partial summary（部分摘要）" in markdown
+    assert "sk-testvalue123456789" not in serialized + markdown
 
 
 def test_blocked_preflight_summary_cannot_pass_acceptance(tmp_path: Path):

@@ -156,7 +156,11 @@ def test_evaluation_runner_exposes_preflight_only_entrypoint():
     module = importlib.import_module("scripts.run_evaluation_scenarios")
     assert hasattr(module, "main")
     source = Path(module.__file__).read_text(encoding="utf-8")
+    assert "--scenario" in source
+    assert "--scenario-timeout" in source
+    assert "--global-timeout" in source
     assert "--preflight-only" in source
+    assert "partial_reason" in source
     assert "run_acceptance_preflight" in source
 
 
