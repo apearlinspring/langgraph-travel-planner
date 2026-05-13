@@ -149,7 +149,10 @@ async def query_transport_options(
         timeout_seconds=TRANSPORT_QUERY_TIMEOUT_SECONDS,
     )
     if guarded.status == "skipped":
-        message = f"交通真实查询参数不完整：{guarded.message}。请先补齐后再查，我不会编造车次、航班或价格。"
+        if guarded.error_type == "duplicate_tool_call_same_turn":
+            message = guarded.message
+        else:
+            message = f"交通真实查询参数不完整：{guarded.message}。请先补齐后再查，我不会编造车次、航班或价格。"
         return audited_command(
             {"messages": [_tool_message(message, runtime)]},
             runtime,

@@ -77,6 +77,7 @@ def test_create_initial_state_uses_shared_entry_step():
     assert state["current_step"] == INITIAL_PLANNING_STEP
     assert state["key_history_turns"] == []
     assert state["context_layer_boundaries"] == {}
+    assert state["tool_loop_guard"] == {}
 
 
 def test_transport_coordinator_prompt_guards_real_recommendation_quality():

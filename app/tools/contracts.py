@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from typing_extensions import TypedDict
+from typing_extensions import NotRequired, TypedDict
 
 
 ToolAuditStatus = Literal[
@@ -45,6 +45,8 @@ class ToolAuditEvent(TypedDict):
     error_type: str | None
     retry_count: int
     evidence_type: ToolEvidenceType
+    turn_id: NotRequired[str]
+    loop_guard_key: NotRequired[str]
 
 
 @dataclass(frozen=True)

@@ -255,6 +255,40 @@ def test_collect_runtime_metrics_uses_turn_observability_for_hidden_tool_pressur
     assert metrics.degraded_event_count == 1
 
 
+def test_duplicate_loop_guard_skip_is_recoverable_runtime_signal():
+    metrics = collect_runtime_metrics(
+        events=[
+            {"type": "tool_call", "tool": "query_transport_options", "turn_index": 1},
+            {
+                "type": "tool_audit",
+                "tool": "query_transport_options",
+                "status": "skipped",
+                "error_type": "duplicate_tool_call_same_turn",
+            },
+            {"type": "report_data"},
+            {
+                "type": "turn_observability",
+                "observability": {
+                    "tool_call_count": 1,
+                    "tool_failure_count": 1,
+                    "fallback_count": 0,
+                    "degradation_status": "degraded",
+                    "estimated_input_tokens": 4,
+                    "estimated_output_tokens": 6,
+                    "estimated_total_tokens": 10,
+                },
+            },
+        ],
+        turns=[{"turn_index": 1, "user_message": "查交通", "elapsed_seconds": 2.0}],
+        assistant_text="本轮已跳过重复交通查询。",
+        elapsed_seconds=2.0,
+    )
+
+    assert metrics.tool_failure_count == 1
+    assert metrics.error_event_count == 0
+    assert metrics.degraded_event_count == 1
+
+
 def test_collect_runtime_metrics_rejects_invalid_inputs():
     with pytest.raises(TypeError):
         collect_runtime_metrics(

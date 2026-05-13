@@ -138,6 +138,7 @@ MAX_FILTERED_PLACE_CANDIDATES = 3
 MAX_RELAXED_PLACE_CANDIDATES = 1
 HOTEL_SESSION_START_TIMEOUT_SECONDS = 18.0
 HOTEL_SEARCH_CALL_TIMEOUT_SECONDS = 12.0
+HOTEL_TOTAL_QUERY_TIMEOUT_SECONDS = 35.0
 SPECIFIC_PLACE_DISTANCE_LIMIT_METERS = 8000
 
 VALID_PLACE_TYPES = {
@@ -863,7 +864,10 @@ async def query_hotel_options(
     )
     started_at = guard.context.perf_counter_started_at
     if not guard.ok and guard.blocked_event is not None:
-        message = f"酒店真实查询参数不完整：{guard.blocked_message}。请先补齐后再查，我不会编造酒店候选。"
+        if guard.blocked_event.get("error_type") == "duplicate_tool_call_same_turn":
+            message = guard.blocked_message
+        else:
+            message = f"酒店真实查询参数不完整：{guard.blocked_message}。请先补齐后再查，我不会编造酒店候选。"
         return audited_command(
             {"messages": [_tool_message(message, runtime)]},
             runtime,
@@ -990,12 +994,46 @@ async def query_hotel_options(
                 return relevant_hotels, candidate["place"], last_message
         return [], "", last_message
 
-    try:
+    async def run_with_active_tool() -> tuple[list[dict[str, Any]], str, str]:
         if hasattr(search_tool, "__aenter__"):
             async with search_tool as active_search_tool:
-                matched_hotels, matched_place, last_message = await run_searches(active_search_tool)
-        else:
-            matched_hotels, matched_place, last_message = await run_searches(search_tool)
+                return await run_searches(active_search_tool)
+        return await run_searches(search_tool)
+
+    try:
+        matched_hotels, matched_place, last_message = await asyncio.wait_for(
+            run_with_active_tool(),
+            timeout=HOTEL_TOTAL_QUERY_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError as exc:
+        total_elapsed = time.perf_counter() - started_at
+        app_logger.warning(
+            "Hotel query stopped by total runtime budget: "
+            f"destination={destination}, elapsed_seconds={total_elapsed:.2f}, "
+            f"tried_places={' / '.join(tried_places)}"
+        )
+        event = fail_tool_execution(
+            guard,
+            exc,
+            output_summary={
+                "message": "hotel query exceeded per-turn runtime budget",
+                "tried_places": tried_places,
+            },
+            retry_count=max(len(tried_places) - 1, 0),
+        )
+        return audited_command(
+            {
+                "messages": [
+                    _tool_message(
+                        "酒店查询超过本轮运行预算，已停止继续等待上游结果。"
+                        "我不会编造酒店候选；可以下一轮放宽区域、预算或偏好后重新查询。",
+                        runtime,
+                    )
+                ]
+            },
+            runtime,
+            event,
+        )
     except Exception as exc:
         total_elapsed = time.perf_counter() - started_at
         message = str(exc).strip() or exc.__class__.__name__

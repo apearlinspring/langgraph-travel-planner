@@ -4,7 +4,8 @@ RAG 检索工具
 """
 from pathlib import Path
 from typing import Optional
-from langchain.tools import tool
+from langchain.tools import ToolRuntime, tool
+from app.core.state import TravelState
 from app.rag.agency_retrieval import (
     filter_documents_by_category,
     format_evidence_response,
@@ -262,6 +263,7 @@ async def _guarded_rag_retrieval(
     visibility: str,
     retrieve_call,
     expected_category: str | None = None,
+    runtime: Optional[ToolRuntime[None, TravelState]] = None,
 ) -> str:
     evidence_type = (
         "internal_rag_evidence" if visibility == "internal" else "public_rag_evidence"
@@ -274,6 +276,7 @@ async def _guarded_rag_retrieval(
         tool_name,
         {"query": query, "expected_category": expected_category},
         _call,
+        runtime=runtime,
         input_validator=validate_rag_query_args,
         result_validator=validate_rag_result,
         evidence_type=evidence_type,
@@ -285,6 +288,9 @@ async def _guarded_rag_retrieval(
     )
     if guarded.output is not None:
         return str(guarded.output)
+
+    if guarded.error_type == "duplicate_tool_call_same_turn" and guarded.message:
+        return guarded.message
 
     return _format_retrieval_failure(
         query,
@@ -352,7 +358,10 @@ async def _retrieve_internal(
 # ============== RAG 检索工具定义 ==============
 
 @tool
-async def search_destination_guide(query: str) -> str:
+async def search_destination_guide(
+    query: str,
+    runtime: ToolRuntime[None, TravelState] = None,
+) -> str:
     """
     从旅游攻略知识库中检索目的地相关信息。
 
@@ -376,11 +385,15 @@ async def search_destination_guide(query: str) -> str:
         label="公开攻略知识库",
         visibility="public",
         retrieve_call=lambda: _retrieve_public(query),
+        runtime=runtime,
     )
 
 
 @tool
-async def search_food_recommendations(query: str) -> str:
+async def search_food_recommendations(
+    query: str,
+    runtime: ToolRuntime[None, TravelState] = None,
+) -> str:
     """
     从美食知识库中检索目的地美食信息。
 
@@ -403,11 +416,15 @@ async def search_food_recommendations(query: str) -> str:
         label="美食知识库",
         visibility="public",
         retrieve_call=lambda: _retrieve_public(query, f"{query} 美食 餐厅 小吃"),
+        runtime=runtime,
     )
 
 
 @tool
-async def search_accommodation_info(query: str) -> str:
+async def search_accommodation_info(
+    query: str,
+    runtime: ToolRuntime[None, TravelState] = None,
+) -> str:
     """
     从住宿知识库中检索目的地住宿信息。
 
@@ -430,11 +447,15 @@ async def search_accommodation_info(query: str) -> str:
         label="住宿知识库",
         visibility="public",
         retrieve_call=lambda: _retrieve_public(query, f"{query} 住宿 酒店 民宿"),
+        runtime=runtime,
     )
 
 
 @tool
-async def search_travel_tips(query: str) -> str:
+async def search_travel_tips(
+    query: str,
+    runtime: ToolRuntime[None, TravelState] = None,
+) -> str:
     """
     从知识库中检索旅行实用信息和注意事项。
 
@@ -457,11 +478,15 @@ async def search_travel_tips(query: str) -> str:
         label="旅行贴士知识库",
         visibility="public",
         retrieve_call=lambda: _retrieve_public(query, f"{query} 注意事项 建议 提示"),
+        runtime=runtime,
     )
 
 
 @tool
-async def search_agency_product_templates(query: str) -> str:
+async def search_agency_product_templates(
+    query: str,
+    runtime: ToolRuntime[None, TravelState] = None,
+) -> str:
     """
     从旅行社内部产品路线模板中检索成熟路线结构、适合人群和产品化表达。
 
@@ -478,11 +503,15 @@ async def search_agency_product_templates(query: str) -> str:
             f"{query} 产品 路线 模板 适合人群 成熟路线",
             expected_category="products",
         ),
+        runtime=runtime,
     )
 
 
 @tool
-async def search_agency_service_sop(query: str) -> str:
+async def search_agency_service_sop(
+    query: str,
+    runtime: ToolRuntime[None, TravelState] = None,
+) -> str:
     """
     从旅行社内部服务 SOP 中检索顾问流程、话术原则和服务优势表达。
 
@@ -499,11 +528,15 @@ async def search_agency_service_sop(query: str) -> str:
             f"{query} 服务 SOP 顾问 流程 交付",
             expected_category="sop",
         ),
+        runtime=runtime,
     )
 
 
 @tool
-async def search_agency_pricing_rules(query: str) -> str:
+async def search_agency_pricing_rules(
+    query: str,
+    runtime: ToolRuntime[None, TravelState] = None,
+) -> str:
     """
     从旅行社内部报价规则中检索预算组成、费用依据和预算置信度标准。
 
@@ -520,11 +553,15 @@ async def search_agency_pricing_rules(query: str) -> str:
             f"{query} 报价 预算 费用 置信度 待核验",
             expected_category="pricing",
         ),
+        runtime=runtime,
     )
 
 
 @tool
-async def search_agency_risk_playbook(query: str) -> str:
+async def search_agency_risk_playbook(
+    query: str,
+    runtime: ToolRuntime[None, TravelState] = None,
+) -> str:
     """
     从旅行社内部风险与避坑手册中检索天气、交通、酒店、景区和体力风险建议。
 
@@ -541,11 +578,15 @@ async def search_agency_risk_playbook(query: str) -> str:
             f"{query} 风险 避坑 天气 交通 酒店 景区 Plan B",
             expected_category="risk",
         ),
+        runtime=runtime,
     )
 
 
 @tool
-async def search_agency_report_standards(query: str) -> str:
+async def search_agency_report_standards(
+    query: str,
+    runtime: ToolRuntime[None, TravelState] = None,
+) -> str:
     """
     从旅行社内部报告标准中检索最终旅游规划报告的章节、结构和禁止内容。
 
@@ -562,6 +603,7 @@ async def search_agency_report_standards(query: str) -> str:
             f"{query} 最终报告 章节 结构 导出 禁止内容",
             expected_category="report",
         ),
+        runtime=runtime,
     )
 
 
