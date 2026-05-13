@@ -710,6 +710,17 @@ def _render_human(report: dict[str, Any]) -> str:
             lines.append(f"- Backend checked: {result.get('check_backend')}")
             missing = ", ".join(preflight.get("missing_required") or []) or "-"
             lines.append("- Missing required: " + missing)
+            required_mcp = (
+                (preflight.get("required_capabilities") or {}).get("mcp_servers")
+                or []
+            )
+            mcp_services = preflight.get("mcp_services") or {}
+            if required_mcp and mcp_services:
+                service_bits = [
+                    f"{server}={((mcp_services.get(server) or {}).get('status') or 'missing')}"
+                    for server in required_mcp
+                ]
+                lines.append("- Required MCP services: " + ", ".join(service_bits))
             if result.get("blocked_reasons"):
                 lines.append(
                     "- Blocked reasons: "

@@ -615,6 +615,38 @@ def test_preflight_declares_scenario_capability_requirements():
     assert {"amap", "tavily"}.issubset(capabilities["external_apis"])
 
 
+def test_preflight_service_table_blocks_required_mcp_without_credentials():
+    scenario = EvaluationScenario(
+        id="hotel_required",
+        name="Hotel Required",
+        category="agency_plan",
+        prompt="Plan a trip",
+        expected_mode="agency_plan",
+        min_score=80,
+        focus=["hotel"],
+        tags=["agency"],
+        requirements={
+            "real_llm": False,
+            "real_mcp": True,
+            "mcp_servers": ["aigohotel-mcp"],
+            "external_apis": [],
+        },
+    )
+
+    preflight = run_acceptance_preflight(
+        [scenario],
+        base_url="http://127.0.0.1:8000",
+        environ={},
+        check_backend=False,
+    )
+    real_mcp = next(check for check in preflight.checks if check.key == "real_mcp")
+
+    assert preflight.status == "blocked"
+    assert "real_mcp" in preflight.missing_required
+    assert preflight.mcp_services["aigohotel-mcp"]["status"] == "blocked"
+    assert real_mcp.details["services"]["aigohotel-mcp"]["status"] == "blocked"
+
+
 def test_backend_ready_degraded_by_unselected_mcp_can_pass_selected_smoke(monkeypatch):
     class FakeResponse:
         status = 200
@@ -654,6 +686,49 @@ def test_backend_ready_degraded_by_unselected_mcp_can_pass_selected_smoke(monkey
 
     assert check.status == "passed"
     assert "outside the selected scenario set" in check.findings[0]
+
+
+def test_backend_ready_blocks_when_service_health_marks_selected_mcp_degraded(monkeypatch):
+    class FakeResponse:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return json.dumps(
+                {
+                    "status": "ready",
+                    "services": {
+                        "mcp": {
+                            "service_health": {
+                                "weather": {"status": "healthy"},
+                                "search": {
+                                    "status": "degraded",
+                                    "reason": "Missing real value for one of: TAVILY_API_KEY",
+                                },
+                            }
+                        }
+                    },
+                }
+            ).encode("utf-8")
+
+    monkeypatch.setattr(
+        "app.evaluation.preflight.urllib.request.urlopen",
+        lambda *args, **kwargs: FakeResponse(),
+    )
+
+    check = _check_backend_ready(
+        "http://127.0.0.1:8000",
+        required_mcp_servers=["weather", "search"],
+    )
+
+    assert check.status == "blocked"
+    assert "search=degraded" in check.findings[0]
+    assert check.details["mcp_services"]["search"]["status"] == "degraded"
 
 
 def test_backend_ready_blocks_when_selected_mcp_is_unavailable(monkeypatch):
