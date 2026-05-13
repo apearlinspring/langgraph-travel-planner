@@ -10,8 +10,8 @@ chcp 65001 | Out-Null
 
 ## 当前分支
 
-- 工作树：`D:\Users\Administrator\PycharmProjects\ZhiXing\langgraph-travel-planner-live-smoke-evidence`
-- 分支：`codex/live-smoke-evidence`
+- 工作树：`D:\Users\Administrator\PycharmProjects\ZhiXing\langgraph-travel-planner-acceptance-core-evidence`
+- 分支：`codex/acceptance-core-evidence`
 - 日期：2026-05-13
 
 ## 状态判定
@@ -58,6 +58,78 @@ chcp 65001 | Out-Null
    ```powershell
    .\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-core --base-url http://127.0.0.1:8000 --json --summary-dir .runtime\acceptance-core
    ```
+
+## acceptance-core 复跑步骤
+
+先确认当前分支以最新主线为基准：
+
+```powershell
+git fetch origin
+git merge --ff-only origin/main
+```
+
+如果当前工作树没有 `.venv`，使用锁文件恢复本地环境：
+
+```powershell
+uv sync --frozen
+```
+
+先跑 preflight（预检），不要跳过 blocked（环境阻塞）判定：
+
+```powershell
+.\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-core --preflight-only --json --no-summary
+```
+
+再启动后端并跑完整入口：
+
+```powershell
+.\.venv\Scripts\python main.py
+.\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-core --base-url http://127.0.0.1:8000 --json --summary-dir .runtime\acceptance-core
+```
+
+验收解释规则：
+
+- `passed（通过）`：preflight 通过，9 个核心场景真实运行并通过门禁。
+- `failed（失败）`：真实场景已运行，但报告、RAG、MCP、工具审计或运行预算门禁失败。
+- `degraded（降级）`：真实场景可运行，但存在可解释的可选依赖或 warning（警告）。
+- `blocked（环境阻塞）`：真实依赖、后端 ready、凭据、向量库或配置缺失，不能声称核心验收通过。
+
+`.runtime/` 下的 JSON（JavaScript 对象表示法）、Markdown（标记文本）、stdout 和 stderr 原始产物只留本地。提交文档时只写相对路径、状态计数、关键阻塞项和脱敏指标。
+
+## acceptance-core 当前真实结果
+
+2026-05-13 在 `codex/acceptance-core-evidence` 分支完成一次 acceptance-core 入口复核：
+
+- `preflight.status=blocked`
+- live health（存活检查）：`passed`
+- ready health（就绪检查）：`blocked`
+- ready 阻塞原因：PostgreSQL（关系型数据库）和 LLM（大语言模型）未就绪。
+- `.env` 存在：`false`
+- 场景状态：9 个 `blocked`，0 个 `passed`，0 个 `failed`，0 个 `degraded`。
+
+本地证据：
+
+- `.runtime\acceptance-core\20260513-051811-acceptance-summary.json`
+- `.runtime\acceptance-core\20260513-051811-acceptance-summary.md`
+- `.runtime\acceptance-core-live-blocked.stdout.txt`
+- `.runtime\acceptance-core-backend-rerun.stdout.txt`
+- `.runtime\acceptance-core-backend-rerun.stderr.txt`
+
+场景地图：
+
+| 场景 | 状态 |
+|---|---|
+| `free_weekend_nearby` | blocked |
+| `free_city_three_days` | blocked |
+| `agency_couple_relaxed` | blocked |
+| `agency_family_parent_child` | blocked |
+| `agency_senior_low_stress` | blocked |
+| `edge_hotel_tool_fallback` | blocked |
+| `pricing_agency_quote_explanation` | blocked |
+| `risk_weather_disruption` | blocked |
+| `edge_transport_tool_fallback` | blocked |
+
+本轮没有修改 evaluation gate（评估门禁）逻辑。阻塞属于本地真实环境缺配置、凭据和向量库，不是业务链路已运行后的失败。
 
 ## S2 当前真实结果
 

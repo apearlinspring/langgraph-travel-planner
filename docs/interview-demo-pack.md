@@ -45,6 +45,7 @@ chcp 65001 | Out-Null
 | 验收门禁 | `app/evaluation/acceptance_gate.py`、`scripts/run_evaluation_scenarios.py`、`docs/evaluation-system.md` | 验收看 `report_data`、RAG 证据、工具治理、运行预算和旅行社业务证据，不靠主观聊天观感。 | `.\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-smoke --dry-run` |
 | CI/CD（持续集成/持续交付） | `.github/workflows/ci.yml`、`.github/workflows/staging-smoke.yml` | 默认 CI 跑本地回归和前端验证；staging smoke（预生产烟测）用 workflow_dispatch（手动触发）跑真实链路。 | `.\.venv\Scripts\python -m pytest tests\test_ci_workflows.py -q` |
 | 前端报告 | `frontend/app.js`、`frontend/zhixing.html`、`docs/frontend-report-experience.md` | 前端优先消费结构化 `report_data`，展示预算置信度、待核验项、地图路线和治理边界。 | `node scripts\verify_frontend_report_renderer.js` |
+| 核心验收证据 | `docs/acceptance-core-report.md`、`docs/live-acceptance-runbook.md`、`app/evaluation/acceptance_gate.py` | acceptance-core（核心验收）给出 9 个核心场景的 passed（通过）、failed（失败）、degraded（降级）、blocked（环境阻塞）地图，不把 blocked 或 failed 伪装成通过。 | `.\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-core --preflight-only --json --no-summary` |
 
 ## 三条演示路径
 
@@ -107,6 +108,23 @@ node scripts\verify_frontend_report_renderer.js
 
 - 前端不是从自然语言里硬解析报告，而是优先消费 `report_data`。
 - `report_data` 能被评估、前端和导出共同使用，是 Agent 交付契约。
+
+### 核心验收证据入口
+
+适用场景：面试官追问“如何证明不是只跑 smoke（烟测）”时，展示 acceptance-core 的可审计入口和当前状态地图。
+
+建议顺序：
+
+```powershell
+.\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-core --dry-run
+.\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-core --preflight-only --json --no-summary
+```
+
+讲述重点：
+
+- `docs/acceptance-core-report.md` 记录 9 个核心场景的状态地图和本地证据路径。
+- 没有真实 `.env`、LLM（大语言模型）、RAG（检索增强生成）向量库、MCP（模型上下文协议）和后端 ready（就绪状态）时，结果必须是 blocked。
+- blocked 只能证明验收入口和门禁语义有效，不能证明业务链路已经通过。
 
 ## 面试时的主线叙事
 
