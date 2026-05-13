@@ -16,6 +16,10 @@ DocumentManager: Any = None
 AdvancedParentDocumentSplitter: Any = None
 VectorStoreManager: Any = None
 validate_internal_knowledge_base: Any = None
+check_chroma_collection_readiness: Any = None
+PUBLIC_VECTORSTORE_CONTRACT: Any = None
+INTERNAL_VECTORSTORE_CONTRACT: Any = None
+has_real_env_value: Any = None
 settings: Any = None
 app_logger: Any = None
 
@@ -24,7 +28,12 @@ try:
     from app.rag.text_splitter import AdvancedParentDocumentSplitter
     from app.rag.vectorstore import VectorStoreManager
     from app.rag.contracts import validate_internal_knowledge_base
-    from app.config import settings
+    from app.rag.readiness import (
+        INTERNAL_VECTORSTORE_CONTRACT,
+        PUBLIC_VECTORSTORE_CONTRACT,
+        check_chroma_collection_readiness,
+    )
+    from app.config import PROJECT_ROOT, has_real_env_value, settings
     from app.utils.logger import app_logger
 except ImportError as exc:
     _RAG_IMPORT_ERROR = exc
@@ -64,8 +73,23 @@ def _ensure_runtime_imports() -> None:
         raise RagInitializationError(_missing_dependency_error(_RAG_IMPORT_ERROR)) from _RAG_IMPORT_ERROR
 
 
+def _ensure_model_credentials() -> None:
+    _ensure_runtime_imports()
+    if has_real_env_value(settings.dashscope_api_key):
+        return
+    raise RagInitializationError(
+        "blocked: RAG 初始化需要真实 DASHSCOPE_API_KEY。"
+        "该密钥同时用于 DashScope embedding（向量嵌入）模型 text-embedding-v2，"
+        "也用于后续 RAG query optimizer（查询优化器）/ LLM（大语言模型）相关能力。"
+        "请在本机 .env 中配置 DASHSCOPE_API_KEY 后重新运行 "
+        ".\\.venv\\Scripts\\python -m scripts.init_rag；不要把真实密钥写入文档、测试或提交。"
+    )
+
+
 def _actionable_rag_error(error: Exception) -> str:
     message = str(error).strip() or error.__class__.__name__
+    if message.startswith("blocked:"):
+        return message
     return (
         "RAG 初始化失败，已停止。请检查："
         "1) data/documents/destinations/ 是否有公开目的地 Markdown 文档；"
@@ -108,10 +132,43 @@ def _build_vectorstore(
     _log_info(f"   - 向量数据库：{vs_manager.persist_directory}")
 
 
+def _verify_vectorstore_ready(
+    *,
+    persist_directory: str,
+    collection_name: str,
+    label: str,
+    contract: dict,
+) -> None:
+    """Fail init if Chroma exists but does not satisfy the readiness contract."""
+
+    check = check_chroma_collection_readiness(
+        configured_path=persist_directory,
+        collection_name=collection_name,
+        label=contract["label"],
+        expected_metadata={
+            "contract_version": "rag.evidence.v1",
+            "knowledge_base": contract["knowledge_base"],
+            "visibility": contract["visibility"],
+        },
+        required_metadata=contract["required_metadata"],
+        project_root=PROJECT_ROOT,
+    )
+    if not check.ready:
+        raise RagInitializationError(
+            f"{label} 初始化后仍未就绪: {check.finding} details={check.details}"
+        )
+    _log_info(
+        f"{label} ready: collection={collection_name}, "
+        f"embeddings={check.details.get('embedding_count')}, "
+        f"path={check.details.get('path')}"
+    )
+
+
 async def initialize_rag() -> None:
     """初始化 RAG 系统"""
 
     _ensure_runtime_imports()
+    _ensure_model_credentials()
     _log_info("开始初始化 RAG 系统...")
 
     # ========== 1. 加载文档 ==========
@@ -146,11 +203,23 @@ async def initialize_rag() -> None:
         collection_name=settings.rag_collection_name,
         label="公开攻略 RAG",
     )
+    _verify_vectorstore_ready(
+        persist_directory=settings.rag_vectorstore_path,
+        collection_name=settings.rag_collection_name,
+        label="公开攻略 RAG",
+        contract=PUBLIC_VECTORSTORE_CONTRACT,
+    )
     _build_vectorstore(
         documents=internal_documents,
         persist_directory=settings.rag_internal_vectorstore_path,
         collection_name=settings.rag_internal_collection_name,
         label="旅行社内部知识库 RAG",
+    )
+    _verify_vectorstore_ready(
+        persist_directory=settings.rag_internal_vectorstore_path,
+        collection_name=settings.rag_internal_collection_name,
+        label="旅行社内部知识库 RAG",
+        contract=INTERNAL_VECTORSTORE_CONTRACT,
     )
 
 

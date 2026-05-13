@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import os
-import sqlite3
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Literal, Mapping
@@ -14,6 +13,12 @@ from dotenv import dotenv_values
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field
 from functools import lru_cache
+from app.rag.readiness import (
+    INTERNAL_VECTORSTORE_CONTRACT,
+    PUBLIC_VECTORSTORE_CONTRACT,
+    check_chroma_collection_readiness,
+    rag_vectorstore_contract_details,
+)
 
 # 获取当前文件的上级目录（即项目根目录）
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -389,53 +394,6 @@ def _resolve_project_path(configured_path: str) -> Path:
     return PROJECT_ROOT / path
 
 
-def _check_chroma_collection(
-    *,
-    configured_path: str,
-    collection_name: str,
-    label: str,
-) -> tuple[str | None, dict[str, Any]]:
-    vectorstore_path = _resolve_project_path(configured_path)
-    details: dict[str, Any] = {
-        "path": str(vectorstore_path),
-        "collection_name": collection_name,
-    }
-
-    if not vectorstore_path.exists():
-        return f"{label} directory does not exist.", details
-    if not vectorstore_path.is_dir():
-        return f"{label} path is not a directory.", details
-
-    metadata_path = vectorstore_path / "chroma.sqlite3"
-    details["metadata_path"] = str(metadata_path)
-    if not metadata_path.exists():
-        return f"{label} metadata file chroma.sqlite3 is missing.", details
-
-    connection: sqlite3.Connection | None = None
-    try:
-        uri = metadata_path.as_posix()
-        connection = sqlite3.connect(f"file:{uri}?mode=ro", uri=True)
-        table = connection.execute(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'collections'"
-        ).fetchone()
-        if table is None:
-            return f"{label} metadata has no collections table.", details
-        collection = connection.execute(
-            "SELECT 1 FROM collections WHERE name = ? LIMIT 1",
-            (collection_name,),
-        ).fetchone()
-        if collection is None:
-            return f"{label} collection {collection_name!r} is missing.", details
-    except sqlite3.Error as exc:
-        details["error_type"] = exc.__class__.__name__
-        return f"{label} metadata is not readable: {exc}", details
-    finally:
-        if connection is not None:
-            connection.close()
-
-    return None, details
-
-
 def _filesystem_dependency_status(
     spec: RuntimeDependencySpec,
     env: Mapping[str, str],
@@ -455,26 +413,45 @@ def _filesystem_dependency_status(
     details = {
         "path": str(vectorstore_path),
         "collection_name": collection_name,
+        "contract": rag_vectorstore_contract_details(),
         "stores": {},
     }
 
     findings: list[str] = []
-    public_finding, public_details = _check_chroma_collection(
+    public_check = check_chroma_collection_readiness(
         configured_path=configured_path,
         collection_name=collection_name,
-        label="Public RAG vector store",
+        label=PUBLIC_VECTORSTORE_CONTRACT["label"],
+        expected_metadata={
+            "contract_version": "rag.evidence.v1",
+            "knowledge_base": PUBLIC_VECTORSTORE_CONTRACT["knowledge_base"],
+            "visibility": PUBLIC_VECTORSTORE_CONTRACT["visibility"],
+        },
+        required_metadata=PUBLIC_VECTORSTORE_CONTRACT["required_metadata"],
+        project_root=PROJECT_ROOT,
     )
+    public_finding = public_check.finding
+    public_details = public_check.details
     details["stores"]["public"] = public_details
     if public_details.get("metadata_path"):
         details["metadata_path"] = public_details["metadata_path"]
     if public_finding:
         findings.append(public_finding)
 
-    internal_finding, internal_details = _check_chroma_collection(
+    internal_check = check_chroma_collection_readiness(
         configured_path=internal_configured_path,
         collection_name=internal_collection_name,
-        label="Internal RAG vector store",
+        label=INTERNAL_VECTORSTORE_CONTRACT["label"],
+        expected_metadata={
+            "contract_version": "rag.evidence.v1",
+            "knowledge_base": INTERNAL_VECTORSTORE_CONTRACT["knowledge_base"],
+            "visibility": INTERNAL_VECTORSTORE_CONTRACT["visibility"],
+        },
+        required_metadata=INTERNAL_VECTORSTORE_CONTRACT["required_metadata"],
+        project_root=PROJECT_ROOT,
     )
+    internal_finding = internal_check.finding
+    internal_details = internal_check.details
     details["stores"]["internal"] = internal_details
     if internal_finding:
         findings.append(internal_finding)
