@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 import json
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +23,7 @@ from app.evaluation.live_runner import (  # noqa: E402
     DEFAULT_BASE_URL,
     DEFAULT_OUTPUT_DIR,
     LiveRunConfig,
+    build_acceptance_evidence_closure,
     run_live_scenario,
     scenario_message_sequence,
     select_scenarios,
@@ -65,6 +68,148 @@ def _redact_cli_payload(value: Any, *, max_depth: int = 12) -> Any:
     if isinstance(value, str):
         return redact_sensitive_text(value)
     return value
+
+
+def _optional_float_env(name: str) -> float | None:
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        return None
+    return float(value)
+
+
+def _result_failure_category(result: dict[str, Any]) -> str | None:
+    category = result.get("failure_category")
+    if isinstance(category, str) and category:
+        return category
+
+    gate = result.get("acceptance_gate") if isinstance(result.get("acceptance_gate"), dict) else {}
+    failures = gate.get("failures") if isinstance(gate, dict) else []
+    dimensions = {
+        str(failure.get("dimension"))
+        for failure in failures
+        if isinstance(failure, dict) and failure.get("dimension")
+    }
+    if "runtime_budget" in dimensions or "runtime_quality" in dimensions:
+        return "runtime_budget"
+
+    closure = result.get("evidence_closure")
+    if isinstance(closure, dict) and closure.get("passed") is False:
+        return "evidence_closure"
+
+    error = str(result.get("error") or "").lower()
+    if "session_busy" in error or "conversation is busy" in error or "busy" in error:
+        return "conversation_busy"
+    if "timeout" in error or "timed out" in error:
+        return "timeout"
+    if result.get("passed") is False:
+        return "acceptance_gate"
+    return None
+
+
+def _failure_classification_counts(results: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for result in results:
+        if not isinstance(result, dict) or result.get("passed") is True:
+            continue
+        category = _result_failure_category(result) or "unknown"
+        counts[category] = counts.get(category, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _enrich_run_summary(
+    summary: dict[str, Any],
+    *,
+    results: list[dict[str, Any]],
+    scenarios: list[Any],
+    partial_reason: str | None = None,
+) -> dict[str, Any]:
+    selected_ids = [str(scenario.id) for scenario in scenarios]
+    completed_ids = [str(result.get("scenario_id")) for result in results if result.get("scenario_id")]
+    pending_ids = [scenario_id for scenario_id in selected_ids if scenario_id not in set(completed_ids)]
+    run_context = {
+        "version": "acceptance_run_context.v1",
+        "partial": bool(partial_reason or pending_ids),
+        "partial_reason": partial_reason,
+        "completed_scenario_ids": completed_ids,
+        "pending_scenario_ids": pending_ids,
+        "failure_classification_counts": _failure_classification_counts(results),
+    }
+    summary["run_context"] = run_context
+    return _redact_cli_payload(summary)
+
+
+def _build_live_error_result(
+    scenario: Any,
+    *,
+    error: str,
+    failure_category: str,
+    status: str = "failed",
+    elapsed_seconds: float = 0.0,
+) -> dict[str, Any]:
+    redacted_error = redact_sensitive_text(error)
+    gate_status = status if status in {"failed", "blocked", "skipped"} else "failed"
+    acceptance_gate = build_error_acceptance_gate_result(
+        scenario=scenario,
+        error=redacted_error,
+        status=gate_status,
+    )
+    acceptance_gate["failure_category"] = failure_category
+    return {
+        "scenario_id": scenario.id,
+        "scenario_name": scenario.name,
+        "status": gate_status,
+        "passed": False,
+        "normalized_score": None,
+        "grade": None,
+        "snapshot_path": None,
+        "elapsed_seconds": round(elapsed_seconds, 2),
+        "agent_score": None,
+        "runtime_budget_passed": None,
+        "runtime_findings": [],
+        "runtime_metrics": None,
+        "tool_counts": None,
+        "evidence_closure": build_acceptance_evidence_closure(
+            scenario=scenario,
+            report_data=None,
+            snapshot_path=None,
+        ),
+        "acceptance_gate": acceptance_gate,
+        "failure_category": failure_category,
+        "failure_details": [redacted_error],
+        "error": redacted_error,
+    }
+
+
+def _build_and_optionally_write_summary(
+    *,
+    results: list[dict[str, Any]],
+    scenarios: list[Any],
+    base_url: str,
+    output_dir: Path,
+    preflight: dict[str, Any] | None,
+    write_files: bool,
+    prefix: str,
+    partial_reason: str | None = None,
+) -> tuple[dict[str, Any], dict[str, str] | None]:
+    summary = build_acceptance_run_summary(
+        results=results,
+        scenarios=scenarios,
+        base_url=base_url,
+        output_dir=output_dir,
+        preflight=preflight,
+    )
+    summary = _enrich_run_summary(
+        summary,
+        results=results,
+        scenarios=scenarios,
+        partial_reason=partial_reason,
+    )
+    summary_paths = (
+        write_acceptance_summary_files(summary, output_dir, prefix=prefix)
+        if write_files
+        else None
+    )
+    return summary, summary_paths
 
 
 def _require_runtime_artifact_dir(path: Path, *, flag_name: str) -> Path:
@@ -183,6 +328,7 @@ def build_cli_json_payload(
         "degraded_optional": (preflight or {}).get("degraded_optional") or [],
         "health_checks": _preflight_health_checks(preflight or {}),
         "blocking_reasons": _preflight_blocking_reasons(preflight or {}),
+        "failure_classification_counts": _failure_classification_counts(results),
         "results": results,
         "acceptance_summary": acceptance_summary,
         "summary_paths": summary_paths,
@@ -225,6 +371,10 @@ def _print_results(results: list[dict[str, Any]]) -> None:
             f"- {status} {result['scenario_id']}: "
             f"score={score}{agent_score_text}{runtime_budget_text}, elapsed={result['elapsed_seconds']}s"
         )
+        if result.get("failure_category"):
+            print(f"  category={result['failure_category']}")
+        for detail in result.get("failure_details") or []:
+            print(f"  detail={detail}")
         for finding in result.get("runtime_findings") or []:
             print(f"  runtime={finding}")
         if result.get("snapshot_path"):
@@ -359,6 +509,21 @@ def main() -> int:
         help="HTTP timeout seconds per request",
     )
     parser.add_argument(
+        "--scenario-timeout",
+        type=float,
+        default=_optional_float_env("ZHIXING_EVAL_SCENARIO_TIMEOUT"),
+        help=(
+            "Wall-clock timeout seconds for one scenario. "
+            "Defaults to --timeout when omitted."
+        ),
+    )
+    parser.add_argument(
+        "--global-timeout",
+        type=float,
+        default=_optional_float_env("ZHIXING_EVAL_GLOBAL_TIMEOUT"),
+        help="Wall-clock timeout seconds for the whole selected scenario run.",
+    )
+    parser.add_argument(
         "--title-prefix",
         default="eval",
         help="Conversation title prefix",
@@ -453,6 +618,12 @@ def main() -> int:
     args = parser.parse_args()
     if args.acceptance_core and args.acceptance_smoke:
         parser.error("--acceptance-core and --acceptance-smoke are mutually exclusive")
+    if args.timeout <= 0:
+        parser.error("--timeout must be positive")
+    if args.scenario_timeout is not None and args.scenario_timeout <= 0:
+        parser.error("--scenario-timeout must be positive")
+    if args.global_timeout is not None and args.global_timeout <= 0:
+        parser.error("--global-timeout must be positive")
 
     try:
         args.output_dir = _require_runtime_artifact_dir(
@@ -537,6 +708,7 @@ def main() -> int:
         password=args.password,
         output_dir=args.output_dir,
         timeout_seconds=args.timeout,
+        scenario_timeout_seconds=args.scenario_timeout or args.timeout,
         conversation_title_prefix=args.title_prefix,
         runtime_budget=runtime_budget_from_dict(runtime_budget_overrides or None),
         enable_llm_judge=args.llm_judge,
@@ -544,27 +716,106 @@ def main() -> int:
     )
     results = []
     continue_on_error = args.continue_on_error or args.acceptance_core or args.acceptance_smoke
-    for scenario in scenarios:
-        result = run_live_scenario(scenario, config)
-        results.append(result.to_dict())
-        if not result.passed and not continue_on_error:
-            break
-
     summary = None
     summary_paths = None
-    if not args.no_summary:
-        summary_output_dir = args.summary_dir or args.output_dir
-        summary = build_acceptance_run_summary(
+    summary_output_dir = args.summary_dir or args.output_dir
+    run_started_at = time.perf_counter()
+    run_interrupted = False
+    partial_reason: str | None = None
+    active_scenario = None
+
+    try:
+        for scenario in scenarios:
+            active_scenario = scenario
+            global_remaining = (
+                args.global_timeout - (time.perf_counter() - run_started_at)
+                if args.global_timeout is not None
+                else None
+            )
+            if global_remaining is not None and global_remaining <= 0:
+                error = (
+                    "Global timeout budget exhausted before scenario "
+                    f"{scenario.id} could start"
+                )
+                results.append(
+                    _build_live_error_result(
+                        scenario,
+                        error=error,
+                        failure_category="global_timeout",
+                    )
+                )
+                partial_reason = "global_timeout"
+                break
+
+            scenario_timeout = config.scenario_timeout_seconds
+            if global_remaining is not None:
+                scenario_timeout = (
+                    min(scenario_timeout, global_remaining)
+                    if scenario_timeout is not None
+                    else global_remaining
+                )
+            scenario_config = replace(
+                config,
+                scenario_timeout_seconds=scenario_timeout,
+            )
+            result = run_live_scenario(scenario, scenario_config)
+            result_payload = result.to_dict()
+            if (
+                result.failure_category == "timeout"
+                and args.global_timeout is not None
+                and time.perf_counter() - run_started_at >= args.global_timeout
+            ):
+                result_payload["failure_category"] = "global_timeout"
+                if isinstance(result_payload.get("acceptance_gate"), dict):
+                    result_payload["acceptance_gate"]["failure_category"] = "global_timeout"
+                partial_reason = "global_timeout"
+            results.append(result_payload)
+            active_scenario = None
+            if not args.no_summary:
+                summary, summary_paths = _build_and_optionally_write_summary(
+                    results=results,
+                    scenarios=scenarios,
+                    base_url=args.base_url,
+                    output_dir=summary_output_dir,
+                    preflight=preflight,
+                    write_files=True,
+                    prefix=args.summary_prefix,
+                    partial_reason=partial_reason or "in_progress",
+                )
+            if not result.passed and not continue_on_error:
+                partial_reason = partial_reason or "stopped_after_failure"
+                break
+            if partial_reason == "global_timeout":
+                break
+    except KeyboardInterrupt:
+        run_interrupted = True
+        partial_reason = "interrupted"
+        if active_scenario is not None and active_scenario.id not in {
+            str(result.get("scenario_id")) for result in results
+        }:
+            elapsed_seconds = time.perf_counter() - run_started_at
+            results.append(
+                _build_live_error_result(
+                    active_scenario,
+                    error=(
+                        "Evaluation run interrupted before this scenario completed. "
+                        "Partial results were preserved."
+                    ),
+                    failure_category="interrupted",
+                    elapsed_seconds=elapsed_seconds,
+                )
+            )
+
+    if (not args.no_summary) or run_interrupted or partial_reason:
+        summary, summary_paths = _build_and_optionally_write_summary(
             results=results,
             scenarios=scenarios,
             base_url=args.base_url,
             output_dir=summary_output_dir,
             preflight=preflight,
-        )
-        summary_paths = write_acceptance_summary_files(
-            summary,
-            summary_output_dir,
+            write_files=not args.no_summary,
             prefix=args.summary_prefix,
+            partial_reason=partial_reason,
         )
 
     if args.json:
@@ -583,6 +834,9 @@ def main() -> int:
             print("# Acceptance Summary Artifacts")
             print(f"- JSON: {summary_paths['json']}")
             print(f"- Markdown: {summary_paths['markdown']}")
+
+    if run_interrupted:
+        return 130
 
     passed = bool(summary["passed"]) if isinstance(summary, dict) else bool(results and all(result["passed"] for result in results))
     return 0 if passed else 2

@@ -80,6 +80,7 @@ class LiveRunConfig:
     password: str = "000000"
     output_dir: Path = DEFAULT_OUTPUT_DIR
     timeout_seconds: float = 900.0
+    scenario_timeout_seconds: float | None = 900.0
     conversation_title_prefix: str = "eval"
     runtime_budget: RuntimeBudget = DEFAULT_RUNTIME_BUDGET
     enable_llm_judge: bool = False
@@ -103,10 +104,24 @@ class LiveScenarioResult:
     tool_counts: dict[str, int] | None = None
     evidence_closure: dict[str, Any] | None = None
     acceptance_gate: dict[str, Any] | None = None
+    failure_category: str | None = None
+    failure_details: list[str] | None = None
     error: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+class LiveScenarioTimeoutError(RuntimeError):
+    """Raised when one evaluation scenario exceeds its scenario-level deadline."""
+
+    failure_category = "timeout"
+
+
+class LiveScenarioConversationBusyError(RuntimeError):
+    """Raised when the backend rejects a turn because the conversation lock is busy."""
+
+    failure_category = "conversation_busy"
 
 
 def select_scenarios(
@@ -137,6 +152,62 @@ def parse_sse_event_line(line: bytes) -> dict[str, Any] | None:
     if not payload:
         return None
     return json.loads(payload)
+
+
+def _scenario_deadline(timeout_seconds: float | None) -> float | None:
+    if timeout_seconds is None:
+        return None
+    if timeout_seconds <= 0:
+        raise ValueError("scenario_timeout_seconds must be positive or None")
+    return time.perf_counter() + float(timeout_seconds)
+
+
+def _remaining_deadline_seconds(deadline: float | None) -> float | None:
+    if deadline is None:
+        return None
+    return deadline - time.perf_counter()
+
+
+def _request_timeout_seconds(
+    *,
+    configured_timeout_seconds: float,
+    deadline: float | None,
+    scenario_id: str,
+) -> float:
+    remaining = _remaining_deadline_seconds(deadline)
+    if remaining is None:
+        return configured_timeout_seconds
+    if remaining <= 0:
+        raise LiveScenarioTimeoutError(
+            f"Scenario {scenario_id} exceeded timeout budget before the next request"
+        )
+    return max(0.001, min(float(configured_timeout_seconds), remaining))
+
+
+def _raise_if_scenario_deadline_exceeded(
+    *,
+    deadline: float | None,
+    scenario_id: str,
+    timeout_seconds: float | None,
+) -> None:
+    remaining = _remaining_deadline_seconds(deadline)
+    if remaining is not None and remaining <= 0:
+        raise LiveScenarioTimeoutError(
+            f"Scenario {scenario_id} exceeded timeout budget {timeout_seconds}s"
+        )
+
+
+def _is_timeout_exception(exc: BaseException) -> bool:
+    message = str(exc).lower()
+    return isinstance(exc, TimeoutError) or "timed out" in message or "timeout" in message
+
+
+def _has_conversation_busy_event(events: list[dict[str, Any]]) -> bool:
+    return any(
+        isinstance(event, dict)
+        and str(event.get("type") or event.get("event") or "") == "session_busy"
+        for event in events
+    )
 
 
 def _as_dict(value: Any) -> dict[str, Any]:
@@ -312,9 +383,13 @@ class EvaluationApiClient:
         payload: dict[str, Any],
         *,
         token: str | None = None,
+        timeout_seconds: float | None = None,
     ) -> dict[str, Any]:
         request = self._request(path, payload, token=token)
-        with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+        with urllib.request.urlopen(
+            request,
+            timeout=timeout_seconds or self.timeout_seconds,
+        ) as response:
             return json.loads(response.read().decode("utf-8"))
 
     def stream_json_events(
@@ -323,9 +398,13 @@ class EvaluationApiClient:
         payload: dict[str, Any],
         *,
         token: str,
+        timeout_seconds: float | None = None,
     ) -> Iterable[dict[str, Any]]:
         request = self._request(path, payload, token=token)
-        with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+        with urllib.request.urlopen(
+            request,
+            timeout=timeout_seconds or self.timeout_seconds,
+        ) as response:
             for line in response:
                 event = parse_sse_event_line(line)
                 if event is not None:
@@ -350,10 +429,17 @@ class EvaluationApiClient:
         )
 
 
-def _login(client: EvaluationApiClient, username: str, password: str) -> str:
+def _login(
+    client: EvaluationApiClient,
+    username: str,
+    password: str,
+    *,
+    timeout_seconds: float | None = None,
+) -> str:
     payload = client.post_json(
         "/api/v1/users/login",
         {"username": username, "password": password},
+        timeout_seconds=timeout_seconds,
     )
     token = payload.get("access_token")
     if not isinstance(token, str) or not token:
@@ -366,9 +452,16 @@ def _create_conversation(
     token: str,
     scenario: EvaluationScenario,
     title_prefix: str,
+    *,
+    timeout_seconds: float | None = None,
 ) -> dict[str, Any]:
     title = f"{title_prefix}: {scenario.id}"
-    return client.post_json("/api/v1/conversations", {"title": title}, token=token)
+    return client.post_json(
+        "/api/v1/conversations",
+        {"title": title},
+        token=token,
+        timeout_seconds=timeout_seconds,
+    )
 
 
 def scenario_message_sequence(scenario: EvaluationScenario) -> list[str]:
@@ -437,16 +530,20 @@ def runtime_budget_for_scenario(
 def _classify_live_error_status(exc: BaseException, *, events: list[dict[str, Any]]) -> str:
     """Classify live-run failures without hiding real environment blockers."""
 
+    if isinstance(exc, (LiveScenarioTimeoutError, LiveScenarioConversationBusyError)):
+        return "failed"
+    if _has_conversation_busy_event(events):
+        return "failed"
     if isinstance(exc, urllib.error.HTTPError) and exc.code in {401, 403, 502, 503, 504}:
         return "blocked"
     if isinstance(exc, urllib.error.URLError) and not events:
         return "blocked"
+    if events and _is_timeout_exception(exc):
+        return "failed"
 
     message = str(exc).lower()
     blocked_markers = (
         "connection refused",
-        "timed out",
-        "timeout",
         "network is unreachable",
         "no route to host",
         "name or service not known",
@@ -463,6 +560,76 @@ def _classify_live_error_status(exc: BaseException, *, events: list[dict[str, An
     if any(marker in message for marker in blocked_markers):
         return "blocked"
     return "failed"
+
+
+def classify_live_failure_category(
+    *,
+    exc: BaseException | None = None,
+    events: list[dict[str, Any]] | None = None,
+    acceptance_gate: dict[str, Any] | None = None,
+    evidence_closure: dict[str, Any] | None = None,
+) -> str | None:
+    """Return a stable failure bucket for machine summaries and runbooks."""
+
+    event_records = events or []
+    if exc is not None:
+        explicit_category = getattr(exc, "failure_category", None)
+        if isinstance(explicit_category, str) and explicit_category:
+            return explicit_category
+        if _is_timeout_exception(exc):
+            return "timeout"
+    if _has_conversation_busy_event(event_records):
+        return "conversation_busy"
+
+    gate = acceptance_gate or {}
+    dimensions = _as_dict(gate.get("dimensions"))
+    failures = _as_list(gate.get("failures"))
+    failed_dimensions = {
+        str(failure.get("dimension"))
+        for failure in failures
+        if isinstance(failure, dict) and failure.get("dimension")
+    }
+    failed_dimensions.update(
+        key
+        for key, value in dimensions.items()
+        if isinstance(value, dict) and value.get("passed") is False
+    )
+    if "runtime_budget" in failed_dimensions:
+        return "runtime_budget"
+    if "runtime_quality" in failed_dimensions:
+        return "runtime_budget"
+
+    closure = evidence_closure or {}
+    if closure and closure.get("passed") is False:
+        return "evidence_closure"
+
+    if gate and gate.get("passed") is False:
+        return "acceptance_gate"
+    return None
+
+
+def _failure_details_from_category(
+    *,
+    category: str | None,
+    acceptance_gate: dict[str, Any] | None = None,
+    evidence_closure: dict[str, Any] | None = None,
+    error: str | None = None,
+) -> list[str] | None:
+    details: list[str] = []
+    if error:
+        details.append(redact_sensitive_text(error))
+    if category == "runtime_budget":
+        for failure in _as_list(_as_dict(acceptance_gate).get("failures")):
+            if isinstance(failure, dict) and failure.get("dimension") in {
+                "runtime_budget",
+                "runtime_quality",
+            }:
+                details.extend(str(item) for item in _as_list(failure.get("findings")))
+    elif category == "evidence_closure":
+        missing = _as_list(_as_dict(evidence_closure).get("missing"))
+        if missing:
+            details.append("evidence_closure missing: " + ", ".join(str(item) for item in missing))
+    return [redact_sensitive_text(item) for item in details[:5]] or None
 
 
 def build_quality_summary(
@@ -567,6 +734,7 @@ def run_live_scenario(
     """Run one scenario through the live API and save a scored snapshot."""
 
     started_at = time.perf_counter()
+    deadline = _scenario_deadline(config.scenario_timeout_seconds)
     client = EvaluationApiClient(config.base_url, timeout_seconds=config.timeout_seconds)
     config.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -577,18 +745,47 @@ def run_live_scenario(
     conversation: dict[str, Any] = {}
 
     try:
-        token = _login(client, config.username, config.password)
+        token = _login(
+            client,
+            config.username,
+            config.password,
+            timeout_seconds=_request_timeout_seconds(
+                configured_timeout_seconds=config.timeout_seconds,
+                deadline=deadline,
+                scenario_id=scenario.id,
+            ),
+        )
+        _raise_if_scenario_deadline_exceeded(
+            deadline=deadline,
+            scenario_id=scenario.id,
+            timeout_seconds=config.scenario_timeout_seconds,
+        )
         conversation = _create_conversation(
             client,
             token,
             scenario,
             config.conversation_title_prefix,
+            timeout_seconds=_request_timeout_seconds(
+                configured_timeout_seconds=config.timeout_seconds,
+                deadline=deadline,
+                scenario_id=scenario.id,
+            ),
+        )
+        _raise_if_scenario_deadline_exceeded(
+            deadline=deadline,
+            scenario_id=scenario.id,
+            timeout_seconds=config.scenario_timeout_seconds,
         )
         conversation_id = conversation.get("id")
         if not isinstance(conversation_id, str) or not conversation_id:
             raise RuntimeError("Conversation response did not contain id")
 
         for turn_index, user_message in enumerate(scenario_message_sequence(scenario), start=1):
+            _raise_if_scenario_deadline_exceeded(
+                deadline=deadline,
+                scenario_id=scenario.id,
+                timeout_seconds=config.scenario_timeout_seconds,
+            )
             turn_started_at = time.perf_counter()
             turn_assistant_parts: list[str] = []
             turn_event_count_before = len(events)
@@ -600,6 +797,11 @@ def run_live_scenario(
                     f"/api/v1/chat/stream/{conversation_id}",
                     {"content": user_message},
                     token=token,
+                    timeout_seconds=_request_timeout_seconds(
+                        configured_timeout_seconds=config.timeout_seconds,
+                        deadline=deadline,
+                        scenario_id=scenario.id,
+                    ),
                 ):
                     event_with_turn = {
                         **event,
@@ -621,12 +823,30 @@ def run_live_scenario(
                         dict,
                     ):
                         turn_observability = event["observability"]
+                    elif event_type == "session_busy":
+                        turn_error = redact_sensitive_text(
+                            str(
+                                event.get("message")
+                                or "Conversation is busy and the scenario cannot continue"
+                            )
+                        )
+                        raise LiveScenarioConversationBusyError(turn_error)
                     elif event_type == "error":
                         turn_error = redact_sensitive_text(
                             str(event.get("message") or "SSE error event")
                         )
                         break
+                    _raise_if_scenario_deadline_exceeded(
+                        deadline=deadline,
+                        scenario_id=scenario.id,
+                        timeout_seconds=config.scenario_timeout_seconds,
+                    )
             except (urllib.error.URLError, OSError) as exc:
+                if _is_timeout_exception(exc):
+                    raise LiveScenarioTimeoutError(
+                        f"Scenario {scenario.id} exceeded timeout budget "
+                        f"{config.scenario_timeout_seconds}s: {redact_sensitive_text(str(exc))}"
+                    ) from exc
                 turn_error = redact_sensitive_text(str(exc))
 
             turn_events = events[turn_event_count_before:]
@@ -716,16 +936,30 @@ def run_live_scenario(
             report_data=report_data,
             snapshot_path=str(path),
         )
+        failure_category = classify_live_failure_category(
+            events=events,
+            acceptance_gate=acceptance_gate,
+            evidence_closure=evidence_closure,
+        )
+        failure_details = _failure_details_from_category(
+            category=failure_category,
+            acceptance_gate=acceptance_gate,
+            evidence_closure=evidence_closure,
+        )
+        effective_passed = bool(acceptance_gate["passed"]) and bool(evidence_closure["passed"])
+        effective_status = str(acceptance_gate["status"])
+        if not effective_passed and effective_status == "passed":
+            effective_status = "failed"
 
         return LiveScenarioResult(
             scenario_id=scenario.id,
             scenario_name=scenario.name,
-            passed=bool(acceptance_gate["passed"]),
+            passed=effective_passed,
             normalized_score=float(evaluation["normalized_score"]),
             grade=str(evaluation["grade"]),
             snapshot_path=str(path),
             elapsed_seconds=round(elapsed_seconds, 2),
-            status=str(acceptance_gate["status"]),
+            status=effective_status,
             agent_score=float(quality_summary["aggregate"]["normalized_score"]),
             runtime_budget_passed=bool(
                 quality_summary["runtime_quality"]["budget_gate"]["passed"]
@@ -738,8 +972,17 @@ def run_live_scenario(
             tool_counts=quality_summary["tool_quality"]["tool_counts"],
             evidence_closure=evidence_closure,
             acceptance_gate=acceptance_gate,
+            failure_category=failure_category,
+            failure_details=failure_details,
         )
-    except (urllib.error.URLError, OSError, RuntimeError, ValueError) as exc:
+    except (
+        LiveScenarioTimeoutError,
+        LiveScenarioConversationBusyError,
+        urllib.error.URLError,
+        OSError,
+        RuntimeError,
+        ValueError,
+    ) as exc:
         elapsed_seconds = time.perf_counter() - started_at
         snapshot_path: str | None = None
         if events or turns:
@@ -759,12 +1002,18 @@ def run_live_scenario(
             path.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
             snapshot_path = str(path)
         status = _classify_live_error_status(exc, events=events)
+        failure_category = classify_live_failure_category(exc=exc, events=events)
+        failure_details = _failure_details_from_category(
+            category=failure_category,
+            error=str(exc),
+        )
         acceptance_gate = build_error_acceptance_gate_result(
             scenario=scenario,
             error=redact_sensitive_text(str(exc)),
             snapshot_path=snapshot_path,
             status=status,
         )
+        acceptance_gate["failure_category"] = failure_category
         return LiveScenarioResult(
             scenario_id=scenario.id,
             scenario_name=scenario.name,
@@ -780,5 +1029,7 @@ def run_live_scenario(
                 snapshot_path=snapshot_path,
             ),
             acceptance_gate=acceptance_gate,
+            failure_category=failure_category,
+            failure_details=failure_details,
             error=redact_sensitive_text(str(exc)),
         )

@@ -4,19 +4,27 @@ RAG 检索工具
 """
 from pathlib import Path
 from typing import Optional
-from langchain.tools import tool
+from langchain.tools import ToolRuntime, tool
+from app.core.state import TravelState
 from app.rag.agency_retrieval import (
     filter_documents_by_category,
     format_evidence_response,
 )
+from app.rag.contracts import CONTRACT_VERSION
 from app.rag.pipeline import AdvancedRAGPipeline
+from app.rag.readiness import (
+    INTERNAL_VECTORSTORE_CONTRACT,
+    PUBLIC_VECTORSTORE_CONTRACT,
+    RagReadinessError,
+    check_chroma_collection_readiness,
+)
 from app.rag.document_loader import DocumentManager
 from app.rag.text_splitter import AdvancedParentDocumentSplitter
 from app.rag.vectorstore import VectorStoreManager
 from app.tools.execution_guard import execute_guarded_call
 from app.tools.guardrails import validate_rag_query_args
 from app.tools.result_validation import validate_rag_result
-from app.config import settings
+from app.config import PROJECT_ROOT, settings
 from app.utils.logger import app_logger
 
 
@@ -78,6 +86,29 @@ def _has_existing_vectorstore(persist_directory: str) -> bool:
     return path.exists() and any(path.iterdir())
 
 
+def _ensure_vectorstore_ready(
+    *,
+    persist_directory: str,
+    collection_name: str,
+    contract: dict,
+) -> None:
+    check = check_chroma_collection_readiness(
+        configured_path=persist_directory,
+        collection_name=collection_name,
+        label=contract["label"],
+        expected_metadata={
+            "contract_version": CONTRACT_VERSION,
+            "knowledge_base": contract["knowledge_base"],
+            "visibility": contract["visibility"],
+        },
+        required_metadata=contract["required_metadata"],
+        retrieval_probes=contract["retrieval_probes"],
+        project_root=PROJECT_ROOT,
+    )
+    if not check.ready:
+        raise RagReadinessError(check.finding or "RAG vector store is not ready", check.details)
+
+
 def _create_pipeline(
     *,
     documents: list,
@@ -120,6 +151,11 @@ async def _get_rag_pipeline() -> AdvancedRAGPipeline:
 
     if _rag_pipeline is None:
         app_logger.info("🔧 初始化 RAG 管道...")
+        _ensure_vectorstore_ready(
+            persist_directory=settings.rag_vectorstore_path,
+            collection_name=settings.rag_collection_name,
+            contract=PUBLIC_VECTORSTORE_CONTRACT,
+        )
 
         # 1. 加载文档
         doc_manager = DocumentManager()
@@ -148,6 +184,11 @@ async def _get_internal_rag_pipeline() -> AdvancedRAGPipeline:
 
     if _internal_rag_pipeline is None:
         app_logger.info("🔧 初始化旅行社内部知识库 RAG 管道...")
+        _ensure_vectorstore_ready(
+            persist_directory=settings.rag_internal_vectorstore_path,
+            collection_name=settings.rag_internal_collection_name,
+            contract=INTERNAL_VECTORSTORE_CONTRACT,
+        )
 
         doc_manager = DocumentManager()
         documents = doc_manager.load_internal_documents()
@@ -241,8 +282,14 @@ def _format_retrieval_failure(
     expected_category: str | None = None,
 ) -> str:
     category_hint = f"「{expected_category}」类" if expected_category else ""
+    finding_code = getattr(exc, "finding_code", type(exc).__name__)
+    finding = getattr(exc, "finding", str(exc))
+    details = getattr(exc, "details", {})
+    probe = (details.get("retrieval_probe_gap") or {}).get("probe", {}) if isinstance(details, dict) else {}
+    probe_hint = f"，probe={probe.get('name')}" if probe else ""
     message = (
-        f"{label}{category_hint}检索暂时不可用（{type(exc).__name__}）。"
+        f"{label}{category_hint}检索暂时不可用（reason={finding_code}{probe_hint}）。"
+        f"诊断信息：{finding}。"
         "本轮不要把它视为业务失败；请基于已确认信息给出保守建议，"
         "并把价格、库存、开放时间、预约、天气等动态信息标注为待二次核实。"
     )
@@ -262,18 +309,29 @@ async def _guarded_rag_retrieval(
     visibility: str,
     retrieve_call,
     expected_category: str | None = None,
+    runtime: Optional[ToolRuntime[None, TravelState]] = None,
 ) -> str:
     evidence_type = (
         "internal_rag_evidence" if visibility == "internal" else "public_rag_evidence"
     )
 
     async def _call(_: dict) -> str:
-        return await retrieve_call()
+        try:
+            return await retrieve_call()
+        except RagReadinessError as exc:
+            return _format_retrieval_failure(
+                query,
+                label=label,
+                visibility=visibility,
+                exc=exc,
+                expected_category=expected_category,
+            )
 
     guarded = await execute_guarded_call(
         tool_name,
         {"query": query, "expected_category": expected_category},
         _call,
+        runtime=runtime,
         input_validator=validate_rag_query_args,
         result_validator=validate_rag_result,
         evidence_type=evidence_type,
@@ -285,6 +343,9 @@ async def _guarded_rag_retrieval(
     )
     if guarded.output is not None:
         return str(guarded.output)
+
+    if guarded.error_type == "duplicate_tool_call_same_turn" and guarded.message:
+        return guarded.message
 
     return _format_retrieval_failure(
         query,
@@ -352,7 +413,10 @@ async def _retrieve_internal(
 # ============== RAG 检索工具定义 ==============
 
 @tool
-async def search_destination_guide(query: str) -> str:
+async def search_destination_guide(
+    query: str,
+    runtime: ToolRuntime[None, TravelState] = None,
+) -> str:
     """
     从旅游攻略知识库中检索目的地相关信息。
 
@@ -376,11 +440,15 @@ async def search_destination_guide(query: str) -> str:
         label="公开攻略知识库",
         visibility="public",
         retrieve_call=lambda: _retrieve_public(query),
+        runtime=runtime,
     )
 
 
 @tool
-async def search_food_recommendations(query: str) -> str:
+async def search_food_recommendations(
+    query: str,
+    runtime: ToolRuntime[None, TravelState] = None,
+) -> str:
     """
     从美食知识库中检索目的地美食信息。
 
@@ -403,11 +471,15 @@ async def search_food_recommendations(query: str) -> str:
         label="美食知识库",
         visibility="public",
         retrieve_call=lambda: _retrieve_public(query, f"{query} 美食 餐厅 小吃"),
+        runtime=runtime,
     )
 
 
 @tool
-async def search_accommodation_info(query: str) -> str:
+async def search_accommodation_info(
+    query: str,
+    runtime: ToolRuntime[None, TravelState] = None,
+) -> str:
     """
     从住宿知识库中检索目的地住宿信息。
 
@@ -430,11 +502,15 @@ async def search_accommodation_info(query: str) -> str:
         label="住宿知识库",
         visibility="public",
         retrieve_call=lambda: _retrieve_public(query, f"{query} 住宿 酒店 民宿"),
+        runtime=runtime,
     )
 
 
 @tool
-async def search_travel_tips(query: str) -> str:
+async def search_travel_tips(
+    query: str,
+    runtime: ToolRuntime[None, TravelState] = None,
+) -> str:
     """
     从知识库中检索旅行实用信息和注意事项。
 
@@ -457,11 +533,15 @@ async def search_travel_tips(query: str) -> str:
         label="旅行贴士知识库",
         visibility="public",
         retrieve_call=lambda: _retrieve_public(query, f"{query} 注意事项 建议 提示"),
+        runtime=runtime,
     )
 
 
 @tool
-async def search_agency_product_templates(query: str) -> str:
+async def search_agency_product_templates(
+    query: str,
+    runtime: ToolRuntime[None, TravelState] = None,
+) -> str:
     """
     从旅行社内部产品路线模板中检索成熟路线结构、适合人群和产品化表达。
 
@@ -478,11 +558,15 @@ async def search_agency_product_templates(query: str) -> str:
             f"{query} 产品 路线 模板 适合人群 成熟路线",
             expected_category="products",
         ),
+        runtime=runtime,
     )
 
 
 @tool
-async def search_agency_service_sop(query: str) -> str:
+async def search_agency_service_sop(
+    query: str,
+    runtime: ToolRuntime[None, TravelState] = None,
+) -> str:
     """
     从旅行社内部服务 SOP 中检索顾问流程、话术原则和服务优势表达。
 
@@ -499,11 +583,15 @@ async def search_agency_service_sop(query: str) -> str:
             f"{query} 服务 SOP 顾问 流程 交付",
             expected_category="sop",
         ),
+        runtime=runtime,
     )
 
 
 @tool
-async def search_agency_pricing_rules(query: str) -> str:
+async def search_agency_pricing_rules(
+    query: str,
+    runtime: ToolRuntime[None, TravelState] = None,
+) -> str:
     """
     从旅行社内部报价规则中检索预算组成、费用依据和预算置信度标准。
 
@@ -520,11 +608,15 @@ async def search_agency_pricing_rules(query: str) -> str:
             f"{query} 报价 预算 费用 置信度 待核验",
             expected_category="pricing",
         ),
+        runtime=runtime,
     )
 
 
 @tool
-async def search_agency_risk_playbook(query: str) -> str:
+async def search_agency_risk_playbook(
+    query: str,
+    runtime: ToolRuntime[None, TravelState] = None,
+) -> str:
     """
     从旅行社内部风险与避坑手册中检索天气、交通、酒店、景区和体力风险建议。
 
@@ -541,11 +633,15 @@ async def search_agency_risk_playbook(query: str) -> str:
             f"{query} 风险 避坑 天气 交通 酒店 景区 Plan B",
             expected_category="risk",
         ),
+        runtime=runtime,
     )
 
 
 @tool
-async def search_agency_report_standards(query: str) -> str:
+async def search_agency_report_standards(
+    query: str,
+    runtime: ToolRuntime[None, TravelState] = None,
+) -> str:
     """
     从旅行社内部报告标准中检索最终旅游规划报告的章节、结构和禁止内容。
 
@@ -562,6 +658,7 @@ async def search_agency_report_standards(query: str) -> str:
             f"{query} 最终报告 章节 结构 导出 禁止内容",
             expected_category="report",
         ),
+        runtime=runtime,
     )
 
 

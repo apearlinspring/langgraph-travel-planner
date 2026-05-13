@@ -13,6 +13,7 @@ from app.rag.contracts import (
 from app.rag.agency_retrieval import document_to_evidence, format_evidence_response
 from app.rag.pipeline import AdvancedRAGPipeline
 from app.rag.query_optimizer import AdvancedQueryOptimizer
+from app.rag.readiness import RagReadinessError
 from app.rag.text_splitter import AdvancedParentDocumentSplitter
 from app.tools import rag_tools
 
@@ -541,6 +542,29 @@ async def test_public_rag_tool_degrades_to_empty_evidence_on_retrieval_failure(m
     assert '"result_status": "empty"' in result
     assert "检索暂时不可用" in result
     assert "待二次核实" in result
+
+
+@pytest.mark.asyncio
+async def test_public_rag_tool_returns_readiness_diagnostics(monkeypatch):
+    async def _not_ready_pipeline():
+        raise RagReadinessError(
+            "Public RAG vector store collection 'travel_guides' has no runtime retrieval hit for probe 'food_recommendations'.",
+            {
+                "finding_code": "retrieval_no_hit",
+                "retrieval_probe_gap": {"probe": {"name": "food_recommendations"}},
+            },
+        )
+
+    monkeypatch.setattr(rag_tools, "_get_rag_pipeline", _not_ready_pipeline)
+
+    result = await rag_tools.search_food_recommendations.ainvoke(
+        {"query": "西安 美食 推荐"}
+    )
+
+    assert '"result_status": "empty"' in result
+    assert "reason=retrieval_no_hit" in result
+    assert "probe=food_recommendations" in result
+    assert "诊断信息" in result
 
 
 @pytest.mark.asyncio

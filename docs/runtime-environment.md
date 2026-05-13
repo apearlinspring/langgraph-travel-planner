@@ -49,7 +49,8 @@
 
 - 必需依赖缺失、Checkpointer 或 Store 未初始化、生产 Redis 会话锁不可用、审批治理无法持久化时，返回 `not_ready`。
 - `staging` 和 `production` 下，`JWT_SECRET_KEY` 为空、仍是默认开发密钥或明显 placeholder（占位）值时，Auth/JWT 依赖进入 `missing_required`。
-- `staging` 和 `production` 下，公开攻略与内部知识 RAG 向量库必须能只读打开各自的 `chroma.sqlite3` 并找到 `RAG_COLLECTION_NAME` / `RAG_INTERNAL_COLLECTION_NAME` 对应 collection（集合），仅目录存在或非空不算 ready。
+- `staging` 和 `production` 下，公开攻略与内部知识 RAG 向量库必须能只读打开各自的 `chroma.sqlite3` 并找到 `RAG_COLLECTION_NAME` / `RAG_INTERNAL_COLLECTION_NAME` 对应 collection（集合），同时通过 metadata（元数据）契约和最小运行时检索探针；仅目录存在或非空不算 ready。
+- RAG 向量库失败会在 `details.stores.<public|internal>.finding_code` 标明类型：`vectorstore_missing`、`collection_missing`、`metadata_missing`、`metadata_mismatch`、`retrieval_no_hit` 或 `metadata_unreadable`，用于区分路径、collection、metadata 和真实命中缺口。
 - MCP 服务池或开发 Redis 降级时，核心依赖已就绪则返回 `degraded`。
 - 可选外部 API 缺少密钥不会阻塞核心 ready，但会在依赖明细里显示 `not_configured`。
 
@@ -98,7 +99,7 @@ RAG_INTERNAL_COLLECTION_NAME=agency_internal_knowledge
 | Auth/JWT（认证/令牌认证） | `JWT_SECRET_KEY`、`JWT_ALGORITHM` | `JWT_SECRET_KEY` 必须是长随机值；`JWT_ALGORITHM` 默认 `HS256`。 |
 | 地图 / 高德 | `AMAP_API_KEY` | staging/production readiness（就绪检查）硬性要求；路线预览和地理编码依赖它。 |
 | 搜索 / 航班 / 酒店 | `TAVILY_API_KEY`、`VARIFLIGHT_API_KEY`、`AIGOHOTEL_API_KEY` 或兼容酒店变量 | 默认是可选能力；当 selected acceptance scenario（已选择验收场景）声明需要对应外部 API 时，preflight（预检）会升级为 blocked。 |
-| RAG（检索增强生成）向量库 | `RAG_VECTORSTORE_PATH`、`RAG_COLLECTION_NAME`、`RAG_INTERNAL_VECTORSTORE_PATH`、`RAG_INTERNAL_COLLECTION_NAME` | 执行 `.\.venv\Scripts\python -m scripts.init_rag`，并确认公开与内部 Chroma（向量库）metadata（元数据）都可读。 |
+| RAG（检索增强生成）向量库 | `RAG_VECTORSTORE_PATH`、`RAG_COLLECTION_NAME`、`RAG_INTERNAL_VECTORSTORE_PATH`、`RAG_INTERNAL_COLLECTION_NAME` | 执行 `.\.venv\Scripts\python -m scripts.init_rag`，并确认公开与内部 Chroma（向量库）metadata（元数据）都可读，且 `search_destination_guide` / `search_food_recommendations` 与内部知识类别探针可命中。 |
 
 `scripts/check_runtime_readiness.py --target staging --json` 的顶层输出会汇总 `blocked_reasons` 和 `repair_suggestions`，方便 CI（持续集成）或人工 runbook（运行手册）直接展示“卡在哪里”和“下一步命令”。`--target acceptance --check-backend` 还会把 acceptance preflight（验收预检）的 backend（后端服务）和外部能力阻塞原因合并进同一个结构。
 

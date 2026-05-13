@@ -191,6 +191,30 @@ def test_state_summary_prefers_structured_short_term_state():
     assert "2 成人 + 1 儿童" in text
 
 
+def test_state_summary_preserves_free_planning_mode_boundary():
+    state = {
+        "current_step": "order_generation",
+        "planning_mode": "free_planning",
+        "planning_mode_confirmed": True,
+        "user_requirement": {
+            "departure_city": "北京",
+            "destination": "南京",
+            "departure_date": "2026-06-01",
+            "travel_days": 3,
+            "adult_count": 2,
+            "children_count": 0,
+            "budget_max": 5000,
+            "special_needs": "自由行，想要文化加美食，不想太赶。",
+        },
+    }
+
+    text = summarize_state_for_context(state)
+
+    assert "free_planning" in text
+    assert "agency_plan" not in text
+    assert "北京 → 南京" in text
+
+
 def test_context_pack_summarizes_old_messages_and_keeps_recent_window():
     messages = [
         HumanMessage(content="我们从上海去北京，预算12000元。"),

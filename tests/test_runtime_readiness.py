@@ -100,42 +100,54 @@ def _write_minimal_chroma_metadata(
             "INSERT INTO segments (id, collection) VALUES (?, ?)",
             ("segment-id", "collection-id"),
         )
-        connection.execute(
-            "INSERT INTO embeddings (id, segment_id, embedding_id) VALUES (?, ?, ?)",
-            (1, "segment-id", "embedding-1"),
-        )
-        metadata = {
-            "contract_version": CONTRACT_VERSION,
-            "knowledge_base": (
-                "agency_internal_knowledge"
-                if visibility == "internal"
-                else "public_destination_guides"
-            ),
-            "source": "data/documents/internal/pricing/pricing_rules.md"
-            if visibility == "internal"
-            else "data/documents/destinations/xian.md",
-            "source_type": "agency_internal" if visibility == "internal" else "destination_guide",
-            "category": "pricing" if visibility == "internal" else "destinations",
-            "visibility": visibility,
-            "evidence_level": "rule" if visibility == "internal" else "guide",
-            "applicable_modes": "agency_plan|free_planning",
-            "constraints": "必须标记待核验",
-            "last_reviewed": "2026-05-11",
-            "freshness_status": "current",
-            "requires_verification": "false",
-        }
-        if bad_metadata:
-            metadata.pop("contract_version")
-            metadata["visibility"] = "public" if visibility == "internal" else "internal"
-        for key, value in metadata.items():
+        if visibility == "internal":
+            documents = [
+                ("products", "data/documents/internal/products/route_templates.md", "产品路线模板 适合人群 成熟路线"),
+                ("sop", "data/documents/internal/sop/service_sop.md", "顾问服务流程 交付 SOP"),
+                ("pricing", "data/documents/internal/pricing/pricing_rules.md", "报价预算必须标记待核验"),
+                ("risk", "data/documents/internal/risk/risk_playbook.md", "风险避坑 Plan B"),
+                ("report", "data/documents/internal/report/report_standard.md", "最终报告章节和交付标准"),
+            ]
+        else:
+            documents = [
+                ("destinations", "data/documents/destinations/xian.md", "西安兵马俑攻略和回民街美食肉夹馍"),
+            ]
+        for index, (category, source, content) in enumerate(documents, start=1):
             connection.execute(
-                """
-                INSERT INTO embedding_metadata
-                    (id, key, string_value, int_value, float_value, bool_value)
-                VALUES (?, ?, ?, NULL, NULL, NULL)
-                """,
-                (1, key, value),
+                "INSERT INTO embeddings (id, segment_id, embedding_id) VALUES (?, ?, ?)",
+                (index, "segment-id", f"embedding-{index}"),
             )
+            metadata = {
+                "contract_version": CONTRACT_VERSION,
+                "knowledge_base": (
+                    "agency_internal_knowledge"
+                    if visibility == "internal"
+                    else "public_destination_guides"
+                ),
+                "source": source,
+                "source_type": "agency_internal" if visibility == "internal" else "destination_guide",
+                "category": category,
+                "visibility": visibility,
+                "evidence_level": "rule" if visibility == "internal" else "guide",
+                "applicable_modes": "agency_plan|free_planning",
+                "constraints": "必须标记待核验",
+                "last_reviewed": "2026-05-11",
+                "freshness_status": "current",
+                "requires_verification": "false",
+                "chroma:document": content,
+            }
+            if bad_metadata:
+                metadata.pop("contract_version")
+                metadata["visibility"] = "public" if visibility == "internal" else "internal"
+            for key, value in metadata.items():
+                connection.execute(
+                    """
+                    INSERT INTO embedding_metadata
+                        (id, key, string_value, int_value, float_value, bool_value)
+                    VALUES (?, ?, ?, NULL, NULL, NULL)
+                    """,
+                    (index, key, value),
+                )
         connection.commit()
     finally:
         connection.close()
@@ -346,6 +358,45 @@ def test_rag_vectorstore_blocks_missing_collection_and_bad_metadata(tmp_path: Pa
     assert "rag_vector_store" in snapshot["missing_required"]
     assert "collection 'travel_guides' is missing" in findings
     assert "missing metadata" in findings or "invalid metadata" in findings
+    assert (
+        snapshot["dependencies"]["rag_vector_store"]["details"]["stores"]["public"][
+            "finding_code"
+        ]
+        == "collection_missing"
+    )
+
+
+def test_rag_vectorstore_blocks_runtime_probe_without_hits(tmp_path: Path):
+    public_vectorstore = tmp_path / "public-vectorstore"
+    internal_vectorstore = tmp_path / "internal-vectorstore"
+    _write_minimal_chroma_metadata(public_vectorstore)
+    _write_minimal_chroma_metadata(
+        internal_vectorstore,
+        collection_name="agency_internal_knowledge",
+        visibility="internal",
+    )
+    connection = sqlite3.connect(public_vectorstore / "chroma.sqlite3")
+    try:
+        connection.execute(
+            "UPDATE embedding_metadata SET string_value = ? WHERE key = ?",
+            ("西安兵马俑攻略但没有餐饮场景词", "chroma:document"),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    env = _required_runtime_env(public_vectorstore, internal_vectorstore)
+    snapshot = runtime_configuration_snapshot(
+        app_env="production",
+        environ=env,
+        dotenv_path=tmp_path / "missing.env",
+        require_real_values=True,
+    )
+
+    public_details = snapshot["dependencies"]["rag_vector_store"]["details"]["stores"]["public"]
+    assert "rag_vector_store" in snapshot["missing_required"]
+    assert public_details["finding_code"] == "retrieval_no_hit"
+    assert public_details["retrieval_probe_gap"]["probe"]["name"] == "food_recommendations"
 
 
 def test_acceptance_preflight_blocks_missing_real_external_credentials(tmp_path: Path):

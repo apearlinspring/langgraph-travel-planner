@@ -1,27 +1,56 @@
 """Planning-mode inference shared by agency rules and report generation."""
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from app.agency.models import PlanningMode
 
 
 AGENCY_MODE_KEYWORDS = (
-    "省心",
     "旅行社",
+    "旅行顾问",
+    "顾问方案",
+    "旅行社方案",
+    "旅行社顾问方案",
+    "省心方案",
+    "省心安排",
+    "省心套餐",
     "成熟路线",
     "定制游",
+    "小包团",
+    "私家团",
     "跟团",
     "成团",
-    "团建",
-    "研学",
-    "亲子",
-    "银发",
-    "老人",
-    "长辈",
+    "一站式",
+    "托管",
+    "包办",
+    "管家式",
     "不要我操心",
-    "少操心",
-    "你帮我安排",
+    "不用我操心",
+    "不想自己操心",
+    "不想做攻略",
+    "懒得做攻略",
+    "旅行社产品",
+    "你们的产品",
+    "产品路线",
+)
+
+AGENCY_QUOTE_SERVICE_KEYWORDS = (
+    "报价",
+    "报价单",
+    "报价规则",
+    "合同",
+    "合同规则",
+    "服务标准",
+    "服务流程",
+    "费用包含",
+    "费用不含",
+    "单房差",
+    "儿童价",
+    "成人价",
+    "SOP",
+    "sop",
 )
 
 AGENCY_FALLBACK_CONTEXT_KEYWORDS = (
@@ -39,18 +68,91 @@ AGENCY_FALLBACK_CONTEXT_KEYWORDS = (
 FREE_MODE_KEYWORDS = (
     "自由行",
     "自由规划",
+    "自助游",
+    "DIY",
+    "diy",
     "自己玩",
     "自己出去玩",
     "不跟团",
+    "不要跟团",
+    "不成团",
     "自己订",
+    "自己安排",
     "只要攻略",
+    "只要建议",
+    "不要旅行社",
+    "不需要旅行社",
+    "别推产品",
+    "不要推销",
 )
+
+
+def _contains_any(text: str, keywords: tuple[str, ...]) -> bool:
+    return any(keyword in text for keyword in keywords)
+
+
+def _agency_rejected(text: str) -> bool:
+    return bool(
+        re.search(
+            r"(不需要|无需|拒绝|别|(?<!要)不要|不想).{0,10}"
+            r"(旅行社|顾问方案|产品|推销|销售|省心方案|省心套餐)",
+            text,
+        )
+    )
+
+
+def _free_rejected(text: str) -> bool:
+    return bool(
+        re.search(
+            r"(不需要|无需|拒绝|(?<!要)不要|不想).{0,10}"
+            r"(自由行|自由规划|自助游|自己玩|自己订|diy|DIY)",
+            text,
+        )
+    )
+
+
+def has_explicit_agency_plan_signal(text: str) -> bool:
+    """Return true only for explicit agency-plan or productized service signals."""
+
+    normalized = (text or "").strip()
+    if not normalized or _agency_rejected(normalized):
+        return False
+    if _contains_any(normalized, AGENCY_MODE_KEYWORDS):
+        return True
+    return bool(
+        re.search(r"省心.{0,4}(方案|安排|套餐|托管|包办)", normalized)
+        or re.search(r"(按|用).{0,6}(旅行社|顾问).{0,6}(方案|标准|流程)", normalized)
+    )
+
+
+def has_explicit_agency_signal(text: str) -> bool:
+    """Return true for agency-plan, quote, contract, or service-standard signals."""
+
+    normalized = (text or "").strip()
+    if not normalized or _agency_rejected(normalized):
+        return False
+    return has_explicit_agency_plan_signal(normalized) or _contains_any(
+        normalized,
+        AGENCY_QUOTE_SERVICE_KEYWORDS,
+    )
+
+
+def has_explicit_free_signal(text: str) -> bool:
+    """Return true when the user explicitly asks for free planning or rejects agency service."""
+
+    normalized = (text or "").strip()
+    if not normalized:
+        return False
+    return _agency_rejected(normalized) or (
+        _contains_any(normalized, FREE_MODE_KEYWORDS) and not _free_rejected(normalized)
+    )
 
 
 def _has_agency_fallback_signal(text: str) -> bool:
     return (
         any(keyword in text for keyword in ("兜底方案", "兜底安排"))
         and any(keyword in text for keyword in AGENCY_FALLBACK_CONTEXT_KEYWORDS)
+        and has_explicit_agency_plan_signal(text)
     )
 
 
@@ -97,10 +199,13 @@ def infer_planning_mode(
         return explicit_mode
 
     text = requirement_text(requirement, state)
-    if any(keyword in text for keyword in FREE_MODE_KEYWORDS):
+    free_signal = has_explicit_free_signal(text)
+    agency_plan_signal = has_explicit_agency_plan_signal(text)
+    agency_quote_service_signal = _contains_any(text, AGENCY_QUOTE_SERVICE_KEYWORDS)
+    if free_signal and not agency_plan_signal:
         return "free_planning"
     if _has_agency_fallback_signal(text):
         return "agency_plan"
-    if any(keyword in text for keyword in AGENCY_MODE_KEYWORDS):
+    if agency_plan_signal or agency_quote_service_signal:
         return "agency_plan"
     return "free_planning"

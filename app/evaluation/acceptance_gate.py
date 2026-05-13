@@ -990,6 +990,20 @@ def render_acceptance_markdown(summary: dict[str, Any]) -> str:
         "",
         "## 门禁阈值",
     ]
+    run_context = _as_dict(summary.get("run_context"))
+    if run_context:
+        partial = "是" if run_context.get("partial") else "否"
+        lines.extend(
+            [
+                "",
+                "## 运行上下文",
+                f"- partial summary（部分摘要）: {partial}",
+                f"- 部分原因: {run_context.get('partial_reason') or '-'}",
+                f"- 已完成场景: {', '.join(str(item) for item in _as_list(run_context.get('completed_scenario_ids'))) or '-'}",
+                f"- 待运行场景: {', '.join(str(item) for item in _as_list(run_context.get('pending_scenario_ids'))) or '-'}",
+                f"- 失败分类: {_as_dict(run_context.get('failure_classification_counts'))}",
+            ]
+        )
     thresholds = _as_dict(summary.get("thresholds"))
     lines.extend(
         [

@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Optional
 
@@ -39,6 +41,36 @@ ToolResultValidator = Callable[[Any], ToolResultValidation]
 GuardedAsyncCall = Callable[[dict[str, Any]], Awaitable[Any]]
 
 
+SINGLE_CALL_PER_TURN_TOOLS = frozenset(
+    {
+        "query_destination_info",
+        "query_hotel_options",
+        "query_transport_options",
+    }
+)
+
+ARG_FINGERPRINT_PER_TURN_TOOLS = frozenset(
+    {
+        "query_driving_route",
+        "query_flight_options",
+        "query_train_options",
+        "search_accommodation_info",
+        "search_agency_pricing_rules",
+        "search_agency_product_templates",
+        "search_agency_report_standards",
+        "search_agency_risk_playbook",
+        "search_agency_service_sop",
+        "search_destination_guide",
+        "search_food_recommendations",
+        "search_travel_tips",
+    }
+)
+
+_LOOP_GUARD_MEMORY_TTL_SECONDS = 30 * 60
+_LOOP_GUARD_MAX_TURNS = 256
+_LOOP_GUARD_MEMORY: dict[str, dict[str, float]] = {}
+
+
 @dataclass
 class ToolExecutionAttempt:
     name: str
@@ -52,6 +84,7 @@ class ToolExecutionAttempt:
     approval_update: dict[str, Any] = field(default_factory=dict)
     blocked_event: ToolAuditEvent | None = None
     blocked_message: str = ""
+    loop_guard_key: str | None = None
 
     @property
     def ok(self) -> bool:
@@ -60,6 +93,130 @@ class ToolExecutionAttempt:
 
 def _runtime_state(runtime: Optional[ToolRuntime]) -> dict[str, Any]:
     return dict(runtime.state) if runtime and runtime.state else {}
+
+
+def _stable_payload(value: Any) -> str:
+    try:
+        return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+    except TypeError:
+        return str(value)
+
+
+def _tool_loop_guard_key(name: str, args: dict[str, Any]) -> str | None:
+    if name in SINGLE_CALL_PER_TURN_TOOLS:
+        return f"{name}:single"
+    if name in ARG_FINGERPRINT_PER_TURN_TOOLS:
+        return f"{name}:{_stable_payload(args)}"
+    return None
+
+
+def _current_turn_id(state: dict[str, Any]) -> str:
+    turn_id = state.get("turn_id")
+    return str(turn_id).strip() if turn_id else ""
+
+
+def _state_loop_guard_keys(state: dict[str, Any], turn_id: str) -> set[str]:
+    guard = state.get("tool_loop_guard")
+    if not isinstance(guard, dict) or str(guard.get("turn_id") or "") != turn_id:
+        return set()
+    calls = guard.get("calls") or []
+    return {
+        str(item.get("key"))
+        for item in calls
+        if isinstance(item, dict) and item.get("key")
+    }
+
+
+def _prune_loop_guard_memory(now: float) -> None:
+    stale_turns = [
+        turn_id
+        for turn_id, keys in _LOOP_GUARD_MEMORY.items()
+        if not keys or max(keys.values()) + _LOOP_GUARD_MEMORY_TTL_SECONDS < now
+    ]
+    for turn_id in stale_turns:
+        _LOOP_GUARD_MEMORY.pop(turn_id, None)
+    if len(_LOOP_GUARD_MEMORY) <= _LOOP_GUARD_MAX_TURNS:
+        return
+    oldest_turns = sorted(
+        _LOOP_GUARD_MEMORY,
+        key=lambda turn_id: max(_LOOP_GUARD_MEMORY[turn_id].values() or [0.0]),
+    )
+    for turn_id in oldest_turns[: len(_LOOP_GUARD_MEMORY) - _LOOP_GUARD_MAX_TURNS]:
+        _LOOP_GUARD_MEMORY.pop(turn_id, None)
+
+
+def _memory_loop_guard_seen(turn_id: str, key: str) -> bool:
+    now = time.time()
+    _prune_loop_guard_memory(now)
+    keys = _LOOP_GUARD_MEMORY.setdefault(turn_id, {})
+    if key in keys:
+        keys[key] = now
+        return True
+    keys[key] = now
+    return False
+
+
+def _duplicate_tool_loop_message(name: str) -> str:
+    if name == "query_hotel_options":
+        return (
+            "本轮已经执行过酒店真实查询，为避免循环和长时间占用会话锁，"
+            "不会再次查询。请基于已有酒店结果总结；如果结果为空，请说明可在下一轮放宽预算、区域或偏好后重试。"
+        )
+    if name == "query_transport_options":
+        return (
+            "本轮已经执行过交通真实查询，为避免重复调用和长回合超时，"
+            "不会再次查询。请基于已有交通结果比较推荐；需要刷新时请在下一轮重新发起。"
+        )
+    if name == "query_destination_info":
+        return (
+            "本轮已经执行过目的地信息查询，不会再次调用等价查询；"
+            "请基于已有攻略、天气或搜索结果继续总结。"
+        )
+    if name.startswith("search_"):
+        return (
+            "本轮已经执行过等价 RAG 检索，不会重复读取同一批知识；"
+            "请基于已有证据继续回答，并把动态价格、库存、开放时间标注为待二次核实。"
+        )
+    return "本轮已经执行过等价工具调用，已跳过重复执行以避免循环。"
+
+
+def _mark_event_loop_guard(
+    event: ToolAuditEvent,
+    *,
+    attempt: ToolExecutionAttempt,
+) -> ToolAuditEvent:
+    turn_id = _current_turn_id(attempt.state)
+    if turn_id:
+        event["turn_id"] = turn_id
+    if attempt.loop_guard_key:
+        event["loop_guard_key"] = attempt.loop_guard_key
+    return event
+
+
+def _updated_loop_guard_state(
+    state: dict[str, Any],
+    event: ToolAuditEvent,
+) -> dict[str, Any]:
+    turn_id = str(event.get("turn_id") or "")
+    key = str(event.get("loop_guard_key") or "")
+    if not turn_id or not key:
+        return state.get("tool_loop_guard") or {}
+
+    existing = state.get("tool_loop_guard")
+    calls: list[dict[str, Any]] = []
+    if isinstance(existing, dict) and str(existing.get("turn_id") or "") == turn_id:
+        calls = [item for item in existing.get("calls") or [] if isinstance(item, dict)]
+
+    if not any(str(item.get("key") or "") == key for item in calls):
+        calls.append(
+            {
+                "key": key,
+                "tool": event.get("name"),
+                "status": event.get("status"),
+                "recorded_at": event.get("started_at"),
+            }
+        )
+    return {"turn_id": turn_id, "calls": calls[-40:]}
 
 
 def _policy_evidence_type(policy: ToolExecutionPolicy) -> ToolEvidenceType:
@@ -146,6 +303,7 @@ def _blocked_attempt(
         error_type=error_type,
         evidence_type=attempt.evidence_type,
     )
+    _mark_event_loop_guard(attempt.blocked_event, attempt=attempt)
     return attempt
 
 
@@ -209,6 +367,23 @@ def begin_tool_execution(
         attempt.args = validation.normalized_args or normalized_args
         attempt.input_summary = summarize_tool_input(attempt.args)
 
+    loop_guard_key = _tool_loop_guard_key(name, attempt.args)
+    turn_id = _current_turn_id(attempt.state)
+    if loop_guard_key and turn_id:
+        attempt.loop_guard_key = loop_guard_key
+        already_seen = (
+            loop_guard_key in _state_loop_guard_keys(attempt.state, turn_id)
+            or _memory_loop_guard_seen(turn_id, loop_guard_key)
+        )
+        if already_seen:
+            message = _duplicate_tool_loop_message(name)
+            return _blocked_attempt(
+                attempt,
+                message=message,
+                error_type="duplicate_tool_call_same_turn",
+                output_summary={"message": message, "loop_guard_key": loop_guard_key},
+            )
+
     return attempt
 
 
@@ -220,7 +395,7 @@ def build_guard_event(
     error_type: str | None = None,
     retry_count: int = 0,
 ) -> ToolAuditEvent:
-    return build_tool_audit_event(
+    event = build_tool_audit_event(
         attempt.context,
         status=status,
         input_summary=attempt.input_summary,
@@ -229,6 +404,7 @@ def build_guard_event(
         retry_count=retry_count,
         evidence_type=attempt.evidence_type,
     )
+    return _mark_event_loop_guard(event, attempt=attempt)
 
 
 def finalize_tool_execution(
@@ -274,6 +450,8 @@ def audited_command(
 ) -> Command:
     state = _runtime_state(runtime)
     merged_update = {**(approval_update or {}), **update}
+    if event.get("loop_guard_key") and event.get("turn_id"):
+        merged_update["tool_loop_guard"] = _updated_loop_guard_state(state, event)
     return Command(update=append_tool_audit_event(state, merged_update, event))
 
 

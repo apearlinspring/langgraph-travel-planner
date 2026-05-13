@@ -141,7 +141,10 @@ async def query_destination_info(
         evidence_type="destination_router_evidence",
     )
     if not guard.ok and guard.blocked_event is not None:
-        message = f"目的地信息查询参数不完整：{guard.blocked_message}。请先补齐目的地后再查。"
+        if guard.blocked_event.get("error_type") == "duplicate_tool_call_same_turn":
+            message = guard.blocked_message
+        else:
+            message = f"目的地信息查询参数不完整：{guard.blocked_message}。请先补齐目的地后再查。"
         if runtime is None:
             return message
         return audited_command(

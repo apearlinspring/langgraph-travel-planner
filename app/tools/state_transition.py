@@ -12,6 +12,11 @@ from langchain_core.messages import ToolMessage
 from langgraph.types import Command
 
 from app.agency import product_rules as agency_product_rules
+from app.agency.planning_mode import (
+    has_explicit_agency_plan_signal,
+    has_explicit_agency_signal,
+    has_explicit_free_signal,
+)
 from app.agency.pricing_rules import (
     budget_confidence_payload,
     build_adjustment_options,
@@ -539,6 +544,55 @@ def _runtime_state(runtime: Optional[ToolRuntime]) -> TravelState:
     if runtime and runtime.state:
         return runtime.state
     return TravelState(messages=[])
+
+
+def _step_at_or_after(current_step: str | None, target_step: str | None) -> bool:
+    if not current_step or not target_step:
+        return current_step == target_step
+    try:
+        return WORKFLOW_STEPS.index(current_step) >= WORKFLOW_STEPS.index(target_step)
+    except ValueError:
+        return current_step == target_step
+
+
+def _duplicate_state_update(
+    state: TravelState,
+    state_update: dict[str, Any],
+) -> bool:
+    fields_to_compare = {
+        key: value
+        for key, value in state_update.items()
+        if key not in {"messages", "current_step"}
+    }
+    if not fields_to_compare:
+        return False
+    if any(state.get(key) != value for key, value in fields_to_compare.items()):
+        return False
+    desired_step = state_update.get("current_step")
+    if desired_step is None:
+        return True
+    return _step_at_or_after(state.get("current_step"), desired_step)
+
+
+def _duplicate_state_command(
+    tool_name: str,
+    state_update: dict[str, Any],
+    runtime: Optional[ToolRuntime],
+) -> Command | None:
+    state = _runtime_state(runtime)
+    if not _duplicate_state_update(state, state_update):
+        return None
+    messages = {
+        "record_requirement_tool": "本轮需求已经记录，规划阶段已推进；不会重复写入同一份需求。",
+        "select_destination_tool": "目的地已经确认，规划阶段已推进；不会重复写入同一目的地或回退阶段。",
+        "select_transport_tool": "交通方案已经确认，规划阶段已推进；不会重复写入同一交通选择。",
+        "select_accommodation_tool": "住宿选择已经确认，规划阶段已推进；不会重复写入同一住宿选择。",
+        "select_food_tool": "餐饮偏好已经确认，规划阶段已推进；不会重复写入同一餐饮选择。",
+    }
+    return _command_with_message(
+        messages.get(tool_name, "本轮已经写入等价状态，已跳过重复状态迁移。"),
+        runtime,
+    )
 
 
 def _planning_mode_state_update(
@@ -1870,18 +1924,25 @@ def record_requirement_tool(
         [str(mode_seed["special_needs"]), " ".join(str(item) for item in travel_styles)]
     )
     inferred_text_mode = None
-    if any(
-        keyword in mode_seed_text
-        for keyword in ("省心", "旅行社", "成熟路线", "定制游", "跟团", "小包团", "私家团", "团建", "亲子", "银发", "兜底", "自由行", "自由规划", "自助游", "自己玩", "不跟团", "自己订")
-    ):
+    explicit_agency_signal = has_explicit_agency_signal(mode_seed_text)
+    explicit_agency_plan_signal = has_explicit_agency_plan_signal(mode_seed_text)
+    explicit_free_signal = has_explicit_free_signal(mode_seed_text)
+    if explicit_agency_signal or explicit_free_signal:
         inferred_text_mode = _infer_planning_mode(mode_seed, runtime.state if runtime else None)
     inferred_state_agency_mode = _agency_signal_mode(
         mode_seed,
         runtime.state if runtime else None,
     )
     tool_planning_mode = _normalize_planning_mode(planning_mode)
+    if tool_planning_mode == "agency_plan" and explicit_free_signal and not explicit_agency_plan_signal:
+        tool_planning_mode = "free_planning"
+        planning_mode_reason = (
+            planning_mode_reason
+            or "已按用户明确自由行/自助规划诉求修正为自由规划"
+        )
     if tool_planning_mode == "free_planning" and (
-        inferred_text_mode == "agency_plan" or inferred_state_agency_mode == "agency_plan"
+        inferred_text_mode == "agency_plan"
+        or (inferred_state_agency_mode == "agency_plan" and not explicit_free_signal)
     ):
         tool_planning_mode = None
         planning_mode_reason = (
@@ -1937,14 +1998,25 @@ def record_requirement_tool(
     if special_needs:
         summary_lines.append(f"- 特殊需求：{special_needs}")
 
+    state_update = {
+        "user_requirement": requirement,
+        "planning_mode": normalized_planning_mode,
+        "planning_mode_reason": normalized_reason,
+        "planning_mode_confirmed": planning_mode_confirmed,
+        "current_step": "destination_recommendation",
+    }
+    duplicate_command = _duplicate_state_command(
+        "record_requirement_tool",
+        state_update,
+        runtime,
+    )
+    if duplicate_command is not None:
+        return duplicate_command
+
     return _command_with_message(
         "\n".join(summary_lines),
         runtime,
-        user_requirement=requirement,
-        planning_mode=normalized_planning_mode,
-        planning_mode_reason=normalized_reason,
-        planning_mode_confirmed=planning_mode_confirmed,
-        current_step="destination_recommendation",
+        **state_update,
     )
 
 
@@ -1984,6 +2056,14 @@ def select_destination_tool(
             "estimated_cost": normalized_estimated_cost,
         }
         state_update["destination_options"] = [destination_info]
+
+    duplicate_command = _duplicate_state_command(
+        "select_destination_tool",
+        state_update,
+        runtime,
+    )
+    if duplicate_command is not None:
+        return duplicate_command
 
     return _command_with_message(
         f"目的地已确认：{destination}",
@@ -2036,6 +2116,14 @@ def select_transport_tool(
             selected_option["source"] = source
         state_update["selected_transport_option"] = selected_option
         response += f"\n已记录具体方案：{_format_transport_option(selected_option)}"
+
+    duplicate_command = _duplicate_state_command(
+        "select_transport_tool",
+        state_update,
+        runtime,
+    )
+    if duplicate_command is not None:
+        return duplicate_command
 
     return _command_with_message(response, runtime, **state_update)
 
@@ -2111,6 +2199,14 @@ def select_accommodation_tool(
             response += f"（酒店ID：{selected_option['hotel_id']}）"
         state_update["selected_accommodation_option"] = selected_option
 
+    duplicate_command = _duplicate_state_command(
+        "select_accommodation_tool",
+        state_update,
+        runtime,
+    )
+    if duplicate_command is not None:
+        return duplicate_command
+
     return _command_with_message(
         response,
         runtime,
@@ -2145,6 +2241,14 @@ def select_food_tool(
         state_update["selected_food_pois"] = [
             poi for poi in (_normalize_food_poi(item) for item in food_pois) if poi.get("name")
         ]
+
+    duplicate_command = _duplicate_state_command(
+        "select_food_tool",
+        state_update,
+        runtime,
+    )
+    if duplicate_command is not None:
+        return duplicate_command
 
     return _command_with_message(
         f"餐饮偏好已确认：{', '.join(selected_labels)}",

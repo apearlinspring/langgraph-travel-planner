@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.reports.contracts import (
+    REPORT_PLANNING_MODES,
     REPORT_VERSION,
     REQUIRED_REPORT_SECTION_IDS,
     REQUIRED_REPORT_TOP_LEVEL_KEYS,
@@ -101,6 +102,12 @@ def validate_report_data(report_data: dict[str, Any]) -> ReportValidationResult:
             if day_summary != route_summary:
                 day_number = day.get("day_number") or route.get("day_number") or "?"
                 route_mismatches.append(f"Day {day_number} 行程路线摘要与地图摘要不一致。")
+
+    agency_context = _as_dict(report_data.get("agency_context"))
+    if "agency_context" not in missing_fields and agency_context.get("mode") not in REPORT_PLANNING_MODES:
+        route_mismatches.append(
+            "agency_context.mode 必须是 free_planning 或 agency_plan。"
+        )
 
     ok = not (missing_fields or missing_sections or route_mismatches or version_error)
     return ReportValidationResult(
