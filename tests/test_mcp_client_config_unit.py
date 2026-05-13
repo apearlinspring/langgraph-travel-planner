@@ -98,3 +98,50 @@ def test_uv_defaults_to_public_pypi_when_no_index_is_configured(monkeypatch):
     env = MCPClientManager.SERVER_CONFIGS["aigohotel-mcp"]["env"]
     assert env["UV_DEFAULT_INDEX"] == "https://pypi.org/simple"
     assert env["UV_INSECURE_HOST"] == "pypi.org"
+
+
+def test_service_health_table_marks_optional_hotel_as_skipped_without_credentials(monkeypatch):
+    monkeypatch.setenv("AMAP_API_KEY", "real-ish-amap")
+    monkeypatch.setenv("TAVILY_API_KEY", "real-ish-tavily")
+    monkeypatch.setenv("VARIFLIGHT_API_KEY", "real-ish-variflight")
+    monkeypatch.delenv("AIGOHOTEL_API_KEY", raising=False)
+    monkeypatch.delenv("AIGOHOTEL_MCP_API", raising=False)
+    monkeypatch.delenv("AIGOHOTEL_SECRET_KEY", raising=False)
+
+    MCPClientManager.refresh_server_configs()
+    service_health = MCPClientManager.build_service_health_table(
+        configured_servers=MCPClientManager.configured_server_names_for_env(),
+        require_probe=False,
+    )
+
+    assert set(service_health) == set(MCPClientManager.SERVICE_DEFINITIONS)
+    assert service_health["weather"]["status"] == "healthy"
+    assert service_health["search"]["status"] == "healthy"
+    assert service_health["12306-mcp"]["status"] == "healthy"
+    assert service_health["aigohotel-mcp"]["status"] == "skipped"
+    assert service_health["aigohotel-mcp"]["core_requirement"] == "optional"
+    assert all(
+        entry["status"] in MCPClientManager.SERVICE_HEALTH_STATUSES
+        for entry in service_health.values()
+    )
+
+
+def test_service_health_table_blocks_required_hotel_when_acceptance_declares_it(monkeypatch):
+    env = {
+        "AMAP_API_KEY": "real-ish-amap",
+        "TAVILY_API_KEY": "real-ish-tavily",
+        "VARIFLIGHT_API_KEY": "real-ish-variflight",
+    }
+
+    service_health = MCPClientManager.build_service_health_table(
+        required_servers=["aigohotel-mcp"],
+        configured_servers=MCPClientManager.configured_server_names_for_env(env),
+        env=env,
+        require_probe=False,
+    )
+
+    hotel = service_health["aigohotel-mcp"]
+    assert hotel["status"] == "blocked"
+    assert hotel["requirement"] == "required"
+    assert hotel["configured"] is False
+    assert "required by the selected acceptance scenarios" in hotel["reason"]

@@ -105,6 +105,7 @@ def _preflight_blocking_reasons(preflight: dict[str, Any]) -> list[dict[str, Any
                 "env_vars": check.get("env_vars") or [],
                 "findings": check.get("findings") or [],
                 "suggestion": check.get("suggestion") or "",
+                "details": check.get("details") or {},
             }
         )
     return reasons

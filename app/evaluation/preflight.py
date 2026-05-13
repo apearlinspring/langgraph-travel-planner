@@ -19,6 +19,7 @@ from app.config import (
 )
 from app.evaluation.scenarios import EvaluationScenario
 from app.evaluation.llm_judge import LLM_JUDGE_ENV_VARS
+from app.mcp_core.client import MCPClientManager
 
 
 PREFLIGHT_VERSION = "acceptance_preflight.v1"
@@ -32,16 +33,6 @@ EXTERNAL_API_ENV_VARS: dict[str, tuple[str, ...]] = {
     "variflight": ("VARIFLIGHT_API_KEY",),
     "aigohotel": ("AIGOHOTEL_API_KEY", "AIGOHOTEL_MCP_API", "AIGOHOTEL_SECRET_KEY"),
 }
-MCP_SERVER_BACKING_APIS: dict[str, str | None] = {
-    "weather": "amap",
-    "search": "tavily",
-    "amap": "amap",
-    "12306-mcp": None,
-    "VariFlight-Aviation": "variflight",
-    "aigohotel-mcp": "aigohotel",
-}
-
-
 @dataclass(frozen=True)
 class PreflightCheck:
     """One preflight check with redacted environment details."""
@@ -53,6 +44,7 @@ class PreflightCheck:
     findings: list[str] = field(default_factory=list)
     env_vars: list[str] = field(default_factory=list)
     suggestion: str = ""
+    details: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -66,6 +58,7 @@ class PreflightResult:
     status: str
     checks: list[PreflightCheck]
     required_capabilities: dict[str, Any]
+    mcp_services: dict[str, Any]
     missing_required: list[str]
     degraded_optional: list[str]
     skipped_metrics: list[str]
@@ -87,6 +80,7 @@ class PreflightResult:
             "blocked": self.blocked,
             "checks": [check.to_dict() for check in self.checks],
             "required_capabilities": self.required_capabilities,
+            "mcp_services": self.mcp_services,
             "missing_required": self.missing_required,
             "degraded_optional": self.degraded_optional,
             "skipped_metrics": self.skipped_metrics,
@@ -112,6 +106,78 @@ def _any_real_env(env: Mapping[str, str], names: tuple[str, ...]) -> bool:
 
 def _as_dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
+
+
+def _selected_mcp_entries(
+    service_table: Mapping[str, Any],
+    selected_servers: list[str],
+) -> dict[str, dict[str, Any]]:
+    return {
+        server: _as_dict(service_table.get(server))
+        for server in selected_servers
+    }
+
+
+def _selected_mcp_blockers(
+    service_table: Mapping[str, Any],
+    selected_servers: list[str],
+) -> list[str]:
+    blockers: list[str] = []
+    for server in selected_servers:
+        entry = _as_dict(service_table.get(server))
+        status = str(entry.get("status") or "missing")
+        if status == "healthy":
+            continue
+        reason = str(entry.get("reason") or entry.get("error") or "").strip()
+        detail = f"{server}={status}"
+        if reason:
+            detail += f" ({reason})"
+        blockers.append(detail)
+    return blockers
+
+
+def _build_mcp_preflight_service_table(
+    *,
+    env: Mapping[str, str],
+    required_servers: list[str],
+) -> dict[str, dict[str, Any]]:
+    return MCPClientManager.build_service_health_table(
+        required_servers=required_servers,
+        configured_servers=MCPClientManager.configured_server_names_for_env(env),
+        env=env,
+        require_probe=False,
+    )
+
+
+def _mcp_service_table_from_ready_payload(
+    payload: Mapping[str, Any],
+    *,
+    required_mcp_servers: list[str],
+) -> dict[str, dict[str, Any]]:
+    services = _as_dict(payload.get("services"))
+    mcp = _as_dict(services.get("mcp"))
+    service_health = mcp.get("service_health")
+    if isinstance(service_health, dict):
+        return {
+            str(server): _as_dict(entry)
+            for server, entry in service_health.items()
+        }
+
+    legacy_servers = _as_dict(mcp.get("servers"))
+    table: dict[str, dict[str, Any]] = {}
+    for server in sorted(set(required_mcp_servers) | set(str(item) for item in legacy_servers)):
+        raw = _as_dict(legacy_servers.get(server))
+        connection_status = str(raw.get("status") or "missing")
+        status = "healthy" if connection_status == "healthy" else "degraded"
+        table[server] = {
+            "status": status,
+            "required": server in required_mcp_servers,
+            "connection_status": connection_status,
+            "tool_count": int(raw.get("tool_count") or 0),
+            "error": raw.get("error"),
+            "reason": raw.get("error") or f"MCP service connection is {connection_status}.",
+        }
+    return table
 
 
 def _scenario_requirements(scenario: EvaluationScenario) -> dict[str, Any]:
@@ -231,6 +297,39 @@ def _check_backend_ready(
             suggestion="Start the backend and confirm GET /health/ready before running live acceptance.",
         )
 
+    selected_mcp_servers = sorted(set(required_mcp_servers or []))
+    mcp_service_table = _mcp_service_table_from_ready_payload(
+        payload,
+        required_mcp_servers=selected_mcp_servers,
+    )
+    selected_mcp_blockers = _selected_mcp_blockers(
+        mcp_service_table,
+        selected_mcp_servers,
+    )
+    if (
+        selected_mcp_blockers
+        and 200 <= http_status < 300
+        and str(payload.get("status") or "") in {"ready", "degraded"}
+    ):
+        return PreflightCheck(
+            key="backend_ready",
+            label="Backend ready health endpoint",
+            status="blocked" if required else "degraded",
+            required=required,
+            findings=[
+                "Selected MCP services are not healthy: "
+                + ", ".join(selected_mcp_blockers)
+            ],
+            suggestion="Restore selected MCP services before claiming live acceptance passed.",
+            details={
+                "required_mcp_servers": selected_mcp_servers,
+                "mcp_services": _selected_mcp_entries(
+                    mcp_service_table,
+                    selected_mcp_servers,
+                ),
+            },
+        )
+
     ready_status = str(payload.get("status") or "")
     if 200 <= http_status < 300 and ready_status == "ready":
         return PreflightCheck(
@@ -238,6 +337,13 @@ def _check_backend_ready(
             label="Backend ready health endpoint",
             status="passed",
             required=required,
+            details={
+                "required_mcp_servers": selected_mcp_servers,
+                "mcp_services": _selected_mcp_entries(
+                    mcp_service_table,
+                    selected_mcp_servers,
+                ),
+            },
         )
     if 200 <= http_status < 300 and ready_status == "degraded":
         degraded_optional = [
@@ -245,41 +351,23 @@ def _check_backend_ready(
             for item in payload.get("degraded_optional", [])
             if str(item)
         ]
-        selected_mcp_servers = sorted(set(required_mcp_servers or []))
         if degraded_optional == ["mcp"] and selected_mcp_servers:
-            servers = (
-                payload.get("services", {})
-                .get("mcp", {})
-                .get("servers", {})
-                if isinstance(payload.get("services"), dict)
-                else {}
-            )
-            unavailable_selected = [
-                server
-                for server in selected_mcp_servers
-                if str(_as_dict(servers.get(server)).get("status") or "") not in {"healthy"}
-            ]
-            if not unavailable_selected:
-                return PreflightCheck(
-                    key="backend_ready",
-                    label="Backend ready health endpoint",
-                    status="passed",
-                    required=required,
-                    findings=[
-                        "Backend readiness is degraded only by MCP services outside the selected scenario set."
-                    ],
-                    suggestion="Review full /health/ready before broadening this run beyond the selected scenarios.",
-                )
             return PreflightCheck(
                 key="backend_ready",
                 label="Backend ready health endpoint",
-                status="blocked" if required else "degraded",
+                status="passed",
                 required=required,
                 findings=[
-                    "Selected MCP services are unavailable: "
-                    + ", ".join(unavailable_selected)
+                    "Backend readiness is degraded only by MCP services outside the selected scenario set."
                 ],
-                suggestion="Restore selected MCP services before claiming live acceptance passed.",
+                suggestion="Review full /health/ready before broadening this run beyond the selected scenarios.",
+                details={
+                    "required_mcp_servers": selected_mcp_servers,
+                    "mcp_services": _selected_mcp_entries(
+                        mcp_service_table,
+                        selected_mcp_servers,
+                    ),
+                },
             )
         return PreflightCheck(
             key="backend_ready",
@@ -291,6 +379,13 @@ def _check_backend_ready(
                 + ", ".join(str(item) for item in degraded_optional[:8])
             ],
             suggestion="Review optional dependency degradation before treating this run as production-like.",
+            details={
+                "required_mcp_servers": selected_mcp_servers,
+                "mcp_services": _selected_mcp_entries(
+                    mcp_service_table,
+                    selected_mcp_servers,
+                ),
+            },
         )
 
     findings = [f"Backend readiness returned HTTP {http_status} with status {ready_status or 'unknown'}"]
@@ -363,6 +458,11 @@ def run_acceptance_preflight(
 
     env, dotenv_present = _load_effective_env(environ=environ, dotenv_path=dotenv_path)
     capabilities = required_capabilities_for_scenarios(scenarios)
+    required_mcp_servers = sorted(set(capabilities["mcp_servers"]))
+    mcp_services = _build_mcp_preflight_service_table(
+        env=env,
+        required_servers=required_mcp_servers if capabilities["real_mcp"] else [],
+    )
     checks: list[PreflightCheck] = []
 
     if not scenarios:
@@ -429,14 +529,23 @@ def run_acceptance_preflight(
         )
 
     if capabilities["real_mcp"]:
-        mcp_findings = []
-        for server in capabilities["mcp_servers"]:
-            backing_api = MCP_SERVER_BACKING_APIS.get(server)
-            if backing_api is None:
-                continue
-            env_vars = EXTERNAL_API_ENV_VARS.get(backing_api, ())
-            if env_vars and not _any_real_env(env, env_vars):
-                mcp_findings.append(f"{server} requires {backing_api} credential")
+        unknown_servers = [
+            server
+            for server in required_mcp_servers
+            if server not in mcp_services
+        ]
+        known_required_servers = [
+            server
+            for server in required_mcp_servers
+            if server in mcp_services
+        ]
+        mcp_findings = [
+            f"Unknown MCP service required by scenario: {server}"
+            for server in unknown_servers
+        ]
+        mcp_findings.extend(
+            _selected_mcp_blockers(mcp_services, known_required_servers)
+        )
         checks.append(
             PreflightCheck(
                 key="real_mcp",
@@ -445,6 +554,13 @@ def run_acceptance_preflight(
                 required=True,
                 findings=mcp_findings,
                 suggestion="Provide real backing API credentials or remove the scenario from live acceptance.",
+                details={
+                    "required_mcp_servers": required_mcp_servers,
+                    "services": _selected_mcp_entries(
+                        mcp_services,
+                        required_mcp_servers,
+                    ),
+                },
             )
         )
 
@@ -489,6 +605,7 @@ def run_acceptance_preflight(
         status=status,
         checks=checks,
         required_capabilities=capabilities,
+        mcp_services=mcp_services,
         missing_required=blocked,
         degraded_optional=degraded,
         skipped_metrics=skipped_metrics,
