@@ -2,8 +2,9 @@ from types import SimpleNamespace
 
 import pytest
 from langchain.tools import ToolRuntime
+from langgraph.graph import END, START, StateGraph
 
-from app.core.state import create_initial_state
+from app.core.state import TravelState, create_initial_state
 from app.tools import transport_query
 from app.tools.execution_guard import _LOOP_GUARD_MEMORY
 from app.tools.rag_tools import _guarded_rag_retrieval
@@ -19,6 +20,77 @@ def _build_runtime(state):
         tool_call_id="tool-call-loop-guard",
         store=None,
     )
+
+
+def test_parallel_tool_loop_guard_updates_are_merged():
+    state = create_initial_state(user_id="user-1", session_id="session-1")
+    state["turn_id"] = "turn-parallel-loop"
+
+    def first_tool(_state):
+        return {
+            "tool_loop_guard": {
+                "turn_id": "turn-parallel-loop",
+                "calls": [
+                    {
+                        "key": "query_destination_info:single",
+                        "tool": "query_destination_info",
+                        "status": "success",
+                    }
+                ],
+            },
+            "tool_audit_events": [
+                {
+                    "name": "query_destination_info",
+                    "started_at": 1.0,
+                    "status": "success",
+                    "error_type": None,
+                }
+            ],
+        }
+
+    def second_tool(_state):
+        return {
+            "tool_loop_guard": {
+                "turn_id": "turn-parallel-loop",
+                "calls": [
+                    {
+                        "key": "search_destination_guide:{\"query\": \"西安\"}",
+                        "tool": "search_destination_guide",
+                        "status": "success",
+                    }
+                ],
+            },
+            "tool_audit_events": [
+                {
+                    "name": "search_destination_guide",
+                    "started_at": 2.0,
+                    "status": "success",
+                    "error_type": None,
+                }
+            ],
+        }
+
+    graph = StateGraph(TravelState)
+    graph.add_node("first_tool", first_tool)
+    graph.add_node("second_tool", second_tool)
+    graph.add_edge(START, "first_tool")
+    graph.add_edge(START, "second_tool")
+    graph.add_edge("first_tool", END)
+    graph.add_edge("second_tool", END)
+
+    result = graph.compile().invoke(state)
+
+    assert result["tool_loop_guard"]["turn_id"] == "turn-parallel-loop"
+    assert {
+        call["key"]
+        for call in result["tool_loop_guard"]["calls"]
+    } == {
+        "query_destination_info:single",
+        'search_destination_guide:{"query": "西安"}',
+    }
+    assert [
+        event["name"] for event in result["tool_audit_events"]
+    ] == ["query_destination_info", "search_destination_guide"]
 
 
 class FakeCoordinator:

@@ -1,7 +1,7 @@
 """
 Core travel-planning state schema.
 """
-from typing import Literal, Optional
+from typing import Annotated, Any, Literal, Optional
 
 from langchain.agents import AgentState
 from typing_extensions import NotRequired, TypedDict
@@ -16,6 +16,67 @@ TransportType = Literal["flight", "train", "driving"]
 AccommodationType = Literal["star_hotel", "economy_hotel", "hostel", "youth_hostel"]
 FoodType = Literal["specialty", "chain", "local"]
 PlanningMode = Literal["free_planning", "agency_plan"]
+
+
+def merge_tool_audit_events(
+    left: list[dict[str, Any]] | None,
+    right: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """Merge audit events emitted by parallel tool nodes without replaying history."""
+
+    merged: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str, str, str]] = set()
+    for event in [*(left or []), *(right or [])]:
+        if not isinstance(event, dict):
+            continue
+        key = (
+            str(event.get("name") or ""),
+            str(event.get("started_at") or ""),
+            str(event.get("status") or ""),
+            str(event.get("error_type") or ""),
+            str(event.get("loop_guard_key") or ""),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(event)
+    return merged
+
+
+def merge_tool_loop_guard(
+    left: dict[str, Any] | None,
+    right: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Merge per-turn tool loop guard state from parallel tool updates."""
+
+    if not isinstance(left, dict):
+        left = {}
+    if not isinstance(right, dict):
+        right = {}
+    if not left:
+        return dict(right)
+    if not right:
+        return dict(left)
+
+    left_turn = str(left.get("turn_id") or "")
+    right_turn = str(right.get("turn_id") or "")
+    if left_turn and right_turn and left_turn != right_turn:
+        return dict(right)
+
+    merged = {**left, **right, "turn_id": right_turn or left_turn}
+    calls_by_key: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    for call in [*(left.get("calls") or []), *(right.get("calls") or [])]:
+        if not isinstance(call, dict):
+            continue
+        key = str(call.get("key") or "")
+        if not key:
+            continue
+        if key not in calls_by_key:
+            order.append(key)
+        calls_by_key[key] = call
+    merged["calls"] = [calls_by_key[key] for key in order][-40:]
+    return merged
 
 
 class UserRequirement(TypedDict):
@@ -178,8 +239,8 @@ class TravelState(AgentState):
     planning_mode_reason: NotRequired[str]
     planning_mode_confirmed: NotRequired[bool]
     evidence_bundle: NotRequired[dict]
-    tool_audit_events: NotRequired[list[dict]]
-    tool_loop_guard: NotRequired[dict]
+    tool_audit_events: NotRequired[Annotated[list[dict], merge_tool_audit_events]]
+    tool_loop_guard: NotRequired[Annotated[dict, merge_tool_loop_guard]]
     conversation_summary: NotRequired[str]
     key_history_turns: NotRequired[list[dict]]
     context_last_step: NotRequired[PlanningStep]
