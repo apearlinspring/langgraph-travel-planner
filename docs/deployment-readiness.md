@@ -16,6 +16,79 @@
 8. 至少有一个审批操作者或管理员账号，用户对象 `role` 或 `preferences.role` 为 `approver` / `admin`，普通用户不能批准、拒绝或手动过期审批。
 9. `/health/ready` 返回 `ready` 或经确认可接受的 `degraded`；生产发布不接受 `not_ready`。
 
+## 三套检查命令
+
+### Local 本地
+
+本地只验证配置契约和可启动闭环，不代表真实部署通过。`local` 是 `development`（开发）档位别名：
+
+```powershell
+.\.venv\Scripts\python -m compileall app tests scripts
+.\.venv\Scripts\python -m pytest tests\test_script_entrypoints.py tests\test_runtime_readiness.py -q
+.\.venv\Scripts\python scripts\check_runtime_readiness.py --target local --json
+docker compose up -d postgres redis
+.\.venv\Scripts\python scripts\check_runtime_readiness.py --target staging --check-docker --json
+.\.venv\Scripts\python -m scripts.init_db --mode bootstrap
+.\.venv\Scripts\python -m scripts.init_rag
+.\.venv\Scripts\python main.py
+.\.venv\Scripts\python scripts\check_runtime_readiness.py --target acceptance --check-backend --base-url http://127.0.0.1:8000 --json
+.\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-smoke --preflight-only --base-url http://127.0.0.1:8000 --json --no-summary
+```
+
+### Staging 预生产
+
+预生产不在本文写真实服务器地址。把 `<staging-base-url>` 替换为部署平台或密钥系统中的地址，并只在运行环境中注入真实密钥：
+
+```powershell
+.\.venv\Scripts\python scripts\check_runtime_readiness.py --target staging --json
+.\.venv\Scripts\python -m scripts.init_db --mode bootstrap
+.\.venv\Scripts\python -m scripts.init_rag
+.\.venv\Scripts\alembic upgrade head
+.\.venv\Scripts\alembic current
+.\.venv\Scripts\python scripts\check_runtime_readiness.py --target acceptance --check-backend --base-url <staging-base-url> --json
+.\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-smoke --preflight-only --base-url <staging-base-url> --json --no-summary
+.\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-smoke --base-url <staging-base-url> --summary-dir .runtime\acceptance-smoke --json
+```
+
+### Production 生产
+
+生产只做 readiness（就绪检查）和 preflight（预检）确认，不把 smoke（冒烟测试）结果当成自动发布动作：
+
+```powershell
+.\.venv\Scripts\alembic upgrade head
+.\.venv\Scripts\alembic current
+.\.venv\Scripts\python scripts\check_runtime_readiness.py --target production --json
+.\.venv\Scripts\python scripts\check_runtime_readiness.py --target acceptance --check-backend --base-url <production-base-url> --json
+.\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-core --preflight-only --base-url <production-base-url> --json --no-summary
+```
+
+`check_runtime_readiness.py` 的 JSON（JavaScript Object Notation，结构化数据格式）会同时输出旧的 `status=passed/degraded/blocked` 和部署口径 `readiness_status=ready/degraded/not_ready`。重点看：
+
+- `target_readiness_statuses`：local、staging、production 的总体结论。
+- `targets.<name>.component_readiness`：PostgreSQL、Redis、RAG、MCP、LLM 五项判定。
+- `blocked_reasons`：阻塞原因，不含密钥值。
+- `repair_suggestions`：可执行修复建议和复跑命令。
+
+## ready / degraded / not_ready 判定
+
+| 依赖 | ready | degraded | not_ready |
+|---|---|---|---|
+| PostgreSQL（关系型数据库） | 必填变量非占位，且后端 `/health/ready` 中 Checkpointer（执行检查点）和 Store（长期存储）均初始化。 | 不作为可选降级处理；local 只做静态配置时仍需后续 `scripts.init_db` 证明连通。 | 缺变量、占位值、TCP（传输控制协议）不可达、迁移/初始化失败，或 `/health/ready` 缺 `checkpointer` / `store`。 |
+| Redis（内存数据结构存储） | 会话锁使用 Redis 且 `/health/ready` 显示 `session_lock.status=ready`。 | development（开发）允许降级为本地锁；MCP 以外的生产核心链路不接受 Redis 降级。 | staging/production 缺 Redis 配置、Redis 不可达，或 `SESSION_LOCK_REDIS_FALLBACK_TO_LOCAL=false` 时锁不可用。 |
+| RAG（检索增强生成） | 公开与内部 Chroma（向量库）`chroma.sqlite3` 都可读，collection（集合）、metadata（元数据）契约和最小检索探针均通过。 | development/test 可不初始化真实向量库，但不能声明真实验收通过。 | staging/production 缺目录、缺 collection、metadata 不匹配、探针无命中或初始化失败。 |
+| MCP（模型上下文协议） | `/health/ready` 或 acceptance preflight 中所选场景要求的 MCP 服务均 healthy（健康）。 | 只有可选 MCP 服务不可用，且核心依赖 ready；smoke 摘要必须保留降级证据。 | 所选验收场景要求的 MCP 服务缺失、不健康，或后端 ready payload（就绪载荷）返回 `not_ready`。 |
+| LLM（大语言模型） | `DASHSCOPE_API_KEY` 是真实值，模型仍通过 `app/utils/llm_factory.py` 创建。 | test（测试）或未启用真实验收时可 mock（模拟）/skip（跳过）。 | staging/production 使用空值、占位值或真实调用不可用；smoke 不得用 mock 假通过。 |
+
+smoke（冒烟测试）失败时，`scripts/run_evaluation_scenarios.py --acceptance-smoke --json` 会输出 `blocking_reasons`、`failure_classification_counts` 和 `repair_suggestions`。常见分类如下：
+
+| 分类 | 含义 | 修复方向 |
+|---|---|---|
+| `blocked` | preflight（预检）缺必需配置、真实密钥、RAG 或后端健康。 | 先跑 `check_runtime_readiness.py --target staging --json`，按 `repair_suggestions` 补齐环境。 |
+| `timeout` / `global_timeout` | 场景或整批超时。 | 查后端日志、MCP 服务健康和模型延迟；理解依赖慢点后再调整 timeout（超时限制）。 |
+| `conversation_busy` | 同一会话锁仍被占用。 | 等待锁过期，或确认没有运行中的验收后重启后端。 |
+| `runtime_budget` | token（令牌）、首 token 延迟、工具调用数或错误事件超预算。 | 查 acceptance summary（验收摘要）里的 runtime metrics（运行指标），先修重复工具调用或慢依赖。 |
+| `evidence_closure` / `acceptance_gate` | 缺 `report_data`、预算、风险、RAG、工具审计或确定性门禁失败。 | 打开 `.runtime/acceptance-smoke` 摘要和快照，按失败维度修复，不改成“通过”。 |
+
 ## 推荐验证命令
 
 ### 本地开发
@@ -71,8 +144,8 @@ docker compose up -d postgres redis
 .\.venv\Scripts\python -m scripts.init_rag
 .\.venv\Scripts\alembic upgrade head
 .\.venv\Scripts\alembic current
-.\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-core --preflight-only --base-url https://staging.example.com --json
-.\.venv\Scripts\python scripts\check_runtime_readiness.py --target acceptance --check-backend --base-url https://staging.example.com --json
+.\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-core --preflight-only --base-url <staging-base-url> --json
+.\.venv\Scripts\python scripts\check_runtime_readiness.py --target acceptance --check-backend --base-url <staging-base-url> --json
 ```
 
 如果 Docker Desktop（Docker 桌面运行环境）未运行，`--check-docker` 必须返回 blocked（环境阻塞）；此时不要继续宣称 PostgreSQL（关系型数据库）和 Redis（内存数据结构存储）已完成本地启动闭环。
@@ -84,7 +157,7 @@ docker compose up -d postgres redis
 只有 preflight（预检）通过后，才手动运行 live acceptance（在线验收）：
 
 ```powershell
-.\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-core --base-url https://staging.example.com --summary-dir .runtime\acceptance
+.\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-core --base-url <staging-base-url> --summary-dir .runtime\acceptance
 ```
 
 GitHub Actions（GitHub 自动化流水线）中的手动 staging smoke（预生产冒烟）门禁在 `.github/workflows/staging-smoke.yml`，触发方式是 Actions 页面选择 `Staging Smoke` 后点击 `Run workflow`。该 workflow（工作流）不会做服务器部署，不连接真实生产环境，只在 GitHub runner（流水线执行机）内完成以下步骤：
@@ -146,7 +219,7 @@ curl http://127.0.0.1:8000/health/ready
 .\.venv\Scripts\alembic upgrade head
 .\.venv\Scripts\alembic current
 .\.venv\Scripts\python scripts\check_runtime_readiness.py --target production --json
-.\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-core --preflight-only --json
+.\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-core --preflight-only --base-url <production-base-url> --json --no-summary
 ```
 
 缺真实密钥、缺 RAG（检索增强生成）向量库、`JWT_SECRET_KEY` 仍是 placeholder（占位）或 `/health/ready` 返回 `not_ready` 时，命令必须返回 blocked（环境阻塞），不能当作通过。
@@ -156,7 +229,7 @@ curl http://127.0.0.1:8000/health/ready
 如果生产或预生产后端已经启动，再增加：
 
 ```powershell
-.\.venv\Scripts\python scripts\check_runtime_readiness.py --target acceptance --check-backend --base-url https://travel.403edr.cn --json
+.\.venv\Scripts\python scripts\check_runtime_readiness.py --target acceptance --check-backend --base-url <production-base-url> --json
 ```
 
 ## Docker 与反向代理检查
@@ -168,7 +241,7 @@ curl http://127.0.0.1:8000/health/ready
 - Compose 同时发布 `${POSTGRES_HOST_PORT:-5432}:5432` 和 `${REDIS_HOST_PORT:-6379}:6379`，保证宿主机上的 `scripts.init_db`、`scripts.init_rag` 和健康检查脚本能连到真实本地依赖。
 - 后端同时映射 `${BACKEND_PORT:-8000}:${APP_PORT:-8000}`，即使 `/health/ready` 因真实密钥或外部依赖缺失返回 `not_ready`，也应能通过 `/health/live` 验证进程没有卡在 application startup（应用启动）。
 - `.env` 在 Compose 中是可选文件，方便 CI（持续集成）解析配置；真实部署必须通过 `.env`、平台 secret（密钥）或托管配置系统覆盖占位默认值。
-- Caddy（反向代理服务器）站点地址可通过 `ZHIXING_SITE_ADDRESS` 覆盖，本地可用 `:80`，生产可用真实域名。
+- Caddy（反向代理服务器）站点地址可通过 `ZHIXING_SITE_ADDRESS` 覆盖；提交文件只保留 `:80` 这类本地默认值，生产域名只在部署配置系统里设置。
 
 ## 结论语义
 

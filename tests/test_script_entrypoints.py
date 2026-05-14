@@ -240,7 +240,7 @@ def test_container_files_keep_liveness_and_proxy_configurable():
         assert "/health/live" in content
         assert "python\", \"-m\", \"app.run" in content
 
-    assert "{$ZHIXING_SITE_ADDRESS:travel.403edr.cn}" in caddyfile
+    assert "{$ZHIXING_SITE_ADDRESS::80}" in caddyfile
     assert "/health/*" in caddyfile
     assert "reverse_proxy backend:8000" in caddyfile
 
@@ -257,7 +257,10 @@ def test_readiness_docs_cover_ci_staging_and_production_layers():
         assert "preflight" in content
 
     assert "--target development --json" in deployment
+    assert "--target local --json" in deployment
     assert "--target production --json" in deployment
+    assert "component_readiness" in deployment
+    assert "repair_suggestions" in deployment
     assert "alembic upgrade head" in deployment
     assert "默认不连接真实 PostgreSQL" in db_migration
     assert "AsyncPostgresSaver.setup()" in db_migration

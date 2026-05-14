@@ -425,11 +425,21 @@ def test_runtime_readiness_report_covers_development_staging_acceptance_and_prod
     )
 
     assert report["status"] == "blocked"
+    assert report["readiness_status"] == "not_ready"
     assert set(report["targets"]) == {"development", "staging", "acceptance", "production"}
     assert report["targets"]["development"]["status"] == "blocked"
     assert report["targets"]["staging"]["status"] == "blocked"
     assert report["targets"]["acceptance"]["status"] == "blocked"
     assert report["targets"]["production"]["status"] == "blocked"
+    assert report["target_readiness_statuses"]["staging"] == "not_ready"
+    assert set(report["targets"]["staging"]["component_readiness"]) == {
+        "postgresql",
+        "redis",
+        "rag_vector_store",
+        "mcp",
+        "llm",
+    }
+    assert report["targets"]["staging"]["component_readiness"]["postgresql"]["status"] == "not_ready"
     assert "dependency_matrix" in report
     assert report["blocked_reasons"]
     assert report["repair_suggestions"]
@@ -437,6 +447,20 @@ def test_runtime_readiness_report_covers_development_staging_acceptance_and_prod
     assert any("scripts.init_db" in item["command"] for item in report["repair_suggestions"])
     assert report["database_migrations"]["status"] == "passed"
     assert report["docker_compose"]["status"] == "not_checked"
+
+
+def test_runtime_readiness_report_accepts_local_alias(tmp_path: Path):
+    report = build_runtime_readiness_report(
+        targets=["local"],
+        environ={},
+        dotenv_path=tmp_path / "missing.env",
+        check_backend=False,
+    )
+
+    assert set(report["targets"]) == {"local"}
+    assert report["targets"]["local"]["resolved_environment"] == "development"
+    assert report["target_readiness_statuses"]["local"] == "not_ready"
+    assert report["targets"]["local"]["component_readiness"]["mcp"]["status"] == "degraded"
 
 
 def test_database_migration_readiness_is_static_and_separates_langgraph():

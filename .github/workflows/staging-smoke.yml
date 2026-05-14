@@ -45,6 +45,8 @@ env:
   SESSION_LOCK_REDIS_FALLBACK_TO_LOCAL: "false"
   RAG_VECTORSTORE_PATH: data/vectorstore
   RAG_COLLECTION_NAME: travel_guides
+  RAG_INTERNAL_VECTORSTORE_PATH: data/vectorstore_internal
+  RAG_INTERNAL_COLLECTION_NAME: agency_internal_knowledge
   DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
   AMAP_API_KEY: ${{ secrets.AMAP_API_KEY }}
   TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
