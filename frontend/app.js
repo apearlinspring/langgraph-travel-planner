@@ -5100,7 +5100,25 @@
         return `知行-${safeTitle || "专属旅程"}-旅游报告.html`;
       }
 
+      function collectLoadedExportStyles() {
+        const chunks = [];
+        Array.from(document.styleSheets || []).forEach((sheet) => {
+          try {
+            const rules = Array.from(sheet.cssRules || []);
+            if (rules.length) {
+              chunks.push(rules.map((rule) => rule.cssText).join("\n"));
+            }
+          } catch (error) {
+            // 跨域图标样式可能不可读；导出只需要保留本地报告样式。
+          }
+        });
+        return chunks.join("\n");
+      }
+
       async function loadExportStyles() {
+        const loadedStyles = collectLoadedExportStyles();
+        if (loadedStyles) return loadedStyles;
+        if (window.location.protocol === "file:") return "";
         try {
           const response = await fetch("./styles.css", { cache: "no-store" });
           if (response.ok) {
@@ -5139,6 +5157,13 @@
         const generatedAt = new Date().toLocaleString("zh-CN", {
           hour12: false,
         });
+        const stylesheetLinks = stylesText
+          ? ""
+          : Array.from(document.querySelectorAll('link[rel="stylesheet"]'))
+              .map((link) => link.href)
+              .filter((href) => href && /styles\.css|font-awesome|fontawesome/i.test(href))
+              .map((href) => `<link rel="stylesheet" href="${escapeHtml(href)}" />`)
+              .join("\n");
 
         return `<!DOCTYPE html>
 <html lang="zh-CN">
@@ -5147,6 +5172,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>${escapeHtml(title)} - 知行旅游报告</title>
     <link rel="stylesheet" href="https://cdn.bootcdn.net/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+    ${stylesheetLinks}
     <style>
       ${stylesText}
       body {

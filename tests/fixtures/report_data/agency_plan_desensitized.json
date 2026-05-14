@@ -1,0 +1,169 @@
+{
+  "version": "travel_report.v1",
+  "overview": {
+    "route_label": "北京到成都 4 日顾问方案（脱敏演示）",
+    "duration": "4 天 3 晚",
+    "people": "2 人",
+    "travel_styles": ["美食慢游", "轻松节奏", "省心方案"],
+    "special_needs": "演示数据已脱敏，不包含真实姓名、手机号、证件号、订单号或支付信息。"
+  },
+  "transport": {
+    "summary": "高铁优先，出发前按真实余票和票价二次核验；如遇售罄，保留同日航班兜底。"
+  },
+  "accommodation": {
+    "summary": "春熙路或太古里周边舒适型酒店，优先选择近地铁、可免费取消、早餐明确的候选。"
+  },
+  "food_preferences": {
+    "summary": "川菜、小吃和茶馆体验为主，默认保留低辣与不排队备选。"
+  },
+  "itinerary": [
+    {
+      "day_number": 1,
+      "title": "抵达成都与老街慢游",
+      "time_blocks": ["上午抵达成都东站", "下午宽窄巷子慢逛", "晚间春熙路附近用餐"],
+      "route": {
+        "summary": "成都东站 -> 宽窄巷子 -> 春熙路"
+      },
+      "meals": ["宽窄巷子小吃", "春熙路川菜"],
+      "plan_b": "若抵达延误，取消宽窄巷子深度逛街，改为酒店周边晚餐。",
+      "risk_notes": ["节假日网约车排队较久", "热门餐厅需要提前取号"]
+    },
+    {
+      "day_number": 2,
+      "title": "城市公园与烟火气",
+      "time_blocks": ["上午人民公园喝茶", "下午太古里和锦里", "晚上可选川剧变脸"],
+      "route": {
+        "summary": "人民公园 -> 太古里 -> 锦里"
+      },
+      "meals": ["公园茶点", "锦里小吃"],
+      "plan_b": "高温或降雨时减少户外步行，改为博物馆和茶馆组合。",
+      "risk_notes": ["锦里夜间人流密集", "川剧场次需提前核验"]
+    },
+    {
+      "day_number": 3,
+      "title": "都江堰轻户外",
+      "time_blocks": ["上午前往都江堰", "下午南桥和古城散步", "晚间回成都"],
+      "route": {
+        "summary": "春熙路 -> 都江堰景区 -> 南桥"
+      },
+      "meals": ["都江堰本地简餐"],
+      "plan_b": "若天气不适合户外，改为成都博物馆和文殊院。",
+      "risk_notes": ["景区开放时间需复核", "跨城交通需预留缓冲"]
+    },
+    {
+      "day_number": 4,
+      "title": "伴手礼与返程",
+      "time_blocks": ["上午酒店附近补买伴手礼", "中午整理行李", "下午前往成都东站返程"],
+      "route": {
+        "summary": "春熙路 -> 成都东站"
+      },
+      "meals": ["酒店早餐", "车站简餐"],
+      "plan_b": "若返程班次提前，取消伴手礼环节，直接前往车站。",
+      "risk_notes": ["返程票价和检票口以当天信息为准"]
+    }
+  ],
+  "map_routes": [
+    {
+      "day_number": 1,
+      "summary": "成都东站 -> 宽窄巷子 -> 春熙路",
+      "route_points": ["成都东站", "宽窄巷子", "春熙路"]
+    },
+    {
+      "day_number": 2,
+      "summary": "人民公园 -> 太古里 -> 锦里",
+      "route_points": ["人民公园", "太古里", "锦里"]
+    },
+    {
+      "day_number": 3,
+      "summary": "春熙路 -> 都江堰景区 -> 南桥",
+      "route_points": ["春熙路", "都江堰景区", "南桥"]
+    },
+    {
+      "day_number": 4,
+      "summary": "春熙路 -> 成都东站",
+      "route_points": ["春熙路", "成都东站"]
+    }
+  ],
+  "agency_context": {
+    "mode": "agency_plan",
+    "summary": "按旅行社顾问方案交付，重点保留服务节点、预订前核验和不可承诺边界。",
+    "highlights": ["交通酒店出发前复核", "预算按已确认、规则估算、待核验拆分", "不写入真实客户隐私或真实支付信息"],
+    "mode_reason": "用户希望面试演示一份可交付、可解释、可回归的顾问方案。"
+  },
+  "budget": {
+    "total": 5880,
+    "per_person": 2940,
+    "fit": "中档舒适预算，正式下单前需按真实库存复核。",
+    "items": [
+      {
+        "label": "交通",
+        "amount": 2060,
+        "basis": "按北京往返成都高铁二等座区间估算",
+        "confidence": "待核验"
+      },
+      {
+        "label": "住宿",
+        "amount": 1920,
+        "basis": "按春熙路舒适型酒店 3 晚估算",
+        "confidence": "规则估算"
+      },
+      {
+        "label": "餐饮",
+        "amount": 1080,
+        "basis": "按 2 人 4 天本地餐饮均摊估算",
+        "confidence": "规则估算"
+      },
+      {
+        "label": "门票与市内交通",
+        "amount": 820,
+        "basis": "按都江堰门票、市内地铁和打车缓冲估算",
+        "confidence": "待核验"
+      }
+    ]
+  },
+  "budget_confidence": {
+    "level": "中",
+    "confirmed_items": ["人数 2 人、天数 4 天、出发地和目的地已确认。"],
+    "estimated_items": ["交通、住宿、餐饮和市内交通均按规则区间估算。"],
+    "verification_items": ["正式购票前复核高铁余票和票价。", "酒店入住政策、取消规则和早餐权益需二次核验。", "景区开放时间和预约要求需在出发前 24-48 小时复核。"]
+  },
+  "risks": ["出发前 24-48 小时复核天气、景区开放和交通余票。", "热门餐厅与演出票可能排队或售罄，需要准备低等待备选。", "当前报告不代表真实支付、真实预订、真实锁价或履约成功。"],
+  "tool_audit_summary": {
+    "readiness": "可用于演示，预订前需核验",
+    "used_sources": ["报告结构来自脱敏 fixture。", "预算已拆分为已确认、规则估算和待核验项目。"],
+    "pending_checks": ["酒店入住政策和取消规则。", "都江堰景区预约和开放时间。", "返程班次真实余票和票价。"],
+    "unsupported_actions": ["不承诺真实库存、真实锁价或真实预订成功。", "不生成支付链接，不写入真实订单。"],
+    "approval": {
+      "approval_id": "approval-demo-desensitized",
+      "action": "generate_order_id",
+      "status": "none",
+      "pending": false,
+      "requires_approval": false,
+      "is_blocking": false,
+      "record_only": true,
+      "boundary": "当前订单号仅用于项目内报告串联，不代表真实支付、真实预订、真实锁价或履约成功。",
+      "unsupported_without_integration": ["不生成支付链接", "不调用真实供应链下单"]
+    },
+    "events": [
+      {
+        "name": "generate_order_tool",
+        "status": "success",
+        "elapsed_seconds": 0.3,
+        "evidence_type": "state_transition"
+      }
+    ]
+  },
+  "evidence_bundle": {
+    "approval_governance": {
+      "approval_id": "approval-demo-desensitized",
+      "action": "generate_order_id",
+      "status": "none",
+      "pending": false,
+      "requires_approval": false,
+      "is_blocking": false,
+      "record_only": true,
+      "boundary": "当前订单号仅用于项目内报告串联，不代表真实支付、真实预订、真实锁价或履约成功。",
+      "unsupported_without_integration": ["不生成支付链接", "不调用真实供应链下单"]
+    }
+  }
+}

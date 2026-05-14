@@ -4,7 +4,16 @@ const { pathToFileURL } = require("url");
 
 const repoRoot = path.resolve(__dirname, "..");
 const frontendHtmlPath = path.join(repoRoot, "frontend", "zhixing.html");
+const frontendStylesText = fs.readFileSync(path.join(repoRoot, "frontend", "styles.css"), "utf8");
 const runtimeDir = path.join(repoRoot, ".runtime");
+const reportFixturePath = path.join(
+  repoRoot,
+  "tests",
+  "fixtures",
+  "report_data",
+  "agency_plan_desensitized.json"
+);
+const reportFixture = JSON.parse(fs.readFileSync(reportFixturePath, "utf8"));
 const runningInCi = ["1", "true"].includes(String(process.env.CI || "").toLowerCase());
 const strictMissingBrowser =
   process.env.ZHIXING_FRONTEND_BROWSER_STRICT === "1" || runningInCi;
@@ -68,120 +77,7 @@ const tinyPng = Buffer.from(
 );
 
 function sampleReportData() {
-  return {
-    version: "travel_report.v1",
-    overview: {
-      route_label: "北京到成都 4 日顾问方案",
-      duration: "4 天",
-      people: "2 人",
-      travel_styles: ["美食慢游", "省心方案"],
-    },
-    transport: { summary: "高铁优先，正式购票前复核余票和票价。" },
-    accommodation: { summary: "春熙路附近舒适型酒店，入住政策待核验。" },
-    food_preferences: { summary: "川菜、小吃，保留低辣备选。" },
-    itinerary: [
-      {
-        day_number: 1,
-        title: "抵达成都",
-        time_blocks: ["上午抵达成都东站", "下午宽窄巷子慢逛"],
-        route: { summary: "成都东站 -> 宽窄巷子 -> 春熙路" },
-        meals: ["宽窄巷子小吃"],
-        plan_b: "雨天改室内茶馆和博物馆。",
-        risk_notes: ["节假日排队较久"],
-      },
-      {
-        day_number: 2,
-        title: "市区慢游",
-        time_blocks: ["上午人民公园", "下午太古里和锦里"],
-        route: { summary: "人民公园 -> 太古里 -> 锦里" },
-        meals: ["川菜正餐", "夜市小吃"],
-        plan_b: "高温时减少户外停留。",
-        risk_notes: ["热门餐厅需排队"],
-      },
-    ],
-    map_routes: [
-      {
-        day_number: 1,
-        summary: "成都东站 -> 宽窄巷子 -> 春熙路",
-        route_points: ["成都东站", "宽窄巷子", "春熙路"],
-      },
-      {
-        day_number: 2,
-        summary: "人民公园 -> 太古里 -> 锦里",
-        route_points: ["人民公园", "太古里", "锦里"],
-      },
-    ],
-    agency_context: {
-      mode: "agency_plan",
-      summary: "按旅行社顾问方案交付，重点保留服务节点和预订前核验。",
-      highlights: ["交通酒店出发前复核", "预算按可追溯、估算、待核验拆分"],
-      mode_reason: "用户希望省心方案",
-    },
-    budget: {
-      total: 5000,
-      items: [
-        {
-          label: "交通",
-          amount: 1800,
-          basis: "按高铁往返规则估算",
-          confidence: "待核验",
-        },
-        {
-          label: "住宿",
-          amount: 1600,
-          basis: "按舒适型酒店两晚估算",
-          confidence: "规则估算",
-        },
-      ],
-    },
-    budget_confidence: {
-      level: "中",
-      confirmed_items: ["人数 2 人，天数 4 天已确认。"],
-      estimated_items: ["交通按高铁往返规则估算。"],
-      verification_items: ["正式购票前复核余票和票价。"],
-    },
-    risks: ["出发前 24-48 小时复核天气和景区预约。"],
-    tool_audit_summary: {
-      readiness: "可交付，预订前需核验",
-      used_sources: ["预算：已拆分为已确认、估算和待核验项目"],
-      pending_checks: ["酒店入住政策和取消规则"],
-      unsupported_actions: ["不承诺真实库存、真实锁价或真实预订成功。"],
-      approval: {
-        approval_id: "approval-demo",
-        action: "generate_order_id",
-        status: "none",
-        pending: false,
-        requires_approval: false,
-        is_blocking: false,
-        record_only: true,
-        boundary:
-          "当前订单号仅用于项目内报告串联，不代表真实支付、真实预订、真实锁价或履约成功。",
-        unsupported_without_integration: ["不生成支付链接"],
-      },
-      events: [
-        {
-          name: "generate_order_tool",
-          status: "success",
-          elapsed_seconds: 0.3,
-          evidence_type: "state_transition",
-        },
-      ],
-    },
-    evidence_bundle: {
-      approval_governance: {
-        approval_id: "approval-demo",
-        action: "generate_order_id",
-        status: "none",
-        pending: false,
-        requires_approval: false,
-        is_blocking: false,
-        record_only: true,
-        boundary:
-          "当前订单号仅用于项目内报告串联，不代表真实支付、真实预订、真实锁价或履约成功。",
-        unsupported_without_integration: ["不生成支付链接"],
-      },
-    },
-  };
+  return JSON.parse(JSON.stringify(reportFixture));
 }
 
 function responseJson(payload, status = 200) {
@@ -284,6 +180,7 @@ async function createPage(browser, viewport) {
     deviceScaleFactor: viewport.isMobile ? 2 : 1,
     isMobile: viewport.isMobile,
     hasTouch: viewport.isMobile,
+    acceptDownloads: true,
     reducedMotion: "reduce",
     locale: "zh-CN",
   });
@@ -326,6 +223,16 @@ async function expectText(page, selector, label, minLength = 2) {
   const text = (await page.locator(selector).first().textContent()) || "";
   if (text.trim().length < minLength) {
     throw new Error(`${label} has too little rendered text.`);
+  }
+}
+
+async function expectContainsText(page, selector, fragments, label) {
+  const locator = page.locator(selector).first();
+  await locator.waitFor({ state: "visible", timeout: 5000 });
+  const text = (await locator.textContent()) || "";
+  const missing = fragments.filter((fragment) => !text.includes(fragment));
+  if (missing.length) {
+    throw new Error(`${label} missing text: ${missing.join(", ")}`);
   }
 }
 
@@ -381,9 +288,170 @@ async function checkReportSurface(page) {
   await expectVisible(page, '[data-report-action="export"]', "export report button");
   await expectVisible(page, '[data-report-action="map"]', "map preview entry");
   await expectVisible(page, ".travel-report-route-digest", "route digest");
+  await expectVisible(page, ".travel-report-card.budget", "budget card");
+  await expectVisible(page, ".travel-report-card.warning", "risk card");
+  await expectVisible(page, ".travel-report-card.confidence", "budget confidence card");
+  await expectVisible(page, ".travel-report-card.handoff", "handoff verification card");
+  await expectVisible(page, ".travel-report-card.governance", "governance card");
+  await expectContainsText(
+    page,
+    '[data-report-source="structured"]',
+    ["脱敏演示", "旅行社顾问方案", "导出报告", "查看路线地图"],
+    "structured report shell"
+  );
+  await expectContainsText(
+    page,
+    ".travel-report-card.budget",
+    ["交通", "住宿", "规则估算", "待核验"],
+    "budget card"
+  );
+  await expectContainsText(
+    page,
+    ".travel-report-card.warning",
+    ["风险提醒", "顾问待核验", "出发前 24-48 小时"],
+    "risk card"
+  );
+  await expectContainsText(
+    page,
+    ".travel-report-card.confidence",
+    ["预算置信度", "已确认 / 可追溯", "规则估算", "待核验"],
+    "budget confidence card"
+  );
+  await expectContainsText(
+    page,
+    ".travel-report-card.handoff",
+    ["待核验清单", "不支持承诺", "酒店入住政策"],
+    "handoff verification card"
+  );
+  await expectContainsText(
+    page,
+    ".travel-report-card.governance",
+    ["审批治理边界", "不代表真实支付", "不生成支付链接"],
+    "governance card"
+  );
+  await expectContainsText(
+    page,
+    ".travel-report-route-digest",
+    ["景点地图", "成都东站", "都江堰景区"],
+    "route digest"
+  );
   const cardCount = await page.locator(".travel-report-card").count();
   if (cardCount < 5) {
     throw new Error(`Expected at least 5 report cards, found ${cardCount}.`);
+  }
+}
+
+async function checkMapPreviewEntry(page) {
+  await page.locator('[data-report-action="map"]').click();
+  await page
+    .locator("#toast.show", { hasText: "已定位到路线地图" })
+    .waitFor({ state: "visible", timeout: 5000 });
+  await expectVisible(page, ".travel-report-route-digest", "map digest after map action");
+}
+
+async function checkReportExport(page, viewport) {
+  const [download] = await Promise.all([
+    page.waitForEvent("download"),
+    page.locator('[data-report-action="export"]').click(),
+  ]);
+  const suggestedFilename = download.suggestedFilename();
+  if (!suggestedFilename.endsWith(".html") || !suggestedFilename.includes("知行")) {
+    throw new Error(`${viewport.name} export filename looks wrong: ${suggestedFilename}`);
+  }
+  const downloadedPath = await download.path();
+  if (!downloadedPath) {
+    throw new Error(`${viewport.name} export did not produce a readable download.`);
+  }
+  const html = fs.readFileSync(downloadedPath, "utf8");
+  const requiredFragments = [
+    "知行 ZhiXing 旅游报告",
+    'data-report-source="structured"',
+    "北京到成都 4 日顾问方案（脱敏演示）",
+    "预算置信度",
+    "待核验清单",
+    "审批治理边界",
+    "不代表真实支付",
+    "景点地图",
+  ];
+  const missing = requiredFragments.filter((fragment) => !html.includes(fragment));
+  if (missing.length) {
+    throw new Error(`${viewport.name} export missing fragments: ${missing.join(", ")}`);
+  }
+  if (/<button[\s>]/i.test(html)) {
+    throw new Error(`${viewport.name} export should not keep interactive buttons.`);
+  }
+  if (
+    !html.includes(".message.assistant .message-text .travel-report") &&
+    !html.includes("styles.css")
+  ) {
+    throw new Error(`${viewport.name} export did not include inline styles or stylesheet fallback.`);
+  }
+  await download.delete();
+}
+
+async function buildReportEvidenceHtml(page) {
+  const reportHtml = await page.evaluate(() => {
+    const report = document.querySelector('[data-report-source="structured"]');
+    if (!report) throw new Error("structured report missing for screenshot");
+    return report.outerHTML;
+  });
+  return `<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <style>
+      ${frontendStylesText}
+      body {
+        margin: 0;
+        min-height: 100vh;
+        padding: 24px;
+        overflow: visible;
+        background: #f5f2eb;
+      }
+      .report-evidence-shell {
+        max-width: 1120px;
+        margin: 0 auto;
+      }
+      .message.assistant .message-text {
+        max-width: none;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="report-evidence-shell">
+      <section class="message assistant">
+        <div class="message-text">${reportHtml}</div>
+      </section>
+    </main>
+  </body>
+</html>`;
+}
+
+async function captureReportScreenshot(browser, page, viewport, screenshotPath) {
+  const html = await buildReportEvidenceHtml(page);
+  const context = await browser.newContext({
+    viewport: { width: viewport.width, height: viewport.height },
+    deviceScaleFactor: viewport.isMobile ? 2 : 1,
+    isMobile: viewport.isMobile,
+    hasTouch: viewport.isMobile,
+    reducedMotion: "reduce",
+    locale: "zh-CN",
+  });
+  await context.route("https://cdn.bootcdn.net/**", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "text/css; charset=utf-8",
+      body: ".fa,.fa-solid,.fa-regular{display:inline-block}.fa::before{content:''}",
+    });
+  });
+  const evidencePage = await context.newPage();
+  try {
+    await evidencePage.setContent(html, { waitUntil: "domcontentloaded" });
+    await expectVisible(evidencePage, '[data-report-source="structured"]', "report screenshot");
+    await evidencePage.screenshot({ path: screenshotPath, fullPage: true });
+  } finally {
+    await context.close();
   }
 }
 
@@ -405,6 +473,11 @@ async function checkLayoutHealth(page, viewport) {
       "#chatMessages",
       '[data-report-source="structured"]',
       ".travel-report-grid",
+      ".travel-report-card.budget",
+      ".travel-report-card.warning",
+      ".travel-report-card.confidence",
+      ".travel-report-card.handoff",
+      ".travel-report-card.governance",
       ".travel-report-actions",
       ".travel-report-route-digest",
     ];
@@ -493,21 +566,22 @@ async function runViewport(browser, viewport) {
     await checkMainSurface(main.page, viewport);
     await injectReport(main.page);
     await checkReportSurface(main.page);
+    const viewportScreenshots = [];
+    const reportScreenshotPath = path.join(
+      runtimeDir,
+      `frontend-browser-regression-${viewport.name}-report.png`
+    );
+    await captureReportScreenshot(browser, main.page, viewport, reportScreenshotPath);
+    viewportScreenshots.push(reportScreenshotPath);
+    await checkMapPreviewEntry(main.page);
+    await checkReportExport(main.page, viewport);
     await checkLayoutHealth(main.page, viewport);
     const screenshotPath = path.join(
       runtimeDir,
       `frontend-browser-regression-${viewport.name}.png`
     );
     await main.page.screenshot({ path: screenshotPath, fullPage: true });
-    const viewportScreenshots = [screenshotPath];
-    const reportScreenshotPath = path.join(
-      runtimeDir,
-      `frontend-browser-regression-${viewport.name}-report.png`
-    );
-    await main.page
-      .locator('[data-report-source="structured"]')
-      .screenshot({ path: reportScreenshotPath });
-    viewportScreenshots.push(reportScreenshotPath);
+    viewportScreenshots.unshift(screenshotPath);
     if (viewport.isMobile) {
       await main.page.locator("#governanceConsole").scrollIntoViewIfNeeded();
       const governanceScreenshotPath = path.join(

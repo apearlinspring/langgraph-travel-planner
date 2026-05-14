@@ -1,0 +1,147 @@
+{
+  "version": "travel_report.v1",
+  "overview": {
+    "route_label": "上海到厦门 3 日自由规划（脱敏演示）",
+    "duration": "3 天 2 晚",
+    "people": "1 人",
+    "travel_styles": ["海边散步", "城市摄影", "自由行"],
+    "special_needs": "演示数据已脱敏，仅保留城市、天数和偏好，不包含真实客户身份信息。"
+  },
+  "transport": {
+    "summary": "飞机或高铁均可，正式出发前按实时票价、行李额度和到达时间二次核验。"
+  },
+  "accommodation": {
+    "summary": "中山路或曾厝垵附近经济舒适型住宿，优先选择交通便利、取消规则清晰的候选。"
+  },
+  "food_preferences": {
+    "summary": "海鲜、小吃和咖啡馆为主，保留非海鲜备选。"
+  },
+  "itinerary": [
+    {
+      "day_number": 1,
+      "title": "抵达与中山路夜游",
+      "time_blocks": ["下午抵达厦门", "傍晚中山路步行街", "晚上八市周边小吃"],
+      "route": {
+        "summary": "厦门站 -> 中山路 -> 八市"
+      },
+      "meals": ["沙茶面", "花生汤"],
+      "plan_b": "若抵达较晚，直接入住并压缩夜游。",
+      "risk_notes": ["夜市人流较多，注意随身物品"]
+    },
+    {
+      "day_number": 2,
+      "title": "鼓浪屿与海边摄影",
+      "time_blocks": ["上午鼓浪屿", "下午菽庄花园", "傍晚海边拍照"],
+      "route": {
+        "summary": "码头 -> 鼓浪屿 -> 菽庄花园"
+      },
+      "meals": ["鼓浪屿简餐"],
+      "plan_b": "若轮渡受天气影响，改为沙坡尾和植物园。",
+      "risk_notes": ["轮渡船票和天气需提前核验"]
+    },
+    {
+      "day_number": 3,
+      "title": "沙坡尾与返程",
+      "time_blocks": ["上午沙坡尾", "中午咖啡馆休息", "下午返程"],
+      "route": {
+        "summary": "沙坡尾 -> 厦门站"
+      },
+      "meals": ["咖啡馆轻食"],
+      "plan_b": "若返程提前，取消咖啡馆停留。",
+      "risk_notes": ["返程交通以当天班次为准"]
+    }
+  ],
+  "map_routes": [
+    {
+      "day_number": 1,
+      "summary": "厦门站 -> 中山路 -> 八市",
+      "route_points": ["厦门站", "中山路", "八市"]
+    },
+    {
+      "day_number": 2,
+      "summary": "码头 -> 鼓浪屿 -> 菽庄花园",
+      "route_points": ["码头", "鼓浪屿", "菽庄花园"]
+    },
+    {
+      "day_number": 3,
+      "summary": "沙坡尾 -> 厦门站",
+      "route_points": ["沙坡尾", "厦门站"]
+    }
+  ],
+  "agency_context": {
+    "mode": "free_planning",
+    "summary": "按自由规划交付，重点保留自订弹性、预算依据和出发前复核项。",
+    "highlights": ["交通与住宿由用户自行确认", "预算不锁价", "保留天气和轮渡 Plan B"],
+    "mode_reason": "用户希望自己预订，只需要前端能稳定展示结构化报告。"
+  },
+  "budget": {
+    "total": 2780,
+    "per_person": 2780,
+    "fit": "单人轻量自由行预算，正式预订前需按实时价格核验。",
+    "items": [
+      {
+        "label": "交通",
+        "amount": 1280,
+        "basis": "按上海往返厦门高铁或机票区间估算",
+        "confidence": "待核验"
+      },
+      {
+        "label": "住宿",
+        "amount": 820,
+        "basis": "按经济舒适型住宿 2 晚估算",
+        "confidence": "规则估算"
+      },
+      {
+        "label": "餐饮与门票",
+        "amount": 680,
+        "basis": "按小吃、咖啡和鼓浪屿相关门票估算",
+        "confidence": "规则估算"
+      }
+    ]
+  },
+  "budget_confidence": {
+    "level": "中",
+    "confirmed_items": ["人数 1 人、天数 3 天已确认。"],
+    "estimated_items": ["交通、住宿、餐饮与门票均按公开区间估算。"],
+    "verification_items": ["轮渡船票、天气和返程班次需二次核验。", "住宿取消规则和入住时间需二次核验。"]
+  },
+  "risks": ["海边天气变化会影响轮渡和拍照安排。", "热门住宿价格波动较快，不承诺真实锁价。"],
+  "tool_audit_summary": {
+    "readiness": "可用于自由规划展示，预订前需核验",
+    "used_sources": ["报告结构来自脱敏 fixture。"],
+    "pending_checks": ["轮渡船票和天气。", "住宿取消规则。"],
+    "unsupported_actions": ["不承诺真实库存、真实锁价或真实预订成功。"],
+    "approval": {
+      "approval_id": "approval-free-desensitized",
+      "action": "export_report",
+      "status": "none",
+      "pending": false,
+      "requires_approval": false,
+      "is_blocking": false,
+      "record_only": true,
+      "boundary": "当前导出报告仅用于规划展示，不代表真实支付、真实预订、真实锁价或履约成功。",
+      "unsupported_without_integration": ["不生成支付链接"]
+    },
+    "events": [
+      {
+        "name": "render_report_fixture",
+        "status": "success",
+        "elapsed_seconds": 0.1,
+        "evidence_type": "frontend_fixture"
+      }
+    ]
+  },
+  "evidence_bundle": {
+    "approval_governance": {
+      "approval_id": "approval-free-desensitized",
+      "action": "export_report",
+      "status": "none",
+      "pending": false,
+      "requires_approval": false,
+      "is_blocking": false,
+      "record_only": true,
+      "boundary": "当前导出报告仅用于规划展示，不代表真实支付、真实预订、真实锁价或履约成功。",
+      "unsupported_without_integration": ["不生成支付链接"]
+    }
+  }
+}
