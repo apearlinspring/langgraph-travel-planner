@@ -3,10 +3,31 @@ Application logging setup.
 """
 import os
 import sys
+import logging
 
 from loguru import logger
 
 from app.config import settings
+from app.utils.security import redact_sensitive_text
+
+
+def _is_test_runtime() -> bool:
+    return settings.runtime_environment == "test" or "PYTEST_CURRENT_TEST" in os.environ
+
+
+def _configure_langsmith_noise_policy() -> None:
+    """Keep optional LangSmith upload failures from flooding unit-test output."""
+
+    if not _is_test_runtime():
+        return
+    os.environ.setdefault("LANGSMITH_TRACING", "false")
+    os.environ.setdefault("LANGCHAIN_TRACING_V2", "false")
+    for logger_name in ("langsmith", "langchain.callbacks.tracers.langchain"):
+        logging.getLogger(logger_name).setLevel(logging.CRITICAL)
+
+
+def _redact_log_record(record: dict) -> None:
+    record["message"] = redact_sensitive_text(str(record["message"]))
 
 
 def _safe_console_sink(message) -> None:
@@ -20,6 +41,8 @@ def _safe_console_sink(message) -> None:
 def setup_logger():
     """Configure console and file logging."""
     logger.remove()
+    _configure_langsmith_noise_policy()
+    safe_logger = logger.patch(_redact_log_record)
     suppress_console = os.getenv("ZHIXING_SUPPRESS_CONSOLE_LOGS", "").strip().lower() in {
         "1",
         "true",
@@ -27,7 +50,7 @@ def setup_logger():
     }
 
     if not suppress_console:
-        logger.add(
+        safe_logger.add(
             _safe_console_sink,
             colorize=True,
             format=(
@@ -39,7 +62,7 @@ def setup_logger():
             level="DEBUG" if settings.debug else "INFO",
         )
 
-    logger.add(
+    safe_logger.add(
         "logs/app.log",
         rotation="500 MB",
         retention="10 days",
@@ -48,19 +71,19 @@ def setup_logger():
         level="INFO",
     )
 
-    logger.add(
+    safe_logger.add(
         "logs/error.log",
         rotation="100 MB",
         retention="30 days",
         compression="zip",
         level="ERROR",
         backtrace=True,
-        diagnose=True,
+        diagnose=False,
     )
 
     if not suppress_console:
-        logger.info("Log system initialized")
-    return logger
+        safe_logger.info("Log system initialized")
+    return safe_logger
 
 
 app_logger = setup_logger()

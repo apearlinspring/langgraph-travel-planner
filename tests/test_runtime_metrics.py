@@ -9,6 +9,8 @@ from app.evaluation.runtime_metrics import (
     evaluate_runtime_metrics,
     runtime_budget_from_dict,
 )
+from app.core.observability import TurnObservation
+from app.utils.security import redact_sensitive_data
 
 
 def test_estimate_token_count_handles_ascii_and_chinese():
@@ -297,3 +299,34 @@ def test_collect_runtime_metrics_rejects_invalid_inputs():
             assistant_text="",
             elapsed_seconds=0,
         )
+
+
+def test_redaction_keeps_runtime_token_metrics_readable():
+    payload = redact_sensitive_data(
+        {
+            "estimated_total_tokens": 128,
+            "average_estimated_total_tokens": 64,
+            "access_token": "eyJabcdefgh.ijklmnopqr.stuvwxyz12",
+            "message": "联系 test@example.com，api_key=sk-testvalue123456789",
+        }
+    )
+
+    assert payload["estimated_total_tokens"] == 128
+    assert payload["average_estimated_total_tokens"] == 64
+    assert payload["access_token"] == "[REDACTED]"
+    assert "test@example.com" not in str(payload)
+    assert "sk-testvalue123456789" not in str(payload)
+
+
+def test_turn_observability_internal_snapshot_redacts_identifiers():
+    observation = TurnObservation(
+        conversation_id="conversation-for-test@example.com",
+        user_id="test@example.com",
+        user_message="手机号 13800138000",
+    )
+    snapshot = observation.finish("completed")
+    serialized = str(snapshot)
+
+    assert snapshot["metadata"]["user_message_chars"] == len("手机号 13800138000")
+    assert "test@example.com" not in serialized
+    assert "13800138000" not in serialized

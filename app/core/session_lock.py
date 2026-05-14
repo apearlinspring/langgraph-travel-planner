@@ -683,7 +683,7 @@ class SessionLockManager:
         return (
             self._fallback_to_local
             and self._configured_backend == "auto"
-            and self._app_env == "development"
+            and self._app_env in {"development", "test"}
         )
 
     def _probe_redis(self) -> tuple[bool, str | None]:

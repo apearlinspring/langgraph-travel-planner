@@ -58,6 +58,8 @@ CI 中 `CI=true` 且显式设置 `ZHIXING_FRONTEND_BROWSER_STRICT=1`，因此缺
 
 CI（持续集成）默认不连接真实 PostgreSQL（关系型数据库），也不执行 `alembic upgrade head`；迁移就绪只通过 `check_runtime_readiness.py` 的静态 `database_migrations` 区块验证。真实数据库迁移放到 staging（预生产）和 production（生产）发布步骤中执行。
 
+CI 和 pytest（测试框架）默认以 `APP_ENV=test`、`LANGSMITH_TRACING=false` 和 `LANGCHAIN_TRACING_V2=false` 运行。LangSmith（LangChain 可观测平台）在测试层是 optional（可选）观测能力，测试占位密钥不得触发 403 上报刷屏；真实 staging（预生产）/production（生产）可显式提供有效 `LANGSMITH_API_KEY`、`LANGSMITH_PROJECT` 并开启 tracing（链路追踪）。无论 LangSmith 是否启用，后端仍必须通过 SSE（服务器发送事件）输出 `turn_observability`（轮次可观测）并在验收摘要中保留运行指标。
+
 ### Staging 预生产
 
 预生产先跑 preflight（预检），不消耗真实对话配额：
@@ -109,6 +111,8 @@ GitHub Actions（GitHub 自动化流水线）中的手动 staging smoke（预生
 - `ZHIXING_EVAL_PASSWORD`
 
 可选 Secrets（密钥管理项）：`VARIFLIGHT_API_KEY`、`AIGOHOTEL_API_KEY`、`AIGOHOTEL_MCP_API`、`AIGOHOTEL_SECRET_KEY`、`LANGSMITH_API_KEY`、`LANGSMITH_PROJECT`。当前 `acceptance-smoke` 场景不强制航班或酒店密钥，但如果后续把相关场景加入 smoke（冒烟）集合，应同步提升为必需项。
+
+LangSmith Secrets（密钥管理项）缺失时不应阻塞 smoke（冒烟）本身；如果提供了无效密钥，LangSmith 上报失败只能作为第三方观测降级处理，不能吞掉真实业务错误，也不能把 acceptance（验收）失败伪装成通过。验收 JSON（JavaScript Object Notation，结构化数据格式）和 Markdown（标记文本）摘要必须保留 `runtime_totals.estimated_total_tokens`、工具调用和错误事件计数，同时递归脱敏邮箱、手机号、JWT、API key、password（密码）和 secret。
 
 `Ensure Evaluation User` 步骤会先用 `ZHIXING_EVAL_USERNAME` / `ZHIXING_EVAL_PASSWORD` 登录；临时 PostgreSQL（关系型数据库）中没有该用户时，才用 `users.noreply.github.com` 非个人域名生成邮箱并调用注册接口，再重新登录验证。该步骤不提交、不打印真实密码、JWT（JSON Web Token，令牌认证）或 `access_token`；如果用户名或邮箱已存在但密码不匹配，workflow（工作流）会明确失败，不会静默改密码或让 smoke（冒烟）假通过。
 

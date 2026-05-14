@@ -272,8 +272,8 @@ class TurnObservation:
         return {
             "version": TURN_OBSERVABILITY_VERSION,
             "turn_id": self.turn_id,
-            "conversation_id": self.conversation_id,
-            "user_id": self.user_id,
+            "conversation_id": redact_sensitive_text(str(self.conversation_id)),
+            "user_id": redact_sensitive_text(str(self.user_id)),
             "started_at": datetime.fromtimestamp(self.started_at, timezone.utc).isoformat(),
             "finished_at": (
                 datetime.fromtimestamp(self.finished_at, timezone.utc).isoformat()
