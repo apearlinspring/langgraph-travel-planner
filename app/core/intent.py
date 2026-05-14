@@ -141,7 +141,6 @@ _FINAL_REPORT_KEYWORDS = (
 
 _AGENCY_PLAN_KEYWORDS = (
     "省心方案",
-    "省心安排",
     "省心套餐",
     "旅行社方案",
     "旅行社顾问方案",

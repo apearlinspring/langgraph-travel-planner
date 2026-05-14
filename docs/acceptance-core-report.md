@@ -2,18 +2,18 @@
 
 ## 结论
 
-2026-05-13 在 `codex/core-preflight-readiness` 分支完成 acceptance-core（核心验收）preflight（预检）真实环境复核。当前真实环境 runtime readiness（运行时就绪检查）和 core preflight 均为 `passed（通过）`，原先阻塞 9 个核心场景前置判断的 MCP（模型上下文协议）冷启动降级已关闭。
+2026-05-14 在 `codex/round-core-fixes-integration-review` 分支完成 acceptance-core（核心验收）9 场景真实环境跑批。9 个场景均生成机器摘要，真实环境 runtime readiness（运行时就绪检查）和 core preflight（预检）均为 `passed（通过）`，但全量结果为 `failed（失败）`，不能建议合入 `main`。
 
-本文件仍不把 preflight 结果等同于 9 个 acceptance-core 场景通过。它只说明真实环境依赖、后端 ready（就绪检查）和 core 所需 MCP 服务已经满足进入 9 场景跑批的前置条件。
+失败没有通过放宽 runtime budget（运行预算）或 warning ratio（警戒比例）掩盖。所有场景均生成 `report_data`，`evidence_closure.missing=[]`，`error_event_count=0`，`session_busy_event_count=0`，`duplicate_tool_call_same_turn=0`。剩余阻塞集中在首 token（文本令牌）慢路径和一个已修复的规划模式边界误判。
 
-环境闭环历史见 [acceptance-runtime-close-loop.md](./acceptance-runtime-close-loop.md)，本轮 smoke 预算收口见本文后续记录。
+环境闭环历史见 [acceptance-runtime-close-loop.md](./acceptance-runtime-close-loop.md)，复跑步骤见 [live-acceptance-runbook.md](./live-acceptance-runbook.md)。
 
 ## 基准与命令
 
-- 工作树：`D:\Users\Administrator\PycharmProjects\ZhiXing\langgraph-travel-planner-acceptance-runner-resilience`
-- 分支：`codex/acceptance-runner-resilience`
-- 基准命令：`git fetch origin --prune; git merge --ff-only origin/main`
-- 结果：本分支从最新 `origin/main` 基线继续；本轮不推 `main`。
+- 工作树：`D:\Users\Administrator\PycharmProjects\ZhiXing\langgraph-travel-planner-round-core-fixes-integration-review`
+- 分支：`codex/round-core-fixes-integration-review`
+- 基准命令：`git fetch origin; git status --short --branch; git log --oneline -5`
+- 结果：本轮没有先合 `main`；只在当前分支做真实验收和小范围修复。
 - 本地 Python（编程语言运行时）环境：如缺少 `.venv`，用 `uv run --frozen ...` 或 `uv sync --frozen` 按锁文件创建。
 
 执行过的核心门禁命令：
@@ -66,27 +66,98 @@
 
 ## 9 个核心场景状态
 
-本轮没有运行 9 个 acceptance-core 场景，因此没有新的场景级 pass/fail 结论。preflight-only（仅预检）输出中场景状态为 `skipped（跳过）` 属于预期，不代表业务场景通过或失败。
+完整跑批命令：
 
-| 场景 | 本轮状态 | 说明 |
-|---|---|---|
-| `free_weekend_nearby` | not_run | preflight 通过后未进入 9 场景跑批。 |
-| `free_city_three_days` | not_run | preflight 通过后未进入 9 场景跑批。 |
-| `agency_couple_relaxed` | not_run | preflight 通过后未进入 9 场景跑批。 |
-| `agency_family_parent_child` | not_run | preflight 通过后未进入 9 场景跑批。 |
-| `agency_senior_low_stress` | not_run | preflight 通过后未进入 9 场景跑批。 |
-| `edge_hotel_tool_fallback` | not_run | preflight 通过后未进入 9 场景跑批。 |
-| `pricing_agency_quote_explanation` | not_run / smoke_passed | 核心批未运行；最小 smoke 真实链路已通过。 |
-| `risk_weather_disruption` | not_run | preflight 通过后未进入 9 场景跑批。 |
-| `edge_transport_tool_fallback` | not_run | preflight 通过后未进入 9 场景跑批。 |
+```powershell
+.\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-core --base-url http://127.0.0.1:8000 --json --summary-dir .runtime\acceptance-core-full --scenario-timeout 900 --global-timeout 7200
+```
 
-核心场景状态统计：
+机器摘要：
 
-- `passed`: 0
-- `failed`: 0
-- `blocked`: 0
-- `degraded`: 0
-- `not_run`: 9
+- `.runtime\acceptance-core-full\20260514-083740-acceptance-summary.json`
+- `.runtime\acceptance-core-full\20260514-083740-acceptance-summary.md`
+
+总体状态：
+
+- `status=failed`
+- `passed=false`
+- `completed=9`
+- `pending=0`
+- `passed_count=5`
+- `degraded_count=1`
+- `failed_count=3`
+
+| 场景 | status | failure_category | tools | duplicate | error | busy | report_data | evidence missing | runtime_budget |
+|---|---:|---|---:|---:|---:|---:|---|---|---|
+| `free_weekend_nearby` | passed | - | 15 | 0 | 0 | 0 | yes | `[]` | passed |
+| `free_city_three_days` | passed | - | 11 | 0 | 0 | 0 | yes | `[]` | passed |
+| `agency_couple_relaxed` | passed | - | 18 | 0 | 0 | 0 | yes | `[]` | passed |
+| `agency_family_parent_child` | passed | - | 20 | 0 | 0 | 0 | yes | `[]` | passed |
+| `agency_senior_low_stress` | degraded | `acceptance_gate` | 20 | 0 | 0 | 0 | yes | `[]` | passed, first-token warning |
+| `edge_hotel_tool_fallback` | failed | `runtime_budget` | 25 | 0 | 0 | 0 | yes | `[]` | failed |
+| `pricing_agency_quote_explanation` | passed | - | 23 | 0 | 0 | 0 | yes | `[]` | passed |
+| `risk_weather_disruption` | failed | `runtime_budget` | 15 | 0 | 0 | 0 | yes | `[]` | failed |
+| `edge_transport_tool_fallback` | failed | `acceptance_gate` | 23 | 0 | 0 | 0 | yes | `[]` | passed, first-token warning |
+
+## 失败与降级归因
+
+- `agency_senior_low_stress`：`degraded`，runtime budget 只触发 warning，首 token 使用 85.0% 的首 token 预算；无 error、busy、duplicate。
+- `edge_hotel_tool_fallback`：`failed/runtime_budget`，首 token 80.59 秒超过 75 秒，总耗时使用 98.0% 的运行预算。工具质量通过，`query_hotel_options` 真实查询可返回结果，但场景中有阶段回退和多轮慢首 token 叠加。
+- `risk_weather_disruption`：`failed/runtime_budget`，首 token 83.683 秒超过 75 秒；工具数 15，未见工具循环或会话占用。
+- `edge_transport_tool_fallback`：完整跑批中因 `agency_context.mode=agency_plan` 与 expected `free_planning` 不一致失败，同时 runtime budget 仅 warning。随后做了小修复并单场复跑，模式边界已修复，但该单场仍因首 token 98.651 秒超过 75 秒而 `failed/runtime_budget`。
+
+本轮未发现：
+
+- `conversation_busy` 或 `session_busy` 复发。
+- `duplicate_tool_call_same_turn` 复发。
+- `report_data` 缺失。
+- `evidence_closure.missing` 非空。
+- 因缺 MCP（模型上下文协议）服务导致的 blocked（环境阻塞）。
+
+## 小修复验证
+
+修复范围：
+
+- `app/agency/planning_mode.py`
+- `app/core/intent.py`
+- `app/tools/state_transition.py`
+- `tests/test_planning_mode_boundary.py`
+
+修复要点：
+
+- “省心安排”不再单独作为强旅行社模式信号；只有“省心方案/旅行社/产品/托管/包办/报价/合同”等明确强信号才进入 `agency_plan`。
+- `record_requirement_tool` 会用用户原文和需求摘要共同核验模型传入的 `planning_mode=agency_plan`；没有用户强信号支撑时回落 `free_planning`。
+
+验证命令：
+
+```powershell
+.\.venv\Scripts\python -m pytest tests\test_planning_mode_boundary.py tests\test_intent_detection.py tests\test_workflow_maintainability.py::test_record_requirement_persists_planning_mode tests\test_workflow_maintainability.py::test_record_requirement_uses_recent_user_agency_signal_when_tool_args_are_plain tests\test_workflow_maintainability.py::test_record_requirement_keeps_hotel_fallback_in_free_planning_without_agency_signal tests\test_workflow_maintainability.py::test_record_requirement_keeps_weak_free_mode_when_hotel_fallback_is_requested -q
+```
+
+结果：`38 passed`。测试结束后 LangSmith（LangChain 可观测平台）上报返回 `403 Forbidden`，不影响 pytest（测试框架）退出码。
+
+修复后单场复跑：
+
+```powershell
+.\.venv\Scripts\python scripts\run_evaluation_scenarios.py --scenario edge_transport_tool_fallback --base-url http://127.0.0.1:8000 --json --summary-dir .runtime\acceptance-core-reruns --scenario-timeout 900 --global-timeout 1200
+```
+
+结果：
+
+- 摘要：`.runtime\acceptance-core-reruns\20260514-090232-acceptance-summary.json`
+- 快照：`.runtime\evaluations\20260514-170232-edge_transport_tool_fallback.json`
+- `agency_context.mode=free_planning`
+- `report_quality=passed`
+- `rag_quality=passed`
+- `tool_quality=passed`
+- `runtime_budget=failed`
+- `first_token_seconds=98.651`，预算 `75.0`
+- `tool_call_count=25`
+- `duplicate=0`
+- `error_event_count=0`
+- `session_busy_event_count=0`
+- `report_data=true`
+- `evidence_closure.missing=[]`
 
 ## Smoke 后置判断
 
@@ -123,20 +194,14 @@ acceptance-smoke 真实运行结果：
 - `.runtime\acceptance-smoke\20260513-150047-acceptance-summary.md`
 - `.runtime\evaluations\20260513-230047-pricing_agency_quote_explanation.json`
 
-## 失败归因
+## 当前待处理项
 
-本轮没有修改 evaluation gate（评估门禁）通过语义，也没有把失败伪装成通过。修复集中在 smoke 场景输入和工具调用稳定性：
+本轮没有修改 evaluation gate（评估门禁）通过语义，也没有把失败伪装成通过。
 
-归因分类：
+待继续修复或复核：
 
-- 环境/密钥/外部 API（应用程序接口）问题：已关闭到 smoke preflight passed。
-- MCP 启动探测问题：已确认默认 8 秒对真实远端 MCP 冷启动偏短；默认值和 `.env.example` 已调整为 25 秒，core preflight 复测通过。
-- Agent（智能体）业务链路问题：已减少无效重试和跨交通方式扩散调用。
-- RAG 证据问题：smoke 通过。
-- `report_data`（结构化报告数据）契约问题：smoke 通过。
-- runtime budget 问题：smoke 当前通过，仍需在 9 个核心场景中复核稳定性。
-- evaluation gate 误判：未发现。
+- runtime budget：`edge_hotel_tool_fallback`、`risk_weather_disruption`、修复后单场 `edge_transport_tool_fallback` 均因首 token 超过 75 秒失败。需要继续定位是模型服务首 token 波动、上下文压缩后提示过长、阶段回退导致慢路径，还是外部工具结果进入模型后的生成延迟。
+- 阶段回退：`edge_hotel_tool_fallback` 在报告前出现需求/天数校正回退，虽然最终报告和证据闭环完整，但推高了总耗时。
+- 规划模式边界：`edge_transport_tool_fallback` 的误判已用小修复关闭，后续完整 core 复跑仍需确认该场不再因 `agency_context.mode` 失败。
 
-## 下一步
-
-下一步可以在同一真实环境下运行 9 个 acceptance-core 场景。若 core 场景失败，按失败维度拆解报告质量、RAG、MCP、工具治理、运行预算和旅行社业务证据；不要用 preflight 或 smoke 通过结果替代核心验收。
+暂不建议合入 `main`。下一步应优先复核 runtime budget 慢路径，在不放宽预算的前提下降低首 token 和阶段回退耗时，然后重新运行完整 9 场景。

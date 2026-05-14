@@ -1,4 +1,5 @@
 from langchain.tools import ToolRuntime
+from langchain_core.messages import HumanMessage
 
 from app.agency.product_rules import infer_report_planning_mode
 from app.core.intent import detect_travel_intent, resolve_planning_mode
@@ -63,6 +64,36 @@ def test_family_or_low_stress_preferences_do_not_imply_agency_plan():
     )
 
     assert decision.mode is None
+    assert command.update["planning_mode"] == "free_planning"
+    assert command.update["user_requirement"]["planning_mode"] == "free_planning"
+
+
+def test_transport_fallback_convenience_wording_stays_free_planning():
+    state = create_initial_state(user_id="user-1", session_id="session-1")
+    state["messages"].append(
+        HumanMessage(
+            content="我想从武汉去张家界玩4天3晚，优先高铁，如果查不到合适车次也请明确待核验并给出可执行交通兜底。"
+        )
+    )
+
+    command = record_requirement_tool.invoke(
+        {
+            "departure_city": "武汉",
+            "destination": "张家界",
+            "departure_date": "2026-05-16",
+            "travel_days": 4,
+            "adult_count": 2,
+            "children_count": 0,
+            "budget_min": 2000.0,
+            "budget_max": 3000.0,
+            "travel_styles": ["轻松舒适"],
+            "special_needs": "优先高铁，省心安排，实时班次价格待核验",
+            "planning_mode": "agency_plan",
+            "planning_mode_reason": "用户希望按推荐的最合适方案安排",
+            "runtime": _build_runtime(state),
+        }
+    )
+
     assert command.update["planning_mode"] == "free_planning"
     assert command.update["user_requirement"]["planning_mode"] == "free_planning"
 

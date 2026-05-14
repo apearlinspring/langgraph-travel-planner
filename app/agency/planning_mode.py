@@ -14,7 +14,6 @@ AGENCY_MODE_KEYWORDS = (
     "旅行社方案",
     "旅行社顾问方案",
     "省心方案",
-    "省心安排",
     "省心套餐",
     "成熟路线",
     "定制游",
@@ -120,7 +119,7 @@ def has_explicit_agency_plan_signal(text: str) -> bool:
     if _contains_any(normalized, AGENCY_MODE_KEYWORDS):
         return True
     return bool(
-        re.search(r"省心.{0,4}(方案|安排|套餐|托管|包办)", normalized)
+        re.search(r"省心.{0,4}(方案|套餐|托管|包办)", normalized)
         or re.search(r"(按|用).{0,6}(旅行社|顾问).{0,6}(方案|标准|流程)", normalized)
     )
 

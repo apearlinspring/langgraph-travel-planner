@@ -2126,13 +2126,14 @@ def record_requirement_tool(
         "travel_styles": travel_styles,
         "destination": destination or "",
     }
-    mode_seed_text = " ".join(
-        [str(mode_seed["special_needs"]), " ".join(str(item) for item in travel_styles)]
+    mode_context_text = agency_product_rules.requirement_text(
+        mode_seed,
+        runtime.state if runtime else None,
     )
     inferred_text_mode = None
-    explicit_agency_signal = has_explicit_agency_signal(mode_seed_text)
-    explicit_agency_plan_signal = has_explicit_agency_plan_signal(mode_seed_text)
-    explicit_free_signal = has_explicit_free_signal(mode_seed_text)
+    explicit_agency_signal = has_explicit_agency_signal(mode_context_text)
+    explicit_agency_plan_signal = has_explicit_agency_plan_signal(mode_context_text)
+    explicit_free_signal = has_explicit_free_signal(mode_context_text)
     if explicit_agency_signal or explicit_free_signal:
         inferred_text_mode = _infer_planning_mode(mode_seed, runtime.state if runtime else None)
     inferred_state_agency_mode = _agency_signal_mode(
@@ -2140,6 +2141,12 @@ def record_requirement_tool(
         runtime.state if runtime else None,
     )
     tool_planning_mode = _normalize_planning_mode(planning_mode)
+    state_mode = _state_planning_mode(runtime.state if runtime else None)
+    if tool_planning_mode == "agency_plan" and not explicit_agency_signal and state_mode != "agency_plan":
+        tool_planning_mode = None
+        planning_mode_reason = (
+            "未发现用户明确旅行社/省心方案/报价服务信号，保持自由规划"
+        )
     if tool_planning_mode == "agency_plan" and explicit_free_signal and not explicit_agency_plan_signal:
         tool_planning_mode = "free_planning"
         planning_mode_reason = (
@@ -2155,7 +2162,6 @@ def record_requirement_tool(
             planning_mode_reason
             or "已按用户提出的省心方案诉求修正为旅行社顾问方案"
         )
-    state_mode = _state_planning_mode(runtime.state if runtime else None)
     normalized_planning_mode = (
         tool_planning_mode
         or inferred_text_mode

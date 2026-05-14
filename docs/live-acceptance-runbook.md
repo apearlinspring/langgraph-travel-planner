@@ -10,8 +10,8 @@ chcp 65001 | Out-Null
 
 ## 当前分支
 
-- 工作树：`D:\Users\Administrator\PycharmProjects\ZhiXing\langgraph-travel-planner-acceptance-runner-resilience`
-- 分支：`codex/acceptance-runner-resilience`
+- 工作树：`D:\Users\Administrator\PycharmProjects\ZhiXing\langgraph-travel-planner-round-core-fixes-integration-review`
+- 分支：`codex/round-core-fixes-integration-review`
 - 日期：2026-05-14
 
 ## 状态判定
@@ -100,11 +100,12 @@ chcp 65001 | Out-Null
 
 ## acceptance-core 复跑步骤
 
-先确认当前分支以最新主线为基准：
+先确认当前分支和远端状态。若任务明确要求不要先合 `main`，只做 fetch（获取远端引用）和状态检查，不执行 merge（合并）：
 
 ```powershell
 git fetch origin
-git merge --ff-only origin/main
+git status --short --branch
+git log --oneline -5
 ```
 
 如果当前工作树没有 `.venv`，使用锁文件恢复本地环境：
@@ -146,17 +147,44 @@ uv sync --frozen
 
 ## acceptance-core 当前真实结果
 
-2026-05-13 在 `codex/core-preflight-readiness` 分支完成一次 acceptance-core preflight（核心验收预检）复核；本轮没有运行 9 个 acceptance-core 场景。
+2026-05-14 在 `codex/round-core-fixes-integration-review` 分支完成一次完整 9 场景真实验收。
 
-- `.env` 存在：`true`
+- `.env` 存在：`true`，未打印真实值，未提交。
 - runtime readiness：`passed`
 - live health（存活检查）：`alive`
 - ready health（就绪检查）：`ready`
 - MCP（模型上下文协议）服务：6 healthy，0 unavailable，37 tools
 - core preflight（预检）：退出码 `0`，`preflight.status=passed`，`backend_live=passed`，`backend_ready=passed`
-- 9 个核心场景：未运行
+- 完整 9 场景摘要：`.runtime\acceptance-core-full\20260514-083740-acceptance-summary.json`
+- 总状态：`failed`
+- 完成情况：`completed=9`，`pending=0`
+- 场景统计：`passed=5`，`degraded=1`，`failed=3`
+- 所有场景：`report_data=true`，`evidence_closure.missing=[]`，`error_event_count=0`，`session_busy_event_count=0`，`duplicate_tool_call_same_turn=0`
 
-当前不把 core preflight 结论替代 core 9 场景结论。preflight 已通过，下一步可以在同一真实环境下运行 9 个核心场景。
+失败/降级摘要：
+
+| 场景 | 状态 | 分类 | 关键证据 |
+|---|---|---|---|
+| `agency_senior_low_stress` | degraded | `acceptance_gate` | runtime budget 通过，但首 token 使用 85.0% 预算，触发 warning（警告）。 |
+| `edge_hotel_tool_fallback` | failed | `runtime_budget` | 首 token 80.59 秒超过 75 秒；总耗时使用 98.0% 预算。 |
+| `risk_weather_disruption` | failed | `runtime_budget` | 首 token 83.683 秒超过 75 秒。 |
+| `edge_transport_tool_fallback` | failed | `acceptance_gate` | 全量跑批中 `agency_context.mode=agency_plan` 与 expected `free_planning` 不一致；后续小修复已关闭该误判。 |
+
+修复后单场复跑 `edge_transport_tool_fallback`：
+
+- 摘要：`.runtime\acceptance-core-reruns\20260514-090232-acceptance-summary.json`
+- `agency_context.mode=free_planning`
+- `report_quality=passed`
+- `rag_quality=passed`
+- `tool_quality=passed`
+- `runtime_budget=failed`
+- 首 token 98.651 秒超过 75 秒
+- `tool_call_count=25`
+- `duplicate=0`
+- `error_event_count=0`
+- `session_busy_event_count=0`
+
+当前不建议合入 `main`。下一步应继续定位 runtime budget 慢路径，不要通过放宽预算或警戒比例伪装通过。
 
 ## 当前 smoke 真实结果
 
