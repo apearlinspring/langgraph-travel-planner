@@ -1,0 +1,96 @@
+{
+  "version": "rag_retrieval_scenarios.v1",
+  "description": "Small deterministic retrieval benchmark for public destination and internal agency RAG knowledge.",
+  "scenarios": [
+    {
+      "id": "retrieval_public_xian_culture_food",
+      "name": "Public guide: Xi'an culture and food",
+      "query": "第一次去西安自由行，想看历史文化景点，也想吃本地小吃，应该参考哪些攻略内容？",
+      "expected_sources": ["data/documents/destinations/xian.md"],
+      "expected_categories": ["destinations"],
+      "expected_source_types": ["destination_guide"],
+      "tags": ["public", "free_planning", "destination"]
+    },
+    {
+      "id": "retrieval_product_family_low_stress",
+      "name": "Internal products: parent-child low-stress route",
+      "query": "亲子省心旅行社方案，带孩子少排队、短动线、可午休，需要成熟路线结构。",
+      "expected_sources": [
+        "data/documents/internal/products/route_templates.md",
+        "data/documents/internal/products/real_world_product_patterns.md"
+      ],
+      "expected_categories": ["products"],
+      "expected_source_types": ["agency_internal"],
+      "tags": ["internal", "agency_plan", "products", "family"]
+    },
+    {
+      "id": "retrieval_product_senior_accessible",
+      "name": "Internal products: senior accessible route",
+      "query": "老人同行的省心路线，要求低强度、少步行、近地铁或打车方便。",
+      "expected_sources": ["data/documents/internal/products/route_templates.md"],
+      "expected_categories": ["products"],
+      "expected_source_types": ["agency_internal"],
+      "tags": ["internal", "agency_plan", "products", "senior"]
+    },
+    {
+      "id": "retrieval_pricing_inclusions_exclusions",
+      "name": "Internal pricing: inclusions and exclusions",
+      "query": "旅行社报价需要说明费用包含、不包含、待核验价格和预算置信度，应该参考什么规则？",
+      "expected_sources": [
+        "data/documents/internal/pricing/pricing_rules.md",
+        "data/documents/internal/pricing/real_world_pricing_and_contract_rules.md"
+      ],
+      "expected_categories": ["pricing"],
+      "expected_source_types": ["agency_internal"],
+      "tags": ["internal", "agency_plan", "pricing"]
+    },
+    {
+      "id": "retrieval_sop_consultant_flow",
+      "name": "Internal SOP: consultant workflow",
+      "query": "旅行顾问应该如何收集需求、确认关键项、避免重复追问，并交付最终报告？",
+      "expected_sources": [
+        "data/documents/internal/sop/service_sop.md",
+        "data/documents/internal/sop/real_world_consultant_sop.md"
+      ],
+      "expected_categories": ["sop"],
+      "expected_source_types": ["agency_internal"],
+      "tags": ["internal", "agency_plan", "sop"]
+    },
+    {
+      "id": "retrieval_risk_weather_elderly",
+      "name": "Internal risk: weather and elderly fallback",
+      "query": "天气变化、老人小孩体力不足、热门景区预约失败时，报告里应该怎么做风险提示和 Plan B？",
+      "expected_sources": [
+        "data/documents/internal/risk/risk_playbook.md",
+        "data/documents/internal/risk/real_world_compliance_risk_rules.md"
+      ],
+      "expected_categories": ["risk"],
+      "expected_source_types": ["agency_internal"],
+      "tags": ["internal", "agency_plan", "risk"]
+    },
+    {
+      "id": "retrieval_report_delivery_contract",
+      "name": "Internal report: delivery contract",
+      "query": "最终旅行规划报告应该包含行程、交通住宿、预算明细、地图路线、风险和待核验项。",
+      "expected_sources": [
+        "data/documents/internal/report/report_standard.md",
+        "data/documents/internal/report/real_world_report_delivery_patterns.md"
+      ],
+      "expected_categories": ["report"],
+      "expected_source_types": ["agency_internal"],
+      "tags": ["internal", "agency_plan", "report"]
+    },
+    {
+      "id": "retrieval_contract_no_locked_price",
+      "name": "Internal pricing and risk: no locked price commitment",
+      "query": "如果没有真实订单和库存，不能承诺锁价、余票、房型或预订成功，这个边界应该查哪些知识？",
+      "expected_sources": [
+        "data/documents/internal/pricing/pricing_rules.md",
+        "data/documents/internal/risk/real_world_compliance_risk_rules.md"
+      ],
+      "expected_categories": ["pricing", "risk"],
+      "expected_source_types": ["agency_internal"],
+      "tags": ["internal", "governance", "pricing", "risk"]
+    }
+  ]
+}

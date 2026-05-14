@@ -79,11 +79,19 @@ LLM（大语言模型）创建统一走 `app/utils/llm_factory.py` 的 `build_ch
 
 - `data/evaluation/rag_quality_scenarios.json`：检查省心方案是否覆盖产品、SOP（标准作业流程）、报价、风险、报告标准等证据类别；自由行场景则重点看模式适配和避免硬推旅行社表达。
 - `data/evaluation/tool_call_scenarios.json`：检查交通、酒店、目的地天气等工具是否按用户意图调用，是否避免同轮重复调用高成本查询工具，以及失败后是否进入待核验兜底。
+- `data/evaluation/rag_retrieval_scenarios.json`：小型 RAG（检索增强生成）召回率评估集，标注查询应命中的知识源、知识分类和来源类型，用 Top-K source recall（来源召回）、category recall（分类召回）和 MRR（平均倒数排名）对比朴素 BM25（词频检索算法）与元数据增强检索。
 
 列出场景：
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\evaluate_report_snapshot.py --list-scenarios
+```
+
+运行小型 RAG（检索增强生成）召回率评估，不需要 `.env`、真实 LLM（大语言模型）或外部 API（应用程序接口）：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\evaluate_rag_retrieval.py
+.\.venv\Scripts\python.exe scripts\evaluate_rag_retrieval.py --json
 ```
 
 用某个场景验收真实链路快照：
