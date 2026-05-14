@@ -7,8 +7,11 @@ import pytest
 
 
 TEST_ENV_DEFAULTS = {
+    "APP_ENV": "test",
     "DASHSCOPE_API_KEY": "test-key-dashscope",
     "LANGSMITH_API_KEY": "test-key-langsmith",
+    "LANGSMITH_TRACING": "false",
+    "LANGCHAIN_TRACING_V2": "false",
     "POSTGRES_DB": "test_db",
     "POSTGRES_USER": "test_user",
     "POSTGRES_PASSWORD": "test_password",

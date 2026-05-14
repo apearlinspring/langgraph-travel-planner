@@ -34,6 +34,18 @@ SENSITIVE_KEY_PARTS = (
     "电话",
 )
 
+SAFE_TOKEN_METRIC_KEYS = {
+    "estimated_input_tokens",
+    "estimated_output_tokens",
+    "estimated_total_tokens",
+    "average_estimated_total_tokens",
+    "max_estimated_total_tokens",
+    "token_event_count",
+    "token_count",
+    "token_ratio",
+    "warning_token_ratio",
+}
+
 EMAIL_PATTERN = re.compile(
     r"(?<![\w.+-])[\w.+-]+@[\w-]+(?:\.[\w-]+)+(?![\w.+-])",
     re.IGNORECASE,
@@ -64,6 +76,10 @@ def is_sensitive_key(key: object) -> bool:
     """Return True when a field name should never expose its raw value."""
 
     normalized = str(key or "").lower()
+    if normalized in SAFE_TOKEN_METRIC_KEYS:
+        return False
+    if normalized.endswith("_tokens") or normalized.endswith("_token_count"):
+        return False
     return any(part in normalized for part in SENSITIVE_KEY_PARTS)
 
 

@@ -119,7 +119,10 @@ def test_build_snapshot_payload_contains_report_and_evaluation_summary():
         elapsed_seconds=12.345,
         base_url="http://127.0.0.1:8000",
         turns=[{"turn_index": 1, "produced_report_data": True, "error": "test@example.com"}],
-        quality_summary={"aggregate": {"normalized_score": 90}},
+        quality_summary={
+            "aggregate": {"normalized_score": 90},
+            "runtime_metrics": {"estimated_total_tokens": 123},
+        },
         llm_judge_evaluation={"status": "blocked", "findings": ["missing key"]},
     )
     serialized = str(payload)
@@ -136,6 +139,7 @@ def test_build_snapshot_payload_contains_report_and_evaluation_summary():
     assert payload["llm_judge"]["status"] == "blocked"
     assert payload["summary"]["has_turn_observability"] is True
     assert payload["quality_summary"]["aggregate"]["normalized_score"] == 90
+    assert payload["quality_summary"]["runtime_metrics"]["estimated_total_tokens"] == 123
     assert payload["evidence_closure"]["checks"]["report_data"] is True
     assert payload["turn_observability"] == [
         {"degradation_status": "ok", "last_error": "联系 [REDACTED]"}

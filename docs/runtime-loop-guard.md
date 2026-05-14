@@ -22,6 +22,8 @@
 - 酒店查询增加整轮总运行上限；候选地逐个超时时，不再把所有候选都等满导致长时间占用会话锁。
 - `record_requirement_tool`、`select_destination_tool`、`select_transport_tool`、`select_accommodation_tool`、`select_food_tool` 对已经写入的等价状态执行 no-op（无操作）返回，避免重复写同一状态或把流程回退到旧阶段。
 - duplicate skip（重复跳过）通过 `tool_audit`（工具审计）记录为 `skipped`，不会产生 SSE `error` 事件；运行指标仍能看到一次可恢复降级。
+- `turn_observability`（轮次可观测）事件继续随真实 SSE（服务器发送事件）输出，acceptance snapshot（验收快照）和 summary（摘要）保留 `tool_call_count`、`error_event_count`、`estimated_total_tokens` 等运行指标；脱敏只遮蔽 PII（个人可识别信息）、JWT（JSON Web Token，令牌认证）、API key（应用程序接口密钥）和 secret（密钥），不遮蔽 token（文本令牌）计数。
+- test（测试）运行环境默认关闭 LangSmith（LangChain 可观测平台）tracing（链路追踪）并压低其上报日志级别，避免无效测试密钥触发 `403 Forbidden` 噪声；这不改变业务异常、SSE `error` 事件或 runtime budget（运行预算）门禁的失败语义。
 
 ## 运行结果预期
 
@@ -29,6 +31,7 @@
 - 在需求记录、目的地查询、酒店查询、住宿记录等单步推进场景，模型的可见工具会被前置收窄，预期从源头减少 `duplicate_tool_call_same_turn`。
 - 上游酒店 MCP（模型上下文协议）慢响应时，工具会在本轮预算内停止等待，明确“不编造酒店候选”，并建议下一轮放宽条件后重试。
 - acceptance snapshot（验收快照）中应看到工具调用数下降，`error_event_count` 维持 0；如触发循环保护，`tool_audit` 会出现 `duplicate_tool_call_same_turn`。
+- 测试默认输出不应再出现 LangSmith 403 上报刷屏；若真实 staging（预生产）或 production（生产）启用有效 LangSmith 密钥，第三方链路追踪仍可用，项目自身的 `turn_observability` 和验收运行指标也保持可读。
 
 ## 建议复核
 
