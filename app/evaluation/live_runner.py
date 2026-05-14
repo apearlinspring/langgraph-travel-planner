@@ -101,6 +101,8 @@ class LiveScenarioResult:
     runtime_budget_passed: bool | None = None
     runtime_findings: list[str] | None = None
     runtime_metrics: dict[str, Any] | None = None
+    first_token_seconds: float | None = None
+    tool_call_count: int | None = None
     tool_counts: dict[str, int] | None = None
     evidence_closure: dict[str, Any] | None = None
     acceptance_gate: dict[str, Any] | None = None
@@ -632,6 +634,25 @@ def _failure_details_from_category(
     return [redact_sensitive_text(item) for item in details[:5]] or None
 
 
+def _partial_runtime_metrics_dict(
+    *,
+    events: list[dict[str, Any]],
+    turns: list[dict[str, Any]],
+    assistant_text: str,
+    elapsed_seconds: float,
+) -> dict[str, Any] | None:
+    """Return best-effort runtime metrics for failed or interrupted scenarios."""
+
+    if not events and not turns and not assistant_text:
+        return None
+    return collect_runtime_metrics(
+        events=events,
+        turns=turns,
+        assistant_text=assistant_text,
+        elapsed_seconds=elapsed_seconds,
+    ).to_dict()
+
+
 def build_quality_summary(
     *,
     scenario: EvaluationScenario,
@@ -950,6 +971,7 @@ def run_live_scenario(
         effective_status = str(acceptance_gate["status"])
         if not effective_passed and effective_status == "passed":
             effective_status = "failed"
+        runtime_metrics = _as_dict(quality_summary.get("runtime_metrics"))
 
         return LiveScenarioResult(
             scenario_id=scenario.id,
@@ -968,7 +990,17 @@ def run_live_scenario(
                 *quality_summary["runtime_quality"]["budget_gate"]["violations"],
                 *quality_summary["runtime_quality"]["budget_gate"]["warnings"],
             ][:5],
-            runtime_metrics=quality_summary["runtime_metrics"],
+            runtime_metrics=runtime_metrics,
+            first_token_seconds=(
+                float(runtime_metrics["first_token_seconds"])
+                if isinstance(runtime_metrics.get("first_token_seconds"), (int, float))
+                else None
+            ),
+            tool_call_count=(
+                int(runtime_metrics["tool_call_count"])
+                if isinstance(runtime_metrics.get("tool_call_count"), int)
+                else None
+            ),
             tool_counts=quality_summary["tool_quality"]["tool_counts"],
             evidence_closure=evidence_closure,
             acceptance_gate=acceptance_gate,
@@ -985,6 +1017,12 @@ def run_live_scenario(
     ) as exc:
         elapsed_seconds = time.perf_counter() - started_at
         snapshot_path: str | None = None
+        partial_runtime_metrics = _partial_runtime_metrics_dict(
+            events=events,
+            turns=turns,
+            assistant_text="".join(assistant_parts),
+            elapsed_seconds=elapsed_seconds,
+        )
         if events or turns:
             snapshot = build_snapshot_payload(
                 scenario=scenario,
@@ -1023,6 +1061,23 @@ def run_live_scenario(
             snapshot_path=snapshot_path,
             elapsed_seconds=round(elapsed_seconds, 2),
             status=str(acceptance_gate["status"]),
+            runtime_metrics=partial_runtime_metrics,
+            first_token_seconds=(
+                float(partial_runtime_metrics["first_token_seconds"])
+                if isinstance(
+                    _as_dict(partial_runtime_metrics).get("first_token_seconds"),
+                    (int, float),
+                )
+                else None
+            ),
+            tool_call_count=(
+                int(partial_runtime_metrics["tool_call_count"])
+                if isinstance(
+                    _as_dict(partial_runtime_metrics).get("tool_call_count"),
+                    int,
+                )
+                else None
+            ),
             evidence_closure=build_acceptance_evidence_closure(
                 scenario=scenario,
                 report_data=report_data,
