@@ -216,6 +216,64 @@ RELATIVE_DATE_TOOL_KEYWORDS = (
     "劳动节",
 )
 
+FIRST_TURN_SLOW_INTENT_KEYWORDS = (
+    "酒店",
+    "住宿",
+    "民宿",
+    "交通",
+    "高铁",
+    "火车",
+    "航班",
+    "飞机",
+    "自驾",
+    "天气",
+    "气温",
+    "下雨",
+    "雨季",
+    "台风",
+    "暴雨",
+    "风险",
+    "避坑",
+    "Plan B",
+    "plan b",
+    "兜底",
+    "查不到",
+    "待核验",
+    "老人",
+    "父母",
+    "长辈",
+    "银发",
+    "走不动",
+)
+
+FIRST_TURN_AGENCY_PLAN_KEYWORDS = (
+    "旅行社方案",
+    "旅行社顾问方案",
+    "旅行社帮我",
+    "按旅行社",
+    "顾问方案",
+    "省心方案",
+    "省心安排",
+    "省心规划",
+    "不用我操心",
+    "不想自己操心",
+)
+
+FINAL_REPORT_REQUEST_KEYWORDS = (
+    "最终报告",
+    "旅游报告",
+    "旅行报告",
+    "旅游规划报告",
+    "旅行规划报告",
+    "规划报告",
+    "完整报告",
+    "生成报告",
+    "最终方案",
+    "完整方案",
+    "report_data",
+    "生成订单",
+)
+
 
 def _to_prompt_value(value: Any) -> Any:
     """Convert nested dicts into attribute-accessible objects for str.format()."""
@@ -375,6 +433,42 @@ def _message_has_human_role(message: Any) -> bool:
         role = message.get("role") or message.get("type")
         return role in {"user", "human"}
     return getattr(message, "type", None) == "human" or getattr(message, "role", None) == "user"
+
+
+def _message_has_assistant_text(message: Any) -> bool:
+    content = None
+    if isinstance(message, dict):
+        role = message.get("role") or message.get("type")
+        if role not in {"assistant", "ai"}:
+            return False
+        content = message.get("content")
+    elif getattr(message, "type", None) in {"ai", "assistant"} or getattr(message, "role", None) in {
+        "ai",
+        "assistant",
+    }:
+        content = getattr(message, "content", None)
+    return bool(str(content or "").strip())
+
+
+def _request_or_state_messages(request: ModelRequest) -> list[Any]:
+    messages = list(request.messages or [])
+    if messages:
+        return messages
+    state = request.state
+    if hasattr(state, "get"):
+        return list(state.get("messages") or [])
+    return []
+
+
+def _is_first_user_turn_without_assistant_text(request: ModelRequest) -> bool:
+    messages = _request_or_state_messages(request)
+    if not messages:
+        return False
+
+    human_count = sum(1 for message in messages if _message_has_human_role(message))
+    if human_count != 1:
+        return False
+    return not any(_message_has_assistant_text(message) for message in messages)
 
 
 def _tool_names_from_message(message: Any) -> set[str]:
@@ -643,6 +737,17 @@ def _transport_query_result_instruction(*, allow_selection: bool = False) -> str
         " 请直接基于已有交通候选做简短总结和推荐，"
         "不要在同一轮继续调用 `select_transport_tool` 抢先记录；"
         "等待用户确认具体交通方式或候选后，再记录交通方案。"
+    )
+
+
+def _transport_selection_fallback_instruction() -> str:
+    return (
+        "当前还没有记录交通方案，但用户已经要求按推荐方式继续推进，"
+        "或后续消息已经进入住宿确认。"
+        " 本轮必须先调用 `select_transport_tool` 记录交通，不要继续追问出发地，"
+        "也不要跨过交通去查询或记录住宿。"
+        " 如果缺少出发地或具体班次，就把交通类型按省心和时间合理优先记录为 train，"
+        "details 写明“出发地待确认，真实班次和价格待二次核验”。"
     )
 
 
@@ -1185,6 +1290,63 @@ def _should_prioritize_requirement_record(text: str) -> bool:
     return sum(1 for item in checks if item) >= 5
 
 
+def _looks_like_initial_complex_trip_request(text: str) -> bool:
+    normalized = (text or "").strip()
+    if not normalized:
+        return False
+
+    has_trip_shape = _has_route_hint(normalized) and (
+        _has_days_hint(normalized) or _has_date_hint(normalized)
+    )
+    if not has_trip_shape:
+        return False
+
+    has_slow_intent = any(
+        keyword in normalized for keyword in FIRST_TURN_SLOW_INTENT_KEYWORDS
+    )
+    has_full_agency_plan_intent = (
+        _has_budget_hint(normalized)
+        and any(keyword in normalized for keyword in FIRST_TURN_AGENCY_PLAN_KEYWORDS)
+    )
+    return has_slow_intent or has_full_agency_plan_intent
+
+
+def _should_defer_initial_slow_tools(request: ModelRequest, text: str) -> bool:
+    """Keep the first visible response ahead of slow external lookups."""
+
+    if not _is_first_user_turn_without_assistant_text(request):
+        return False
+    if _should_prioritize_requirement_record(text):
+        return False
+    return _looks_like_initial_complex_trip_request(text)
+
+
+def _initial_slow_tool_deferral_instruction() -> str:
+    return (
+        "你是知行旅行顾问。本轮只做首轮轻量响应，不调用任何工具，"
+        "也不编造实时价格、库存、班次或天气。"
+        "请用 1-2 句确认你已理解用户的目的地、天数、同行人和慢项诉求；"
+        "说明会在需求确认后核验真实交通、酒店、天气和风险证据，"
+        "然后请用户确认是否按此记录并推进。"
+    )
+
+
+def _looks_like_final_report_request(text: str) -> bool:
+    normalized = (text or "").strip()
+    if not normalized:
+        return False
+    return any(keyword in normalized for keyword in FINAL_REPORT_REQUEST_KEYWORDS)
+
+
+def _final_report_tool_instruction() -> str:
+    return (
+        "本轮已经处于最终报告生成阶段，用户明确要求生成最终报告或 report_data。"
+        " 只能调用 `generate_order_tool`，不要先输出寒暄、确认语或手写报告。"
+        " 工具会用已确认状态补齐结构化报告、预算置信度、风险和待核验项；"
+        " 即使仍有估算项，也应通过工具生成带待核验说明的 report_data。"
+    )
+
+
 def _should_finalize_requirement_after_followup(
     request: ModelRequest,
     text: str,
@@ -1332,6 +1494,11 @@ class StepConfigMiddleware(AgentMiddleware):
 
         compatibility = get_model_compatibility(profile="planner")
         latest_human_text = _latest_human_text(request)
+        active_human_text = latest_human_text or _recent_human_text(request, limit=1)
+        defer_initial_slow_tools = (
+            current_step == "requirement_collection"
+            and _should_defer_initial_slow_tools(request, active_human_text)
+        )
         if current_step == "requirement_collection":
             today_text = date.today().isoformat()
             override_kwargs["system_prompt"] = (
@@ -1373,6 +1540,13 @@ class StepConfigMiddleware(AgentMiddleware):
             latest_human_text,
             state=state_dict,
             intent=travel_intent,
+        )
+        final_report_requested = (
+            travel_intent.name in {"final_report", "export_report"}
+            or (
+                current_step == "order_generation"
+                and _looks_like_final_report_request(active_human_text)
+            )
         )
         planning_instruction = _planning_mode_instruction(planning_mode)
         if planning_instruction:
@@ -1426,7 +1600,39 @@ class StepConfigMiddleware(AgentMiddleware):
                     "规划模式待确认：本轮暂缓记录需求，优先确认自由规划或旅行社顾问方案"
                 )
 
-        cross_step_tool_names = _cross_step_verification_tools(latest_human_text)
+        if defer_initial_slow_tools:
+            state["pending_initial_request_text"] = active_human_text
+            if planning_mode.mode:
+                state["pending_initial_planning_mode"] = planning_mode.mode
+                state["pending_initial_planning_mode_reason"] = planning_mode.reason
+            if override_kwargs["tools"]:
+                override_kwargs["tools"] = []
+            override_kwargs["system_prompt"] = _initial_slow_tool_deferral_instruction()
+            app_logger.info(
+                "需求收集首轮复杂规划请求：暂缓所有工具以降低首 token 延迟"
+            )
+
+        cross_step_tool_names = (
+            [] if defer_initial_slow_tools else _cross_step_verification_tools(latest_human_text)
+        )
+        if (
+            current_step == "transport_planning"
+            and not _has_selected_transport(state_dict)
+            and "query_hotel_options" in cross_step_tool_names
+        ):
+            cross_step_tool_names = [
+                tool_name
+                for tool_name in cross_step_tool_names
+                if tool_name != "query_hotel_options"
+            ]
+            override_kwargs["system_prompt"] = (
+                f"{override_kwargs['system_prompt']}\n\n"
+                "交通方案尚未记录时，不要跨阶段查询或记录住宿；"
+                "请先完成交通记录，再处理住宿。"
+            )
+            app_logger.info(
+                "交通未记录：暂缓跨阶段酒店查询，避免跳过交通前置状态"
+            )
         if cross_step_tool_names:
             current_tool_names = _tool_names(override_kwargs["tools"])
             added_tools: list[str] = []
@@ -1451,7 +1657,11 @@ class StepConfigMiddleware(AgentMiddleware):
                 )
 
         available_tool_names = _tool_names(override_kwargs["tools"])
-        intent_preferred_tool = _preferred_tool_for_intent(travel_intent, state_dict)
+        intent_preferred_tool = (
+            None
+            if defer_initial_slow_tools
+            else _preferred_tool_for_intent(travel_intent, state_dict)
+        )
         if (
             planning_mode.needs_confirmation
             and intent_preferred_tool == "record_requirement_tool"
@@ -1508,8 +1718,25 @@ class StepConfigMiddleware(AgentMiddleware):
         middleware_forced_tool = None
         latest_tool_result_names = _latest_tool_result_names(request)
         if current_step == "transport_planning":
+            transport_human_text = latest_human_text or _recent_human_text(request, limit=1)
+            transport_selection_requested = (
+                not any(keyword in transport_human_text for keyword in ("重新", "换个", "改成"))
+                and (
+                    (
+                        any(keyword in transport_human_text for keyword in SELECTION_KEYWORDS)
+                        and any(
+                            keyword in transport_human_text
+                            for keyword in ("交通", "方式", "推荐", "省心", "时间合理")
+                        )
+                        and any(
+                            keyword in transport_human_text
+                            for keyword in ("交通", "方式", "班次", "出行", "省心和时间合理")
+                        )
+                    )
+                    or any(keyword in transport_human_text for keyword in CROSS_STEP_HOTEL_KEYWORDS)
+                )
+            )
             if "query_transport_options" in latest_tool_result_names:
-                transport_human_text = latest_human_text or _recent_human_text(request, limit=1)
                 allow_transport_selection = any(
                     keyword in transport_human_text for keyword in SELECTION_KEYWORDS
                 )
@@ -1532,6 +1759,23 @@ class StepConfigMiddleware(AgentMiddleware):
                 override_kwargs["system_prompt"] = (
                     f"{override_kwargs['system_prompt']}\n\n"
                     f"{_transport_query_result_instruction(allow_selection=allow_transport_selection)}"
+                )
+            elif (
+                not _has_selected_transport(state_dict)
+                and "select_transport_tool" in available_tool_names
+                and transport_selection_requested
+            ):
+                middleware_forced_tool = "select_transport_tool"
+                filtered_tools = _keep_tools_by_name(
+                    override_kwargs["tools"],
+                    {"select_transport_tool"},
+                )
+                if filtered_tools:
+                    override_kwargs["tools"] = filtered_tools
+                    available_tool_names = _tool_names(override_kwargs["tools"])
+                override_kwargs["system_prompt"] = (
+                    f"{override_kwargs['system_prompt']}\n\n"
+                    f"{_transport_selection_fallback_instruction()}"
                 )
             elif (
                 not _has_selected_transport(state_dict)
@@ -1623,6 +1867,27 @@ class StepConfigMiddleware(AgentMiddleware):
             elif "update_accommodation_preference_tool" in accommodation_excluded_tools:
                 override_kwargs["system_prompt"] = (
                     f"{override_kwargs['system_prompt']}\n\n{_temporary_accommodation_instruction()}"
+                )
+
+        if (
+            current_step == "order_generation"
+            and final_report_requested
+            and not state_dict.get("report_data")
+        ):
+            final_report_tool = _find_tool_by_name(
+                self._step_config,
+                "generate_order_tool",
+            )
+            if final_report_tool is not None:
+                override_kwargs["tools"] = [final_report_tool]
+                available_tool_names = _tool_names(override_kwargs["tools"])
+                middleware_forced_tool = "generate_order_tool"
+                override_kwargs["system_prompt"] = (
+                    f"{override_kwargs['system_prompt']}\n\n"
+                    f"{_final_report_tool_instruction()}"
+                )
+                app_logger.info(
+                    "最终报告阶段：本轮收窄为 generate_order_tool，确保产出 report_data"
                 )
 
         forced_tool = None

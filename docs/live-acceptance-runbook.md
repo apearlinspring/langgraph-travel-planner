@@ -147,7 +147,7 @@ uv sync --frozen
 
 ## acceptance-core 当前真实结果
 
-2026-05-14 在 `codex/round-core-fixes-integration-review` 分支完成一次完整 9 场景真实验收。
+2026-05-14 在 `codex/round-core-fixes-integration-review` 分支完成新一轮完整 9 场景真实验收。
 
 - `.env` 存在：`true`，未打印真实值，未提交。
 - runtime readiness：`passed`
@@ -155,36 +155,35 @@ uv sync --frozen
 - ready health（就绪检查）：`ready`
 - MCP（模型上下文协议）服务：6 healthy，0 unavailable，37 tools
 - core preflight（预检）：退出码 `0`，`preflight.status=passed`，`backend_live=passed`，`backend_ready=passed`
-- 完整 9 场景摘要：`.runtime\acceptance-core-full\20260514-083740-acceptance-summary.json`
-- 总状态：`failed`
+- 完整 9 场景摘要：`.runtime\acceptance-core-full\20260514-134448-acceptance-summary.json`
+- 总状态：`passed`
 - 完成情况：`completed=9`，`pending=0`
-- 场景统计：`passed=5`，`degraded=1`，`failed=3`
-- 所有场景：`report_data=true`，`evidence_closure.missing=[]`，`error_event_count=0`，`session_busy_event_count=0`，`duplicate_tool_call_same_turn=0`
+- 场景统计：`passed=9`，`degraded=0`，`failed=0`
+- 所有场景：`report_data=true`，`evidence_closure.missing=[]`，`runtime_budget=passed`，`error_event_count=0`，`session_busy_event_count=0`
+- 按每个快照的同轮同名工具事件复核，`duplicate_tool_call_same_turn=0`
 
-失败/降级摘要：
+场景指标摘要：
 
-| 场景 | 状态 | 分类 | 关键证据 |
-|---|---|---|---|
-| `agency_senior_low_stress` | degraded | `acceptance_gate` | runtime budget 通过，但首 token 使用 85.0% 预算，触发 warning（警告）。 |
-| `edge_hotel_tool_fallback` | failed | `runtime_budget` | 首 token 80.59 秒超过 75 秒；总耗时使用 98.0% 预算。 |
-| `risk_weather_disruption` | failed | `runtime_budget` | 首 token 83.683 秒超过 75 秒。 |
-| `edge_transport_tool_fallback` | failed | `acceptance_gate` | 全量跑批中 `agency_context.mode=agency_plan` 与 expected `free_planning` 不一致；后续小修复已关闭该误判。 |
+| 场景 | 状态 | first_token_seconds | tool_call_count | mode |
+|---|---:|---:|---:|---|
+| `free_weekend_nearby` | passed | 12.565 | 14 | `free_planning` |
+| `free_city_three_days` | passed | 9.681 | 13 | `free_planning` |
+| `agency_couple_relaxed` | passed | 20.547 | 17 | `agency_plan` |
+| `agency_family_parent_child` | passed | 33.636 | 21 | `agency_plan` |
+| `agency_senior_low_stress` | passed | 17.513 | 18 | `agency_plan` |
+| `edge_hotel_tool_fallback` | passed | 29.511 | 19 | `free_planning` |
+| `pricing_agency_quote_explanation` | passed | 74.391 | 26 | `agency_plan` |
+| `risk_weather_disruption` | passed | 15.614 | 13 | `agency_plan` |
+| `edge_transport_tool_fallback` | passed | 40.417 | 15 | `free_planning` |
 
-修复后单场复跑 `edge_transport_tool_fallback`：
+本轮闭环的历史问题：
 
-- 摘要：`.runtime\acceptance-core-reruns\20260514-090232-acceptance-summary.json`
-- `agency_context.mode=free_planning`
-- `report_quality=passed`
-- `rag_quality=passed`
-- `tool_quality=passed`
-- `runtime_budget=failed`
-- 首 token 98.651 秒超过 75 秒
-- `tool_call_count=25`
-- `duplicate=0`
-- `error_event_count=0`
-- `session_busy_event_count=0`
+- 首轮复杂慢请求不再先等待酒店、交通、天气或风险工具，先轻量确认，再在后续推进轮核验证据。
+- `pricing_agency_quote_explanation` 最终报告轮收窄到 `generate_order_tool` 后已稳定生成 `report_data`。
+- `agency_couple_relaxed` 不再因首轮内部产品检索导致工具预算 warning。
+- `edge_transport_tool_fallback` 保持 `agency_context.mode=free_planning`，没有回到 `agency_plan`。
 
-当前不建议合入 `main`。下一步应继续定位 runtime budget 慢路径，不要通过放宽预算或警戒比例伪装通过。
+当前建议：可以推进合入 `main`，但合入前仍建议维护者在目标环境复跑 `/health/ready`、preflight（预检）和完整 acceptance-core。
 
 ## 当前 smoke 真实结果
 
@@ -216,22 +215,22 @@ uv sync --frozen
 ## 本轮验证记录
 
 ```powershell
-.\.venv\Scripts\python.exe -m compileall app tests scripts
+.\.venv\Scripts\python -m compileall app tests scripts
 ```
 
 结果：退出码 `0`。
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest tests\test_evaluation_live_runner.py tests\test_transport_query_tool.py tests\test_workflow_maintainability.py -q
+.\.venv\Scripts\python -m pytest tests\test_step_prompt_rendering.py tests\test_planning_mode_boundary.py tests\test_tool_loop_guard.py tests\test_evaluation_live_runner.py tests\test_runtime_metrics.py -q
 ```
 
-结果：退出码 `0`，`70 passed`。测试结束后 LangSmith（LangChain 可观测平台）上报返回 `403 Forbidden`，不影响 pytest（测试框架）退出码。
+结果：退出码 `0`，`102 passed`。测试结束后 LangSmith（LangChain 可观测平台）上报返回 `403 Forbidden`，不影响 pytest（测试框架）退出码。
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python -m pytest -q
 ```
 
-结果：退出码 `0`，`387 passed, 24 deselected`。结束后 LangSmith（LangChain 可观测平台）上报返回 `403 Forbidden`，但 pytest（测试框架）退出码为 `0`。
+结果：退出码 `0`，`434 passed, 24 deselected`。结束后 LangSmith（LangChain 可观测平台）上报返回 `403 Forbidden`，但 pytest（测试框架）退出码为 `0`。
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\run_evaluation_scenarios.py --acceptance-smoke --preflight-only --json --no-summary
@@ -243,19 +242,18 @@ uv sync --frozen
 .\.venv\Scripts\python.exe scripts\run_evaluation_scenarios.py --acceptance-core --preflight-only --json --no-summary
 ```
 
-结果：退出码 `0`，`preflight.status=passed`，`backend_live=passed`，`backend_ready=passed`。首次默认 8 秒 MCP 启动探测会导致 `amap`、`12306-mcp` 和 `VariFlight-Aviation` degraded；把 `RUNTIME_MCP_STARTUP_TIMEOUT_SECONDS` 调整为 25 秒后复测通过，并已把 25 秒同步为默认值。
+结果：退出码 `0`，`preflight.status=passed`，`backend_live=passed`，`backend_ready=passed`。
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\run_evaluation_scenarios.py --acceptance-smoke --base-url http://127.0.0.1:8000 --json --summary-dir .runtime\acceptance-smoke
+.\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-core --base-url http://127.0.0.1:8000 --json --summary-dir .runtime\acceptance-core-full --scenario-timeout 900 --global-timeout 7200
 ```
 
-结果：退出码 `0`，`status=passed`，`passed=true`，场景数 `1`。`runtime_budget=passed`，`total_elapsed_seconds=556.393`，`first_token_seconds=84.103`，`tool_call_count=21`。
+结果：退出码 `0`，`status=passed`，`passed=true`，场景数 `9`。所有场景 `report_data=true`、`evidence_closure.missing=[]`、`runtime_budget=passed`、`error_event_count=0`、`session_busy_event_count=0`。
 
 本地证据：
 
-- `.runtime\acceptance-smoke\20260513-150047-acceptance-summary.json`
-- `.runtime\acceptance-smoke\20260513-150047-acceptance-summary.md`
-- `.runtime\evaluations\20260513-230047-pricing_agency_quote_explanation.json`
+- `.runtime\acceptance-core-full\20260514-134448-acceptance-summary.json`
+- `.runtime\acceptance-core-full\20260514-134448-acceptance-summary.md`
 
 这些 `.runtime/` 文件不提交。
 
@@ -270,4 +268,4 @@ uv sync --frozen
 
 ## 下一步
 
-如果后续改动影响模型、RAG（检索增强生成）、MCP（模型上下文协议）或报告结构，先复跑 `acceptance-smoke`。当前 smoke 和 core preflight 均已通过；下一步运行 9 个 acceptance-core 场景，并继续只提交脱敏摘要，不提交 `.runtime/` 原始产物。
+如果后续改动影响模型、RAG（检索增强生成）、MCP（模型上下文协议）或报告结构，先复跑 `acceptance-smoke`，再复跑完整 acceptance-core。当前 smoke 历史链路、core preflight 和完整 9 场景均已通过；后续继续只提交脱敏摘要，不提交 `.runtime/` 原始产物。

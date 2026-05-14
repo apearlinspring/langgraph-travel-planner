@@ -64,6 +64,11 @@ AGENCY_FALLBACK_CONTEXT_KEYWORDS = (
     "住",
 )
 
+AGENCY_TRANSPORT_CONTEXT_KEYWORDS = ("交通", "高铁", "航班", "飞机", "火车", "车次", "自驾")
+AGENCY_LODGING_CONTEXT_KEYWORDS = ("酒店", "住宿", "民宿", "宾馆", "客栈")
+AGENCY_RISK_CONTEXT_KEYWORDS = ("天气", "下雨", "雨季", "台风", "Plan B", "plan b", "风险")
+AGENCY_CARE_CONTEXT_KEYWORDS = ("老人", "父母", "长辈", "银发", "走不动")
+
 FREE_MODE_KEYWORDS = (
     "自由行",
     "自由规划",
@@ -93,10 +98,11 @@ def _contains_any(text: str, keywords: tuple[str, ...]) -> bool:
 def _agency_rejected(text: str) -> bool:
     return bool(
         re.search(
-            r"(不需要|无需|拒绝|别|(?<!要)不要|不想).{0,10}"
+            r"(不需要|无需|拒绝|(?<!要)不要|不想).{0,10}"
             r"(旅行社|顾问方案|产品|推销|销售|省心方案|省心套餐)",
             text,
         )
+        or re.search(r"别.{0,6}(推销|销售|硬推|推产品|推荐产品)", text)
     )
 
 
@@ -118,6 +124,18 @@ def has_explicit_agency_plan_signal(text: str) -> bool:
         return False
     if _contains_any(normalized, AGENCY_MODE_KEYWORDS):
         return True
+    if re.search(r"省心.{0,4}(安排|规划)", normalized):
+        has_transport = _contains_any(normalized, AGENCY_TRANSPORT_CONTEXT_KEYWORDS)
+        has_lodging = _contains_any(normalized, AGENCY_LODGING_CONTEXT_KEYWORDS)
+        has_risk = _contains_any(normalized, AGENCY_RISK_CONTEXT_KEYWORDS)
+        has_care = _contains_any(normalized, AGENCY_CARE_CONTEXT_KEYWORDS)
+        if has_transport and has_lodging and (has_risk or has_care):
+            return True
+        if has_risk and has_care and (has_transport or has_lodging):
+            return True
+        return bool(
+            re.search(r"省心.{0,4}(安排|规划).{0,24}(全程|一站式|托管|包办)", normalized)
+        )
     return bool(
         re.search(r"省心.{0,4}(方案|套餐|托管|包办)", normalized)
         or re.search(r"(按|用).{0,6}(旅行社|顾问).{0,6}(方案|标准|流程)", normalized)

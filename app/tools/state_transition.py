@@ -2126,8 +2126,34 @@ def record_requirement_tool(
         "travel_styles": travel_styles,
         "destination": destination or "",
     }
+    pending_initial_request_text = ""
+    pending_initial_planning_mode = None
+    pending_initial_planning_mode_reason = ""
+    if runtime and runtime.state:
+        pending_initial_request_text = _normalize_requirement_text(
+            runtime.state.get("pending_initial_request_text")
+        )
+        pending_initial_planning_mode = _normalize_planning_mode(
+            runtime.state.get("pending_initial_planning_mode")
+        )
+        pending_initial_planning_mode_reason = _normalize_requirement_text(
+            runtime.state.get("pending_initial_planning_mode_reason")
+        )
+    mode_inference_seed = {
+        **mode_seed,
+        "special_needs": " ".join(
+            item
+            for item in [
+                str(mode_seed.get("special_needs") or ""),
+                pending_initial_request_text,
+                planning_mode_reason,
+                pending_initial_planning_mode_reason,
+            ]
+            if item
+        ),
+    }
     mode_context_text = agency_product_rules.requirement_text(
-        mode_seed,
+        mode_inference_seed,
         runtime.state if runtime else None,
     )
     inferred_text_mode = None
@@ -2135,12 +2161,18 @@ def record_requirement_tool(
     explicit_agency_plan_signal = has_explicit_agency_plan_signal(mode_context_text)
     explicit_free_signal = has_explicit_free_signal(mode_context_text)
     if explicit_agency_signal or explicit_free_signal:
-        inferred_text_mode = _infer_planning_mode(mode_seed, runtime.state if runtime else None)
+        inferred_text_mode = _infer_planning_mode(
+            mode_inference_seed,
+            runtime.state if runtime else None,
+        )
     inferred_state_agency_mode = _agency_signal_mode(
-        mode_seed,
+        mode_inference_seed,
         runtime.state if runtime else None,
     )
     tool_planning_mode = _normalize_planning_mode(planning_mode)
+    if not tool_planning_mode and pending_initial_planning_mode and explicit_agency_signal:
+        tool_planning_mode = pending_initial_planning_mode
+        planning_mode_reason = planning_mode_reason or pending_initial_planning_mode_reason
     state_mode = _state_planning_mode(runtime.state if runtime else None)
     if tool_planning_mode == "agency_plan" and not explicit_agency_signal and state_mode != "agency_plan":
         tool_planning_mode = None
@@ -2216,6 +2248,9 @@ def record_requirement_tool(
         "planning_mode_reason": normalized_reason,
         "planning_mode_confirmed": planning_mode_confirmed,
         "current_step": "destination_recommendation",
+        "pending_initial_request_text": "",
+        "pending_initial_planning_mode": None,
+        "pending_initial_planning_mode_reason": "",
     }
     duplicate_command = _duplicate_state_command(
         "record_requirement_tool",

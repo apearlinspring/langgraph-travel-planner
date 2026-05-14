@@ -337,7 +337,12 @@ def _detect_planning_mode_from_text(text: str) -> PlanningModeDecision:
         free_score = 1
 
     agency_rejected = bool(
-        re.search(r"(不需要|无需|拒绝|别|(?<!要)不要|不想).{0,8}(旅行社|顾问方案|产品|推销|销售|省心方案)", normalized)
+        re.search(
+            r"(不需要|无需|拒绝|(?<!要)不要|不想).{0,8}"
+            r"(旅行社|顾问方案|产品|推销|销售|省心方案)",
+            normalized,
+        )
+        or re.search(r"别.{0,6}(推销|销售|硬推|推产品|推荐产品)", normalized)
     )
     free_rejected = bool(
         re.search(r"(不需要|无需|拒绝|(?<!要)不要|不想).{0,8}(自由行|自由规划|自助游|自己玩|自己订|diy)", lower_text)

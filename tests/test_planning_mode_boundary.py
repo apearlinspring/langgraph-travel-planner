@@ -98,6 +98,86 @@ def test_transport_fallback_convenience_wording_stays_free_planning():
     assert command.update["user_requirement"]["planning_mode"] == "free_planning"
 
 
+def test_full_service_weather_risk_convenience_signal_enters_agency_plan():
+    prompt = "我计划7月带父母去桂林4天3晚，担心下雨和老人走不动，请给省心安排并把天气、交通、酒店和Plan B风险写清楚。"
+    state = create_initial_state(user_id="user-1", session_id="session-1")
+    state["messages"].append(HumanMessage(content=prompt))
+
+    intent = detect_travel_intent(
+        prompt,
+        current_step="requirement_collection",
+        state=state,
+    )
+    decision = resolve_planning_mode(prompt, state=state, intent=intent)
+    command = record_requirement_tool.invoke(
+        {
+            "departure_city": "出发地待确认",
+            "destination": "桂林",
+            "departure_date": "2026-07-10",
+            "travel_days": 4,
+            "adult_count": 2,
+            "children_count": 0,
+            "budget_min": 2000.0,
+            "budget_max": 5000.0,
+            "travel_styles": ["轻松舒适"],
+            "special_needs": prompt,
+            "runtime": _build_runtime(state),
+        }
+    )
+
+    assert intent.name == "risk_query"
+    assert intent.planning_mode == "agency_plan"
+    assert decision.mode == "agency_plan"
+    assert command.update["planning_mode"] == "agency_plan"
+    assert command.update["user_requirement"]["planning_mode"] == "agency_plan"
+
+
+def test_pending_initial_agency_request_preserves_mode_on_confirmation_turn():
+    state = create_initial_state(user_id="user-1", session_id="session-1")
+    state["pending_initial_request_text"] = (
+        "给父母做银发游，5天4晚，想去北京，交通住宿都希望稳妥，别太累。"
+        "请按旅行社顾问方案安排。"
+    )
+    state["pending_initial_planning_mode"] = "agency_plan"
+    state["pending_initial_planning_mode_reason"] = "用户首轮明确旅行社顾问方案"
+
+    command = record_requirement_tool.invoke(
+        {
+            "departure_city": "出发地待确认",
+            "destination": "北京",
+            "departure_date": "2026-06-01",
+            "travel_days": 5,
+            "adult_count": 2,
+            "children_count": 0,
+            "budget_min": 2500.0,
+            "budget_max": 6000.0,
+            "travel_styles": ["轻松舒适"],
+            "special_needs": "父母同行，交通住宿稳妥，别太累。",
+            "planning_mode": "agency_plan",
+            "runtime": _build_runtime(state),
+        }
+    )
+
+    assert command.update["planning_mode"] == "agency_plan"
+    assert command.update["user_requirement"]["planning_mode"] == "agency_plan"
+    assert command.update["pending_initial_request_text"] == ""
+    assert command.update["pending_initial_planning_mode"] is None
+
+
+def test_low_stress_wording_does_not_negate_agency_plan_signal():
+    prompt = "给父母做银发游，5天4晚，想去北京，交通住宿都希望稳妥，别太累。请按旅行社顾问方案安排。"
+
+    intent = detect_travel_intent(
+        prompt,
+        current_step="requirement_collection",
+        state={},
+    )
+    decision = resolve_planning_mode(prompt, state={}, intent=intent)
+
+    assert intent.planning_mode == "agency_plan"
+    assert decision.mode == "agency_plan"
+
+
 def test_explicit_free_signal_overrides_overeager_agency_tool_argument():
     state = create_initial_state(user_id="user-1", session_id="session-1")
 

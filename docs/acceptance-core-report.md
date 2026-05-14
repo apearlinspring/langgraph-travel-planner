@@ -2,206 +2,133 @@
 
 ## 结论
 
-2026-05-14 在 `codex/round-core-fixes-integration-review` 分支完成 acceptance-core（核心验收）9 场景真实环境跑批。9 个场景均生成机器摘要，真实环境 runtime readiness（运行时就绪检查）和 core preflight（预检）均为 `passed（通过）`，但全量结果为 `failed（失败）`，不能建议合入 `main`。
+2026-05-14 在 `codex/round-core-fixes-integration-review` 分支完成新一轮 acceptance-core（核心验收）9 场景真实环境跑批。9 个场景均生成机器摘要，总体 `status=passed`，没有 `degraded（降级）` 或 `failed（失败）` 场景。
 
-失败没有通过放宽 runtime budget（运行预算）或 warning ratio（警戒比例）掩盖。所有场景均生成 `report_data`，`evidence_closure.missing=[]`，`error_event_count=0`，`session_busy_event_count=0`，`duplicate_tool_call_same_turn=0`。剩余阻塞集中在首 token（文本令牌）慢路径和一个已修复的规划模式边界误判。
+本轮没有合并 `main`，没有放宽 runtime budget（运行预算）或 warning ratio（警戒比例），也没有改写验收门禁结果。所有真实密钥只来自本地 `.env`，未打印、未写入文档、未提交；`.runtime/` 原始产物仅保留本地。
 
-环境闭环历史见 [acceptance-runtime-close-loop.md](./acceptance-runtime-close-loop.md)，复跑步骤见 [live-acceptance-runbook.md](./live-acceptance-runbook.md)。
+## 本轮修复摘要
 
-## 基准与命令
+- StepConfigMiddleware（阶段配置中间件）新增首轮轻量响应策略：首轮复杂酒店、天气、交通、风险、老人低压力或完整旅行社省心方案请求，先快速确认理解并暂缓慢工具，下一轮再记录需求和核验证据。
+- `record_requirement_tool` 会保留首轮暂缓请求的规划模式线索，避免首轮轻量响应后丢失 `agency_plan` 或 `free_planning` 边界。
+- `order_generation` 阶段遇到明确最终报告或 `report_data` 请求时，工具列表收窄为 `generate_order_tool`，避免模型只输出短文本却不生成结构化报告。
+- 交通阶段在尚未记录交通方案时，不允许住宿确认轮跨阶段抢跑酒店查询；先写入交通，再进入住宿。
+- 规划模式边界继续保持：`free_city_three_days` 和 `edge_transport_tool_fallback` 均为 `free_planning`，明确旅行社顾问、报价、服务标准、风险闭环场景仍进入 `agency_plan`。
+
+## 环境与命令
 
 - 工作树：`D:\Users\Administrator\PycharmProjects\ZhiXing\langgraph-travel-planner-round-core-fixes-integration-review`
 - 分支：`codex/round-core-fixes-integration-review`
-- 基准命令：`git fetch origin; git status --short --branch; git log --oneline -5`
-- 结果：本轮没有先合 `main`；只在当前分支做真实验收和小范围修复。
-- 本地 Python（编程语言运行时）环境：如缺少 `.venv`，用 `uv run --frozen ...` 或 `uv sync --frozen` 按锁文件创建。
+- 后端：`http://127.0.0.1:8000`
+- `/health/live`：`alive`
+- `/health/ready`：`ready`
+- MCP（模型上下文协议）服务：6 healthy，0 unavailable，37 tools
 
-执行过的核心门禁命令：
+执行过的真实环境命令：
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\check_runtime_readiness.py --target staging --check-docker --json
-.\.venv\Scripts\python.exe -m scripts.init_db --mode bootstrap
-.\.venv\Scripts\python.exe -m scripts.init_rag
-.\.venv\Scripts\python.exe scripts\run_evaluation_scenarios.py --acceptance-core --preflight-only --json --no-summary
+.\.venv\Scripts\python scripts\check_runtime_readiness.py --target staging --check-docker --json
+.\.venv\Scripts\python -m scripts.init_db --mode bootstrap
+.\.venv\Scripts\python -m scripts.init_rag
+.\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-core --preflight-only --json --no-summary
 ```
 
-后续运行 9 个 acceptance-core（核心验收）场景时，使用带韧性预算的入口，不写真实 `.env` 内容，不提交 `.runtime/` 原始产物：
+关键复跑命令：
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\run_evaluation_scenarios.py --acceptance-core --base-url http://127.0.0.1:8000 --json --summary-dir .runtime\acceptance-core --scenario-timeout 900 --global-timeout 7200
-```
-
-单场景或子集复跑用于定位失败，不替代完整 core 结论：
-
-```powershell
-.\.venv\Scripts\python.exe scripts\run_evaluation_scenarios.py --scenario agency_couple_relaxed --base-url http://127.0.0.1:8000 --json --summary-dir .runtime\acceptance-subset --scenario-timeout 900
-.\.venv\Scripts\python.exe scripts\run_evaluation_scenarios.py --scenario agency_couple_relaxed --scenario risk_weather_disruption --base-url http://127.0.0.1:8000 --json --summary-dir .runtime\acceptance-subset --scenario-timeout 900 --global-timeout 1800
-```
-
-若发生 timeout（超时）、global_timeout（全局超时）、conversation_busy（会话占用）、runtime budget（运行预算）或 evidence closure（证据闭环）失败，摘要会在 `run_context` 和每个场景结果中保留脱敏分类。每个场景结束后都会即时刷新 JSON（JavaScript 对象表示法）和 Markdown（标记文本）summary（摘要），因此已完成场景的机器结论不会被后续长循环吞掉。
-
-## 环境闭环摘要
-
-- `.env` 存在：是，未提交。
-- `.env` 存在但未打印内容，未提交；本轮不把真实密钥写入文档或提交说明。
-- PostgreSQL（关系型数据库）：`healthy`。
-- Redis（内存数据结构存储）：`healthy`。
-- `scripts.init_db --mode bootstrap`：退出码 `0`。
-- `scripts.init_rag`：退出码 `0`。新工作树本地生成公开和内部 RAG（检索增强生成）向量库；这些 ignored（忽略）产物不提交。
-- runtime readiness（运行时就绪检查）：`status=passed`，`blocked_reasons=[]`。
-- `/health/live`：`alive`。
-- `/health/ready`：在 `RUNTIME_MCP_STARTUP_TIMEOUT_SECONDS=25` 下为 `ready`；MCP 服务 6 healthy、0 unavailable、37 tools。
-- 本轮已把默认 `RUNTIME_MCP_STARTUP_TIMEOUT_SECONDS` 从 8 秒调整为 25 秒，并同步 `.env.example` 与运行文档，避免远端 MCP 冷启动被误判为 degraded（降级）。
-
-## Preflight 结果
-
-- `preflight.status=passed`
-- `preflight.blocked=false`
-- `backend_live=passed`
-- `backend_ready=passed`
-- `missing_required=[]`
-- `degraded_optional=[]`
-- core 所需 MCP 服务：`12306-mcp`、`VariFlight-Aviation`、`aigohotel-mcp`、`amap`、`search`、`weather` 均满足 preflight。
-- 首次用默认 8 秒 MCP 启动超时启动后端时，`amap`、`12306-mcp`、`VariFlight-Aviation` 曾 degraded；提高到 25 秒后复测通过。
-
-## 9 个核心场景状态
-
-完整跑批命令：
-
-```powershell
+.\.venv\Scripts\python scripts\run_evaluation_scenarios.py --scenario edge_hotel_tool_fallback --scenario risk_weather_disruption --scenario edge_transport_tool_fallback --scenario agency_senior_low_stress --base-url http://127.0.0.1:8000 --json --summary-dir .runtime\acceptance-core-reruns --scenario-timeout 900 --global-timeout 2400
+.\.venv\Scripts\python scripts\run_evaluation_scenarios.py --scenario pricing_agency_quote_explanation --scenario agency_couple_relaxed --base-url http://127.0.0.1:8000 --json --summary-dir .runtime\acceptance-core-reruns --scenario-timeout 900 --global-timeout 1800
 .\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-core --base-url http://127.0.0.1:8000 --json --summary-dir .runtime\acceptance-core-full --scenario-timeout 900 --global-timeout 7200
 ```
 
-机器摘要：
-
-- `.runtime\acceptance-core-full\20260514-083740-acceptance-summary.json`
-- `.runtime\acceptance-core-full\20260514-083740-acceptance-summary.md`
-
-总体状态：
-
-- `status=failed`
-- `passed=false`
-- `completed=9`
-- `pending=0`
-- `passed_count=5`
-- `degraded_count=1`
-- `failed_count=3`
-
-| 场景 | status | failure_category | tools | duplicate | error | busy | report_data | evidence missing | runtime_budget |
-|---|---:|---|---:|---:|---:|---:|---|---|---|
-| `free_weekend_nearby` | passed | - | 15 | 0 | 0 | 0 | yes | `[]` | passed |
-| `free_city_three_days` | passed | - | 11 | 0 | 0 | 0 | yes | `[]` | passed |
-| `agency_couple_relaxed` | passed | - | 18 | 0 | 0 | 0 | yes | `[]` | passed |
-| `agency_family_parent_child` | passed | - | 20 | 0 | 0 | 0 | yes | `[]` | passed |
-| `agency_senior_low_stress` | degraded | `acceptance_gate` | 20 | 0 | 0 | 0 | yes | `[]` | passed, first-token warning |
-| `edge_hotel_tool_fallback` | failed | `runtime_budget` | 25 | 0 | 0 | 0 | yes | `[]` | failed |
-| `pricing_agency_quote_explanation` | passed | - | 23 | 0 | 0 | 0 | yes | `[]` | passed |
-| `risk_weather_disruption` | failed | `runtime_budget` | 15 | 0 | 0 | 0 | yes | `[]` | failed |
-| `edge_transport_tool_fallback` | failed | `acceptance_gate` | 23 | 0 | 0 | 0 | yes | `[]` | passed, first-token warning |
-
-## 失败与降级归因
-
-- `agency_senior_low_stress`：`degraded`，runtime budget 只触发 warning，首 token 使用 85.0% 的首 token 预算；无 error、busy、duplicate。
-- `edge_hotel_tool_fallback`：`failed/runtime_budget`，首 token 80.59 秒超过 75 秒，总耗时使用 98.0% 的运行预算。工具质量通过，`query_hotel_options` 真实查询可返回结果，但场景中有阶段回退和多轮慢首 token 叠加。
-- `risk_weather_disruption`：`failed/runtime_budget`，首 token 83.683 秒超过 75 秒；工具数 15，未见工具循环或会话占用。
-- `edge_transport_tool_fallback`：完整跑批中因 `agency_context.mode=agency_plan` 与 expected `free_planning` 不一致失败，同时 runtime budget 仅 warning。随后做了小修复并单场复跑，模式边界已修复，但该单场仍因首 token 98.651 秒超过 75 秒而 `failed/runtime_budget`。
-
-本轮未发现：
-
-- `conversation_busy` 或 `session_busy` 复发。
-- `duplicate_tool_call_same_turn` 复发。
-- `report_data` 缺失。
-- `evidence_closure.missing` 非空。
-- 因缺 MCP（模型上下文协议）服务导致的 blocked（环境阻塞）。
-
-## 小修复验证
-
-修复范围：
-
-- `app/agency/planning_mode.py`
-- `app/core/intent.py`
-- `app/tools/state_transition.py`
-- `tests/test_planning_mode_boundary.py`
-
-修复要点：
-
-- “省心安排”不再单独作为强旅行社模式信号；只有“省心方案/旅行社/产品/托管/包办/报价/合同”等明确强信号才进入 `agency_plan`。
-- `record_requirement_tool` 会用用户原文和需求摘要共同核验模型传入的 `planning_mode=agency_plan`；没有用户强信号支撑时回落 `free_planning`。
-
-验证命令：
+本地回归命令：
 
 ```powershell
-.\.venv\Scripts\python -m pytest tests\test_planning_mode_boundary.py tests\test_intent_detection.py tests\test_workflow_maintainability.py::test_record_requirement_persists_planning_mode tests\test_workflow_maintainability.py::test_record_requirement_uses_recent_user_agency_signal_when_tool_args_are_plain tests\test_workflow_maintainability.py::test_record_requirement_keeps_hotel_fallback_in_free_planning_without_agency_signal tests\test_workflow_maintainability.py::test_record_requirement_keeps_weak_free_mode_when_hotel_fallback_is_requested -q
-```
-
-结果：`38 passed`。测试结束后 LangSmith（LangChain 可观测平台）上报返回 `403 Forbidden`，不影响 pytest（测试框架）退出码。
-
-修复后单场复跑：
-
-```powershell
-.\.venv\Scripts\python scripts\run_evaluation_scenarios.py --scenario edge_transport_tool_fallback --base-url http://127.0.0.1:8000 --json --summary-dir .runtime\acceptance-core-reruns --scenario-timeout 900 --global-timeout 1200
+.\.venv\Scripts\python -m compileall app tests scripts
+.\.venv\Scripts\python -m pytest tests\test_step_prompt_rendering.py tests\test_planning_mode_boundary.py tests\test_tool_loop_guard.py tests\test_evaluation_live_runner.py tests\test_runtime_metrics.py -q
+.\.venv\Scripts\python -m pytest -q
 ```
 
 结果：
 
-- 摘要：`.runtime\acceptance-core-reruns\20260514-090232-acceptance-summary.json`
-- 快照：`.runtime\evaluations\20260514-170232-edge_transport_tool_fallback.json`
-- `agency_context.mode=free_planning`
-- `report_quality=passed`
-- `rag_quality=passed`
-- `tool_quality=passed`
-- `runtime_budget=failed`
-- `first_token_seconds=98.651`，预算 `75.0`
-- `tool_call_count=25`
-- `duplicate=0`
-- `error_event_count=0`
-- `session_busy_event_count=0`
-- `report_data=true`
-- `evidence_closure.missing=[]`
+- `compileall`：退出码 `0`
+- 重点 pytest（测试框架）：`102 passed`
+- 全量 pytest：`434 passed, 24 deselected`
+- 测试结束后 LangSmith（LangChain 可观测平台）上报返回 `403 Forbidden`，不影响 pytest 退出码。
 
-## Smoke 后置判断
+## 4 场景子集
 
-acceptance-smoke 真实运行结果：
+子集用于复核上一轮失败/降级点：酒店慢兜底、天气风险、交通兜底和银发低压力方案。结果：`status=passed`，`passed=true`。
+
+| 场景 | status | first_token_seconds | tool_call_count | duplicate | error | busy | report_data | evidence missing | runtime_budget |
+|---|---:|---:|---:|---:|---:|---:|---|---|---|
+| `edge_hotel_tool_fallback` | passed | 23.194 | 12 | 0 | 0 | 0 | yes | `[]` | passed |
+| `risk_weather_disruption` | passed | 22.958 | 12 | 0 | 0 | 0 | yes | `[]` | passed |
+| `edge_transport_tool_fallback` | passed | 28.170 | 22 | 0 | 0 | 0 | yes | `[]` | passed |
+| `agency_senior_low_stress` | passed | 18.010 | 14 | 0 | 0 | 0 | yes | `[]` | passed |
+
+补充回归点：
+
+| 场景 | status | first_token_seconds | tool_call_count | duplicate | error | busy | report_data | evidence missing | runtime_budget |
+|---|---:|---:|---:|---:|---:|---:|---|---|---|
+| `agency_couple_relaxed` | passed | 42.339 | 13 | 0 | 0 | 0 | yes | `[]` | passed |
+| `pricing_agency_quote_explanation` | passed | 58.028 | 22 | 0 | 0 | 0 | yes | `[]` | passed |
+
+## 完整 9 场景结果
+
+机器摘要：
+
+- `.runtime\acceptance-core-full\20260514-134448-acceptance-summary.json`
+- `.runtime\acceptance-core-full\20260514-134448-acceptance-summary.md`
+
+总体：
 
 - `status=passed`
 - `passed=true`
-- `blocked_count=0`
+- `completed=9`
+- `pending=0`
+- `passed_count=9`
 - `degraded_count=0`
 - `failed_count=0`
-- `scenario_id=pricing_agency_quote_explanation`
-- `report_quality=passed`
-- `rag_quality=passed`
-- `tool_quality=passed`
-- `evidence_closure=passed`
-- `runtime_quality=passed`
-- `runtime_budget=passed`
+- `failure_classification_counts={}`
 
-关键通过指标：
+| 场景 | status | first_token_seconds | tool_call_count | duplicate | error | busy | report_data | evidence missing | runtime_budget | mode |
+|---|---:|---:|---:|---:|---:|---:|---|---|---|---|
+| `free_weekend_nearby` | passed | 12.565 | 14 | 0 | 0 | 0 | yes | `[]` | passed | `free_planning` |
+| `free_city_three_days` | passed | 9.681 | 13 | 0 | 0 | 0 | yes | `[]` | passed | `free_planning` |
+| `agency_couple_relaxed` | passed | 20.547 | 17 | 0 | 0 | 0 | yes | `[]` | passed | `agency_plan` |
+| `agency_family_parent_child` | passed | 33.636 | 21 | 0 | 0 | 0 | yes | `[]` | passed | `agency_plan` |
+| `agency_senior_low_stress` | passed | 17.513 | 18 | 0 | 0 | 0 | yes | `[]` | passed | `agency_plan` |
+| `edge_hotel_tool_fallback` | passed | 29.511 | 19 | 0 | 0 | 0 | yes | `[]` | passed | `free_planning` |
+| `pricing_agency_quote_explanation` | passed | 74.391 | 26 | 0 | 0 | 0 | yes | `[]` | passed | `agency_plan` |
+| `risk_weather_disruption` | passed | 15.614 | 13 | 0 | 0 | 0 | yes | `[]` | passed | `agency_plan` |
+| `edge_transport_tool_fallback` | passed | 40.417 | 15 | 0 | 0 | 0 | yes | `[]` | passed | `free_planning` |
 
-- `total_elapsed_seconds=556.393`，预算 `900.0`
-- `first_token_seconds=84.103`，场景预算 `90.0`
-- `tool_call_count=21`，场景预算 `36`
-- `tool_failure_count=13`
-- `fallback_count=13`
-- `error_event_count=0`
-- `report_event_count=1`
-- `report_data=true`
-- `evidence_closure.missing=[]`
+说明：当前 summary 未显式输出 `duplicate_tool_call_same_turn` 字段；本报告按每个快照的同轮同名工具事件分组复核，9 个场景均为 `0`，且 acceptance gate（验收门禁）无 duplicate 相关 finding（发现项）。
 
-本地原始产物只保留在 `.runtime/`，不提交：
+## 历史失败闭环
 
-- `.runtime\acceptance-smoke\20260513-150047-acceptance-summary.json`
-- `.runtime\acceptance-smoke\20260513-150047-acceptance-summary.md`
-- `.runtime\evaluations\20260513-230047-pricing_agency_quote_explanation.json`
+上一轮完整 9 场景曾为 `failed`：5 passed、1 degraded、3 failed。阻塞点集中在首 token 慢路径和最终报告生成缺口：
 
-## 当前待处理项
+- `edge_hotel_tool_fallback`：首轮先等待酒店工具超时，first token 超预算。
+- `risk_weather_disruption`：首轮串联目的地、搜索和模式工具后才输出，first token 超预算。
+- `edge_transport_tool_fallback`：交通慢链路导致 first token 超预算，并曾误判为 `agency_plan`。
+- `agency_senior_low_stress`：首 token warning（警告），后续一度因住宿抢跑导致交通证据缺口。
+- `pricing_agency_quote_explanation`：最终报告轮未调用 `generate_order_tool`，导致无 `report_data`。
+- `agency_couple_relaxed`：工具调用数触发 81.2% warning。
 
-本轮没有修改 evaluation gate（评估门禁）通过语义，也没有把失败伪装成通过。
+本轮对应闭环：
 
-待继续修复或复核：
+- 首轮轻量响应把慢工具延后到确认/推进轮，首 token 均回到预算内。
+- 最终报告阶段强制收窄到 `generate_order_tool` 后，报价场景产出 `report_data`。
+- 完整旅行社省心首轮不再先做内部产品检索，情侣省心场景工具数降回预算内。
+- 交通阶段前置边界关闭住宿抢跑，`edge_transport_tool_fallback` 保持 `free_planning`。
 
-- runtime budget：`edge_hotel_tool_fallback`、`risk_weather_disruption`、修复后单场 `edge_transport_tool_fallback` 均因首 token 超过 75 秒失败。需要继续定位是模型服务首 token 波动、上下文压缩后提示过长、阶段回退导致慢路径，还是外部工具结果进入模型后的生成延迟。
-- 阶段回退：`edge_hotel_tool_fallback` 在报告前出现需求/天数校正回退，虽然最终报告和证据闭环完整，但推高了总耗时。
-- 规划模式边界：`edge_transport_tool_fallback` 的误判已用小修复关闭，后续完整 core 复跑仍需确认该场不再因 `agency_context.mode` 失败。
+## 脱敏说明
 
-暂不建议合入 `main`。下一步应优先复核 runtime budget 慢路径，在不放宽预算的前提下降低首 token 和阶段回退耗时，然后重新运行完整 9 场景。
+- 未打印、提交或写入 `.env` 真实值。
+- 文档仅记录状态、计数、路径和脱敏指标，不包含真实手机号、邮箱、JWT（JSON Web Token，令牌认证）或外部 API（应用程序接口）原始响应。
+- `.runtime/`、`.venv/`、`data/vectorstore/`、`data/vectorstore_internal/` 仅本地使用，不提交。
+
+## 合入建议
+
+在当前真实环境和本地回归结果下，建议将 `codex/round-core-fixes-integration-review` 合入 `main`。合入前仍建议维护者按本 runbook（运行手册）在目标环境复跑 `/health/ready`、preflight（预检）和完整 acceptance-core。

@@ -247,6 +247,9 @@ class TravelState(AgentState):
     context_pack_metadata: NotRequired[dict]
     context_layer_boundaries: NotRequired[dict]
     context_summary_updated_at: NotRequired[float]
+    pending_initial_request_text: NotRequired[str]
+    pending_initial_planning_mode: NotRequired[PlanningMode]
+    pending_initial_planning_mode_reason: NotRequired[str]
     turn_id: NotRequired[str]
     observability_context: NotRequired[dict]
 
