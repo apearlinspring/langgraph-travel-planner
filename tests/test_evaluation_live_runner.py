@@ -847,6 +847,9 @@ def test_live_timeout_writes_redacted_partial_snapshot(monkeypatch, tmp_path: Pa
 
     assert result.status == "failed"
     assert result.failure_category == "timeout"
+    assert result.runtime_metrics is not None
+    assert result.first_token_seconds is not None
+    assert result.tool_call_count == 0
     assert result.snapshot_path is not None
     snapshot_text = Path(result.snapshot_path).read_text(encoding="utf-8")
     assert "13800138000" not in snapshot_text

@@ -167,6 +167,8 @@ def _build_live_error_result(
         "runtime_budget_passed": None,
         "runtime_findings": [],
         "runtime_metrics": None,
+        "first_token_seconds": None,
+        "tool_call_count": None,
         "tool_counts": None,
         "evidence_closure": build_acceptance_evidence_closure(
             scenario=scenario,
@@ -449,6 +451,10 @@ def _build_skipped_results(scenarios: list[Any], preflight: dict[str, Any]) -> l
             "agent_score": None,
             "runtime_budget_passed": None,
             "runtime_findings": [],
+            "runtime_metrics": None,
+            "first_token_seconds": None,
+            "tool_call_count": None,
+            "tool_counts": None,
             "acceptance_gate": (
                 build_error_acceptance_gate_result(
                     scenario=scenario,

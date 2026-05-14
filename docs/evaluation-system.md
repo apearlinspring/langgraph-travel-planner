@@ -122,6 +122,22 @@ LLM（大语言模型）创建统一走 `app/utils/llm_factory.py` 的 `build_ch
 
 运行器会在每个场景结束后立即刷新 run-level summary（整批摘要），所以单个场景失败、timeout（超时）或后续中断不会吞掉前面已完成场景的机器摘要。摘要里的 `run_context` 会标明是否是 partial summary（部分摘要）、已完成场景、待运行场景和失败分类计数。
 
+### 可提交证据包导出
+
+`.runtime/` 下的 summary（摘要）和 snapshot（快照）属于本地原始产物，不提交。需要把最新 acceptance-core（核心验收）结果转成可提交、可面试展示的脱敏 Markdown（标记文本）时，使用：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\export_acceptance_evidence.py --runtime-dir .runtime --output docs\acceptance-core-report.md
+```
+
+导出脚本会自动扫描 `.runtime` 下最新的 `acceptance_run_summary.v1` JSON（JavaScript 对象表示法）摘要，生成稳定的 9 场景状态地图，包含每个场景的状态、首 token（文本令牌）、工具调用数、证据闭环和运行预算结论。脚本只输出脱敏后的聚合字段，不读取或写入 `.env`，也不会把真实密钥、手机号、邮箱、JWT（JSON Web Token，令牌认证）或原始工具响应写进文档。
+
+缺文件或只存在 partial summary（部分摘要）时，证据包不会假装通过：
+
+- 找不到 `.runtime` summary 时输出 `missing_summary（缺少摘要）`，并以非零退出。
+- 已完成场景少于选中场景时输出 `partial summary（部分摘要）`，表格中未完成场景显示 `pending（待运行）`。
+- 整批 `failed（失败）`、`degraded（降级）`、`blocked（环境阻塞）` 会原样保留在结论和状态表中，不会改写为 passed（通过）。
+
 失败分类当前用于快速排查：
 
 - `timeout`：单场景超时或网络读取超时，通常看场景快照、后端日志和最后一个 SSE 事件。
