@@ -11,8 +11,28 @@ down_revision: Union[str, None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
+_LEGACY_BUSINESS_TABLES = {"user", "conversation", "message"}
+
+
+def _bootstrap_legacy_create_all_schema() -> bool:
+    """Adopt databases that already have legacy business tables but no revision."""
+
+    bind = op.get_bind()
+    existing_tables = set(sa.inspect(bind).get_table_names())
+    if not (_LEGACY_BUSINESS_TABLES & existing_tables):
+        return False
+
+    import app.models  # noqa: F401
+    from app.models.base import Base
+
+    Base.metadata.create_all(bind=bind, checkfirst=True)
+    return True
+
 
 def upgrade() -> None:
+    if _bootstrap_legacy_create_all_schema():
+        return
+
     op.create_table(
         "user",
         sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
