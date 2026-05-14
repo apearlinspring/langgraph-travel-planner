@@ -214,6 +214,88 @@ def test_state_transition_duplicate_accommodation_does_not_rewind_step():
     assert "selected_accommodation_types" not in command.update
 
 
+def test_select_accommodation_infers_type_from_existing_candidate():
+    state = create_initial_state(user_id="user-1", session_id="session-1")
+    state.update(
+        {
+            "current_step": "accommodation_planning",
+            "accommodation_options": [
+                {
+                    "hotel_id": 1001,
+                    "name": "长沙低压力酒店",
+                    "type": "star_hotel",
+                    "location": "五一广场",
+                    "price_per_night": 680.0,
+                    "rating": 4.7,
+                    "amenities": ["近地铁"],
+                }
+            ],
+        }
+    )
+
+    command = select_accommodation_tool.invoke(
+        {
+            "hotel_id": 1001,
+            "runtime": _build_runtime(state),
+        }
+    )
+
+    assert command.update["current_step"] == "food_planning"
+    assert command.update["selected_accommodation_types"] == ["star_hotel"]
+    assert command.update["selected_accommodation_option"]["hotel_id"] == 1001
+
+
+def test_select_accommodation_defaults_to_first_candidate_without_args():
+    state = create_initial_state(user_id="user-1", session_id="session-1")
+    state.update(
+        {
+            "current_step": "accommodation_planning",
+            "accommodation_options": [
+                {
+                    "hotel_id": 1002,
+                    "name": "北京舒适酒店",
+                    "type": "舒适型酒店",
+                    "location": "东城区",
+                    "price_per_night": 520.0,
+                    "rating": 4.6,
+                    "amenities": ["安静"],
+                }
+            ],
+        }
+    )
+
+    command = select_accommodation_tool.invoke({"runtime": _build_runtime(state)})
+
+    assert command.update["current_step"] == "food_planning"
+    assert command.update["selected_accommodation_types"] == ["star_hotel"]
+    assert command.update["selected_accommodation_option"]["hotel_id"] == 1002
+
+
+def test_select_accommodation_accepts_model_string_arguments():
+    state = create_initial_state(user_id="user-1", session_id="session-1")
+    state.update({"current_step": "accommodation_planning"})
+
+    command = select_accommodation_tool.invoke(
+        {
+            "accommodation_types": "舒适型酒店",
+            "hotel_id": "hotel-1003",
+            "hotel_name": "汉中舒适酒店",
+            "price_per_night": "约 320 元/晚",
+            "rating": "4.6",
+            "amenities": "近商圈、安静",
+            "runtime": _build_runtime(state),
+        }
+    )
+
+    assert command.update["current_step"] == "food_planning"
+    assert command.update["selected_accommodation_types"] == ["star_hotel"]
+    option = command.update["selected_accommodation_option"]
+    assert option["hotel_id"] == "hotel-1003"
+    assert option["price_per_night"] == 320.0
+    assert option["rating"] == 4.6
+    assert option["amenities"] == ["近商圈、安静"]
+
+
 def test_state_transition_duplicate_food_does_not_rewrite_state():
     state = create_initial_state(user_id="user-1", session_id="session-1")
     state.update(

@@ -528,16 +528,45 @@ def _normalize_choices(
     return normalized
 
 
+def _as_string_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        return [str(item) for item in value if item is not None]
+    return [str(value)]
+
+
+def _as_optional_float(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        match = re.search(r"\d+(?:\.\d+)?", value)
+        if match:
+            return float(match.group(0))
+    return None
+
+
 def _find_accommodation_option(
     state: TravelState,
     *,
-    hotel_id: Optional[int] = None,
+    hotel_id: Optional[int | str] = None,
     hotel_name: Optional[str] = None,
 ) -> Optional[dict]:
     for option in state.get("accommodation_options") or []:
-        if hotel_id is not None and option.get("hotel_id") == hotel_id:
+        if hotel_id is not None and str(option.get("hotel_id")) == str(hotel_id):
             return dict(option)
         if hotel_name and option.get("name") == hotel_name:
+            return dict(option)
+    return None
+
+
+def _first_accommodation_option(state: TravelState) -> Optional[dict]:
+    for option in state.get("accommodation_options") or []:
+        if option:
             return dict(option)
     return None
 
@@ -2307,25 +2336,45 @@ def select_transport_tool(
 
 @tool
 def select_accommodation_tool(
-    accommodation_types: list[str],
-    hotel_id: Optional[int] = None,
+    accommodation_types: Optional[list[str] | str] = None,
+    hotel_id: Optional[int | str] = None,
     hotel_name: Optional[str] = None,
     location: Optional[str] = None,
-    price_per_night: Optional[float] = None,
-    rating: Optional[float] = None,
-    amenities: Optional[list[str]] = None,
+    price_per_night: Optional[float | str] = None,
+    rating: Optional[float | str] = None,
+    amenities: Optional[list[str] | str] = None,
     booking_url: Optional[str] = None,
     runtime: ToolRuntime[None, TravelState] = None,
 ) -> Command:
     """Persist accommodation preferences or a concrete hotel choice and move to food planning."""
 
-    app_logger.info(f"用户选择住宿偏好: {accommodation_types}")
+    state = _runtime_state(runtime)
+    selected_option = _find_accommodation_option(
+        state,
+        hotel_id=hotel_id,
+        hotel_name=hotel_name,
+    )
+    if selected_option is None and hotel_id is None and not hotel_name:
+        selected_option = _first_accommodation_option(state)
+
+    normalized_price = _as_optional_float(price_per_night)
+    normalized_rating = _as_optional_float(rating)
+    normalized_amenities = _as_string_list(amenities)
+    raw_accommodation_types = _as_string_list(accommodation_types)
+    if not raw_accommodation_types:
+        inferred_type = (selected_option or {}).get("type")
+        raw_accommodation_types = [inferred_type or "star_hotel"]
+
+    app_logger.info(f"用户选择住宿偏好: {raw_accommodation_types}")
     accommodation_types = _normalize_choices(
-        accommodation_types,
+        raw_accommodation_types,
         ACCOMMODATION_LABELS,
         ACCOMMODATION_ALIASES,
     )
     invalid_types = sorted(set(accommodation_types) - set(ACCOMMODATION_LABELS))
+    if invalid_types and selected_option:
+        accommodation_types = ["star_hotel"]
+        invalid_types = []
     if invalid_types:
         valid_types = ", ".join(sorted(ACCOMMODATION_LABELS))
         return _command_with_message(
@@ -2334,12 +2383,6 @@ def select_accommodation_tool(
         )
 
     selected_labels = [ACCOMMODATION_LABELS[item] for item in accommodation_types]
-    state = _runtime_state(runtime)
-    selected_option = _find_accommodation_option(
-        state,
-        hotel_id=hotel_id,
-        hotel_name=hotel_name,
-    )
 
     if hotel_id is not None or hotel_name:
         if selected_option is None:
@@ -2347,21 +2390,21 @@ def select_accommodation_tool(
                 "name": hotel_name or f"酒店ID {hotel_id}",
                 "type": accommodation_types[0],
                 "location": location or "位置待确认",
-                "price_per_night": price_per_night or 0.0,
-                "rating": rating,
-                "amenities": amenities or [],
+                "price_per_night": normalized_price or 0.0,
+                "rating": normalized_rating,
+                "amenities": normalized_amenities,
             }
             if hotel_id is not None:
                 selected_option["hotel_id"] = hotel_id
 
         if location is not None:
             selected_option["location"] = location
-        if price_per_night is not None:
-            selected_option["price_per_night"] = price_per_night
-        if rating is not None:
-            selected_option["rating"] = rating
-        if amenities is not None:
-            selected_option["amenities"] = amenities
+        if normalized_price is not None:
+            selected_option["price_per_night"] = normalized_price
+        if normalized_rating is not None:
+            selected_option["rating"] = normalized_rating
+        if normalized_amenities:
+            selected_option["amenities"] = normalized_amenities
         if booking_url is not None:
             selected_option["booking_url"] = booking_url
 

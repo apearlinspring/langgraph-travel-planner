@@ -145,6 +145,26 @@ ONE_SHOT_TOOLS_AFTER_CALL = frozenset(
     {
         "record_requirement_tool",
         "query_destination_info",
+        "search_travel_info",
+        "search_food_recommendations",
+        "query_hotel_options",
+        "query_transport_options",
+        "select_destination_tool",
+        "select_transport_tool",
+        "select_accommodation_tool",
+        "select_food_tool",
+        "generate_itinerary_tool",
+        "summarize_budget_tool",
+        "generate_order_tool",
+    }
+)
+
+FORCE_NARROW_TOOL_NAMES = frozenset(
+    {
+        "record_requirement_tool",
+        "query_destination_info",
+        "search_travel_info",
+        "search_food_recommendations",
         "query_hotel_options",
         "query_transport_options",
         "select_destination_tool",
@@ -158,6 +178,18 @@ ONE_SHOT_TOOLS_AFTER_CALL = frozenset(
 )
 
 DATE_TOOL_NAMES = frozenset({"get-current-date", "getTodayDate"})
+DESTINATION_REFRESH_TOOL_NAMES = frozenset(
+    {"query_destination_info", "search_travel_info", "search_food_recommendations"}
+)
+REQUIREMENT_MEMORY_TOOL_NAMES = frozenset(
+    {
+        "update_travel_style_tool",
+        "update_dietary_restriction_tool",
+        "update_food_preference_tool",
+        "add_travel_record_tool",
+        "update_accommodation_preference_tool",
+    }
+)
 
 RELATIVE_DATE_TOOL_KEYWORDS = (
     "今天",
@@ -369,6 +401,46 @@ def _tool_names_from_message(message: Any) -> set[str]:
     return names
 
 
+def _latest_message_is_tool_result(request: ModelRequest) -> bool:
+    messages = list(request.messages or [])
+    if not messages:
+        state = request.state
+        if hasattr(state, "get"):
+            messages = list(state.get("messages") or [])
+    if not messages:
+        return False
+    latest = messages[-1]
+    if isinstance(latest, ToolMessage):
+        return True
+    if isinstance(latest, dict):
+        return (latest.get("role") or latest.get("type")) == "tool"
+    return getattr(latest, "type", None) == "tool" or getattr(latest, "role", None) == "tool"
+
+
+def _latest_tool_result_names(request: ModelRequest) -> set[str]:
+    messages = list(request.messages or [])
+    if not messages:
+        state = request.state
+        if hasattr(state, "get"):
+            messages = list(state.get("messages") or [])
+    if not messages:
+        return set()
+    latest = messages[-1]
+    is_tool_result = False
+    if isinstance(latest, ToolMessage):
+        is_tool_result = True
+    elif isinstance(latest, dict):
+        is_tool_result = (latest.get("role") or latest.get("type")) == "tool"
+    else:
+        is_tool_result = (
+            getattr(latest, "type", None) == "tool"
+            or getattr(latest, "role", None) == "tool"
+        )
+    if not is_tool_result:
+        return set()
+    return _tool_names_from_message(latest)
+
+
 def _recent_tool_names_since_latest_human(request: ModelRequest) -> set[str]:
     messages = list(request.messages or [])
     if not messages:
@@ -411,6 +483,193 @@ def _tool_repeat_instruction(current_step: str, recent_tool_names: set[str]) -> 
             "不要在同一轮再次调用它们；请基于已有工具结果继续总结、推荐或推进下一步。"
         )
     return ""
+
+
+def _has_nonempty_list(value: Any) -> bool:
+    return isinstance(value, list) and any(item for item in value)
+
+
+def _has_destination_candidates(state_dict: dict[str, Any]) -> bool:
+    return _has_nonempty_list(state_dict.get("destination_options"))
+
+
+def _has_selected_transport(state_dict: dict[str, Any]) -> bool:
+    return bool(
+        state_dict.get("selected_transport")
+        or state_dict.get("selected_transport_option")
+    )
+
+
+def _has_accommodation_candidates(state_dict: dict[str, Any]) -> bool:
+    return _has_nonempty_list(state_dict.get("accommodation_options"))
+
+
+def _has_selected_accommodation(state_dict: dict[str, Any]) -> bool:
+    return bool(
+        state_dict.get("selected_accommodation_option")
+        or state_dict.get("selected_accommodation_types")
+    )
+
+
+def _accommodation_memory_is_stable(text: str) -> bool:
+    if not text.strip():
+        return False
+    negative_stable_keywords = (
+        "不要记成长期",
+        "别记成长期",
+        "不要作为长期",
+        "不作为长期",
+        "不是长期",
+        "无需记住",
+        "不用记住",
+        "不要记住",
+        "别记住",
+    )
+    if any(keyword in text for keyword in negative_stable_keywords):
+        return False
+    stable_keywords = (
+        "记住",
+        "请记",
+        "以后",
+        "每次",
+        "一直",
+        "长期",
+        "我习惯",
+        "常住",
+        "固定偏好",
+    )
+    temporary_keywords = (
+        "这次",
+        "本次",
+        "这趟",
+        "这回",
+        "当前行程",
+        "本轮",
+    )
+    if any(keyword in text for keyword in temporary_keywords) and not any(
+        keyword in text for keyword in stable_keywords
+    ):
+        return False
+    return any(keyword in text for keyword in stable_keywords)
+
+
+def _allowed_requirement_memory_tools(text: str) -> set[str]:
+    """Return long-term memory tools that are safe to expose for this utterance."""
+    if not text.strip():
+        return set()
+
+    negative_keywords = (
+        "不要记成长期",
+        "别记成长期",
+        "不要作为长期",
+        "不作为长期",
+        "不是长期",
+        "无需记住",
+        "不用记住",
+        "不要记住",
+        "别记住",
+    )
+    if any(keyword in text for keyword in negative_keywords):
+        return set()
+
+    allowed: set[str] = set()
+    history_keywords = ("去过", "以前去", "之前去", "上次去", "来过", "玩过")
+    if any(keyword in text for keyword in history_keywords):
+        allowed.add("add_travel_record_tool")
+
+    stable_keywords = (
+        "请记住",
+        "帮我记住",
+        "记住我",
+        "以后",
+        "每次",
+        "一直",
+        "长期",
+        "我习惯",
+        "固定偏好",
+        "常住",
+    )
+    has_stable_scope = any(keyword in text for keyword in stable_keywords)
+    if has_stable_scope:
+        allowed.update(
+            {
+                "update_travel_style_tool",
+                "update_dietary_restriction_tool",
+                "update_food_preference_tool",
+                "update_accommodation_preference_tool",
+            }
+        )
+
+    safety_keywords = ("过敏", "严重忌口", "不能吃", "清真", "素食")
+    temporary_keywords = ("这次", "本次", "这趟", "这回", "当前行程", "本轮")
+    if any(keyword in text for keyword in safety_keywords) and not any(
+        keyword in text for keyword in temporary_keywords
+    ):
+        allowed.add("update_dietary_restriction_tool")
+
+    return allowed
+
+
+def _temporary_requirement_memory_instruction() -> str:
+    return (
+        "本轮需求收集中的轻松、少走路、美食、住宿、口味等描述，"
+        "默认都是当前行程条件，不要调用长期记忆工具。"
+        "请把它们写入本轮需求、特殊需求或后续查询参数；"
+        "只有用户明确说“请记住/以后/每次/我一直/我过敏”"
+        "或提到已经去过的真实历史旅行时，才写入长期记忆。"
+    )
+
+
+def _destination_candidate_instruction() -> str:
+    return (
+        "本轮已经拿到目的地候选或目的地信息。"
+        " 在用户明确确认前，不要调用 `select_destination_tool`，"
+        " 也不要再次调用 `query_destination_info` 或搜索工具刷新同类信息；"
+        "请直接基于已有候选做简短总结，并等待用户确认目的地。"
+    )
+
+
+def _transport_query_result_instruction(*, allow_selection: bool = False) -> str:
+    if allow_selection:
+        return (
+            "本轮已经完成真实交通查询。"
+            " 用户已经明确授权按推荐结果直接记录交通方案，"
+            "请基于已有交通候选选择最省心或最符合用户偏好的方案，"
+            "并调用 `select_transport_tool` 记录。"
+            "不要再次调用 `query_transport_options` 刷新同类信息。"
+        )
+    return (
+        "本轮已经完成真实交通查询。"
+        " 请直接基于已有交通候选做简短总结和推荐，"
+        "不要在同一轮继续调用 `select_transport_tool` 抢先记录；"
+        "等待用户确认具体交通方式或候选后，再记录交通方案。"
+    )
+
+
+def _accommodation_candidate_instruction() -> str:
+    return (
+        "当前已经有酒店候选或住宿查询结果。"
+        " 不要再次调用 `query_hotel_options`，也不要把本次住宿条件写入长期住宿记忆；"
+        "请直接从已有候选里选择最符合省心、干净、动线方便的方案，"
+        "并调用 `select_accommodation_tool` 记录。"
+        " 如果没有合适的具体酒店，也可以记录住宿类型/区域，并把真实价格标注为待核验。"
+    )
+
+
+def _temporary_accommodation_instruction() -> str:
+    return (
+        "本轮住宿偏好属于当前行程条件，不是长期稳定偏好。"
+        " 不要调用 `update_accommodation_preference_tool`；"
+        "请把这些偏好作为酒店查询或住宿选择参数使用。"
+    )
+
+
+def _post_transport_accommodation_instruction() -> str:
+    return (
+        "本轮刚刚完成交通方案记录。"
+        " 不要在同一轮继续调用酒店查询或住宿选择工具，避免把交通确认轮扩成长工具链；"
+        "请先简短说明交通已记录，住宿会在下一条住宿确认消息中继续处理。"
+    )
 
 
 def _forced_tool_choice(
@@ -1073,14 +1332,37 @@ class StepConfigMiddleware(AgentMiddleware):
 
         compatibility = get_model_compatibility(profile="planner")
         latest_human_text = _latest_human_text(request)
-        if current_step == "requirement_collection" and not _should_allow_date_tools(
-            latest_human_text
-        ):
+        if current_step == "requirement_collection":
+            today_text = date.today().isoformat()
+            override_kwargs["system_prompt"] = (
+                f"{override_kwargs['system_prompt']}\n\n"
+                "【当前日期】"
+                f"今天是 {today_text}。"
+                "处理“今天/明天/这个周末/下周/下个月”等相对日期时，"
+                "直接基于这个日期换算为 YYYY-MM-DD 或具体日期范围；"
+                "不要调用日期工具。"
+            )
             filtered_tools = _exclude_tools_by_name(override_kwargs["tools"], DATE_TOOL_NAMES)
             if len(filtered_tools) != len(override_kwargs["tools"]):
                 override_kwargs["tools"] = filtered_tools
                 app_logger.info(
-                    "需求收集未检测到相对日期，本轮移除日期工具以降低首 token 延迟"
+                    "需求收集阶段已注入当前日期并移除日期工具以降低首 token 延迟"
+                )
+            allowed_memory_tools = _allowed_requirement_memory_tools(latest_human_text)
+            memory_tools_to_exclude = REQUIREMENT_MEMORY_TOOL_NAMES - allowed_memory_tools
+            filtered_tools = _exclude_tools_by_name(
+                override_kwargs["tools"],
+                memory_tools_to_exclude,
+            )
+            if len(filtered_tools) != len(override_kwargs["tools"]):
+                override_kwargs["tools"] = filtered_tools
+                override_kwargs["system_prompt"] = (
+                    f"{override_kwargs['system_prompt']}\n\n"
+                    f"{_temporary_requirement_memory_instruction()}"
+                )
+                app_logger.info(
+                    "需求收集阶段按长期记忆语义收窄记忆工具: "
+                    f"excluded={sorted(memory_tools_to_exclude)}"
                 )
         travel_intent = detect_travel_intent(
             latest_human_text,
@@ -1223,8 +1505,130 @@ class StepConfigMiddleware(AgentMiddleware):
             if current_step == "destination_recommendation"
             else None
         )
+        middleware_forced_tool = None
+        latest_tool_result_names = _latest_tool_result_names(request)
+        if current_step == "transport_planning":
+            if "query_transport_options" in latest_tool_result_names:
+                transport_human_text = latest_human_text or _recent_human_text(request, limit=1)
+                allow_transport_selection = any(
+                    keyword in transport_human_text for keyword in SELECTION_KEYWORDS
+                )
+                excluded_after_transport_query = {"query_transport_options"}
+                if not allow_transport_selection:
+                    excluded_after_transport_query.add("select_transport_tool")
+                filtered_tools = _exclude_tools_by_name(
+                    override_kwargs["tools"],
+                    excluded_after_transport_query,
+                )
+                if len(filtered_tools) != len(override_kwargs["tools"]):
+                    override_kwargs["tools"] = filtered_tools
+                    available_tool_names = _tool_names(override_kwargs["tools"])
+                    app_logger.info(
+                        "本轮已完成交通查询：按用户确认语义收窄后续交通工具: "
+                        f"allow_selection={allow_transport_selection}"
+                    )
+                if allow_transport_selection and "select_transport_tool" in available_tool_names:
+                    middleware_forced_tool = "select_transport_tool"
+                override_kwargs["system_prompt"] = (
+                    f"{override_kwargs['system_prompt']}\n\n"
+                    f"{_transport_query_result_instruction(allow_selection=allow_transport_selection)}"
+                )
+            elif (
+                not _has_selected_transport(state_dict)
+                and "query_transport_options" in available_tool_names
+                and "select_destination_tool" not in latest_tool_result_names
+                and intent_preferred_tool is None
+                and not any(keyword in latest_human_text for keyword in SELECTION_KEYWORDS)
+            ):
+                middleware_forced_tool = "query_transport_options"
+
+        if (
+            current_step == "destination_recommendation"
+            and _has_destination_candidates(state_dict)
+            and not state_dict.get("selected_destination")
+            and not confirmed_destination
+            and _latest_message_is_tool_result(request)
+        ):
+            filtered_tools = _exclude_tools_by_name(
+                override_kwargs["tools"],
+                {"select_destination_tool", *DESTINATION_REFRESH_TOOL_NAMES},
+            )
+            if len(filtered_tools) != len(override_kwargs["tools"]):
+                override_kwargs["tools"] = filtered_tools
+                available_tool_names = _tool_names(override_kwargs["tools"])
+                app_logger.info(
+                    "已有目的地候选且用户尚未确认：本轮移除目的地选择和重复查询工具"
+                )
+            override_kwargs["system_prompt"] = (
+                f"{override_kwargs['system_prompt']}\n\n{_destination_candidate_instruction()}"
+            )
+
+        if current_step == "accommodation_planning":
+            accommodation_excluded_tools: set[str] = set()
+            post_transport_selection = "select_transport_tool" in latest_tool_result_names
+            accommodation_human_text = latest_human_text or _recent_human_text(request, limit=1)
+            post_transport_requested_accommodation = any(
+                keyword in accommodation_human_text for keyword in CROSS_STEP_HOTEL_KEYWORDS
+            )
+            if post_transport_selection and not post_transport_requested_accommodation:
+                accommodation_excluded_tools.update(
+                    {
+                        "query_hotel_options",
+                        "select_accommodation_tool",
+                        "update_accommodation_preference_tool",
+                    }
+                )
+            if not _accommodation_memory_is_stable(latest_human_text):
+                accommodation_excluded_tools.add("update_accommodation_preference_tool")
+            if _has_selected_accommodation(state_dict):
+                accommodation_excluded_tools.update(
+                    {"query_hotel_options", "update_accommodation_preference_tool"}
+                )
+            elif _has_accommodation_candidates(state_dict):
+                accommodation_excluded_tools.update(
+                    {"query_hotel_options", "update_accommodation_preference_tool"}
+                )
+                if "select_accommodation_tool" in available_tool_names:
+                    middleware_forced_tool = "select_accommodation_tool"
+            elif (
+                "query_hotel_options" in available_tool_names
+                and "query_hotel_options" not in _latest_tool_result_names(request)
+                and (
+                    "select_transport_tool" not in _latest_tool_result_names(request)
+                    or post_transport_requested_accommodation
+                )
+            ):
+                middleware_forced_tool = "query_hotel_options"
+
+            if accommodation_excluded_tools:
+                filtered_tools = _exclude_tools_by_name(
+                    override_kwargs["tools"],
+                    accommodation_excluded_tools,
+                )
+                if len(filtered_tools) != len(override_kwargs["tools"]):
+                    override_kwargs["tools"] = filtered_tools
+                    available_tool_names = _tool_names(override_kwargs["tools"])
+                    app_logger.info(
+                        "住宿阶段按候选/记忆语义收窄工具: "
+                        f"excluded={sorted(accommodation_excluded_tools)}"
+                    )
+            if _has_accommodation_candidates(state_dict) and not _has_selected_accommodation(state_dict):
+                override_kwargs["system_prompt"] = (
+                    f"{override_kwargs['system_prompt']}\n\n{_accommodation_candidate_instruction()}"
+                )
+            elif post_transport_selection and not post_transport_requested_accommodation:
+                override_kwargs["system_prompt"] = (
+                    f"{override_kwargs['system_prompt']}\n\n{_post_transport_accommodation_instruction()}"
+                )
+            elif "update_accommodation_preference_tool" in accommodation_excluded_tools:
+                override_kwargs["system_prompt"] = (
+                    f"{override_kwargs['system_prompt']}\n\n{_temporary_accommodation_instruction()}"
+                )
+
         forced_tool = None
-        if travel_intent.name in {"final_report", "export_report"} and intent_preferred_tool:
+        if middleware_forced_tool:
+            forced_tool = middleware_forced_tool
+        elif travel_intent.name in {"final_report", "export_report"} and intent_preferred_tool:
             forced_tool = intent_preferred_tool
         else:
             forced_tool = (
@@ -1242,6 +1646,15 @@ class StepConfigMiddleware(AgentMiddleware):
             )
             forced_tool = None
         if forced_tool:
+            if forced_tool in FORCE_NARROW_TOOL_NAMES and len(cross_step_tool_names) < 2:
+                forced_tools = _keep_tools_by_name(override_kwargs["tools"], {forced_tool})
+                if forced_tools:
+                    override_kwargs["tools"] = forced_tools
+                    available_tool_names = _tool_names(override_kwargs["tools"])
+                    app_logger.info(
+                        "强制工具场景：本轮工具列表已收窄，避免并行重复调用: "
+                        f"{forced_tool}"
+                    )
             if compatibility.supports_forced_tool_choice:
                 override_kwargs["tool_choice"] = forced_tool
                 app_logger.info(f"本轮强制优先调用工具: {forced_tool}")
