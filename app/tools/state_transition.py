@@ -1,7 +1,7 @@
 """
 State transition tools for the travel-planning workflow.
 """
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from math import ceil
 import re
 from typing import Any, Optional
@@ -172,6 +172,28 @@ PLANNING_MODE_ALIASES = {
     "小包团": "agency_plan",
     "私家团": "agency_plan",
 }
+
+PENDING_REQUIREMENT_VALUES = {
+    "",
+    "待定",
+    "待确认",
+    "未确认",
+    "不确定",
+    "未知",
+    "待核验",
+    "日期",
+    "出发日期",
+    "出发日期待确认",
+    "出发地",
+    "出发地待确认",
+    "unknown",
+    "none",
+    "null",
+    "tbd",
+}
+DEFAULT_ASSUMED_DEPARTURE_OFFSET_DAYS = 30
+DEFAULT_BUDGET_MIN_PER_PERSON = 1500.0
+DEFAULT_BUDGET_MAX_PER_PERSON = 3500.0
 
 TRANSPORT_BASE_COST_PER_PERSON = {
     "flight": 800,
@@ -704,6 +726,112 @@ def _budget_level_from_range(budget_min: float, budget_max: float) -> str:
     if avg_budget < 8000:
         return "comfort"
     return "luxury"
+
+
+def _is_pending_requirement_value(value: Any) -> bool:
+    return str(value or "").strip().lower() in PENDING_REQUIREMENT_VALUES
+
+
+def _default_assumed_departure_date() -> str:
+    return (date.today() + timedelta(days=DEFAULT_ASSUMED_DEPARTURE_OFFSET_DAYS)).isoformat()
+
+
+def _normalize_requirement_date(value: Any) -> tuple[str, bool]:
+    text = str(value or "").strip()
+    if text:
+        text = text.replace("/", "-")
+        match = re.fullmatch(r"(\d{4})年(\d{1,2})月(\d{1,2})日", text)
+        if match:
+            text = f"{match.group(1)}-{int(match.group(2)):02d}-{int(match.group(3)):02d}"
+        try:
+            return datetime.strptime(text, "%Y-%m-%d").date().isoformat(), False
+        except ValueError:
+            pass
+    return _default_assumed_departure_date(), True
+
+
+def _coerce_positive_int(value: Any, default: int) -> tuple[int, bool]:
+    if isinstance(value, str):
+        match = re.search(r"\d+", value)
+        if match:
+            value = match.group(0)
+    try:
+        normalized = int(value)
+    except (TypeError, ValueError):
+        return default, True
+    if normalized <= 0:
+        return default, True
+    return normalized, False
+
+
+def _coerce_non_negative_int(value: Any, default: int = 0) -> tuple[int, bool]:
+    if isinstance(value, str):
+        match = re.search(r"\d+", value)
+        if match:
+            value = match.group(0)
+    try:
+        normalized = int(value)
+    except (TypeError, ValueError):
+        return default, True
+    if normalized < 0:
+        return default, True
+    return normalized, False
+
+
+def _coerce_float(value: Any) -> float | None:
+    if isinstance(value, str):
+        text = value.strip()
+        match = re.search(r"\d+(?:\.\d+)?", text)
+        if not match:
+            return None
+        parsed = float(match.group(0))
+        return parsed * 10000 if "万" in text else parsed
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalize_requirement_text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _normalize_requirement_styles(value: Any) -> list[str]:
+    if isinstance(value, str):
+        raw_items = re.split(r"[、,，/；;\s]+", value)
+    elif isinstance(value, (list, tuple, set)):
+        raw_items = list(value)
+    elif value is None:
+        raw_items = []
+    else:
+        raw_items = [value]
+    return [str(item).strip() for item in raw_items if str(item).strip()]
+
+
+def _coerce_bool(value: Any, default: bool = True) -> bool:
+    if isinstance(value, bool):
+        return value
+    text = str(value or "").strip().lower()
+    if text in {"true", "1", "yes", "y", "确认", "是"}:
+        return True
+    if text in {"false", "0", "no", "n", "否"}:
+        return False
+    return default
+
+
+def _append_requirement_assumptions(
+    special_needs: str,
+    assumption_notes: list[str],
+) -> str:
+    if not assumption_notes:
+        return special_needs
+    normalized = (special_needs or "").strip()
+    assumption_text = "待核验假设：" + "；".join(assumption_notes)
+    if not normalized:
+        return assumption_text
+    if assumption_text in normalized:
+        return normalized
+    return f"{normalized}；{assumption_text}"
 
 
 def _format_transport_option(option: Optional[dict]) -> str:
@@ -1884,34 +2012,83 @@ def _build_final_report(
 
 @tool
 def record_requirement_tool(
-    departure_city: str,
-    departure_date: str,
-    travel_days: int,
-    budget_min: float,
-    budget_max: float,
-    travel_styles: list[str],
-    special_needs: str = "",
-    adult_count: Optional[int] = 1,
-    children_count: Optional[int] = 0,
-    destination: Optional[str] = None,
-    planning_mode: Optional[str] = None,
-    planning_mode_reason: str = "",
-    planning_mode_confirmed: bool = True,
+    departure_city: Any = None,
+    departure_date: Any = None,
+    travel_days: Any = None,
+    budget_min: Any = None,
+    budget_max: Any = None,
+    travel_styles: Any = None,
+    special_needs: Any = "",
+    adult_count: Any = 1,
+    children_count: Any = 0,
+    destination: Any = None,
+    planning_mode: Any = None,
+    planning_mode_reason: Any = "",
+    planning_mode_confirmed: Any = True,
     runtime: ToolRuntime[None, TravelState] = None,
 ) -> Command:
     """Persist the confirmed requirement summary and move to destination selection."""
 
+    assumption_notes: list[str] = []
+    departure_city = _normalize_requirement_text(departure_city)
+    if _is_pending_requirement_value(departure_city):
+        departure_city = "出发地待确认"
+        assumption_notes.append("出发地未明确，暂按出发地待确认处理")
+
+    destination = _normalize_requirement_text(destination)
+    if _is_pending_requirement_value(destination):
+        destination = None
+
+    planning_mode = _normalize_requirement_text(planning_mode)
+    if _is_pending_requirement_value(planning_mode):
+        planning_mode = None
+    planning_mode_reason = _normalize_requirement_text(planning_mode_reason)
+    planning_mode_confirmed = _coerce_bool(planning_mode_confirmed, default=True)
+
+    departure_date, date_assumed = _normalize_requirement_date(departure_date)
+    if date_assumed:
+        assumption_notes.append(f"出发日期未明确，暂按 {departure_date} 占位")
+
+    travel_days, days_assumed = _coerce_positive_int(travel_days, default=1)
+    if days_assumed:
+        assumption_notes.append("行程天数未明确，暂按 1 天估算")
+
+    adult_count, adult_assumed = _coerce_positive_int(adult_count, default=1)
+    if adult_assumed:
+        assumption_notes.append("成人数量未明确，暂按 1 位成人估算")
+    children_count, children_assumed = _coerce_non_negative_int(children_count, default=0)
+    if children_assumed:
+        assumption_notes.append("儿童数量未明确，暂按无儿童估算")
+
+    normalized_budget_min = _coerce_float(budget_min)
+    normalized_budget_max = _coerce_float(budget_max)
+    if not normalized_budget_min or normalized_budget_min <= 0:
+        normalized_budget_min = DEFAULT_BUDGET_MIN_PER_PERSON
+        assumption_notes.append(
+            f"预算下限未明确，暂按每人 {normalized_budget_min:.0f} 元估算"
+        )
+    if not normalized_budget_max or normalized_budget_max <= 0:
+        normalized_budget_max = DEFAULT_BUDGET_MAX_PER_PERSON
+        assumption_notes.append(
+            f"预算上限未明确，暂按每人 {normalized_budget_max:.0f} 元估算"
+        )
+    if normalized_budget_min > normalized_budget_max:
+        normalized_budget_min, normalized_budget_max = (
+            normalized_budget_max,
+            normalized_budget_min,
+        )
+    budget_min = normalized_budget_min
+    budget_max = normalized_budget_max
+
+    travel_styles = _normalize_requirement_styles(travel_styles)
+    if not travel_styles:
+        travel_styles = ["轻松舒适"]
+        assumption_notes.append("旅行风格未结构化，暂按轻松舒适估算")
+    special_needs = _append_requirement_assumptions(special_needs, assumption_notes)
+
     app_logger.info(
         f"记录用户需求: {departure_date}, {travel_days}天, 预算 {budget_min}-{budget_max}"
     )
-
-    try:
-        datetime.strptime(departure_date, "%Y-%m-%d")
-    except ValueError:
-        return _command_with_message(
-            "日期格式错误，请使用 YYYY-MM-DD，例如 2026-05-01。",
-            runtime,
-        )
 
     budget_level = _budget_level_from_range(budget_min, budget_max)
     total_people = (adult_count or 0) + (children_count or 0)

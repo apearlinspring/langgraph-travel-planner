@@ -481,6 +481,42 @@ async def test_requirement_collection_prioritizes_record_when_user_already_provi
 
 
 @pytest.mark.asyncio
+async def test_requirement_collection_records_confirmed_minimum_plannable_need():
+    captured = {}
+    compatibility = get_model_compatibility()
+    middleware = StepConfigMiddleware(
+        {
+            "requirement_collection": {
+                "prompt": "需求收集阶段",
+                "tools": ["record_requirement_tool", "query_destination_info"],
+                "requires": [],
+            }
+        }
+    )
+    state = {"current_step": "requirement_collection"}
+    messages = [
+        HumanMessage(content="我第一次去南京，3天2晚，自由行，想要文化加美食，不想太赶。"),
+        AIMessage(content="我先按南京低压力文化美食路线理解。"),
+        HumanMessage(content="以上需求确认无误，请先记录需求，然后继续推进规划。"),
+    ]
+
+    async def handler(request):
+        captured["tool_choice"] = getattr(request, "tool_choice", None)
+        captured["system_prompt"] = getattr(request, "system_prompt", "")
+        return "ok"
+
+    await middleware.awrap_model_call(DummyRequest(state, messages), handler)
+
+    if compatibility.supports_forced_tool_choice:
+        assert captured["tool_choice"] == "record_requirement_tool"
+    else:
+        assert captured["tool_choice"] is None
+        assert "record_requirement_tool" in captured["system_prompt"]
+        assert "出发地待确认" in captured["system_prompt"]
+        assert "待核验" in captured["system_prompt"]
+
+
+@pytest.mark.asyncio
 async def test_requirement_collection_can_answer_destination_info_before_full_intake():
     captured = {}
     compatibility = get_model_compatibility()

@@ -1,5 +1,6 @@
 import re
 import time
+from datetime import date, timedelta
 from types import SimpleNamespace
 from typing import Any, Callable
 
@@ -107,6 +108,8 @@ COMMON_CITY_NAMES = (
     "昆明",
     "张家界",
 )
+
+ASSUMED_REQUIREMENT_DEPARTURE_DAYS = 30
 
 AGENCY_INTERNAL_TOOL_NAMES = frozenset(
     {
@@ -715,11 +718,18 @@ def _planning_mode_instruction(decision: PlanningModeDecision) -> str:
 
 
 def _record_requirement_instruction() -> str:
+    assumed_departure_date = (
+        date.today() + timedelta(days=ASSUMED_REQUIREMENT_DEPARTURE_DAYS)
+    ).isoformat()
     return (
-        "如果用户这条消息已经提供了出发地、日期、天数、人数、预算和主要风格，"
-        "并且明确要求你整理需求、记录需求或开始推荐，"
+        "如果用户这条消息或最近几轮已经提供了目的地、行程天数、主要风格或规划模式，"
+        "并且本轮明确要求你整理需求、记录需求、确认无误或继续推进规划，"
         "那就把这条消息视为一次显式确认。"
         " 你可以先用一句简短摘要确认你的理解，但必须在本轮直接调用 `record_requirement_tool`。"
+        f" 如果缺少出发日期，先用 `{assumed_departure_date}` 作为待核验占位日期；"
+        "缺少出发地时使用 `出发地待确认`；缺少人数时按 1 位成人；"
+        "缺少预算时按目的地常规轻松行程做保守估算。"
+        " 这些兜底假设必须写进 `special_needs`，并明确标注待核验。"
         " 不要为了补充非关键偏好而继续追问，也不要把记录动作拖到下一轮。"
     )
 
@@ -863,6 +873,31 @@ def _has_style_hint(text: str) -> bool:
     return any(keyword in text for keyword in style_keywords)
 
 
+def _has_planning_mode_or_style_hint(text: str) -> bool:
+    mode_keywords = (
+        "自由行",
+        "自由规划",
+        "自助游",
+        "自己订",
+        "不跟团",
+        "旅行社",
+        "顾问方案",
+        "省心方案",
+        "定制游",
+        "小包团",
+        "私家团",
+    )
+    return _has_style_hint(text) or any(keyword in text for keyword in mode_keywords)
+
+
+def _has_minimum_plannable_requirement(text: str) -> bool:
+    return (
+        _has_route_hint(text)
+        and (_has_days_hint(text) or _has_date_hint(text))
+        and _has_planning_mode_or_style_hint(text)
+    )
+
+
 def _should_prioritize_destination_query(text: str) -> bool:
     if not any(keyword in text for keyword in DESTINATION_QUERY_KEYWORDS):
         return False
@@ -919,7 +954,9 @@ def _should_finalize_requirement_after_followup(
         _has_budget_hint(combined_text),
         _has_style_hint(combined_text),
     ]
-    return sum(1 for item in checks if item) >= 5
+    return sum(1 for item in checks if item) >= 5 or _has_minimum_plannable_requirement(
+        combined_text
+    )
 
 
 def _should_allow_date_tools(text: str) -> bool:

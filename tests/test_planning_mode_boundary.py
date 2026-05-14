@@ -92,6 +92,60 @@ def test_explicit_free_signal_overrides_overeager_agency_tool_argument():
     assert "自由规划" in command.update["messages"][0].content
 
 
+def test_confirmed_minimum_requirement_uses_pending_assumptions():
+    state = create_initial_state(user_id="user-1", session_id="session-1")
+
+    command = record_requirement_tool.invoke(
+        {
+            "destination": "南京",
+            "travel_days": 3,
+            "travel_styles": ["culture", "food"],
+            "special_needs": "自由行，文化加美食，不想太赶。",
+            "runtime": _build_runtime(state),
+        }
+    )
+
+    requirement = command.update["user_requirement"]
+    assert command.update["current_step"] == "destination_recommendation"
+    assert requirement["planning_mode"] == "free_planning"
+    assert requirement["departure_city"] == "出发地待确认"
+    assert requirement["departure_date"]
+    assert requirement["adult_count"] == 1
+    assert requirement["budget_min"] == 1500.0
+    assert requirement["budget_max"] == 3500.0
+    assert "待核验假设" in requirement["special_needs"]
+
+
+def test_record_requirement_tool_normalizes_model_text_arguments():
+    state = create_initial_state(user_id="user-1", session_id="session-1")
+
+    command = record_requirement_tool.invoke(
+        {
+            "departure_city": "待确认",
+            "destination": "南京",
+            "departure_date": "待核验",
+            "travel_days": "3天2晚",
+            "adult_count": "1人",
+            "children_count": "0",
+            "budget_min": "待核验",
+            "budget_max": "待核验",
+            "travel_styles": "文化、美食",
+            "special_needs": "自由行，不想太赶。",
+            "runtime": _build_runtime(state),
+        }
+    )
+
+    requirement = command.update["user_requirement"]
+    assert requirement["departure_city"] == "出发地待确认"
+    assert requirement["travel_days"] == 3
+    assert requirement["travel_styles"] == ["文化", "美食"]
+    assert requirement["adult_count"] == 1
+    assert requirement["children_count"] == 0
+    assert requirement["budget_min"] == 1500.0
+    assert requirement["budget_max"] == 3500.0
+    assert "出发日期未明确" in requirement["special_needs"]
+
+
 def test_explicit_agency_quote_signal_still_records_agency_plan():
     prompt = "想要省心方案，请按旅行社顾问方案安排，并说明报价、费用包含和不含。"
     state = create_initial_state(user_id="user-1", session_id="session-1")
