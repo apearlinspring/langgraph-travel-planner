@@ -42,6 +42,20 @@ DATABASE_MIGRATION_READINESS_VERSION = "database_migration_readiness.v1"
 DOCKER_COMPOSE_READINESS_VERSION = "docker_compose_readiness.v1"
 DEFAULT_BASE_URL = "http://127.0.0.1:8000"
 READINESS_TARGETS = ("development", "staging", "acceptance", "production")
+READINESS_TARGET_ALIASES = {"local": "development"}
+READINESS_TARGET_CHOICES = ("local", *READINESS_TARGETS)
+READINESS_COMPONENTS = {
+    "postgresql": "PostgreSQL（关系型数据库）",
+    "redis": "Redis（内存数据结构存储）",
+    "rag_vector_store": "RAG（检索增强生成）",
+    "mcp": "MCP（模型上下文协议）",
+    "llm": "LLM（大语言模型）",
+}
+READINESS_STATUS_LEGEND = {
+    "ready": "Required configuration or health evidence is present for this target.",
+    "degraded": "Core path can continue, but an optional capability is missing, unprobed, or degraded.",
+    "not_ready": "A required dependency is missing, placeholder-like, or unhealthy for this target.",
+}
 ALEMBIC_CONFIG_PATH = PROJECT_ROOT / "alembic.ini"
 ALEMBIC_SCRIPT_PATH = PROJECT_ROOT / "alembic"
 ALEMBIC_VERSION_PATH = ALEMBIC_SCRIPT_PATH / "versions"
@@ -78,6 +92,16 @@ DEPENDENCY_REPAIR_SUGGESTIONS: dict[str, dict[str, str]] = {
         ),
         "command": ".\\.venv\\Scripts\\python -m scripts.init_rag",
     },
+    "mcp": {
+        "action": (
+            "Probe backend /health/ready for MCP service health and restore required upstream "
+            "credentials or network access before live acceptance."
+        ),
+        "command": (
+            ".\\.venv\\Scripts\\python scripts\\check_runtime_readiness.py "
+            "--target acceptance --check-backend --base-url http://127.0.0.1:8000 --json"
+        ),
+    },
     "map": {
         "action": "Set a real AMAP_API_KEY before running staging, production, or map-backed acceptance.",
         "command": ".\\.venv\\Scripts\\python scripts\\check_runtime_readiness.py --target staging --json",
@@ -95,6 +119,90 @@ GENERIC_REPAIR_SUGGESTION = {
     "action": "Set the listed environment variables to real values or confirm the dependency can degrade.",
     "command": ".\\.venv\\Scripts\\python scripts\\check_runtime_readiness.py --json",
 }
+
+
+def _canonical_readiness_target(target: str) -> str:
+    return READINESS_TARGET_ALIASES.get(target, target)
+
+
+def _selected_target_pairs(targets: Sequence[str] | None) -> list[tuple[str, str]]:
+    selected_targets = list(targets or READINESS_TARGETS)
+    unknown_targets = sorted(
+        {
+            target
+            for target in selected_targets
+            if target not in READINESS_TARGETS and target not in READINESS_TARGET_ALIASES
+        }
+    )
+    if unknown_targets:
+        raise ValueError("Unknown readiness targets: " + ", ".join(unknown_targets))
+
+    pairs: list[tuple[str, str]] = []
+    for target in selected_targets:
+        pairs.append((target, _canonical_readiness_target(target)))
+    return pairs
+
+
+def _runtime_readiness_status(status: str | None) -> str:
+    if status == "passed":
+        return "ready"
+    if status == "degraded":
+        return "degraded"
+    return "not_ready"
+
+
+def _dependency_runtime_status(key: str, dependency: Mapping[str, Any]) -> str:
+    status = str(dependency.get("status") or "unknown")
+    requirement = str(dependency.get("requirement") or "optional")
+    if status in {"configured", "ready", "healthy", "passed"}:
+        return "ready"
+    if status in {"blocked", "not_ready", "unavailable", "failed"}:
+        return "not_ready"
+    if status == "service_checked":
+        return "degraded" if key == "mcp" else "ready"
+    if requirement == "required":
+        return "not_ready"
+    return "degraded"
+
+
+def _component_reason(key: str, dependency: Mapping[str, Any], runtime_status: str) -> str:
+    findings = list(dependency.get("findings") or [])
+    if findings:
+        return _finding_summary(findings)
+    raw_status = str(dependency.get("status") or "unknown")
+    if key == "mcp" and raw_status == "service_checked":
+        return (
+            "Configuration-only smoke cannot prove MCP service health; run acceptance "
+            "readiness with --check-backend to verify selected MCP services."
+        )
+    if runtime_status == "ready":
+        return "Required configuration evidence is present for this target."
+    if runtime_status == "degraded":
+        return str(dependency.get("optional_reason") or "Optional capability is unavailable or unprobed.")
+    return "Required dependency is missing, placeholder-like, or not ready."
+
+
+def _component_readiness_from_dependencies(
+    dependencies: Mapping[str, Mapping[str, Any]],
+    *,
+    target: str,
+) -> dict[str, dict[str, Any]]:
+    components: dict[str, dict[str, Any]] = {}
+    for key, default_label in READINESS_COMPONENTS.items():
+        dependency = dependencies.get(key) or {}
+        runtime_status = _dependency_runtime_status(key, dependency)
+        repair = _dependency_repair_suggestion(key, dependency, target=target)
+        components[key] = {
+            "key": key,
+            "label": dependency.get("label") or default_label,
+            "status": runtime_status,
+            "raw_status": dependency.get("status") or "unknown",
+            "requirement": dependency.get("requirement") or "optional",
+            "reason": _component_reason(key, dependency, runtime_status),
+            "env_vars": list(dependency.get("env_vars") or []),
+            "repair_suggestion": repair,
+        }
+    return components
 
 
 def _run_command(
@@ -397,6 +505,7 @@ def _resolve_target_status(snapshot: dict[str, Any]) -> str:
 def _configuration_target(
     *,
     target: RuntimeEnvironment,
+    display_target: str | None = None,
     environ: Mapping[str, str] | None,
     dotenv_path: Path | None,
     require_real_values: bool,
@@ -407,22 +516,29 @@ def _configuration_target(
         dotenv_path=dotenv_path,
         require_real_values=require_real_values,
     )
-    snapshot["target"] = target
+    output_target = display_target or target
+    snapshot["target"] = output_target
+    snapshot["resolved_environment"] = target
     snapshot["status"] = _resolve_target_status(snapshot)
+    snapshot["readiness_status"] = _runtime_readiness_status(snapshot["status"])
     snapshot["status_counts"] = _dependency_status_counts(snapshot["dependencies"])
     blocked_reasons, repair_suggestions = _configuration_issues(
         snapshot,
         snapshot.get("missing_required") or [],
-        target=target,
+        target=output_target,
     )
     degraded_reasons, _ = _configuration_issues(
         snapshot,
         snapshot.get("degraded_optional") or [],
-        target=target,
+        target=output_target,
     )
     snapshot["blocked_reasons"] = blocked_reasons
     snapshot["degraded_reasons"] = degraded_reasons
     snapshot["repair_suggestions"] = repair_suggestions
+    snapshot["component_readiness"] = _component_readiness_from_dependencies(
+        snapshot.get("dependencies") or {},
+        target=output_target,
+    )
     return snapshot
 
 
@@ -445,6 +561,7 @@ def _acceptance_target(
     return {
         "target": "acceptance",
         "status": preflight["status"],
+        "readiness_status": _runtime_readiness_status(preflight["status"]),
         "base_url": base_url,
         "check_backend": check_backend,
         "scenario_count": len(scenarios),
@@ -587,43 +704,47 @@ def build_runtime_readiness_report(
 ) -> dict[str, Any]:
     """Build a redacted readiness report for development, acceptance, and production."""
 
-    selected_targets = targets or list(READINESS_TARGETS)
-    unknown_targets = sorted(set(selected_targets) - set(READINESS_TARGETS))
-    if unknown_targets:
-        raise ValueError("Unknown readiness targets: " + ", ".join(unknown_targets))
-
+    selected_target_pairs = _selected_target_pairs(targets)
     resolved_dotenv = dotenv_path or DEFAULT_DOTENV_PATH
     target_results: dict[str, dict[str, Any]] = {}
-    if "development" in selected_targets:
-        target_results["development"] = _configuration_target(
-            target="development",
-            environ=environ,
-            dotenv_path=resolved_dotenv,
-            require_real_values=False,
-        )
-    if "staging" in selected_targets:
-        target_results["staging"] = _configuration_target(
-            target="staging",
-            environ=environ,
-            dotenv_path=resolved_dotenv,
-            require_real_values=True,
-        )
-    if "acceptance" in selected_targets:
-        target_results["acceptance"] = _acceptance_target(
-            base_url=base_url,
-            environ=environ,
-            dotenv_path=resolved_dotenv,
-            check_backend=check_backend,
-        )
-    if "production" in selected_targets:
-        target_results["production"] = _configuration_target(
-            target="production",
-            environ=environ,
-            dotenv_path=resolved_dotenv,
-            require_real_values=True,
-        )
+    for output_target, canonical_target in selected_target_pairs:
+        if canonical_target == "development":
+            target_results[output_target] = _configuration_target(
+                target="development",
+                display_target=output_target,
+                environ=environ,
+                dotenv_path=resolved_dotenv,
+                require_real_values=False,
+            )
+        elif canonical_target == "staging":
+            target_results[output_target] = _configuration_target(
+                target="staging",
+                display_target=output_target,
+                environ=environ,
+                dotenv_path=resolved_dotenv,
+                require_real_values=True,
+            )
+        elif canonical_target == "acceptance":
+            target_results[output_target] = _acceptance_target(
+                base_url=base_url,
+                environ=environ,
+                dotenv_path=resolved_dotenv,
+                check_backend=check_backend,
+            )
+        elif canonical_target == "production":
+            target_results[output_target] = _configuration_target(
+                target="production",
+                display_target=output_target,
+                environ=environ,
+                dotenv_path=resolved_dotenv,
+                require_real_values=True,
+            )
 
     statuses = {key: value["status"] for key, value in target_results.items()}
+    readiness_statuses = {
+        key: value.get("readiness_status") or _runtime_readiness_status(value.get("status"))
+        for key, value in target_results.items()
+    }
     database_migrations = build_database_migration_readiness_report()
     docker_compose = build_docker_compose_readiness_report(check=check_docker)
     if any(status == "blocked" for status in statuses.values()):
@@ -647,12 +768,15 @@ def build_runtime_readiness_report(
     return {
         "version": READINESS_REPORT_VERSION,
         "status": overall_status,
+        "readiness_status": _runtime_readiness_status(overall_status),
+        "readiness_status_legend": READINESS_STATUS_LEGEND,
         "current_environment": settings.runtime_environment,
         "dotenv_path": str(resolved_dotenv),
         "blocked_reasons": blocked_reasons,
         "repair_suggestions": repair_suggestions,
         "targets": target_results,
         "target_statuses": statuses,
+        "target_readiness_statuses": readiness_statuses,
         "database_migrations": database_migrations,
         "docker_compose": docker_compose,
         "dependency_matrix": {
@@ -665,7 +789,7 @@ def build_runtime_readiness_report(
 def _render_human(report: dict[str, Any]) -> str:
     lines = [
         "# Runtime Config Readiness",
-        f"- Overall: {report['status']}",
+        f"- Overall: {report['status']} ({report.get('readiness_status')})",
         f"- Current environment: {report['current_environment']}",
         f"- .env path: {report['dotenv_path']}",
         "",
@@ -703,7 +827,16 @@ def _render_human(report: dict[str, Any]) -> str:
         lines.append("- Findings: not checked; add --check-docker for local/staging bootstrap.")
     lines.append("")
     for target, result in report["targets"].items():
-        lines.append(f"## {target}: {result['status']}")
+        lines.append(f"## {target}: {result['status']} ({result.get('readiness_status')})")
+        components = result.get("component_readiness") or {}
+        if components:
+            lines.append(
+                "- Component readiness: "
+                + ", ".join(
+                    f"{item.get('label') or key}={item.get('status')}"
+                    for key, item in components.items()
+                )
+            )
         if target == "acceptance":
             preflight = result.get("preflight") or {}
             lines.append(f"- Scenarios: {result.get('scenario_count')}")
@@ -757,8 +890,11 @@ def main() -> int:
     parser.add_argument(
         "--target",
         action="append",
-        choices=READINESS_TARGETS,
-        help="Target to check. Can be repeated. Defaults to all targets.",
+        choices=READINESS_TARGET_CHOICES,
+        help=(
+            "Target to check. Can be repeated. Defaults to development/staging/"
+            "acceptance/production. local is an alias for development."
+        ),
     )
     parser.add_argument(
         "--base-url",

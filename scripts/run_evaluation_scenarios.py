@@ -45,6 +45,64 @@ from app.utils.security import redact_sensitive_text  # noqa: E402
 
 
 RUNTIME_ARTIFACT_ROOT = PROJECT_ROOT / ".runtime"
+FAILURE_REPAIR_SUGGESTIONS: dict[str, dict[str, str]] = {
+    "blocked": {
+        "action": (
+            "Resolve preflight blockers before running live smoke; do not treat skipped "
+            "or blocked scenarios as acceptance evidence."
+        ),
+        "command": (
+            ".\\.venv\\Scripts\\python scripts\\check_runtime_readiness.py "
+            "--target staging --json"
+        ),
+    },
+    "timeout": {
+        "action": (
+            "Inspect backend logs, MCP service health, and model latency; then rerun with "
+            "a larger --scenario-timeout only after the dependency delay is understood."
+        ),
+        "command": (
+            ".\\.venv\\Scripts\\python scripts\\run_evaluation_scenarios.py "
+            "--acceptance-smoke --preflight-only --json --no-summary"
+        ),
+    },
+    "global_timeout": {
+        "action": "Reduce the scenario set or raise --global-timeout after checking partial artifacts.",
+        "command": "Get-ChildItem .runtime\\acceptance-smoke",
+    },
+    "conversation_busy": {
+        "action": (
+            "Wait for the prior conversation lock to expire or restart the backend after "
+            "confirming no evaluation run is still active."
+        ),
+        "command": "curl http://127.0.0.1:8000/health/ready",
+    },
+    "runtime_budget": {
+        "action": "Review runtime metrics and duplicate tool calls before relaxing budgets.",
+        "command": (
+            ".\\.venv\\Scripts\\python scripts\\run_evaluation_scenarios.py "
+            "--acceptance-smoke --dry-run"
+        ),
+    },
+    "evidence_closure": {
+        "action": (
+            "Inspect the scenario snapshot for missing report_data, budget, risk, RAG, or "
+            "tool-audit evidence before rerunning smoke."
+        ),
+        "command": "Get-ChildItem .runtime\\acceptance-smoke -Recurse",
+    },
+    "acceptance_gate": {
+        "action": "Open the acceptance summary and fix the failing deterministic gate dimension.",
+        "command": "Get-ChildItem .runtime\\acceptance-smoke -Filter *summary*.md",
+    },
+    "unknown": {
+        "action": "Inspect the redacted error and rerun preflight to separate environment blockers from code failures.",
+        "command": (
+            ".\\.venv\\Scripts\\python scripts\\run_evaluation_scenarios.py "
+            "--acceptance-smoke --preflight-only --json --no-summary"
+        ),
+    },
+}
 
 
 def _redact_cli_payload(value: Any, *, max_depth: int = 12) -> Any:
@@ -114,6 +172,68 @@ def _failure_classification_counts(results: list[dict[str, Any]]) -> dict[str, i
         category = _result_failure_category(result) or "unknown"
         counts[category] = counts.get(category, 0) + 1
     return dict(sorted(counts.items()))
+
+
+def _repair_suggestions_from_preflight(preflight: dict[str, Any] | None) -> list[dict[str, Any]]:
+    suggestions: list[dict[str, Any]] = []
+    for reason in _preflight_blocking_reasons(preflight or {}):
+        suggestion = str(reason.get("suggestion") or "").strip()
+        if not suggestion:
+            continue
+        suggestions.append(
+            {
+                "key": reason.get("key") or "preflight",
+                "label": reason.get("label") or reason.get("key") or "preflight",
+                "category": "blocked",
+                "action": suggestion,
+                "command": (
+                    ".\\.venv\\Scripts\\python scripts\\run_evaluation_scenarios.py "
+                    "--acceptance-smoke --preflight-only --json --no-summary"
+                ),
+                "env_vars": reason.get("env_vars") or [],
+            }
+        )
+    return suggestions
+
+
+def _repair_suggestion_for_category(category: str | None) -> dict[str, str]:
+    return FAILURE_REPAIR_SUGGESTIONS.get(category or "", FAILURE_REPAIR_SUGGESTIONS["unknown"])
+
+
+def build_repair_suggestions(
+    *,
+    results: list[dict[str, Any]],
+    preflight: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    suggestions = _repair_suggestions_from_preflight(preflight)
+    seen: set[tuple[str, str, str]] = {
+        (
+            str(item.get("key") or ""),
+            str(item.get("action") or ""),
+            str(item.get("command") or ""),
+        )
+        for item in suggestions
+    }
+    for result in results:
+        if not isinstance(result, dict) or result.get("passed") is True:
+            continue
+        category = _result_failure_category(result) or str(result.get("status") or "unknown")
+        template = _repair_suggestion_for_category(category)
+        key = str(result.get("scenario_id") or category)
+        payload = {
+            "key": key,
+            "label": str(result.get("scenario_name") or key),
+            "category": category,
+            "action": template["action"],
+            "command": template["command"],
+            "env_vars": [],
+        }
+        dedupe_key = (key, payload["action"], payload["command"])
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        suggestions.append(payload)
+    return suggestions
 
 
 def _enrich_run_summary(
@@ -328,6 +448,10 @@ def build_cli_json_payload(
         "degraded_optional": (preflight or {}).get("degraded_optional") or [],
         "health_checks": _preflight_health_checks(preflight or {}),
         "blocking_reasons": _preflight_blocking_reasons(preflight or {}),
+        "repair_suggestions": build_repair_suggestions(
+            results=results,
+            preflight=preflight,
+        ),
         "failure_classification_counts": _failure_classification_counts(results),
         "results": results,
         "acceptance_summary": acceptance_summary,
@@ -373,6 +497,12 @@ def _print_results(results: list[dict[str, Any]]) -> None:
         )
         if result.get("failure_category"):
             print(f"  category={result['failure_category']}")
+        if not result.get("passed"):
+            repair = _repair_suggestion_for_category(
+                _result_failure_category(result) or str(result.get("status") or "unknown")
+            )
+            print(f"  repair={repair['action']}")
+            print(f"  command={repair['command']}")
         for detail in result.get("failure_details") or []:
             print(f"  detail={detail}")
         for finding in result.get("runtime_findings") or []:

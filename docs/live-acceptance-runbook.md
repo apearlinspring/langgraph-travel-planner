@@ -10,8 +10,8 @@ chcp 65001 | Out-Null
 
 ## 当前分支
 
-- 工作树：`D:\Users\Administrator\PycharmProjects\ZhiXing\langgraph-travel-planner-round-core-fixes-integration-review`
-- 分支：`codex/round-core-fixes-integration-review`
+- 工作树：`D:\Users\Administrator\PycharmProjects\ZhiXing\langgraph-travel-planner-deployment-smoke-readiness`
+- 分支：`codex/deployment-smoke-readiness`
 - 日期：2026-05-14
 
 ## 状态判定
@@ -30,6 +30,56 @@ chcp 65001 | Out-Null
 - `evidence_closure（证据闭环）`：缺少快照、报告数据、预算、风险、待核验项或旅行社证据。
 
 缺真实依赖或缺 `report_data` 时，任何命令都不能返回 `passed`。
+
+## 部署验收三层入口
+
+本手册不写真实服务器地址、真实密钥或真实个人信息；`<staging-base-url>` 和 `<production-base-url>` 只表示由部署平台注入或人工临时传入的地址。
+
+### Local 本地
+
+```powershell
+.\.venv\Scripts\python scripts\check_runtime_readiness.py --target local --json
+docker compose up -d postgres redis
+.\.venv\Scripts\python scripts\check_runtime_readiness.py --target staging --check-docker --json
+.\.venv\Scripts\python -m scripts.init_db --mode bootstrap
+.\.venv\Scripts\python -m scripts.init_rag
+.\.venv\Scripts\python main.py
+.\.venv\Scripts\python scripts\check_runtime_readiness.py --target acceptance --check-backend --base-url http://127.0.0.1:8000 --json
+.\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-smoke --preflight-only --base-url http://127.0.0.1:8000 --json --no-summary
+```
+
+### Staging 预生产
+
+```powershell
+.\.venv\Scripts\python scripts\check_runtime_readiness.py --target staging --json
+.\.venv\Scripts\python -m scripts.init_db --mode bootstrap
+.\.venv\Scripts\python -m scripts.init_rag
+.\.venv\Scripts\alembic upgrade head
+.\.venv\Scripts\alembic current
+.\.venv\Scripts\python scripts\check_runtime_readiness.py --target acceptance --check-backend --base-url <staging-base-url> --json
+.\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-smoke --preflight-only --base-url <staging-base-url> --json --no-summary
+.\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-smoke --base-url <staging-base-url> --json --summary-dir .runtime\acceptance-smoke --summary-prefix staging-smoke
+```
+
+### Production 生产
+
+```powershell
+.\.venv\Scripts\alembic upgrade head
+.\.venv\Scripts\alembic current
+.\.venv\Scripts\python scripts\check_runtime_readiness.py --target production --json
+.\.venv\Scripts\python scripts\check_runtime_readiness.py --target acceptance --check-backend --base-url <production-base-url> --json
+.\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-core --preflight-only --base-url <production-base-url> --json --no-summary
+```
+
+`check_runtime_readiness.py` 输出里要同时看 `readiness_status` 和 `component_readiness`。PostgreSQL（关系型数据库）、Redis（内存数据结构存储）、RAG（检索增强生成）和 LLM（大语言模型）在 staging/production 缺真实配置时必须是 `not_ready`；MCP（模型上下文协议）在配置静态检查中可显示 `degraded`，但只要所选 smoke 场景要求的 MCP 服务不 healthy（健康），acceptance preflight（验收预检）必须 blocked（环境阻塞）。
+
+smoke（冒烟测试）失败时先看 JSON（JavaScript Object Notation，结构化数据格式）里的 `repair_suggestions`：
+
+- `blocked`：补齐真实环境变量、RAG 向量库或后端 `/health/ready`，然后重跑 preflight。
+- `timeout` / `global_timeout`：查后端日志、MCP 服务健康和模型延迟，不要直接把 timeout（超时限制）调大当作修复。
+- `conversation_busy`：确认没有旧验收仍在运行，等待会话锁过期或重启后端。
+- `runtime_budget`：先看 runtime metrics（运行指标）和工具调用数，排查重复工具调用或慢依赖。
+- `evidence_closure` / `acceptance_gate`：打开 `.runtime/acceptance-smoke` 摘要，补齐 `report_data`、预算、风险、RAG、工具审计等缺口。
 
 ## 推荐复跑顺序
 
@@ -145,7 +195,7 @@ uv sync --frozen
 
 `.runtime/` 下的 JSON（JavaScript 对象表示法）、Markdown（标记文本）、stdout 和 stderr 原始产物只留本地。提交文档时只写相对路径、状态计数、关键阻塞项和脱敏指标。
 
-## acceptance-core 当前真实结果
+## acceptance-core 历史真实结果（仅供参考）
 
 2026-05-14 在 `codex/round-core-fixes-integration-review` 分支完成新一轮完整 9 场景真实验收。
 
@@ -183,9 +233,9 @@ uv sync --frozen
 - `agency_couple_relaxed` 不再因首轮内部产品检索导致工具预算 warning。
 - `edge_transport_tool_fallback` 保持 `agency_context.mode=free_planning`，没有回到 `agency_plan`。
 
-当前建议：可以推进合入 `main`，但合入前仍建议维护者在目标环境复跑 `/health/ready`、preflight（预检）和完整 acceptance-core。
+该段是历史验收记录，不代表 `codex/deployment-smoke-readiness` 分支已经完成目标环境验收。合入或发布前仍要在目标环境复跑 `/health/ready`、preflight（预检）和完整 acceptance-core。
 
-## 当前 smoke 真实结果
+## smoke 历史真实结果（仅供参考）
 
 2026-05-13 在当前真实环境完成一次新的 smoke 闭环：
 
