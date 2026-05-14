@@ -16,6 +16,21 @@
 8. 至少有一个审批操作者或管理员账号，用户对象 `role` 或 `preferences.role` 为 `approver` / `admin`，普通用户不能批准、拒绝或手动过期审批。
 9. `/health/ready` 返回 `ready` 或经确认可接受的 `degraded`；生产发布不接受 `not_ready`。
 
+## 2026-05-14 部署前本地真实验收记录
+
+本轮在 `codex/predeploy-runtime-acceptance` 分支、真实本机 `.env` 和真实本地 PostgreSQL（关系型数据库）/ Redis（内存数据结构存储）条件下执行；`.env`、`.runtime/`、`.venv/`、`data/vectorstore/` 和 `data/vectorstore_internal/` 均只保留本地，不提交。
+
+| 检查项 | 结果 | 脱敏证据 |
+|---|---:|---|
+| main 基线 | passed（通过） | `codex/predeploy-runtime-acceptance` 与 `origin/main` 一致后开始 |
+| RAG（检索增强生成）初始化 | passed（通过） | public collection（公开集合）18 个 embedding（嵌入向量）；internal collection（内部集合）61 个 embedding；metadata（元数据）契约检查通过 |
+| staging readiness（预生产就绪检查） | ready | `check_runtime_readiness.py --target staging --json` 返回 `status=passed`、`readiness_status=ready` |
+| acceptance backend readiness（验收后端就绪检查） | ready | 当前工作树后端 `/health/live` 和 `/health/ready` 为 200；MCP（模型上下文协议）6 个服务 healthy，37 个工具 |
+| acceptance-smoke（验收冒烟测试） | passed（通过） | `pricing_agency_quote_explanation` 1/1 passed；总耗时 395.967s，first token（首个文本令牌）58.040s，工具调用 13 次 |
+| 原始证据 | local only（仅本地） | `.runtime\readiness-staging.json`、`.runtime\readiness-acceptance.json`、`.runtime\acceptance-smoke\20260514-151605-acceptance-summary.json` |
+
+本轮没有发现部署前 hard blocker（硬阻塞项）。需要保留的风险是：本次只复跑 `acceptance-smoke` 的 1 个最小报价说明场景，不替代主线已有的 9 场景 acceptance-core（核心验收）记录；生产发布前若模型、RAG、MCP、报告契约或外部 API（应用程序接口）配置有变化，应重新跑完整 acceptance-core。
+
 ## 三套检查命令
 
 ### Local 本地
@@ -209,7 +224,7 @@ curl http://127.0.0.1:8000/health/ready
 .\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-core --preflight-only --base-url http://127.0.0.1:8000 --json --no-summary
 ```
 
-2026-05-11 本地复跑结果是 `blocked（环境阻塞）`：缺真实 PostgreSQL（关系型数据库）、Redis（内存数据结构存储）、LLM（大语言模型）、RAG（检索增强生成）向量库元数据、MCP（模型上下文协议）上游 API（应用程序接口）凭据和后端健康端点。完整记录见 `docs/live-acceptance-runbook.md`。
+2026-05-14 本地部署前复跑结果是 `ready`：真实 PostgreSQL（关系型数据库）、Redis（内存数据结构存储）、LLM（大语言模型）、RAG（检索增强生成）向量库元数据、MCP（模型上下文协议）服务池和后端健康端点均通过本轮检查。完整记录见 `docs/live-acceptance-runbook.md`。
 
 ### Production 生产
 

@@ -10,8 +10,8 @@ chcp 65001 | Out-Null
 
 ## 当前分支
 
-- 工作树：`D:\Users\Administrator\PycharmProjects\ZhiXing\langgraph-travel-planner-deployment-smoke-readiness`
-- 分支：`codex/deployment-smoke-readiness`
+- 工作树：`D:\Users\Administrator\PycharmProjects\ZhiXing\langgraph-travel-planner-predeploy-runtime-acceptance`
+- 分支：`codex/predeploy-runtime-acceptance`
 - 日期：2026-05-14
 
 ## 状态判定
@@ -30,6 +30,23 @@ chcp 65001 | Out-Null
 - `evidence_closure（证据闭环）`：缺少快照、报告数据、预算、风险、待核验项或旅行社证据。
 
 缺真实依赖或缺 `report_data` 时，任何命令都不能返回 `passed`。
+
+## 2026-05-14 部署前真实环境结果
+
+本轮目标是部署前 readiness（就绪检查）收口，不重新替代主线已有的完整 9 场景 acceptance-core（核心验收）记录。所有命令使用真实本机 `.env`，但只记录变量名、状态和脱敏指标，不记录真实密钥。
+
+| 项目 | 实际结果 |
+|---|---|
+| main 基线 | `git fetch origin main` 后，当前分支与 `origin/main` 一致，工作树从干净状态开始 |
+| Python（编程语言运行时）环境 | 本机新建 `.venv`，`uv sync --frozen` 安装 193 个包；`.venv/` 未提交 |
+| RAG（检索增强生成）初始化 | `python -m scripts.init_rag` 通过；public collection（公开集合）18 个 embedding（嵌入向量），internal collection（内部集合）61 个 embedding，metadata（元数据）契约检查通过 |
+| staging readiness（预生产就绪检查） | `status=passed`，`readiness_status=ready` |
+| 后端健康 | 先发现 `8000` 端口有旧工作树后端，停止后从当前工作树启动；`/health/live=200`，`/health/ready=200` |
+| acceptance backend check（验收后端检查） | `status=passed`，`readiness_status=ready`；MCP（模型上下文协议）服务 6 healthy，37 tools（工具） |
+| acceptance-smoke（验收冒烟测试） | `pricing_agency_quote_explanation` 1/1 passed；总耗时 395.967s，first token（首个文本令牌）58.040s，工具调用 13 次，`evidence_closure.missing=[]` |
+| 脱敏证据 | `.runtime\readiness-staging.json`、`.runtime\readiness-acceptance.json`、`.runtime\acceptance-smoke\20260514-151605-acceptance-summary.json` 仅本地保留 |
+
+本轮未发现 hard blocker（硬阻塞项）。smoke 运行中有工具失败/兜底计数 7 次，但确定性门禁、预算、风险、待核验项、旅行社证据和工具审计均通过；这类降级证据保留在 `.runtime/` 原始摘要中，不提交。
 
 ## 部署验收三层入口
 
@@ -265,45 +282,79 @@ uv sync --frozen
 ## 本轮验证记录
 
 ```powershell
+git fetch origin main
+git status --short --branch
+```
+
+结果：退出码 `0`，当前分支 `codex/predeploy-runtime-acceptance` 与 `origin/main` 一致。
+
+```powershell
+python -m venv .venv
+uv sync --frozen
+```
+
+结果：退出码 `0`，安装 193 个包；`.venv/` 不提交。
+
+```powershell
+.\.venv\Scripts\python -m scripts.init_rag
+```
+
+结果：退出码 `0`；公开攻略 RAG 18 个 embedding，旅行社内部知识库 RAG 61 个 embedding，metadata 契约检查通过。
+
+```powershell
+.\.venv\Scripts\python scripts\check_runtime_readiness.py --target staging --json
+```
+
+结果：退出码 `0`，`status=passed`，`readiness_status=ready`。
+
+```powershell
+.\.venv\Scripts\python main.py
+```
+
+结果：当前工作树后端启动成功；`/health/live` 和 `/health/ready` 均返回 200。复跑前发现并停止了一个指向旧工作树的本地 `8000` 进程。
+
+```powershell
+.\.venv\Scripts\python scripts\check_runtime_readiness.py --target acceptance --check-backend --base-url http://127.0.0.1:8000 --json
+```
+
+结果：退出码 `0`，`status=passed`，`readiness_status=ready`；MCP 服务 6 healthy、37 tools。
+
+```powershell
+.\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-smoke --base-url http://127.0.0.1:8000 --json --summary-dir .runtime\acceptance-smoke
+```
+
+结果：退出码 `0`，`status=passed`，`passed=true`，场景数 `1`。`pricing_agency_quote_explanation` 生成 `report_data`，`evidence_closure.missing=[]`，`runtime_budget=passed`。
+
+```powershell
+.\.venv\Scripts\python scripts\export_acceptance_evidence.py --output docs\acceptance-core-report.md
+```
+
+结果：退出码 `0`，读取最新 `.runtime\acceptance-smoke\20260514-151605-acceptance-summary.json` 并生成脱敏 Markdown（标记文本）。由于本轮最新 summary 是 smoke 1 场景，`docs/acceptance-core-report.md` 会明确提示 `selected_count=1`，不能把它当成完整 9 场景 core 通过证据。
+
+```powershell
 .\.venv\Scripts\python -m compileall app tests scripts
 ```
 
 结果：退出码 `0`。
 
 ```powershell
-.\.venv\Scripts\python -m pytest tests\test_step_prompt_rendering.py tests\test_planning_mode_boundary.py tests\test_tool_loop_guard.py tests\test_evaluation_live_runner.py tests\test_runtime_metrics.py -q
+.\.venv\Scripts\python -m pytest tests\test_runtime_readiness.py tests\test_acceptance_evidence_pack.py tests\test_evaluation_live_runner.py -q
 ```
 
-结果：退出码 `0`，`102 passed`。测试结束后 LangSmith（LangChain 可观测平台）上报返回 `403 Forbidden`，不影响 pytest（测试框架）退出码。
+结果：退出码 `0`，`61 passed`。
 
 ```powershell
 .\.venv\Scripts\python -m pytest -q
 ```
 
-结果：退出码 `0`，`434 passed, 24 deselected`。结束后 LangSmith（LangChain 可观测平台）上报返回 `403 Forbidden`，但 pytest（测试框架）退出码为 `0`。
-
-```powershell
-.\.venv\Scripts\python.exe scripts\run_evaluation_scenarios.py --acceptance-smoke --preflight-only --json --no-summary
-```
-
-结果：退出码 `0`，`preflight.status=passed`，`backend_live=passed`，`backend_ready=passed`。
-
-```powershell
-.\.venv\Scripts\python.exe scripts\run_evaluation_scenarios.py --acceptance-core --preflight-only --json --no-summary
-```
-
-结果：退出码 `0`，`preflight.status=passed`，`backend_live=passed`，`backend_ready=passed`。
-
-```powershell
-.\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-core --base-url http://127.0.0.1:8000 --json --summary-dir .runtime\acceptance-core-full --scenario-timeout 900 --global-timeout 7200
-```
-
-结果：退出码 `0`，`status=passed`，`passed=true`，场景数 `9`。所有场景 `report_data=true`、`evidence_closure.missing=[]`、`runtime_budget=passed`、`error_event_count=0`、`session_busy_event_count=0`。
+结果：退出码 `0`，`441 passed, 24 deselected`。
 
 本地证据：
 
-- `.runtime\acceptance-core-full\20260514-134448-acceptance-summary.json`
-- `.runtime\acceptance-core-full\20260514-134448-acceptance-summary.md`
+- `.runtime\readiness-staging.json`
+- `.runtime\readiness-acceptance.json`
+- `.runtime\acceptance-smoke\20260514-151605-acceptance-summary.json`
+- `.runtime\acceptance-smoke\20260514-151605-acceptance-summary.md`
 
 这些 `.runtime/` 文件不提交。
 
