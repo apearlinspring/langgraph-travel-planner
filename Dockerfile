@@ -39,6 +39,8 @@ RUN /opt/venv/bin/python -c "import importlib, importlib.metadata as md; assert 
 
 COPY app /app/app
 COPY scripts /app/scripts
+COPY alembic /app/alembic
+COPY alembic.ini /app/alembic.ini
 COPY data /app/data
 COPY frontend /app/frontend
 
