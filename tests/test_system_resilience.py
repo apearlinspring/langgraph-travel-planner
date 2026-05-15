@@ -485,5 +485,5 @@ def test_turn_observability_records_degraded_fallback_without_readiness_dependen
 
     assert snapshot["metrics"]["degradation_status"] == "degraded"
     assert snapshot["metrics"]["fallback_count"] == 1
-    assert snapshot["metadata"]["current_step"] == "unknown"
+    assert snapshot["metadata"]["current_step"] == "requirement_collection"
     assert get_turn_observability_snapshot(observation.turn_id)["turn_id"] == observation.turn_id

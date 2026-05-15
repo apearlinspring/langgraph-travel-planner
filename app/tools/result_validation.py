@@ -65,10 +65,10 @@ def validate_transport_result(content: Any) -> ToolResultValidation:
     output_summary = summarize_tool_output(content)
     if not isinstance(content, str) or not content.strip():
         return ToolResultValidation(
-            status="failed",
+            status="degraded",
             output_summary=output_summary,
             error_type="empty_transport_result",
-            message="交通工具未返回可用内容",
+            message="交通工具调用完成，但没有查到合适结果",
         )
 
     lowered = content.lower()

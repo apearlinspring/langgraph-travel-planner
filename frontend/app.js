@@ -1206,7 +1206,7 @@
           error: "连接失败",
           idle: "待开始",
           ok: "正常",
-          pending: "待审批",
+          pending: "待确认",
           approved: "已批准",
           rejected: "已拒绝",
           expired: "已过期",
@@ -1214,16 +1214,34 @@
           none: "记录",
           completed: "已完成",
           running: "运行中",
-          unknown: "未知",
+          success: "成功",
+          needs_verification: "需核验",
+          not_found: "未查到",
+          insufficient_parameters: "参数不足",
+          service_exception: "服务异常",
+          skipped: "已跳过",
+          pending_confirmation: "待确认",
+          requirement_collection: "需求收集",
+          destination_recommendation: "目的地推荐",
+          transport_planning: "交通规划",
+          accommodation_planning: "住宿规划",
+          food_planning: "餐饮规划",
+          itinerary_generation: "行程生成",
+          budget_summarization: "预算汇总",
+          order_generation: "报告生成",
+          free_planning: "自由规划",
+          agency_plan: "旅行社顾问方案",
+          unknown: "待确认",
         };
-        return labels[status] || status || "未知";
+        return labels[status] || status || "待确认";
       }
 
       function getReadinessStatusCopy(status = "") {
-        if (status === "ready") return "核心依赖和治理审计均可用，可以继续完整规划链路。";
-        if (status === "degraded") return "核心链路可用，部分外部能力降级，页面会保留边界提示。";
-        if (status === "not_ready") return "核心依赖尚未就绪，暂不开放登录、聊天或审批动作。";
-        return "正在确认服务状态。";
+        if (status === "ready") return "对话、报告、工具审计和人工确认边界都可演示。";
+        if (status === "degraded") return "核心规划可继续，部分外部查询可能需要稍后复查。";
+        if (status === "not_ready") return "关键能力尚未就绪，暂不开放登录、聊天或确认动作。";
+        if (status === "error") return "暂时无法连接服务，需要稍后重试。";
+        return "正在确认当前可用能力。";
       }
 
       function formatEpochSeconds(value) {
@@ -1239,24 +1257,114 @@
         el.className = `governance-status-pill ${status || "idle"}`.trim();
       }
 
+      const READINESS_ITEM_LABELS = {
+        checkpointer: "会话进度",
+        store: "长期偏好",
+        mcp: "外部查询",
+        session_lock: "会话保护",
+        approval_governance: "人工确认边界",
+        postgres: "业务数据",
+        redis: "会话保护",
+      };
+
+      function normalizeReadinessStatus(service = {}) {
+        const rawStatus = String(service.status || (service.ready ? "ready" : "checking"));
+        if (rawStatus === "healthy" || rawStatus === "ok") return "ready";
+        if (rawStatus === "unavailable" || rawStatus === "missing") return "not_ready";
+        if (rawStatus === "error") return "not_ready";
+        return rawStatus || "checking";
+      }
+
+      function combineReadinessStatuses(statuses = []) {
+        if (statuses.some((status) => status === "not_ready")) return "not_ready";
+        if (statuses.some((status) => status === "degraded")) return "degraded";
+        if (statuses.length && statuses.every((status) => status === "ready")) return "ready";
+        return "checking";
+      }
+
+      function formatReadinessName(name = "") {
+        return READINESS_ITEM_LABELS[name] || String(name || "待确认能力");
+      }
+
       function summarizeReadinessServices(services = {}) {
+        const checkpointerStatus = normalizeReadinessStatus(services.checkpointer);
+        const storeStatus = normalizeReadinessStatus(services.store);
+        const mcpStatus = normalizeReadinessStatus(services.mcp);
+        const sessionLockStatus = normalizeReadinessStatus(services.session_lock);
+        const approvalStatus = normalizeReadinessStatus(services.approval_governance);
+        const coreStatus = combineReadinessStatuses([checkpointerStatus, storeStatus]);
+        const protectionStatus = combineReadinessStatuses([sessionLockStatus, approvalStatus]);
         return [
-          ["checkpointer", "会话检查点"],
-          ["store", "长期记忆"],
-          ["mcp", "外部工具服务"],
-          ["session_lock", "会话锁"],
-          ["approval_governance", "审批治理"],
-        ].map(([key, label]) => {
-          const service = services?.[key] || {};
-          const rawStatus = service.status || (service.ready ? "ready" : "unknown");
-          const status =
-            rawStatus === "healthy"
-              ? "ready"
-              : rawStatus === "unavailable"
-                ? "not_ready"
-                : rawStatus;
-          return { key, label, status };
-        });
+          {
+            key: "core",
+            label: "对话与报告",
+            status: coreStatus,
+            description: "对话续接、阶段进度、报告生成",
+          },
+          {
+            key: "memory",
+            label: "长期偏好",
+            status: storeStatus,
+            description: "用户偏好可用于后续建议",
+          },
+          {
+            key: "external",
+            label: "外部服务",
+            status: mcpStatus,
+            description: "天气、地图、交通、酒店等查询能力",
+          },
+          {
+            key: "human_boundary",
+            label: "人工确认边界",
+            status: protectionStatus,
+            description: "当前只记录边界，不会真实支付或下单",
+          },
+        ];
+      }
+
+      function readinessSummaryLines(data = {}, status = "") {
+        const services = data.services || {};
+        const items = summarizeReadinessServices(services);
+        const available = items
+          .filter((item) => item.status === "ready" || item.status === "degraded")
+          .map((item) => item.label);
+        const mcpStatus = normalizeReadinessStatus(services.mcp);
+        const approval = services.approval_governance || {};
+        const approvalReady = normalizeReadinessStatus(approval) === "ready";
+        const missing = Array.isArray(data.missing_required)
+          ? data.missing_required.map(formatReadinessName)
+          : [];
+        const degraded = Array.isArray(data.degraded_optional)
+          ? data.degraded_optional.map(formatReadinessName)
+          : [];
+        const attention = [
+          ...missing.map((item) => `${item}未就绪`),
+          ...degraded.map((item) => `${item}需复查`),
+          ...(data.startup_complete === false ? ["服务仍在启动中"] : []),
+        ];
+        return [
+          `<strong>${escapeHtml(getReadinessStatusCopy(status))}</strong>`,
+          `<span>可用能力：${escapeHtml(
+            available.length ? available.join("、") : "正在确认"
+          )}</span>`,
+          `<span>外部服务：${escapeHtml(
+            mcpStatus === "ready"
+              ? "天气、地图、交通、酒店等查询可用"
+              : mcpStatus === "degraded"
+                ? "部分查询能力不稳定，结果会提示核验"
+                : mcpStatus === "not_ready"
+                  ? "暂不可用，可先生成草案"
+                  : "正在检测"
+          )}</span>`,
+          `<span>人工确认边界：${escapeHtml(
+            approvalReady
+              ? approval.persistent
+                ? "确认记录可追溯；当前不触发真实支付、短信或下单"
+                : "边界说明可展示；确认记录能力仍需复查"
+              : "确认能力暂未就绪；不会执行真实支付、短信或下单"
+          )}</span>`,
+          `<span>待关注：${escapeHtml(attention.length ? attention.join("、") : "无")}</span>`,
+        ];
       }
 
       function renderReadinessPanel(payload = null) {
@@ -1269,21 +1377,7 @@
         setPillStatus(statusPill, status, getStatusLabel(status));
 
         if (summary) {
-          const missing = Array.isArray(data.missing_required)
-            ? data.missing_required
-            : [];
-          const degraded = Array.isArray(data.degraded_optional)
-            ? data.degraded_optional
-            : [];
-          const approval = data.services?.approval_governance || {};
-          summary.innerHTML = `
-            <strong>${escapeHtml(getReadinessStatusCopy(status))}</strong>
-            <span>环境：${escapeHtml(data.environment || "unknown")}</span>
-            <span>启动：${data.startup_complete ? "已完成" : "未完成"}</span>
-            <span>缺失必需项：${escapeHtml(missing.length ? missing.join("、") : "无")}</span>
-            <span>可选降级：${escapeHtml(degraded.length ? degraded.join("、") : "无")}</span>
-            <span>审批持久化：${approval.persistent ? "PostgreSQL（关系型数据库）已持久化" : "未声明持久化闭环"}</span>
-          `;
+          summary.innerHTML = readinessSummaryLines(data, status).join("");
         }
 
         if (grid) {
@@ -1293,6 +1387,7 @@
                 <div class="readiness-service-item">
                   <span>${escapeHtml(item.label)}</span>
                   <strong>${escapeHtml(getStatusLabel(item.status))}</strong>
+                  <small>${escapeHtml(item.description)}</small>
                 </div>
               `
             )
@@ -1328,18 +1423,145 @@
           : compact;
       }
 
+      const TOOL_DISPLAY_LABELS = {
+        query_transport_options: "交通查询",
+        query_flight_options: "航班查询",
+        query_train_options: "高铁查询",
+        query_driving_route: "自驾路线",
+        query_hotel_options: "住宿查询",
+        query_destination_info: "目的地信息",
+        search_travel_info: "旅行搜索",
+        search_destination_guide: "目的地攻略",
+        search_food_recommendations: "餐饮建议",
+        search_accommodation_info: "住宿建议",
+        search_travel_tips: "旅行提示",
+        search_agency_product_templates: "产品模板检索",
+        search_agency_service_sop: "服务流程检索",
+        search_agency_pricing_rules: "报价规则检索",
+        search_agency_risk_playbook: "风险规则检索",
+        search_agency_report_standards: "报告标准检索",
+        generate_order_tool: "报告生成",
+      };
+
+      const TOOL_EVIDENCE_LABELS = {
+        live_transport_query: "实时交通查询",
+        live_hotel_search: "实时住宿查询",
+        mcp_live_query: "外部服务查询",
+        internal_rag_evidence: "内部知识检索",
+        public_rag_evidence: "公开知识检索",
+        destination_router_evidence: "目的地知识编排",
+        internal_state_update: "本地状态更新",
+        unknown: "证据类型待确认",
+      };
+
+      const TOOL_AUDIT_STATUS_LABELS = {
+        success: "成功",
+        needs_verification: "需核验",
+        not_found: "未查到",
+        insufficient_parameters: "参数不足",
+        service_exception: "服务异常",
+        skipped: "已跳过",
+      };
+
+      const TOOL_AUDIT_EXPLANATIONS = {
+        success: "工具返回了可用结果。",
+        needs_verification: "工具返回了内容，但仍需要人工或出发前再次核验。",
+        not_found: "工具调用成功，但这次没有查到合适结果；不是系统崩溃。",
+        insufficient_parameters: "本轮缺少必要参数，补齐后可以再查。",
+        service_exception: "外部服务或工具执行异常，需要稍后重试。",
+        skipped: "本轮按保护规则跳过了这次工具调用。",
+      };
+
+      function getToolDisplayName(toolName = "") {
+        const rawName = String(toolName || "").trim();
+        return TOOL_DISPLAY_LABELS[rawName] || redactClientText(rawName || "工具", 80);
+      }
+
+      function getToolEvidenceLabel(evidenceType = "") {
+        const rawType = String(evidenceType || "unknown").trim();
+        return TOOL_EVIDENCE_LABELS[rawType] || redactClientText(rawType, 80);
+      }
+
+      function inferToolAuditSemanticStatus(status = "", errorType = "") {
+        const rawStatus = String(status || "").toLowerCase();
+        const rawError = String(errorType || "").toLowerCase();
+        if (rawStatus === "success") return "success";
+        if (rawError === "empty_transport_result") return "not_found";
+        if (rawError.startsWith("empty_") || rawError.includes("empty_or_unavailable")) {
+          return "not_found";
+        }
+        if (rawStatus === "skipped") {
+          if (
+            rawError.startsWith("invalid_") ||
+            rawError.includes("missing") ||
+            rawError.includes("placeholder")
+          ) {
+            return "insufficient_parameters";
+          }
+          return "skipped";
+        }
+        if (rawStatus === "approval_required") return "skipped";
+        if (rawStatus === "failed" || rawStatus === "timeout") return "service_exception";
+        return "needs_verification";
+      }
+
+      function getToolAuditReasonLabel(errorType = "") {
+        const rawError = String(errorType || "").trim();
+        const labels = {
+          empty_transport_result: "未查到合适交通结果",
+          empty_hotel_result: "未查到合适住宿结果",
+          empty_mcp_result: "外部服务没有返回可用内容",
+          empty_rag_result: "知识检索没有返回证据",
+          rag_empty_or_unavailable: "知识检索为空或降级",
+          transport_result_requires_verification: "交通结果需要复查",
+          mcp_result_requires_verification: "外部服务结果需要复查",
+          upstream_timeout: "外部服务超时",
+          duplicate_tool_call_same_turn: "同一轮重复查询已跳过",
+          approval_required: "需要人工确认",
+          tool_disabled: "能力尚未开放",
+          invalid_transport_query_args: "交通查询参数不足",
+          invalid_hotel_query_args: "住宿查询参数不足",
+          invalid_destination_query_args: "目的地查询参数不足",
+          invalid_rag_query_args: "检索参数不足",
+          invalid_mcp_tool_args: "外部工具参数不足",
+        };
+        return labels[rawError] || redactClientText(rawError, 80);
+      }
+
       function normalizeToolAuditEvent(event = {}) {
         const status = String(event.status || "unknown");
+        const errorType = redactClientText(event.error_type || "", 80);
+        const semanticStatus = String(
+          event.semantic_status || inferToolAuditSemanticStatus(status, errorType)
+        );
+        const statusLabel = redactClientText(
+          event.status_label ||
+            TOOL_AUDIT_STATUS_LABELS[semanticStatus] ||
+            getStatusLabel(status),
+          80
+        );
+        const statusExplanation = redactClientText(
+          event.status_explanation ||
+            TOOL_AUDIT_EXPLANATIONS[semanticStatus] ||
+            "本轮工具结果需要结合行程上下文判断。",
+          160
+        );
         return {
-          tool: redactClientText(event.tool || event.name || "unknown_tool", 80),
+          tool: getToolDisplayName(event.tool || event.name || "unknown_tool"),
+          rawTool: redactClientText(event.tool || event.name || "unknown_tool", 80),
           status,
+          semanticStatus,
+          statusLabel,
+          statusExplanation,
           elapsedSeconds:
             event.elapsed_seconds === null || event.elapsed_seconds === undefined
               ? null
               : Number(event.elapsed_seconds),
           retryCount: Number(event.retry_count || 0),
           evidenceType: redactClientText(event.evidence_type || "unknown", 80),
-          errorType: redactClientText(event.error_type || "", 80),
+          evidenceLabel: getToolEvidenceLabel(event.evidence_type || "unknown"),
+          errorType,
+          reasonLabel: errorType ? getToolAuditReasonLabel(errorType) : "",
           degraded:
             Boolean(event.degraded) ||
             ["failed", "timeout", "degraded", "skipped", "approval_required"].includes(
@@ -1369,20 +1591,43 @@
         renderToolAuditList();
       }
 
+      function normalizeObservabilityField(value = "", fallback = "pending_confirmation") {
+        const text = String(value || "").trim();
+        if (!text || text.toLowerCase() === "unknown") return fallback;
+        return text;
+      }
+
       function rememberTurnObservability(event = {}) {
         const observability = event.observability || event;
         if (!observability || typeof observability !== "object") return;
+        const step = normalizeObservabilityField(
+          observability.step || observability.current_step,
+          "requirement_collection"
+        );
+        const planningMode = normalizeObservabilityField(
+          observability.planning_mode,
+          "pending_confirmation"
+        );
+        const status = normalizeObservabilityField(observability.status, "completed");
+        const degradationStatus = normalizeObservabilityField(
+          observability.degradation_status,
+          "ok"
+        );
         state.governance.turnObservability = {
           turnId: redactClientText(observability.turn_id || "", 80),
-          status: String(observability.status || "unknown"),
-          step: redactClientText(observability.step || "unknown", 80),
-          planningMode: redactClientText(observability.planning_mode || "unknown", 80),
+          status,
+          statusLabel: getStatusLabel(status),
+          step,
+          stepLabel: getStatusLabel(step),
+          planningMode,
+          planningModeLabel: getStatusLabel(planningMode),
           firstTokenSeconds: observability.first_token_seconds,
           totalElapsedSeconds: observability.total_elapsed_seconds,
           toolCallCount: Number(observability.tool_call_count || 0),
           toolFailureCount: Number(observability.tool_failure_count || 0),
           fallbackCount: Number(observability.fallback_count || 0),
-          degradationStatus: String(observability.degradation_status || "unknown"),
+          degradationStatus,
+          degradationLabel: getStatusLabel(degradationStatus),
           estimatedTotalTokens: Number(observability.estimated_total_tokens || 0),
         };
         renderTurnObservability();
@@ -1408,20 +1653,19 @@
               <article class="tool-audit-card">
                 <div class="tool-audit-card-head">
                   <strong>${escapeHtml(event.tool)}</strong>
-                  <span class="governance-status-pill ${
-                    event.degraded ? "degraded" : "ok"
-                  }">${escapeHtml(getStatusLabel(event.status))}</span>
+                  <span class="governance-status-pill ${escapeHtml(
+                    event.semanticStatus
+                  )}">${escapeHtml(event.statusLabel)}</span>
                 </div>
+                <p>${escapeHtml(event.statusExplanation)}</p>
                 <div class="tool-audit-meta">
                   <span><i class="fa-regular fa-clock"></i>${escapeHtml(elapsed)}</span>
                   <span><i class="fa-solid fa-rotate"></i>${event.retryCount} 次重试</span>
-                  <span><i class="fa-solid fa-file-shield"></i>${escapeHtml(
-                    event.evidenceType
-                  )}</span>
+                  <span><i class="fa-solid fa-file-shield"></i>${escapeHtml(event.evidenceLabel)}</span>
                   ${
-                    event.errorType
+                    event.reasonLabel
                       ? `<span><i class="fa-solid fa-triangle-exclamation"></i>${escapeHtml(
-                          event.errorType
+                          event.reasonLabel
                         )}</span>`
                       : ""
                   }
@@ -1446,19 +1690,19 @@
           `;
           return;
         }
-        setPillStatus(pill, item.degradationStatus, getStatusLabel(item.degradationStatus));
+        setPillStatus(pill, item.degradationStatus, item.degradationLabel);
         const metrics = [
-          ["Turn", item.turnId ? item.turnId.slice(0, 16) : "unknown"],
-          ["状态", item.status],
-          ["阶段", item.step],
-          ["模式", item.planningMode],
-          ["首 token", item.firstTokenSeconds == null ? "未记录" : `${item.firstTokenSeconds}s`],
+          ["状态", item.statusLabel],
+          ["阶段", item.stepLabel],
+          ["模式", item.planningModeLabel],
+          ["首个响应片段", item.firstTokenSeconds == null ? "未记录" : `${item.firstTokenSeconds}s`],
           ["总耗时", item.totalElapsedSeconds == null ? "未记录" : `${item.totalElapsedSeconds}s`],
           ["工具调用", `${item.toolCallCount} 次`],
-          ["失败/兜底", `${item.toolFailureCount}/${item.fallbackCount}`],
-          ["token 估算", `${item.estimatedTotalTokens}`],
+          ["需复查工具", `${item.toolFailureCount} 个`],
+          ["兜底次数", `${item.fallbackCount} 次`],
+          ["文本量估算", `${item.estimatedTotalTokens}`],
         ];
-        grid.innerHTML = metrics
+        const metricsHtml = metrics
           .map(
             ([label, value]) => `
               <div class="turn-observability-item">
@@ -1468,6 +1712,12 @@
             `
           )
           .join("");
+        const traceHtml = item.turnId
+          ? `<div class="turn-observability-footnote">追踪码（排查用）：${escapeHtml(
+              item.turnId.slice(0, 12)
+            )}</div>`
+          : "";
+        grid.innerHTML = `${metricsHtml}${traceHtml}`;
       }
 
       function renderApprovalList() {
@@ -1482,17 +1732,17 @@
         });
 
         if (!state.token) {
-          list.innerHTML = '<div class="governance-empty">登录后展示审批记录。</div>';
+          list.innerHTML = '<div class="governance-empty">登录后展示人工确认记录。</div>';
           return;
         }
         if (state.governance.isApprovalLoading) {
-          list.innerHTML = '<div class="governance-empty">正在同步审批记录…</div>';
+          list.innerHTML = '<div class="governance-empty">正在同步人工确认记录…</div>';
           return;
         }
         if (!approvals.length) {
           list.innerHTML = `
             <div class="governance-empty">
-              当前没有${filter === "pending" ? "待审批" : "可展示"}记录。可以创建一条未来真实支付的审批记录。
+              当前没有${filter === "pending" ? "待人工确认" : "可展示"}记录。演示记录只说明未来真实支付、短信或客户资料导出前需要人工确认，不会真实下单。
             </div>
           `;
           return;
@@ -1510,14 +1760,14 @@
                 onclick="selectApprovalRecord('${escapeHtml(id)}')"
               >
                 <div class="approval-card-head">
-                  <strong>${escapeHtml(redactClientText(approval.label || approval.action || "敏感动作"))}</strong>
+                  <strong>${escapeHtml(redactClientText(approval.label || approval.action || "需确认动作"))}</strong>
                   <span class="governance-status-pill ${escapeHtml(status)}">${escapeHtml(
                     getStatusLabel(status)
                   )}</span>
                 </div>
-                <p>${escapeHtml(redactClientText(approval.reason || "未填写审批理由"))}</p>
+                <p>${escapeHtml(redactClientText(approval.reason || "未填写确认理由"))}</p>
                 <div class="approval-card-meta">
-                  <span><i class="fa-solid fa-shield-halved"></i>${approval.requires_approval ? "需审批" : "记录型"}</span>
+                  <span><i class="fa-solid fa-shield-halved"></i>${approval.requires_approval ? "需人工确认" : "边界记录"}</span>
                   <span><i class="fa-regular fa-clock"></i>${escapeHtml(
                     formatEpochSeconds(approval.created_at)
                   )}</span>
@@ -1563,12 +1813,12 @@
         const events = state.governance.approvalEvents || [];
         if (!state.governance.selectedApprovalId) {
           list.className = "governance-empty";
-          list.innerHTML = "选择一条审批记录后展示只追加事件。";
+          list.innerHTML = "选择一条人工确认记录后展示状态变化。";
           return;
         }
         if (!events.length) {
           list.className = "governance-empty";
-          list.innerHTML = "这条审批还没有返回事件。";
+          list.innerHTML = "这条记录还没有返回事件。";
           return;
         }
         list.className = "approval-event-list";
@@ -1621,7 +1871,7 @@
             : [];
         } catch (error) {
           state.governance.approvalEvents = [];
-          showToast("审批事件同步失败", true);
+          showToast("人工确认事件同步失败", true);
         }
         renderApprovalEvents();
       }
@@ -1665,7 +1915,7 @@
         } catch (error) {
           state.governance.approvals = [];
           state.governance.selectedApprovalId = null;
-          if (!silent) showToast("审批记录同步失败", true);
+          if (!silent) showToast("人工确认记录同步失败", true);
         } finally {
           state.governance.isApprovalLoading = false;
           syncUiAvailability();
@@ -1694,9 +1944,9 @@
       }
 
       async function createDemoApproval() {
-        if (!(await ensureServiceReady("创建审批记录"))) return;
+        if (!(await ensureServiceReady("创建人工确认记录"))) return;
         if (!state.token) {
-          showToast("请先登录后再创建审批记录。", true);
+          showToast("请先登录后再创建人工确认记录。", true);
           return;
         }
         state.governance.isApprovalLoading = true;
@@ -1724,10 +1974,10 @@
             throw new Error(data?.detail?.message || `HTTP ${response.status}`);
           }
           state.governance.selectedApprovalId = data.approval_id;
-          showToast("审批记录已创建");
+          showToast("人工确认演示记录已创建，不会触发真实支付或下单。");
           await loadApprovals({ silent: true });
         } catch (error) {
-          showToast("审批记录创建失败，请确认审批治理服务可用。", true);
+          showToast("演示记录创建失败，请确认人工确认记录服务可用。", true);
         } finally {
           state.governance.isApprovalLoading = false;
           syncUiAvailability();
@@ -1736,7 +1986,7 @@
 
       async function decideApproval(approvalId, decision, event) {
         event?.stopPropagation();
-        if (!(await ensureServiceReady("处理审批"))) return;
+        if (!(await ensureServiceReady("处理人工确认"))) return;
         if (!approvalId || !["approve", "reject", "expire"].includes(decision)) return;
         const decisionPath =
           decision === "approve" ? "approve" : decision === "reject" ? "reject" : "expire";
@@ -1767,14 +2017,14 @@
             const message =
               data?.detail?.message ||
               data?.detail ||
-              "当前账号没有审批权限，或审批记录状态已变化。";
+              "当前账号没有处理权限，或人工确认记录状态已变化。";
             throw new Error(redactClientText(message));
           }
           state.governance.selectedApprovalId = data.approval_id || approvalId;
-          showToast(`审批已${decision === "approve" ? "批准" : decision === "reject" ? "拒绝" : "过期"}`);
+          showToast(`人工确认记录已${decision === "approve" ? "批准" : decision === "reject" ? "拒绝" : "过期"}`);
           await loadApprovals({ silent: true });
         } catch (error) {
-          showToast(error.message || "审批处理失败", true);
+          showToast(error.message || "人工确认处理失败", true);
         }
       }
 
@@ -1897,7 +2147,7 @@
             setRuntimeStatus(state.token ? "已连接 · 降级" : "服务降级可用", "online");
             updateEndpointTone("warning");
             setAuthServiceHint(
-              "核心服务可用，但部分外部能力降级；聊天、审批和报告边界仍可继续查看。",
+              "核心服务可用，但部分外部能力降级；聊天、人工确认和报告边界仍可继续查看。",
               "online"
             );
             setServiceBanner({
@@ -1916,7 +2166,7 @@
           setRuntimeStatus("服务未就绪", "error");
           updateEndpointTone("error");
           setAuthServiceHint(
-            "后端核心依赖尚未就绪，暂时不能登录、聊天或执行审批动作。",
+            "后端关键能力尚未就绪，暂时不能登录、聊天或处理人工确认。",
             "error"
           );
           setServiceBanner({
@@ -4564,19 +4814,19 @@
         ].filter((item, index, list) => list.indexOf(item) === index);
         const statusText = approval.requiresApproval
           ? approval.pending
-            ? "等待人工审批"
+            ? "等待人工确认"
             : getStatusLabel(approval.status)
-          : "记录型治理边界";
+          : "边界记录";
         return `
           <div class="travel-report-governance">
             <div class="travel-report-governance-status">
               <div>
-                <span>审批状态</span>
+                <span>人工确认状态</span>
                 <strong>${escapeHtml(statusText)}</strong>
               </div>
               <div>
                 <span>动作</span>
-                <strong>${escapeHtml(approval.action || "敏感动作")}</strong>
+                <strong>${escapeHtml(approval.action || "需确认动作")}</strong>
               </div>
               <div>
                 <span>阻塞</span>
@@ -4584,7 +4834,7 @@
               </div>
             </div>
             <div class="travel-report-governance-boundary">
-              <strong>审批治理边界</strong>
+              <strong>人工确认边界</strong>
               <p>${escapeHtml(approval.boundary)}</p>
               ${renderReportDataList(unsupported, "暂无额外不可承诺项。")}
             </div>
@@ -4924,7 +5174,7 @@
                 tone: "governance",
                 icon: "fa-shield-halved",
                 label: "治理边界",
-                title: "审批治理与不可承诺项",
+                title: "人工确认与不可承诺项",
                 body: renderReportDataGovernancePanel(viewModel),
               })}
             </div>
