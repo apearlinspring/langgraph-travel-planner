@@ -4,7 +4,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>知行 ZhiXing - 您的智能旅伴</title>
+    <title>知行 ZhiXing - 旅行规划工作台</title>
     <!-- 使用系统字体回退，避免国内网络环境下字体外链拖慢首屏 -->
     <!-- 引入 FontAwesome 图标库（国内镜像） -->
     <link
@@ -33,7 +33,7 @@
       <div class="intro-copy">
         <div class="intro-kicker">知行 ZhiXing</div>
         <h1>把远方先变得直观，再慢慢长成一段真正能出发的旅程</h1>
-        <p>目的地、交通、住宿与提醒会一步步展开，最后整理成专属于你的个性化旅游规划。</p>
+        <p>目的地、交通、住宿与提醒会一步步展开，最后整理成一份可继续调整的旅游规划。</p>
         <div class="intro-enter-hint">
           <span><i class="fa-regular fa-hand-pointer"></i> 点击任意位置进入</span>
         </div>
@@ -68,8 +68,8 @@
           <div class="auth-hero-overlay"></div>
           <div class="auth-hero-caption">
             <span class="auth-hero-kicker">目的地 · 交通 · 住宿 · 报告</span>
-            <strong>专属于你的个性化旅游规划</strong>
-            <p>聊完需求后，我会把路线、交通、住宿和关键提醒整理成一份更完整的旅游规划报告。</p>
+            <strong>可继续调整的旅游规划</strong>
+            <p>聊完需求后，我会把路线、交通、住宿和关键提醒整理成一份清晰的旅游规划报告。</p>
           </div>
         </div>
         <div class="auth-highlights">
@@ -91,7 +91,7 @@
           <div class="auth-highlight-item">
             <i class="fa-solid fa-file-lines"></i>
             <strong>报告成册</strong>
-            <span>完整走完后会整理成专属于你的个性化旅游规划</span>
+            <span>完整走完后会整理成可查看的旅游规划报告</span>
           </div>
         </div>
 
@@ -233,11 +233,11 @@
               <span>返回列表</span>
             </button>
             <div class="chat-icon-wrapper">
-              <i class="fa-solid fa-robot"></i>
+              <i class="fa-solid fa-compass"></i>
             </div>
             <div class="chat-info">
-              <h2 id="chatTitle">行程助手</h2>
-              <p id="chatSubtitle">把出发地、时间、人数和预算告诉我，我会陪你一路规划到最终旅游报告。</p>
+              <h2 id="chatTitle">旅行顾问</h2>
+              <p id="chatSubtitle">把出发地、时间、人数和预算告诉我，我会按步骤整理到最终旅游报告。</p>
               <div class="trip-overview" id="tripOverview">
                 <span class="overview-chip primary">
                   <i class="fa-solid fa-route"></i> 未选择行程
@@ -483,8 +483,8 @@
             </div>
             <div class="planner-mode-note">
               <div>
-                <strong>两种生成方式</strong>
-                <span>简洁攻略更像旅行帖子，个性化规划会继续补齐交通、住宿、预算和最终报告。</span>
+                <strong>两种规划方式</strong>
+                <span>简洁攻略适合快速参考，完整规划会继续补齐交通、住宿、预算和最终报告。</span>
               </div>
             </div>
             <div class="planner-actions">
@@ -495,7 +495,7 @@
                   data-planner-control="true"
                   onclick="composePlannerDraft('brief')"
                 >
-                  生成简洁攻略
+                  整理简洁攻略
                 </button>
                 <button
                   class="planner-btn primary outline"
@@ -503,7 +503,7 @@
                   data-planner-control="true"
                   onclick="composePlannerDraft('personalized')"
                 >
-                  生成个性化规划
+                  整理完整规划
                 </button>
                 <button
                   class="planner-btn secondary"
@@ -565,8 +565,8 @@
       >
         <div class="governance-console-head">
           <div>
-            <div class="governance-console-kicker">HITL（人类在环）治理</div>
-            <h2>治理台</h2>
+            <div class="governance-console-kicker">人工确认与运行边界</div>
+            <h2>服务治理</h2>
           </div>
           <button
             class="governance-icon-btn"
@@ -583,7 +583,7 @@
         <section class="governance-section readiness" aria-labelledby="readinessTitle">
           <div class="governance-section-head">
             <div>
-              <span class="governance-section-label">ready check（就绪检查）</span>
+              <span class="governance-section-label">服务就绪</span>
               <h3 id="readinessTitle">运行状态</h3>
             </div>
             <span class="governance-status-pill checking" id="readinessStatusPill">
@@ -591,7 +591,7 @@
             </span>
           </div>
           <div class="readiness-summary" id="readinessSummary">
-            正在读取 /health/ready 摘要。
+            正在读取服务就绪摘要。
           </div>
           <div class="readiness-service-grid" id="readinessServiceGrid"></div>
         </section>
@@ -608,7 +608,7 @@
               type="button"
               onclick="createDemoApproval()"
             >
-              演示审批
+              创建审批记录
             </button>
           </div>
           <div class="approval-filter-row" role="group" aria-label="审批记录筛选">
@@ -635,7 +635,7 @@
           <div class="approval-events" id="approvalEvents">
             <div class="approval-events-title">审批事件</div>
             <div id="approvalEventsList" class="governance-empty">
-              选择一条审批记录后展示 append-only（只追加）事件。
+              选择一条审批记录后展示只追加事件。
             </div>
           </div>
         </section>
@@ -656,14 +656,14 @@
         <section class="governance-section observability" aria-labelledby="observabilityTitle">
           <div class="governance-section-head">
             <div>
-              <span class="governance-section-label">SSE（服务器发送事件）</span>
+              <span class="governance-section-label">轮次观测</span>
               <h3 id="observabilityTitle">轮次观测</h3>
             </div>
             <span class="governance-status-pill idle" id="turnStatusPill">待开始</span>
           </div>
           <div class="turn-observability-grid" id="turnObservabilityGrid">
             <div class="governance-empty">
-              完成一轮聊天后展示脱敏运行摘要，不展示 PII（个人可识别信息）、密钥或完整工具输入输出。
+              完成一轮聊天后展示脱敏运行摘要，不展示个人敏感信息、密钥或完整工具输入输出。
             </div>
           </div>
         </section>

@@ -203,7 +203,10 @@ async function gotoFrontend(page) {
   });
   await page.waitForSelector("#readinessStatusPill", { state: "attached" });
   await page.waitForFunction(
-    () => document.getElementById("readinessStatusPill")?.textContent?.trim() === "ready",
+    () =>
+      ["ready", "就绪"].includes(
+        document.getElementById("readinessStatusPill")?.textContent?.trim()
+      ),
     null,
     { timeout: 5000 }
   );

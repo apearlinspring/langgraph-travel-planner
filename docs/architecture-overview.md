@@ -2,18 +2,18 @@
 
 ## 1. 项目一句话说明
 
-这是一个面向“旅行规划”场景的多智能体后端系统：
+这是一个面向“旅行规划”和“旅行社顾问交付”场景的多智能体系统：
 
 - 后端接口用 `FastAPI`
 - 对话主控用 `LangChain / LangGraph`
 - 知识检索用 `RAG + Chroma`
 - 外部能力通过 `MCP` 接入
 - 业务数据和用户体系落在 `PostgreSQL`
-- 前端目前是一个单文件原型页 `frontend/zhixing.html`
+- 前端是轻量单页工作台，由 `frontend/zhixing.html`、`frontend/app.js` 和 `frontend/styles.css` 组成
 
 如果把它看成一个产品，可以理解为：
 
-“一个会和用户持续对话、分阶段做决策、能查攻略/天气/交通/酒店，并逐步生成出行方案的 AI 旅行顾问系统。”
+“一个会和用户持续对话、分阶段做决策、能查攻略/天气/交通/酒店，并逐步生成结构化旅行报告的旅行社智能顾问系统。”
 
 ## 2. 整体架构图
 
@@ -35,7 +35,7 @@ Travel Agent（主控 Agent）
         +---- 状态流转工具（记录需求、选择目的地、回退步骤）
         +---- 目的地 Router（攻略 + 天气）
         +---- 交通 Coordinator（高铁 / 航班 / 自驾子代理）
-        +---- RAG 工具（本地旅游知识库检索）
+        +---- RAG 工具（公开目的地知识 + 内部旅行社知识）
         +---- Memory 工具（用户长期偏好）
         +---- MCP 工具（天气、搜索、地图、12306 等）
         |
@@ -159,8 +159,8 @@ Travel Agent（主控 Agent）
 
 其中：
 
-- `explore` 主要依赖本地 RAG
-- `weather` 当前是占位实现，返回的是写死示例数据
+- `explore` 主要依赖本地 RAG。
+- `weather` 通过自建天气 MCP Server 调用高德天气 API；缺少密钥或上游异常时返回可解释错误，不能编造天气。
 
 ### 6.3 交通 Coordinator
 
@@ -204,7 +204,7 @@ Coordinator 负责：
 
 ## 8. RAG 在项目里承担什么角色
 
-RAG 主要用于补充本地旅游知识，不让 Agent 纯靠模型记忆回答。
+RAG 主要用于补充本地旅游知识和旅行社内部业务知识，不让 Agent 纯靠模型记忆回答。
 
 相关模块：
 
@@ -216,13 +216,16 @@ RAG 主要用于补充本地旅游知识，不让 Agent 纯靠模型记忆回答
 - `app/rag/pipeline.py` 把检索流程串起来
 - `app/tools/rag_tools.py` 暴露给 Agent 使用
 
-当前知识库来源是本地 Markdown，比如：
+当前知识库来源是本地 Markdown：
 
-- `data/documents/destinations/xian.md`
+- `data/documents/destinations/`：公开目的地攻略。
+- `data/documents/internal/products/`：旅行社产品和路线模板。
+- `data/documents/internal/sop/`：服务 SOP（标准作业流程）。
+- `data/documents/internal/pricing/`：报价和合同规则。
+- `data/documents/internal/risk/`：风险和合规规则。
+- `data/documents/internal/report/`：报告交付标准。
 
-可以理解为：
-
-“项目目前更像是一个可扩展的旅游知识问答底座，现在已经接入了西安这类示例目的地文档。”
+项目还补了小型离线召回评估：`scripts/evaluate_rag_retrieval.py` 会对 8 条标注查询计算 Top-K recall（召回率）和 MRR（平均倒数排名）。最近复跑结果见 `docs/rag-retrieval-evaluation.md`，metadata-aware BM25（元数据感知 BM25）在 source/category recall@3 上达到 100%，比只看正文的 BM25 基线提升 6.25 个百分点。
 
 ## 9. 数据层分成三类
 
@@ -277,18 +280,21 @@ SQLAlchemy 模型在 `app/models/`：
 
 ## 11. 前端目前是什么状态
 
-`frontend/zhixing.html` 是一个较完整的单页原型：
+`frontend/zhixing.html` 是单页入口，`frontend/app.js` 负责交互逻辑，`frontend/styles.css` 负责样式：
 
 - 注册/登录
 - 会话列表
 - 聊天窗口
-- SSE 流式消息渲染
+- SSE（服务器发送事件）流式消息渲染
+- 结构化 `report_data` 报告卡片
+- 地图路线预览和导出
+- 服务治理台和脱敏运行摘要
 
-它已经能体现产品交互链路，但仍属于“原型页”形态：
+它已经能体现产品交互链路，但仍属于轻量前端形态：
 
 - 没有工程化前端框架
-- 样式和逻辑在一个 HTML 文件里
-- 更适合作为演示界面，而不是长期维护的正式前端架构
+- 适合面试演示和小规模上线展示
+- 如果后续做长期产品化，可以再迁移到组件化前端工程
 
 ## 12. 当前项目成熟度判断
 
@@ -299,18 +305,20 @@ SQLAlchemy 模型在 `app/models/`：
 - 分层清晰
 - 主流程和阶段设计明确
 - Agent / Tool / State 的边界比较清楚
-- RAG、MCP、长期记忆都已经有接入口
+- RAG、MCP、长期记忆和治理边界都有接入口
+- 前端优先消费结构化 `report_data`，不是从自然语言里硬解析报告
+- acceptance-core（核心验收）和 acceptance-smoke（验收烟测）已有可复跑门禁和脱敏证据包
 
-仍然偏演示/占位的部分：
+仍然需要继续谨慎说明的部分：
 
-- `destination_router.py` 里的天气结果还是写死示例
-- `state_transition.py` 里的行程、预算、订单生成仍是简化实现
-- 主 Agent 当前实际使用的是 `MemorySaver()`，不是前面初始化好的 PostgreSQL checkpointer
-- 前端还是单文件原型页
+- 当前不接真实支付、真实预订、短信或真实供应链下单
+- 外部 API（应用程序接口）失败时，只能写入待核验和兜底说明，不能承诺真实库存、锁价或履约成功
+- RAG 离线召回评估是小型标注集，不代表全量线上查询分布
+- 轻量前端适合展示，长期产品化仍建议组件化重构
 
-所以更准确地说，这不是“一个简单 demo”，而是：
+所以更准确地说，这不是只停留在演示层的页面，而是：
 
-“一个已经搭好主骨架、但部分节点还在用占位实现的旅行规划 Agent 系统。”
+“一个已经具备真实链路、治理边界和可复跑验收证据的旅行社智能顾问 Agent 系统。”
 
 ## 13. 新人最快理解方式
 

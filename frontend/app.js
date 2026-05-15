@@ -1190,28 +1190,29 @@
 
       function getStatusLabel(status = "") {
         const labels = {
-          ready: "ready",
-          degraded: "degraded",
-          not_ready: "not_ready",
+          ready: "就绪",
+          degraded: "降级可用",
+          not_ready: "未就绪",
           checking: "检查中",
           error: "连接失败",
           idle: "待开始",
-          ok: "ok",
-          pending: "pending",
-          approved: "approved",
-          rejected: "rejected",
-          expired: "expired",
-          failed: "failed",
-          none: "record-only",
-          completed: "completed",
-          running: "running",
+          ok: "正常",
+          pending: "待审批",
+          approved: "已批准",
+          rejected: "已拒绝",
+          expired: "已过期",
+          failed: "失败",
+          none: "记录",
+          completed: "已完成",
+          running: "运行中",
+          unknown: "未知",
         };
-        return labels[status] || status || "unknown";
+        return labels[status] || status || "未知";
       }
 
       function getReadinessStatusCopy(status = "") {
-        if (status === "ready") return "核心依赖和治理审计均可用，可以演示完整链路。";
-        if (status === "degraded") return "核心链路可用，但部分可选能力降级，演示时需要说明边界。";
+        if (status === "ready") return "核心依赖和治理审计均可用，可以继续完整规划链路。";
+        if (status === "degraded") return "核心链路可用，部分外部能力降级，页面会保留边界提示。";
         if (status === "not_ready") return "核心依赖尚未就绪，暂不开放登录、聊天或审批动作。";
         return "正在确认服务状态。";
       }
@@ -1231,9 +1232,9 @@
 
       function summarizeReadinessServices(services = {}) {
         return [
-          ["checkpointer", "Checkpointer（执行检查点）"],
-          ["store", "Store（长期存储）"],
-          ["mcp", "MCP（模型上下文协议）"],
+          ["checkpointer", "会话检查点"],
+          ["store", "长期记忆"],
+          ["mcp", "外部工具服务"],
           ["session_lock", "会话锁"],
           ["approval_governance", "审批治理"],
         ].map(([key, label]) => {
@@ -1432,7 +1433,7 @@
           setPillStatus(pill, "idle", "待开始");
           grid.innerHTML = `
             <div class="governance-empty">
-              完成一轮聊天后展示脱敏运行摘要，不展示 PII（个人可识别信息）、密钥或完整工具输入输出。
+              完成一轮聊天后展示脱敏运行摘要，不展示个人敏感信息、密钥或完整工具输入输出。
             </div>
           `;
           return;
@@ -1483,7 +1484,7 @@
         if (!approvals.length) {
           list.innerHTML = `
             <div class="governance-empty">
-              当前没有${filter === "pending" ? "待审批" : "可展示"}记录。可以用“演示审批”生成未来真实支付的占位审批。
+              当前没有${filter === "pending" ? "待审批" : "可展示"}记录。可以创建一条未来真实支付的审批记录。
             </div>
           `;
           return;
@@ -1554,7 +1555,7 @@
         const events = state.governance.approvalEvents || [];
         if (!state.governance.selectedApprovalId) {
           list.className = "governance-empty";
-          list.innerHTML = "选择一条审批记录后展示 append-only（只追加）事件。";
+          list.innerHTML = "选择一条审批记录后展示只追加事件。";
           return;
         }
         if (!events.length) {
@@ -1563,13 +1564,23 @@
           return;
         }
         list.className = "approval-event-list";
+        const formatApprovalEventType = (type = "") => {
+          const labels = {
+            created: "创建",
+            approved: "批准",
+            rejected: "拒绝",
+            expired: "过期",
+            updated: "更新",
+          };
+          return labels[type] || type || "事件";
+        };
         list.innerHTML = events
           .map(
             (event) => `
               <div class="approval-event-item">
-                <strong>${escapeHtml(event.event_type || "event")} · ${escapeHtml(
-                  event.from_status || "none"
-                )} → ${escapeHtml(event.to_status || "unknown")}</strong>
+                <strong>${escapeHtml(formatApprovalEventType(event.event_type))} · ${escapeHtml(
+                  getStatusLabel(event.from_status || "none")
+                )} → ${escapeHtml(getStatusLabel(event.to_status || "unknown"))}</strong>
                 <span>${escapeHtml(formatEpochSeconds(event.created_at))}</span>
                 ${
                   event.reason
@@ -1675,9 +1686,9 @@
       }
 
       async function createDemoApproval() {
-        if (!(await ensureServiceReady("创建演示审批"))) return;
+        if (!(await ensureServiceReady("创建审批记录"))) return;
         if (!state.token) {
-          showToast("请先登录后再创建演示审批。", true);
+          showToast("请先登录后再创建审批记录。", true);
           return;
         }
         state.governance.isApprovalLoading = true;
@@ -1691,7 +1702,7 @@
             },
             body: JSON.stringify({
               action: "real_payment",
-              reason: "治理台演示：未来真实支付接入前必须审批",
+              reason: "未来真实支付接入前必须经过人工确认",
               conversation_id: state.currentConversationId,
               metadata: {
                 source: "frontend_governance_console",
@@ -1705,10 +1716,10 @@
             throw new Error(data?.detail?.message || `HTTP ${response.status}`);
           }
           state.governance.selectedApprovalId = data.approval_id;
-          showToast("演示审批已创建");
+          showToast("审批记录已创建");
           await loadApprovals({ silent: true });
         } catch (error) {
-          showToast("演示审批创建失败，请确认审批治理服务可用。", true);
+          showToast("审批记录创建失败，请确认审批治理服务可用。", true);
         } finally {
           state.governance.isApprovalLoading = false;
           syncUiAvailability();
@@ -1722,8 +1733,8 @@
         const decisionPath =
           decision === "approve" ? "approve" : decision === "reject" ? "reject" : "expire";
         const decisionCopy = {
-          approve: "治理台演示批准：确认仍不触发真实支付或预订。",
-          reject: "治理台演示拒绝：真实供应链未接入。",
+          approve: "人工批准：确认当前仍不触发真实支付或预订。",
+          reject: "人工拒绝：真实供应链未接入。",
           expire: "",
         };
         try {
@@ -1878,13 +1889,13 @@
             setRuntimeStatus(state.token ? "已连接 · 降级" : "服务降级可用", "online");
             updateEndpointTone("warning");
             setAuthServiceHint(
-              "核心服务可用，但部分外部能力降级；可以演示聊天、审批和报告治理边界。",
+              "核心服务可用，但部分外部能力降级；聊天、审批和报告边界仍可继续查看。",
               "online"
             );
             setServiceBanner({
               visible: true,
               tone: "loading",
-              title: "服务处于 degraded（降级可用）",
+              title: "服务降级可用",
               text: getReadinessStatusCopy("degraded"),
               meta: `检查时间：${formatClock(new Date())}`,
             });
@@ -1903,7 +1914,7 @@
           setServiceBanner({
             visible: true,
             tone: "error",
-            title: "服务尚未 ready（就绪）",
+            title: "服务尚未就绪",
             text: getReadinessStatusCopy("not_ready"),
             meta: `检查时间：${formatClock(new Date())}`,
           });
@@ -1992,7 +2003,7 @@
             ? `当前会话最近更新于 ${formatConversationStamp(
                 current.updated_at || current.created_at
               )}`
-            : "把出发地、时间、人数和预算告诉我，我会陪你一步步整理成专属于你的个性化旅游规划。";
+            : "把出发地、时间、人数和预算告诉我，我会按步骤整理成一份旅游规划报告。";
         }
 
         if (tripOverview) {
@@ -2046,10 +2057,10 @@
               "服务暂不可用，建议先点击“重新检查”确认后再继续操作";
           } else if (state.serviceStatus === "not_ready") {
             composerHint.textContent =
-              "服务尚未 ready（就绪），请等待后端核心依赖完成初始化";
+              "服务尚未就绪，请等待后端核心依赖完成初始化";
           } else if (state.serviceStatus === "degraded") {
             composerHint.textContent =
-              "服务 degraded（降级可用），可继续演示核心链路并留意治理台提示";
+              "部分能力降级，可继续使用核心链路并留意治理台提示";
           } else if (state.serviceStatus === "checking") {
             composerHint.textContent =
               "正在检测服务状态，确认就绪后会自动开放发送和新建会话";
@@ -2076,7 +2087,7 @@
                 <div class="welcome-screen">
               <div class="welcome-logo"><i class="fa-solid fa-paper-plane"></i></div>
               <h3 class="welcome-title">欢迎使用 知行</h3>
-              <p class="welcome-text">直接告诉我这次想去哪、几天、几个人、预算和偏好，我会逐步帮你完成目的地、交通、住宿，并在最后整理成专属于你的个性化旅游规划。</p>
+              <p class="welcome-text">直接告诉我这次想去哪、几天、几个人、预算和偏好，我会按步骤整理目的地、交通、住宿，并在最后形成一份旅游规划报告。</p>
                     <div class="welcome-suggestions">
                         <button class="suggestion-btn" onclick="applySuggestion('我想从北京出发，端午去成都玩 4 天，2 个人，预算 5000 元，喜欢美食和慢节奏。')">周末城市小旅行</button>
                         <button class="suggestion-btn" onclick="applySuggestion('帮我规划一次去云南的 7 天亲子旅行，暑假出发，预算 12000 元。')">亲子长线行程</button>
@@ -2155,8 +2166,8 @@
 
       function applySuggestion(text) {
         appendToComposer(text, "replace");
-        updatePlannerSummary("示例需求已经填入输入框，可以直接发送；辅助栏只是加速整理需求，不是必填。");
-        setRuntimeStatus("示例已填充，可以直接发送", "online");
+        updatePlannerSummary("这组需求已经填入输入框，可以直接发送；辅助栏只是加速整理需求，不是必填。");
+        setRuntimeStatus("需求已填入，可以直接发送", "online");
       }
 
       function appendPlannerStyle(value) {
@@ -2210,7 +2221,7 @@
         document.getElementById("plannerStay").value = picked.stay;
         document.getElementById("plannerStyle").value = picked.style;
         persistPlannerDraft();
-        updatePlannerSummary("模板已填入，可以生成简洁攻略，也可以走更完整的个性化规划。");
+        updatePlannerSummary("模板已填入，可以整理简洁攻略，也可以走更完整的规划流程。");
       }
 
       function readPlannerFields() {
@@ -2273,10 +2284,10 @@
         updatePlannerSummary(
           mode === "brief"
             ? "简洁攻略草稿已放进输入框：适合快速得到每天怎么玩、住哪片区、吃什么。"
-            : "个性化规划草稿已放进输入框：会继续补齐交通、住宿、预算和最终报告。"
+            : "完整规划草稿已放进输入框：会继续补齐交通、住宿、预算和最终报告。"
         );
         setRuntimeStatus(
-          mode === "brief" ? "简洁攻略草稿已生成" : "个性化规划草稿已生成",
+          mode === "brief" ? "简洁攻略草稿已整理" : "完整规划草稿已整理",
           "online"
         );
       }
@@ -4141,7 +4152,7 @@
         if (!picked.length) {
           return `
             <div class="travel-report-route-sketch empty">
-              <div class="travel-report-route-empty">这一天的路线点还没被识别出来，后续生成完整日程后会补成静态路线图。</div>
+              <div class="travel-report-route-empty">这一天的路线点还没被识别出来，后续补齐完整日程后会形成静态路线图。</div>
             </div>
           `;
         }
@@ -4812,7 +4823,7 @@
             dayNumber: day,
             label: `Day ${day}`,
             title: plan?.title || "待补齐当天安排",
-            lines: plan?.note ? [plan.note] : ["这一天还没有出现在当前报告正文里，需要模型在下一轮补齐具体玩法、餐饮、住宿和动线。"],
+            lines: plan?.note ? [plan.note] : ["这一天还没有出现在当前报告正文里，需要在下一轮补齐具体玩法、餐饮、住宿和动线。"],
             plan,
             missing: true,
           });
@@ -5273,7 +5284,7 @@
 
         if (action === "export") {
           exportTravelReport(report)
-            .then(() => showToast("旅游报告 HTML（超文本标记语言）文件已开始导出"))
+            .then(() => showToast("旅游报告文件已开始导出"))
             .catch((error) => {
               console.error(error);
               showToast("导出失败，请稍后重试。", true);
@@ -5436,7 +5447,7 @@
       function buildMessageMarkup(role, text, timestamp = new Date(), options = {}) {
         return `
                 <div class="message-avatar"><i class="fa-solid ${
-                  role === "user" ? "fa-user" : "fa-robot"
+                  role === "user" ? "fa-user" : "fa-compass"
                 }"></i></div>
                 <div class="message-content">
                     <div class="message-text">${renderMessageText(
@@ -5575,7 +5586,7 @@
           setMobileChatFocus(false);
           updateSessionOverview();
           setAuthFeedback(
-            "如果你是第一次来，可以先注册；如果之前用过，直接登录即可继续会话，最后我会帮你整理成专属于你的个性化旅游规划。",
+            "如果你是第一次来，可以先注册；如果之前用过，直接登录即可继续会话，最后我会帮你整理成旅游规划报告。",
             "info"
           );
         }
@@ -6296,7 +6307,7 @@
           return "\n\n补充说明：这轮回复在中途断开了。你可以直接继续追问，我会尽量接着当前上下文往下补全。";
         }
         if (reachedVerySlowStage || elapsedMs >= 45000) {
-          return "这轮等待时间比较久，可能是模型生成较慢，或者交通、住宿这类外部查询还没来得及返回。你可以稍后再试一次，或直接继续追问，我会尽量接着当前上下文继续。";
+          return "这轮等待时间比较久，可能是规划链路较慢，或者交通、住宿这类外部查询还没来得及返回。你可以稍后再试一次，或直接继续追问，我会尽量接着当前上下文继续。";
         }
         return "这轮连接没有顺利完成。你可以稍后重试一次，或换个问法继续，我会接着当前会话往下帮你规划。";
       }
@@ -6348,7 +6359,7 @@
           reachedVerySlowStage = true;
           updateLoadingCopy(
             loadingId,
-            "这轮等待时间比平时更久，可能正在查询外部信息，或生成较长的分日建议。页面可以继续保持打开，我会在结果返回后直接补上。"
+            "这轮等待时间比平时更久，可能正在查询外部信息，或整理较长的分日建议。页面可以继续保持打开，我会在结果返回后直接补上。"
           );
           setRuntimeStatus("仍在处理中", "loading");
         }, 45000);
@@ -6427,7 +6438,7 @@
               streamingMessageId = convertLoadingToAssistant(
                 loadingId,
                 streamingReportData
-                  ? "结构化旅游规划报告已生成。"
+                  ? "结构化旅游规划报告已整理完成。"
                   : "这次没有拿到可展示的内容，你可以再试一次，或者换个问法继续。",
                 {
                   suppressJourneyPreview: false,
@@ -6442,7 +6453,7 @@
                 reportData: streamingReportData,
               });
             }
-            setRuntimeStatus("行程建议已生成", "online");
+            setRuntimeStatus("行程建议已整理", "online");
           } else {
             clearTimeout(slowHintTimer);
             removeMessage(loadingId);
@@ -6571,14 +6582,14 @@
         div.className = "message assistant";
         div.id = id;
         div.innerHTML = `
-                <div class="message-avatar"><i class="fa-solid fa-robot"></i></div>
+                <div class="message-avatar"><i class="fa-solid fa-compass"></i></div>
                 <div class="message-content thinking-card">
                     <div class="thinking-header">
                         <div class="thinking-title">
-                            <i class="fa-solid fa-wand-magic-sparkles"></i>
+                            <i class="fa-solid fa-route"></i>
                             正在整理行程建议
                         </div>
-                        <span class="thinking-badge">LIVE</span>
+                        <span class="thinking-badge">处理中</span>
                     </div>
                     <div class="thinking-copy">正在结合你的需求和已经聊到的信息，整理下一步更完整的建议。</div>
                     <div class="thinking-progress"></div>

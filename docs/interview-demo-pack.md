@@ -38,7 +38,7 @@ chcp 65001 | Out-Null
 | 多智能体编排 | `app/agents/handoffs/travel_agent.py`、`app/agents/routers/destination_router.py`、`app/agents/subagents/transport_coordinator.py` | 主控 Agent 负责旅行流程，目的地 Router 负责攻略和天气分流，交通 Coordinator（协调器）再分发到航班、高铁、自驾子代理。 | `.\.venv\Scripts\python -m pytest tests\test_travel_agent_tool_registry.py -q` |
 | 状态机 | `app/core/state.py`、`app/core/workflow.py`、`app/agents/handoffs/step_config.py`、`app/tools/state_transition.py` | `current_step` 驱动需求收集、目的地推荐、交通、住宿、餐饮、行程、预算和报告生成，不是单轮问答。 | `.\.venv\Scripts\python -m pytest tests\test_workflow_maintainability.py tests\test_step_prompt_rendering.py -q` |
 | 工具调用 | `app/tools/transport_query.py`、`app/tools/hotel_query.py`、`app/tools/mcp_tools.py` | Agent 可调用交通、酒店、地图、搜索、天气等工具；失败时写入待核验，而不是编造库存或价格。 | `.\.venv\Scripts\python -m pytest tests\test_hotel_query_tool.py tests\test_driving_query_tool.py -q` |
-| RAG 知识增强 | `app/rag/`、`app/tools/rag_tools.py`、`data/documents/internal/` | RAG 不是最终答案生成器，而是给顾问方案提供目的地知识、产品、SOP（标准作业流程）、报价、风险和报告标准证据。 | `.\.venv\Scripts\python scripts\validate_rag_knowledge.py` |
+| RAG 知识增强 | `app/rag/`、`app/tools/rag_tools.py`、`app/evaluation/rag_retrieval.py`、`data/documents/internal/` | RAG 不是最终答案生成器，而是给顾问方案提供目的地知识、产品、SOP（标准作业流程）、报价、风险和报告标准证据，并用小型标注集验证召回。 | `.\.venv\Scripts\python scripts\validate_rag_knowledge.py`；`.\.venv\Scripts\python scripts\evaluate_rag_retrieval.py --json` |
 | MCP 外部能力 | `app/mcp_core/client.py`、`app/mcp_core/servers/` | MCP 把天气、搜索、地图、铁路、航班、酒店等外部能力标准化为 Agent 工具，并支持服务级降级。 | `.\.venv\Scripts\python -m pytest tests\test_mcp_client_config_unit.py tests\test_mcp\test_weather_server_unit.py -q` |
 | HITL 治理 | `app/core/approval.py`、`app/core/permissions.py`、`app/api/v1/approvals.py`、`docs/approval-governance.md` | 当前不做真实支付或预订，但敏感动作已经有审批策略、事件账本和 readiness（就绪状态）语义。 | `.\.venv\Scripts\python -m pytest tests\test_approval_governance.py -q` |
 | 可观测性 | `app/core/observability.py`、`app/evaluation/runtime_metrics.py`、`docs/observability.md` | 每轮对话输出首 token（文本令牌）耗时、总耗时、工具调用数、失败数、fallback（兜底）数和 token 估算。 | `.\.venv\Scripts\python -m pytest tests\test_runtime_metrics.py -q` |
@@ -46,6 +46,13 @@ chcp 65001 | Out-Null
 | CI/CD（持续集成/持续交付） | `.github/workflows/ci.yml`、`.github/workflows/staging-smoke.yml` | 默认 CI 跑本地回归和前端验证；staging smoke（预生产烟测）用 workflow_dispatch（手动触发）跑真实链路。 | `.\.venv\Scripts\python -m pytest tests\test_ci_workflows.py -q` |
 | 前端报告 | `frontend/app.js`、`frontend/zhixing.html`、`docs/frontend-report-experience.md` | 前端优先消费结构化 `report_data`，展示预算置信度、待核验项、地图路线和治理边界。 | `node scripts\verify_frontend_report_renderer.js` |
 | 核心验收证据 | `docs/acceptance-core-report.md`、`docs/live-acceptance-runbook.md`、`app/evaluation/acceptance_gate.py` | acceptance-core（核心验收）给出 9 个核心场景的 passed（通过）、failed（失败）、degraded（降级）、blocked（环境阻塞）地图，不把 blocked 或 failed 伪装成通过。 | `.\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-core --preflight-only --json --no-summary` |
+
+## 当前可展示状态
+
+- 线上入口最近一次部署到 `https://travel.403edr.cn`，但面试时不要只依赖网页观感，要同时展示健康检查、验收摘要和代码定位。
+- `docs/acceptance-core-report.md` 保留完整 9 场景核心验收证据；部署前 1 场景 smoke 记录在 `docs/predeploy-runtime-acceptance.md`，不能替代 core。
+- `docs/rag-retrieval-evaluation.md` 可用于回答“RAG 怎么验证”：8 条标注查询、11 份本地知识文档，metadata-aware BM25 的 source/category recall@3 达到 100%，比正文 BM25 基线提升 6.25 个百分点。
+- 前端展示面已经把技术缩写和“机器人式”语言收敛为旅行顾问工作台、服务治理、审批记录和脱敏运行摘要，更适合现场给面试官看。
 
 ## 三条演示路径
 

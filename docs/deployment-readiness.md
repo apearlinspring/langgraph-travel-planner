@@ -24,6 +24,14 @@
 
 边界：本轮 smoke 1/1 passed 只是部署前最小链路验收，不能替代 `docs/acceptance-core-report.md` 中已有的 9 场景 acceptance-core。生产发布前若模型、RAG、MCP、报告契约或外部 API（应用程序接口）配置变化，应重跑完整 acceptance-core。`.env`、`.runtime/`、`.venv/`、`data/vectorstore/` 和 `data/vectorstore_internal/` 均只保留本地，不提交。
 
+## 2026-05-15 线上部署与 RAG 检查记录
+
+最近一次一体化部署已更新到 `https://travel.403edr.cn`，后端、Caddy（反向代理服务器）、PostgreSQL（关系型数据库）和 Redis（内存数据结构存储）均由 Docker Compose（容器编排）管理，并配置为随容器运行时自动恢复。线上复核口径：
+
+- `/health/live` 和 `/health/ready` 返回 HTTP 200。
+- 服务器容器内已运行 `scripts/evaluate_rag_retrieval.py --json`，8 条小型标注查询、11 份本地知识文档复跑通过；metadata-aware BM25（元数据感知 BM25）的 source/category recall@3 为 100%，相对正文 BM25 基线提升 6.25 个百分点。
+- `scripts.init_rag` 当前重复运行会累积 ChromaDB（向量库）embedding（嵌入向量）数量；这不影响离线召回评估，但后续应把 RAG 初始化改成幂等流程，例如按稳定 ID upsert（更新或插入）或重建 collection（集合）。
+
 ## 三套检查命令
 
 ### Local 本地
