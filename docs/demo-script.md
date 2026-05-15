@@ -1,6 +1,6 @@
 # Demo Script（演示脚本）
 
-这份脚本用于面试现场按时间顺序讲解。推荐总时长 20 到 35 分钟；如果时间短，只讲路径一和核心架构；如果有真实环境，再走 acceptance-smoke（验收烟测）和前端报告。
+这份脚本用于项目展示现场按时间顺序讲解。推荐总时长 20 到 35 分钟；如果时间短，只讲路径一和核心架构；如果有真实环境，再走 acceptance-smoke（验收烟测）和前端报告。
 
 ## 开场 2 分钟
 
@@ -10,8 +10,8 @@
 
 马上打开：
 
-- `docs/interview-demo-pack.md`
-- `docs/interview-answer-map.md`
+- `docs/project-demo-pack.md`
+- `docs/project-capability-map.md`
 - `app/core/state.py`
 - `app/agents/handoffs/step_config.py`
 - `app/tools/state_transition.py`
@@ -35,27 +35,27 @@
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 chcp 65001 | Out-Null
-.\.venv\Scripts\python scripts\build_interview_demo_pack.py --output .runtime\interview-demo-pack
-.\.venv\Scripts\python -m pytest tests\test_interview_demo_pack.py -q
+.\.venv\Scripts\python scripts\build_project_demo_pack.py --output .runtime\project-demo-pack
+.\.venv\Scripts\python -m pytest tests\test_project_demo_pack.py -q
 .\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-smoke --dry-run
 ```
 
 讲解顺序：
 
-1. 打开 `.runtime\interview-demo-pack\manifest.json`。
+1. 打开 `.runtime\project-demo-pack\manifest.json`。
 2. 指出 `reads_env_files=false`、`copies_runtime_snapshots=false`、三条 `demo_paths`。
 3. 打开 `redaction-check.txt`，说明演示包只保存脱敏材料。
-4. 打开 `docs/interview-answer-map.md`，用表格回答“为什么不是普通 RAG”。
+4. 打开 `docs/project-capability-map.md`，用表格回答“为什么不是普通 RAG”。
 5. 打开 `scripts\run_evaluation_scenarios.py --acceptance-smoke --dry-run` 输出，说明真实链路入口存在，但 dry-run 不调用后端。
 
 推荐说法：
 
-> 本地路径证明的是工程结构和复跑入口，不证明真实外部服务可用。它适合没有密钥的面试环境：我可以展示状态机、工具白名单、报告契约、验收场景和安全生成目录。
+> 本地路径证明的是工程结构和复跑入口，不证明真实外部服务可用。它适合没有密钥的项目展示环境：我可以展示状态机、工具白名单、报告契约、验收场景和安全生成目录。
 
 如果命令失败：
 
-- 如果 `.venv` 不存在，说明当前机器没有安装项目依赖；可改用 `uv run --frozen python -m pytest tests\test_interview_demo_pack.py -q`。
-- 如果 dry-run 因依赖缺失失败，只展示 `docs/interview-answer-map.md` 和代码定位，不把它说成验收通过。
+- 如果 `.venv` 不存在，说明当前机器没有安装项目依赖；可改用 `uv run --frozen python -m pytest tests\test_project_demo_pack.py -q`。
+- 如果 dry-run 因依赖缺失失败，只展示 `docs/project-capability-map.md` 和代码定位，不把它说成验收通过。
 
 ## 路径二：acceptance-smoke 真实链路
 
@@ -160,7 +160,7 @@ node scripts\verify_frontend_report_renderer.js
 9. `app/reports/builder.py`：最终报告契约。
 10. `app/evaluation/acceptance_gate.py`：验收门禁。
 
-## 面试追问速答
+## 常见追问速答
 
 | 追问 | 30 秒回答 |
 |---|---|

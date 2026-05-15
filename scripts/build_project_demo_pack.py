@@ -1,4 +1,4 @@
-"""Build a sanitized interview demo pack for the ZhiXing project."""
+"""Build a sanitized project demo pack for the ZhiXing project."""
 
 from __future__ import annotations
 
@@ -12,13 +12,13 @@ from pathlib import Path
 from typing import Iterable, Sequence
 
 
-PACK_VERSION = "interview_demo_pack.v1"
+PACK_VERSION = "project_demo_pack.v1"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_OUTPUT_DIR = PROJECT_ROOT / ".runtime" / "interview-demo-pack"
+DEFAULT_OUTPUT_DIR = PROJECT_ROOT / ".runtime" / "project-demo-pack"
 
 SOURCE_DOCUMENTS = (
-    Path("docs/interview-demo-pack.md"),
-    Path("docs/interview-answer-map.md"),
+    Path("docs/project-demo-pack.md"),
+    Path("docs/project-capability-map.md"),
     Path("docs/demo-script.md"),
 )
 
@@ -35,10 +35,10 @@ DEMO_PATHS = (
         "id": "local-briefing",
         "name": "本地纯讲解路径",
         "requires_real_secrets": False,
-        "entry": "docs/interview-demo-pack.md#本地纯讲解路径",
+        "entry": "docs/project-demo-pack.md#本地纯讲解路径",
         "commands": [
-            r".\.venv\Scripts\python scripts\build_interview_demo_pack.py",
-            r".\.venv\Scripts\python -m pytest tests\test_interview_demo_pack.py -q",
+            r".\.venv\Scripts\python scripts\build_project_demo_pack.py",
+            r".\.venv\Scripts\python -m pytest tests\test_project_demo_pack.py -q",
         ],
     },
     {
@@ -134,7 +134,7 @@ def _require_source_documents(repo_root: Path) -> list[Path]:
     missing = [repo_relative(path, repo_root) for path in paths if not path.exists()]
     if missing:
         raise FileNotFoundError(
-            "Missing interview demo source documents: " + ", ".join(missing)
+            "Missing project demo source documents: " + ", ".join(missing)
         )
     return paths
 
@@ -182,9 +182,9 @@ def _render_index(manifest: dict[str, object]) -> str:
     )
     demos = "\n".join(demo_lines)
 
-    return fr"""# Interview Demo Pack（面试演示包）
+    return fr"""# Project Demo Pack（项目演示包）
 
-本目录由 `scripts/build_interview_demo_pack.py` 生成，用于把知行项目整理成可讲述、可复跑、可审计的 AI-Agent（人工智能智能体）面试材料。
+本目录由 `scripts/build_project_demo_pack.py` 生成，用于把知行项目整理成可讲述、可复跑、可审计的 AI-Agent（人工智能智能体）项目展示材料。
 
 ## 使用方式
 
@@ -192,7 +192,7 @@ def _render_index(manifest: dict[str, object]) -> str:
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 chcp 65001 | Out-Null
-.\.venv\Scripts\python scripts\build_interview_demo_pack.py
+.\.venv\Scripts\python scripts\build_project_demo_pack.py
 ```
 
 ## 三条演示路径
@@ -201,8 +201,8 @@ chcp 65001 | Out-Null
 
 ## 文件说明
 
-- `interview-demo-pack.md`：能力总览、演示路径和安全边界。
-- `interview-answer-map.md`：面试问题、架构回答、代码定位和可运行命令。
+- `project-demo-pack.md`：能力总览、演示路径和安全边界。
+- `project-capability-map.md`：常见问题、架构回答、代码定位和可运行命令。
 - `demo-script.md`：按时间顺序讲解的演示脚本。
 - `commands.ps1`：复跑演示包、专项测试和验收入口的命令清单。
 - `manifest.json`：机器可读清单，记录来源、生成文件和安全策略。
@@ -219,17 +219,17 @@ chcp 65001 | Out-Null
 
 
 def _render_commands() -> str:
-    return r"""# Interview Demo Pack commands
+    return r"""# Project Demo Pack commands
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 chcp 65001 | Out-Null
 
 # 1. Rebuild the sanitized demo pack.
-.\.venv\Scripts\python scripts\build_interview_demo_pack.py --output .runtime\interview-demo-pack
+.\.venv\Scripts\python scripts\build_project_demo_pack.py --output .runtime\project-demo-pack
 
 # 2. Validate this module locally.
 .\.venv\Scripts\python -m compileall app tests scripts
-.\.venv\Scripts\python -m pytest tests\test_interview_demo_pack.py -q
+.\.venv\Scripts\python -m pytest tests\test_project_demo_pack.py -q
 
 # 3. Optional full default regression.
 .\.venv\Scripts\python -m pytest -q
@@ -242,14 +242,14 @@ chcp 65001 | Out-Null
 
 def _source_document_metadata(paths: Iterable[Path], repo_root: Path) -> list[dict[str, str]]:
     purposes = {
-        "interview-demo-pack.md": "面试演示包主入口",
-        "interview-answer-map.md": "AI-Agent 能力面试答题地图",
+        "project-demo-pack.md": "项目演示包主入口",
+        "project-capability-map.md": "AI-Agent 能力答疑地图",
         "demo-script.md": "三条演示路径的讲述脚本",
     }
     return [
         {
             "path": repo_relative(path, repo_root),
-            "purpose": purposes.get(path.name, "interview demo source"),
+            "purpose": purposes.get(path.name, "project demo source"),
         }
         for path in paths
     ]
@@ -275,10 +275,10 @@ def build_demo_pack(
     *,
     repo_root: str | Path = PROJECT_ROOT,
 ) -> dict[str, object]:
-    """Build the interview demo pack and return its manifest."""
+    """Build the project demo pack and return its manifest."""
 
     root = Path(repo_root).resolve()
-    out = Path(output_dir or root / ".runtime" / "interview-demo-pack").resolve()
+    out = Path(output_dir or root / ".runtime" / "project-demo-pack").resolve()
     source_paths = _require_source_documents(root)
     now = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
@@ -350,12 +350,12 @@ def build_demo_pack(
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Build a sanitized interview demo pack without copying secrets or runtime snapshots."
+        description="Build a sanitized project demo pack without copying secrets or runtime snapshots."
     )
     parser.add_argument(
         "--output",
         default=str(DEFAULT_OUTPUT_DIR),
-        help="Output directory. Defaults to .runtime/interview-demo-pack.",
+        help="Output directory. Defaults to .runtime/project-demo-pack.",
     )
     return parser.parse_args(argv)
 

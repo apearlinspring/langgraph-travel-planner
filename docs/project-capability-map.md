@@ -1,10 +1,10 @@
-# Interview Answer Map（面试答题地图）
+# Project Capability Map（项目能力答疑地图）
 
-这份文档把常见 AI-Agent（人工智能智能体）面试问题映射到项目回答、代码定位、可运行命令和风险边界。回答时优先讲“设计取舍”和“可验证证据”，避免只说概念。
+这份文档把 AI-Agent（人工智能智能体）项目常见问题映射到项目回答、代码定位、可运行命令和风险边界。回答时优先讲“设计取舍”和“可验证证据”，避免只说概念。
 
 ## 快速总览
 
-| 面试问题 | 一句话回答 | 代码定位 | 验证命令 | 风险边界 |
+| 常见问题 | 一句话回答 | 代码定位 | 验证命令 | 风险边界 |
 |---|---|---|---|---|
 | 这是不是普通 RAG 问答？ | 不是。RAG（检索增强生成）只是证据来源之一，主链路由状态机、工具调用、MCP（模型上下文协议）和最终 `report_data`（结构化报告数据）交付组成。 | `app/core/workflow.py`、`app/tools/state_transition.py`、`app/reports/` | `.\.venv\Scripts\python -m pytest tests\test_report_contract_module.py -q` | 不把检索片段直接当成最终事实。 |
 | 多智能体怎么编排？ | 主控 Travel Agent（旅行智能体）负责阶段推进；目的地 Router（路由器）处理攻略和天气；交通 Coordinator（协调器）分发航班、高铁、自驾。 | `app/agents/handoffs/travel_agent.py`、`app/agents/routers/destination_router.py`、`app/agents/subagents/transport_coordinator.py` | `.\.venv\Scripts\python -m pytest tests\test_destination_router.py tests\test_flight_query_tool.py -q` | 子 Agent 不是越多越好，必须有清晰职责和工具边界。 |
@@ -83,8 +83,8 @@
 可运行命令：
 
 ```powershell
-.\.venv\Scripts\python scripts\build_interview_demo_pack.py --output .runtime\interview-demo-pack
-.\.venv\Scripts\python -m pytest tests\test_interview_demo_pack.py -q
+.\.venv\Scripts\python scripts\build_project_demo_pack.py --output .runtime\project-demo-pack
+.\.venv\Scripts\python -m pytest tests\test_project_demo_pack.py -q
 .\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-smoke --dry-run
 ```
 
@@ -109,6 +109,6 @@
 
 ## 最后收束
 
-面试结束前可以这样总结：
+讲解结束前可以这样总结：
 
 > 我把这个项目当作 Agent 工程问题，而不是 prompt 工程问题来做。它的核心价值在于：有阶段状态、有工具边界、有证据契约、有结构化交付、有可观测和验收门禁，也知道哪些真实业务动作现在不能做。

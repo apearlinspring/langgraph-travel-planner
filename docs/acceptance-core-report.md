@@ -9,7 +9,7 @@
 - 来源摘要: latest `.runtime` acceptance summary（验收摘要）: `20260514-134448-acceptance-summary.json`
 - 原始产物: `.runtime/` 仅本地使用，不提交
 
-本文件是可提交、可面试展示的脱敏 Markdown（标记文本）证据包。它只保留 acceptance-core（核心验收）summary（摘要）中的状态、计数、首 token（文本令牌）、工具调用、证据闭环和运行预算字段，不提交 `.runtime/` 原始 JSON（JavaScript 对象表示法）或快照。
+本文件是可提交、可项目展示的脱敏 Markdown（标记文本）证据包。它只保留 acceptance-core（核心验收）summary（摘要）中的状态、计数、首 token（文本令牌）、工具调用、证据闭环和运行预算字段，不提交 `.runtime/` 原始 JSON（JavaScript 对象表示法）或快照。
 
 自动重建命令：
 

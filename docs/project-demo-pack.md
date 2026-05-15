@@ -1,10 +1,10 @@
-# Interview Demo Pack（面试演示包）
+# Project Demo Pack（项目演示包）
 
 ## 目标
 
-本包把“知行”项目整理成面试时可演示、可讲述、可复跑的 AI-Agent（人工智能智能体）材料。核心论点是：它不是普通 RAG（检索增强生成）问答，而是一个面向旅行社顾问工作流的 Agent（智能体）系统。
+本包把“知行”项目整理成可演示、可讲述、可复跑的 AI-Agent（人工智能智能体）项目材料。核心论点是：它不是普通 RAG（检索增强生成）问答，而是一个面向旅行社顾问工作流的 Agent（智能体）系统。
 
-面试时建议用一句话开场：
+项目讲解建议用一句话开场：
 
 > 这个项目把用户的一次旅行咨询拆成阶段化状态机，由主控 Agent 编排目的地 Router（路由器）、交通子 Agent、RAG 知识、MCP（模型上下文协议）工具、HITL（人类在环）治理和最终 `report_data`（结构化报告数据）交付，因此重点不是“回答得像不像”，而是“能不能按顾问流程稳定交付、可审计、可复跑”。
 
@@ -16,14 +16,14 @@ PowerShell（Windows 命令行环境）先启用 UTF-8，避免中文输出损�
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 chcp 65001 | Out-Null
-.\.venv\Scripts\python scripts\build_interview_demo_pack.py --output .runtime\interview-demo-pack
+.\.venv\Scripts\python scripts\build_project_demo_pack.py --output .runtime\project-demo-pack
 ```
 
 生成目录只包含：
 
 - `README.md`：演示包目录说明。
-- `interview-demo-pack.md`：本文。
-- `interview-answer-map.md`：面试答题地图。
+- `project-demo-pack.md`：本文。
+- `project-capability-map.md`：项目能力答疑地图。
 - `demo-script.md`：现场讲述脚本。
 - `commands.ps1`：可复跑命令。
 - `manifest.json`：来源、演示路径和安全策略清单。
@@ -33,7 +33,7 @@ chcp 65001 | Out-Null
 
 ## 能力映射
 
-| 面试能力点 | 项目里的证据 | 面试说法 | 可运行入口 |
+| 能力点 | 项目里的证据 | 讲解口径 | 可运行入口 |
 |---|---|---|---|
 | 多智能体编排 | `app/agents/handoffs/travel_agent.py`、`app/agents/routers/destination_router.py`、`app/agents/subagents/transport_coordinator.py` | 主控 Agent 负责旅行流程，目的地 Router 负责攻略和天气分流，交通 Coordinator（协调器）再分发到航班、高铁、自驾子代理。 | `.\.venv\Scripts\python -m pytest tests\test_travel_agent_tool_registry.py -q` |
 | 状态机 | `app/core/state.py`、`app/core/workflow.py`、`app/agents/handoffs/step_config.py`、`app/tools/state_transition.py` | `current_step` 驱动需求收集、目的地推荐、交通、住宿、餐饮、行程、预算和报告生成，不是单轮问答。 | `.\.venv\Scripts\python -m pytest tests\test_workflow_maintainability.py tests\test_step_prompt_rendering.py -q` |
@@ -49,10 +49,10 @@ chcp 65001 | Out-Null
 
 ## 当前可展示状态
 
-- 线上入口最近一次部署到 `https://travel.403edr.cn`，但面试时不要只依赖网页观感，要同时展示健康检查、验收摘要和代码定位。
+- 线上入口最近一次部署到 `https://travel.403edr.cn`，但展示时不要只依赖网页观感，要同时展示健康检查、验收摘要和代码定位。
 - `docs/acceptance-core-report.md` 保留完整 9 场景核心验收证据；部署前 1 场景 smoke 记录在 `docs/predeploy-runtime-acceptance.md`，不能替代 core。
 - `docs/rag-retrieval-evaluation.md` 可用于回答“RAG 怎么验证”：8 条标注查询、11 份本地知识文档，metadata-aware BM25 的 source/category recall@3 达到 100%，比正文 BM25 基线提升 6.25 个百分点。
-- 前端展示面已经把技术缩写和“机器人式”语言收敛为旅行顾问工作台、服务治理、审批记录和脱敏运行摘要，更适合现场给面试官看。
+- 前端展示面已经把技术缩写和“机器人式”语言收敛为旅行顾问工作台、服务治理、审批记录和脱敏运行摘要，更适合现场给审阅者看。
 
 ## 三条演示路径
 
@@ -63,15 +63,15 @@ chcp 65001 | Out-Null
 建议顺序：
 
 ```powershell
-.\.venv\Scripts\python scripts\build_interview_demo_pack.py --output .runtime\interview-demo-pack
-.\.venv\Scripts\python -m pytest tests\test_interview_demo_pack.py -q
+.\.venv\Scripts\python scripts\build_project_demo_pack.py --output .runtime\project-demo-pack
+.\.venv\Scripts\python -m pytest tests\test_project_demo_pack.py -q
 .\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-smoke --dry-run
 ```
 
 讲述重点：
 
 - `--dry-run` 只列出验收场景，不调用真实后端。
-- 面试官如果问“没有密钥怎么证明”，就展示代码定位、测试、场景目录和生成目录的脱敏策略。
+- 审阅者如果问“没有密钥怎么证明”，就展示代码定位、测试、场景目录和生成目录的脱敏策略。
 - 这条路径证明工程结构和验收入口存在，但不宣称真实链路已经通过。
 
 ### 路径二：acceptance-smoke 真实链路
@@ -118,7 +118,7 @@ node scripts\verify_frontend_report_renderer.js
 
 ### 核心验收证据入口
 
-适用场景：面试官追问“如何证明不是只跑 smoke（烟测）”时，展示 acceptance-core 的可审计入口和当前状态地图。
+适用场景：审阅者追问“如何证明不是只跑 smoke（烟测）”时，展示 acceptance-core 的可审计入口和当前状态地图。
 
 建议顺序：
 
@@ -133,7 +133,7 @@ node scripts\verify_frontend_report_renderer.js
 - 没有真实 `.env`、LLM（大语言模型）、RAG（检索增强生成）向量库、MCP（模型上下文协议）和后端 ready（就绪状态）时，结果必须是 blocked。
 - blocked 只能证明验收入口和门禁语义有效，不能证明业务链路已经通过。
 
-## 面试时的主线叙事
+## 项目讲解主线
 
 1. 业务身份：这是旅行社智能顾问，不是攻略问答机器人。
 2. 编排方式：主控 Agent + Router + 子 Agent + 状态迁移工具。
