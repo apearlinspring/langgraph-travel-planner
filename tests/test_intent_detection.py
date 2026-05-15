@@ -21,6 +21,29 @@ class DummyRequest:
         return snapshot
 
 
+def _ready_report_state(**overrides):
+    state = {
+        "current_step": "destination_recommendation",
+        "user_requirement": {
+            "departure_city": "北京",
+            "destination": "上海",
+            "departure_date": "2026-06-01",
+            "departure_date_confirmed": True,
+            "travel_days": 3,
+            "adult_count": 2,
+            "children_count": 0,
+            "budget_max": 8000,
+        },
+        "selected_destination": "上海",
+        "selected_transport": "train",
+        "selected_accommodation_types": ["star_hotel"],
+        "itinerary": [{"day_number": 1, "theme": "抵达"}],
+        "budget": {"total": 7000},
+    }
+    state.update(overrides)
+    return state
+
+
 def test_detect_hotel_query_prefers_hotel_tool():
     intent = detect_travel_intent(
         "请帮我查长沙湘江中路附近真实江景房酒店候选。",
@@ -609,17 +632,7 @@ async def test_middleware_opens_generate_order_tool_when_report_basics_are_ready
             },
         }
     )
-    state = {
-        "current_step": "destination_recommendation",
-        "user_requirement": {
-            "departure_city": "\u5317\u4eac",
-            "destination": "\u4e0a\u6d77",
-            "travel_days": 3,
-            "adult_count": 2,
-            "children_count": 0,
-            "budget_max": 8000,
-        },
-    }
+    state = _ready_report_state()
 
     async def handler(request):
         captured["tools"] = request.tools
@@ -661,18 +674,7 @@ async def test_final_report_intent_overrides_destination_selection_confirmation(
             },
         }
     )
-    state = {
-        "current_step": "destination_recommendation",
-        "user_requirement": {
-            "departure_city": "\u5317\u4eac",
-            "destination": "\u4e0a\u6d77",
-            "travel_days": 3,
-            "adult_count": 2,
-            "children_count": 0,
-            "budget_max": 8000,
-        },
-        "destination_options": [{"name": "\u4e0a\u6d77"}],
-    }
+    state = _ready_report_state(destination_options=[{"name": "\u4e0a\u6d77"}])
 
     async def handler(request):
         captured["tools"] = request.tools
@@ -722,13 +724,19 @@ async def test_middleware_opens_generate_order_tool_when_report_state_is_ready()
             },
         }
     )
-    state = {
-        "current_step": "budget_summarization",
-        "user_requirement": {"destination": "长沙"},
-        "selected_destination": "长沙",
-        "itinerary": [{"day_number": 1, "theme": "抵达"}],
-        "budget": {"total": 7000},
-    }
+    state = _ready_report_state(
+        current_step="budget_summarization",
+        user_requirement={
+            "destination": "长沙",
+            "departure_date": "2026-06-01",
+            "departure_date_confirmed": True,
+            "travel_days": 3,
+            "adult_count": 2,
+            "children_count": 0,
+            "budget_max": 8000,
+        },
+        selected_destination="长沙",
+    )
 
     async def handler(request):
         captured["tools"] = request.tools

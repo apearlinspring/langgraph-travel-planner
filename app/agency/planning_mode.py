@@ -98,7 +98,7 @@ def _contains_any(text: str, keywords: tuple[str, ...]) -> bool:
 def _agency_rejected(text: str) -> bool:
     return bool(
         re.search(
-            r"(不需要|无需|拒绝|(?<!要)不要|不想).{0,10}"
+            r"(不需要|无需|拒绝|(?<!要)不要|不想)[^，。；;,.!?！？]{0,10}"
             r"(旅行社|顾问方案|产品|推销|销售|省心方案|省心套餐)",
             text,
         )
@@ -109,7 +109,7 @@ def _agency_rejected(text: str) -> bool:
 def _free_rejected(text: str) -> bool:
     return bool(
         re.search(
-            r"(不需要|无需|拒绝|(?<!要)不要|不想).{0,10}"
+            r"(不需要|无需|拒绝|(?<!要)不要|不想)[^，。；;,.!?！？]{0,10}"
             r"(自由行|自由规划|自助游|自己玩|自己订|diy|DIY)",
             text,
         )

@@ -338,14 +338,18 @@ def _detect_planning_mode_from_text(text: str) -> PlanningModeDecision:
 
     agency_rejected = bool(
         re.search(
-            r"(不需要|无需|拒绝|(?<!要)不要|不想).{0,8}"
+            r"(不需要|无需|拒绝|(?<!要)不要|不想)[^，。；;,.!?！？]{0,8}"
             r"(旅行社|顾问方案|产品|推销|销售|省心方案)",
             normalized,
         )
         or re.search(r"别.{0,6}(推销|销售|硬推|推产品|推荐产品)", normalized)
     )
     free_rejected = bool(
-        re.search(r"(不需要|无需|拒绝|(?<!要)不要|不想).{0,8}(自由行|自由规划|自助游|自己玩|自己订|diy)", lower_text)
+        re.search(
+            r"(不需要|无需|拒绝|(?<!要)不要|不想)[^，。；;,.!?！？]{0,8}"
+            r"(自由行|自由规划|自助游|自己玩|自己订|diy)",
+            lower_text,
+        )
     )
     self_service_rejected = bool(
         re.search(r"(不想|不愿意|懒得|没空).{0,10}(自己|我自己).{0,8}(做攻略|订|安排|操心|查)", normalized)

@@ -18,11 +18,17 @@ PLACEHOLDER_VALUES = {
     "城市",
     "出发地",
     "日期",
+    "日期待确认",
     "入住日期",
+    "入住日期待确认",
     "departure_date",
     "check_in_date",
     "destination",
     "origin",
+    "出发日期待确认",
+    "待二次核实",
+    "待二次核验",
+    "暂未确认",
 }
 
 VALID_BUDGET_LEVELS = {"economy", "comfort", "luxury"}
@@ -42,6 +48,26 @@ def _validate_iso_date(value: Any, field_name: str) -> str | None:
         datetime.strptime(text, "%Y-%m-%d")
     except ValueError:
         return f"{field_name}必须是 YYYY-MM-DD 格式"
+    return None
+
+
+def _validate_confirmed_live_query_date(
+    args: dict[str, Any],
+    *,
+    date_field: str,
+    field_name: str,
+) -> str | None:
+    """Block live inventory queries when the date is only a model-side assumption."""
+
+    confirmed_key = f"{date_field}_confirmed"
+    source_key = f"{date_field}_source"
+    if confirmed_key not in args and source_key not in args:
+        return None
+
+    confirmed = args.get(confirmed_key)
+    source = str(args.get(source_key) or "").strip().lower()
+    if confirmed is False or source in {"assumed", "pending", "placeholder", "unconfirmed"}:
+        return f"{field_name}需要先由用户明确或确认，不能用模型推测日期执行真实查询"
     return None
 
 
@@ -74,6 +100,12 @@ def validate_hotel_query_args(args: dict[str, Any]) -> ToolValidationResult:
     messages: list[str] = []
     if _is_placeholder(args.get("destination")):
         messages.append("目的地缺失")
+    if error := _validate_confirmed_live_query_date(
+        args,
+        date_field="check_in_date",
+        field_name="入住日期",
+    ):
+        messages.append(error)
     if error := _validate_iso_date(args.get("check_in_date"), "入住日期"):
         messages.append(error)
     for field_name, minimum, maximum in [
@@ -101,6 +133,12 @@ def validate_transport_query_args(args: dict[str, Any]) -> ToolValidationResult:
         messages.append("出发城市缺失")
     if _is_placeholder(args.get("destination_city")):
         messages.append("目的地城市缺失")
+    if error := _validate_confirmed_live_query_date(
+        args,
+        date_field="departure_date",
+        field_name="出发日期",
+    ):
+        messages.append(error)
     if error := _validate_iso_date(args.get("departure_date"), "出发日期"):
         messages.append(error)
     if args.get("transport_type") not in VALID_TRANSPORT_TYPES:

@@ -1,6 +1,6 @@
 import re
 import time
-from datetime import date, timedelta
+from datetime import date, datetime
 from types import SimpleNamespace
 from typing import Any, Callable
 
@@ -109,8 +109,6 @@ COMMON_CITY_NAMES = (
     "张家界",
 )
 
-ASSUMED_REQUIREMENT_DEPARTURE_DAYS = 30
-
 AGENCY_INTERNAL_TOOL_NAMES = frozenset(
     {
         "search_agency_product_templates",
@@ -178,6 +176,7 @@ FORCE_NARROW_TOOL_NAMES = frozenset(
 )
 
 DATE_TOOL_NAMES = frozenset({"get-current-date", "getTodayDate"})
+LIVE_DATE_REQUIRED_TOOL_NAMES = frozenset({"query_transport_options", "query_hotel_options"})
 DESTINATION_REFRESH_TOOL_NAMES = frozenset(
     {"query_destination_info", "search_travel_info", "search_food_recommendations"}
 )
@@ -273,6 +272,20 @@ FINAL_REPORT_REQUEST_KEYWORDS = (
     "report_data",
     "生成订单",
 )
+
+PENDING_DATE_VALUES = {
+    "",
+    "日期",
+    "日期待确认",
+    "出发日期",
+    "出发日期待确认",
+    "入住日期",
+    "入住日期待确认",
+    "待确认",
+    "未确认",
+    "待核验",
+    "待核实",
+}
 
 
 def _to_prompt_value(value: Any) -> Any:
@@ -848,9 +861,10 @@ def _cross_step_verification_instruction(tool_names: list[str]) -> str:
     if len(tool_names) >= 2:
         return (
             "本轮用户同时要求核验交通和住宿。"
-            " 如果出发地、目的地、日期、人数和预算上下文已经存在，"
+            " 如果出发地、目的地、用户明确或确认过的日期、人数和预算上下文已经存在，"
             " 请优先调用 `query_transport_options` 和 `query_hotel_options` 获取真实候选；"
             " 不要只用公开攻略、搜索结果或经验估算替代真实交通/酒店候选。"
+            " 如果日期仍待确认，先请用户确认日期，不能用模型推测日期查真实库存。"
             " 如果两个工具都可用，建议先查交通，再查住宿。"
         )
 
@@ -920,6 +934,44 @@ def _append_tools_by_name(
     return updated_tools
 
 
+def _is_iso_date_text(value: Any) -> bool:
+    try:
+        datetime.strptime(str(value or "").strip(), "%Y-%m-%d")
+    except ValueError:
+        return False
+    return True
+
+
+def _has_confirmed_departure_date(state_dict: dict[str, Any]) -> bool:
+    requirement = state_dict.get("user_requirement") or {}
+    if not isinstance(requirement, dict):
+        return False
+
+    departure_date = str(requirement.get("departure_date") or "").strip()
+    if departure_date in PENDING_DATE_VALUES or not _is_iso_date_text(departure_date):
+        return False
+    if requirement.get("departure_date_confirmed") is False:
+        return False
+    return True
+
+
+def _live_query_date_gate_instruction(blocked_tools: set[str] | frozenset[str]) -> str:
+    if not blocked_tools:
+        return ""
+    tool_labels = []
+    if "query_transport_options" in blocked_tools:
+        tool_labels.append("真实交通")
+    if "query_hotel_options" in blocked_tools:
+        tool_labels.append("真实酒店")
+    label_text = "、".join(tool_labels) or "真实查询"
+    return (
+        f"当前出发/入住日期仍未由用户明确或确认，本轮已暂缓{label_text}查询。"
+        "请先用一句话请用户确认具体出发日期或日期范围；"
+        "不要自己生成类似“5月22日”的真实查询日期，也不要调用真实交通、酒店或票务工具。"
+        "如需临时估算，只能写“日期待确认”或“暂按某日期待核验估算”。"
+    )
+
+
 def _state_value_ready(value: Any) -> bool:
     return value not in (None, "", [], {})
 
@@ -933,21 +985,15 @@ def _can_generate_final_report(state_dict: dict[str, Any]) -> bool:
     if not _state_value_ready(destination):
         return False
 
-    if _state_value_ready(state_dict.get("itinerary")) and _state_value_ready(state_dict.get("budget")):
-        return True
-
-    people_count = (
-        (user_requirement.get("adult_count") or 0)
-        + (user_requirement.get("children_count") or 0)
+    if not _has_confirmed_departure_date(state_dict):
+        return False
+    if not _has_selected_transport(state_dict):
+        return False
+    if not _has_selected_accommodation(state_dict):
+        return False
+    return _state_value_ready(state_dict.get("itinerary")) and _state_value_ready(
+        state_dict.get("budget")
     )
-    has_people = people_count > 0 or _state_value_ready(user_requirement.get("total_people"))
-    has_days = _state_value_ready(user_requirement.get("travel_days"))
-    has_budget = (
-        _state_value_ready(user_requirement.get("budget_min"))
-        or _state_value_ready(user_requirement.get("budget_max"))
-        or _state_value_ready(user_requirement.get("budget_level"))
-    )
-    return has_days and has_people and has_budget
 
 
 def _preferred_tool_for_intent(intent: TravelIntent, state_dict: dict[str, Any]) -> str | None:
@@ -967,15 +1013,17 @@ def _intent_instruction(
     if intent.name == "hotel_query":
         return (
             "本轮用户的主要意图是查询住宿/酒店候选。"
-            " 如果目的地、日期、人数等上下文已经存在，请优先调用 `query_hotel_options`，"
+            " 如果目的地、用户明确或确认过的日期、人数等上下文已经存在，请优先调用 `query_hotel_options`，"
             " 不要退回泛泛区域建议，也不要只用公开攻略替代真实酒店候选。"
+            " 若日期仍是“日期待确认”，必须先确认日期，不要编造入住日期。"
         )
 
     if intent.name == "transport_query":
         return (
             "本轮用户的主要意图是查询或对比交通方案。"
-            " 如果出发地、目的地和日期上下文已经存在，请优先调用 `query_transport_options`，"
+            " 如果出发地、目的地和用户明确或确认过的日期上下文已经存在，请优先调用 `query_transport_options`，"
             " 并把不同交通方式的耗时、费用、稳定性和适配理由讲清楚。"
+            " 若日期仍待确认，必须先请用户确认出发日期，不能用推测日期查真实航班或车次。"
         )
 
     if intent.name == "final_report":
@@ -984,7 +1032,6 @@ def _intent_instruction(
                 "本轮用户明确要求生成最终旅游规划报告。"
                 " 当前已有生成报告所需的核心信息，必须优先调用 `generate_order_tool`，"
                 " 并以工具返回的 report 作为正文，不要手写、压缩或删减正式报告章节。"
-                " 如果行程或预算尚未完整落库，工具会生成带待核验项的结构化报告。"
             )
         return (
             "本轮用户明确要求生成最终旅游规划报告，但当前状态还未具备正式生成条件。"
@@ -997,7 +1044,6 @@ def _intent_instruction(
             return (
                 "本轮用户想导出或保存报告。"
                 " 如果尚未生成正式报告，请先调用 `generate_order_tool` 生成结构化报告；"
-                " 如果行程或预算尚未完整落库，工具会先补齐带待核验项的报告数据；"
                 " 如果已经有正式报告，则说明前端导出入口会基于报告内容导出。"
             )
         return (
@@ -1015,7 +1061,8 @@ def _intent_instruction(
     if intent.name == "agency_plan_query":
         return (
             "本轮用户倾向旅行社省心方案或成熟产品路线。"
-            " 请优先参考内部产品模板、服务标准和风险避坑经验，把它自然转化为方案依据；"
+            " 请先匹配内部产品或路线模板，给 2-3 个方向，并说明适用人群、服务边界和报价口径；"
+            " 再参考服务标准和风险避坑经验，把它自然转化为方案依据；"
             " 不要暴露内部知识库、RAG 或工具名，也不要承诺真实库存、锁价或支付能力。"
         )
 
@@ -1068,6 +1115,7 @@ def _planning_mode_instruction(decision: PlanningModeDecision) -> str:
         return (
             "当前规划模式：旅行社顾问方案。"
             " 你要像真实旅行社顾问一样，把托付诉求转化为成熟路线、服务节奏、预算依据和风险预案；"
+            " 在产品框架阶段，先给可选方向和边界，不要直接生成最终报告或 report_data；"
             " 可以自然参考内部产品模板、服务标准、报价规则和风险经验，但不要暴露内部资料、RAG 或工具名。"
         )
 
@@ -1075,22 +1123,21 @@ def _planning_mode_instruction(decision: PlanningModeDecision) -> str:
         return (
             "当前规划模式：自由规划。"
             " 回复保持中立实用，重点帮助用户自己完成路线、交通、住宿区域、预算和避坑判断；"
-            " 不要主动推旅行社产品或省心套餐，只有用户明确询问报价、风险或托付式服务时才切换相应表达。"
+            " 用户拒绝旅行社产品后，不要主动推旅行社产品或省心套餐；"
+            " 只有用户明确重新询问报价、风险或托付式服务时才切换相应表达。"
         )
 
     return ""
 
 
 def _record_requirement_instruction() -> str:
-    assumed_departure_date = (
-        date.today() + timedelta(days=ASSUMED_REQUIREMENT_DEPARTURE_DAYS)
-    ).isoformat()
     return (
         "如果用户这条消息或最近几轮已经提供了目的地、行程天数、主要风格或规划模式，"
         "并且本轮明确要求你整理需求、记录需求、确认无误或继续推进规划，"
         "那就把这条消息视为一次显式确认。"
         " 你可以先用一句简短摘要确认你的理解，但必须在本轮直接调用 `record_requirement_tool`。"
-        f" 如果缺少出发日期，先用 `{assumed_departure_date}` 作为待核验占位日期；"
+        " 如果缺少出发日期，必须把出发日期写为 `日期待确认`；"
+        "不要自己生成类似“5月22日”或今天加若干天的真实查询日期；"
         "缺少出发地时使用 `出发地待确认`；缺少人数时按 1 位成人；"
         "缺少预算时按目的地常规轻松行程做保守估算。"
         " 这些兜底假设必须写进 `special_needs`，并明确标注待核验。"
@@ -1342,8 +1389,15 @@ def _final_report_tool_instruction() -> str:
     return (
         "本轮已经处于最终报告生成阶段，用户明确要求生成最终报告或 report_data。"
         " 只能调用 `generate_order_tool`，不要先输出寒暄、确认语或手写报告。"
-        " 工具会用已确认状态补齐结构化报告、预算置信度、风险和待核验项；"
-        " 即使仍有估算项，也应通过工具生成带待核验说明的 report_data。"
+        " 工具会用已确认状态生成结构化报告、预算置信度、风险和待核验项。"
+    )
+
+
+def _final_report_not_ready_instruction() -> str:
+    return (
+        "用户要求生成最终报告或 report_data，但当前还没有同时确认交通、住宿、完整行程和预算汇总。"
+        "本轮不要调用 `generate_order_tool`，也不要手写最终报告卡片；"
+        "请简短说明还缺哪些关键确认，并继续推进当前阶段。"
     )
 
 
@@ -1548,6 +1602,7 @@ class StepConfigMiddleware(AgentMiddleware):
                 and _looks_like_final_report_request(active_human_text)
             )
         )
+        confirmed_departure_date = _has_confirmed_departure_date(state_dict)
         planning_instruction = _planning_mode_instruction(planning_mode)
         if planning_instruction:
             override_kwargs["system_prompt"] = (
@@ -1615,6 +1670,33 @@ class StepConfigMiddleware(AgentMiddleware):
         cross_step_tool_names = (
             [] if defer_initial_slow_tools else _cross_step_verification_tools(latest_human_text)
         )
+        date_blocked_cross_step_tools = set()
+        if not confirmed_departure_date and cross_step_tool_names:
+            date_blocked_cross_step_tools = set(cross_step_tool_names) & LIVE_DATE_REQUIRED_TOOL_NAMES
+            if date_blocked_cross_step_tools:
+                cross_step_tool_names = [
+                    tool_name
+                    for tool_name in cross_step_tool_names
+                    if tool_name not in LIVE_DATE_REQUIRED_TOOL_NAMES
+                ]
+                override_kwargs["system_prompt"] = (
+                    f"{override_kwargs['system_prompt']}\n\n"
+                    f"{_live_query_date_gate_instruction(date_blocked_cross_step_tools)}"
+                )
+                if (
+                    current_step == "transport_planning"
+                    and not _has_selected_transport(state_dict)
+                    and "query_hotel_options" in date_blocked_cross_step_tools
+                ):
+                    override_kwargs["system_prompt"] = (
+                        f"{override_kwargs['system_prompt']}\n\n"
+                        "交通方案尚未记录时，不要跨阶段查询或记录住宿；"
+                        "请先完成交通记录，再处理住宿。"
+                    )
+                app_logger.info(
+                    "缺少已确认日期：暂缓跨阶段真实查询工具: "
+                    f"{sorted(date_blocked_cross_step_tools)}"
+                )
         if (
             current_step == "transport_planning"
             and not _has_selected_transport(state_dict)
@@ -1676,6 +1758,28 @@ class StepConfigMiddleware(AgentMiddleware):
                     "按用户意图临时开放跨阶段工具: "
                     f"intent={travel_intent.name}, tool={intent_preferred_tool}"
                 )
+
+        date_blocked_available_tools: set[str] = set()
+        if not confirmed_departure_date:
+            date_blocked_available_tools = available_tool_names & LIVE_DATE_REQUIRED_TOOL_NAMES
+            if date_blocked_available_tools:
+                filtered_tools = _exclude_tools_by_name(
+                    override_kwargs["tools"],
+                    date_blocked_available_tools,
+                )
+                if len(filtered_tools) != len(override_kwargs["tools"]):
+                    override_kwargs["tools"] = filtered_tools
+                    available_tool_names = _tool_names(override_kwargs["tools"])
+                    override_kwargs["system_prompt"] = (
+                        f"{override_kwargs['system_prompt']}\n\n"
+                        f"{_live_query_date_gate_instruction(date_blocked_available_tools)}"
+                    )
+                    if intent_preferred_tool in date_blocked_available_tools:
+                        intent_preferred_tool = None
+                    app_logger.info(
+                        "缺少已确认日期：本轮移除真实查询工具: "
+                        f"{sorted(date_blocked_available_tools)}"
+                    )
 
         if travel_intent.name in {"final_report", "export_report"} and intent_preferred_tool:
             report_tools = _keep_tools_by_name(
@@ -1874,20 +1978,36 @@ class StepConfigMiddleware(AgentMiddleware):
             and final_report_requested
             and not state_dict.get("report_data")
         ):
-            final_report_tool = _find_tool_by_name(
-                self._step_config,
-                "generate_order_tool",
-            )
-            if final_report_tool is not None:
-                override_kwargs["tools"] = [final_report_tool]
-                available_tool_names = _tool_names(override_kwargs["tools"])
-                middleware_forced_tool = "generate_order_tool"
+            if _can_generate_final_report(state_dict):
+                final_report_tool = _find_tool_by_name(
+                    self._step_config,
+                    "generate_order_tool",
+                )
+                if final_report_tool is not None:
+                    override_kwargs["tools"] = [final_report_tool]
+                    available_tool_names = _tool_names(override_kwargs["tools"])
+                    middleware_forced_tool = "generate_order_tool"
+                    override_kwargs["system_prompt"] = (
+                        f"{override_kwargs['system_prompt']}\n\n"
+                        f"{_final_report_tool_instruction()}"
+                    )
+                    app_logger.info(
+                        "最终报告阶段：本轮收窄为 generate_order_tool，确保产出 report_data"
+                    )
+            else:
+                filtered_tools = _exclude_tools_by_name(
+                    override_kwargs["tools"],
+                    {"generate_order_tool"},
+                )
+                if len(filtered_tools) != len(override_kwargs["tools"]):
+                    override_kwargs["tools"] = filtered_tools
+                    available_tool_names = _tool_names(override_kwargs["tools"])
                 override_kwargs["system_prompt"] = (
                     f"{override_kwargs['system_prompt']}\n\n"
-                    f"{_final_report_tool_instruction()}"
+                    f"{_final_report_not_ready_instruction()}"
                 )
                 app_logger.info(
-                    "最终报告阶段：本轮收窄为 generate_order_tool，确保产出 report_data"
+                    "最终报告阶段信息未齐：移除 generate_order_tool，避免提前产出 report_data"
                 )
 
         forced_tool = None

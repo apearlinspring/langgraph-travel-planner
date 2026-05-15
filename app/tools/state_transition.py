@@ -1,7 +1,7 @@
 """
 State transition tools for the travel-planning workflow.
 """
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from math import ceil
 import re
 from typing import Any, Optional
@@ -181,7 +181,9 @@ PENDING_REQUIREMENT_VALUES = {
     "不确定",
     "未知",
     "待核验",
+    "待核实",
     "日期",
+    "日期待确认",
     "出发日期",
     "出发日期待确认",
     "出发地",
@@ -191,7 +193,7 @@ PENDING_REQUIREMENT_VALUES = {
     "null",
     "tbd",
 }
-DEFAULT_ASSUMED_DEPARTURE_OFFSET_DAYS = 30
+PENDING_DEPARTURE_DATE = "日期待确认"
 DEFAULT_BUDGET_MIN_PER_PERSON = 1500.0
 DEFAULT_BUDGET_MAX_PER_PERSON = 3500.0
 
@@ -761,22 +763,112 @@ def _is_pending_requirement_value(value: Any) -> bool:
     return str(value or "").strip().lower() in PENDING_REQUIREMENT_VALUES
 
 
-def _default_assumed_departure_date() -> str:
-    return (date.today() + timedelta(days=DEFAULT_ASSUMED_DEPARTURE_OFFSET_DAYS)).isoformat()
+def _runtime_recent_human_text(runtime: Optional[ToolRuntime]) -> str:
+    state = runtime.state if runtime and runtime.state else {}
+    texts: list[str] = []
+    for message in (state.get("messages") or [])[-8:]:
+        content = None
+        if isinstance(message, dict):
+            role = message.get("role") or message.get("type")
+            if role in {"user", "human"}:
+                content = message.get("content")
+        elif getattr(message, "type", None) == "human" or getattr(message, "role", None) == "user":
+            content = getattr(message, "content", None)
+        if content:
+            texts.append(content if isinstance(content, str) else str(content))
+    return "\n".join(texts)
 
 
-def _normalize_requirement_date(value: Any) -> tuple[str, bool]:
+def _parse_requirement_date_text(value: Any) -> str | None:
     text = str(value or "").strip()
-    if text:
-        text = text.replace("/", "-")
-        match = re.fullmatch(r"(\d{4})年(\d{1,2})月(\d{1,2})日", text)
-        if match:
-            text = f"{match.group(1)}-{int(match.group(2)):02d}-{int(match.group(3)):02d}"
+    if not text or _is_pending_requirement_value(text):
+        return None
+
+    normalized = text.replace("/", "-")
+    match = re.fullmatch(r"(\d{4})年(\d{1,2})月(\d{1,2})日", normalized)
+    if match:
+        normalized = f"{match.group(1)}-{int(match.group(2)):02d}-{int(match.group(3)):02d}"
+
+    try:
+        return datetime.strptime(normalized, "%Y-%m-%d").date().isoformat()
+    except ValueError:
+        pass
+
+    match = re.fullmatch(r"(\d{1,2})月(\d{1,2})日?", normalized)
+    if not match:
+        return None
+
+    month = int(match.group(1))
+    day = int(match.group(2))
+    today = date.today()
+    try:
+        candidate = date(today.year, month, day)
+    except ValueError:
+        return None
+    if candidate < today:
         try:
-            return datetime.strptime(text, "%Y-%m-%d").date().isoformat(), False
+            candidate = date(today.year + 1, month, day)
         except ValueError:
-            pass
-    return _default_assumed_departure_date(), True
+            return None
+    return candidate.isoformat()
+
+
+def _human_text_has_date_hint(text: str) -> bool:
+    patterns = (
+        r"\d{4}-\d{1,2}-\d{1,2}",
+        r"\d{4}/\d{1,2}/\d{1,2}",
+        r"\d{4}年\d{1,2}月\d{1,2}日",
+        r"\d{1,2}月\d{1,2}日?",
+        r"(今天|明天|后天|大后天|这周|本周|下周|下下周|周末|下个月|春节|五一|端午|中秋|国庆|暑假|寒假|元旦|清明|劳动节)",
+    )
+    return any(re.search(pattern, text or "") for pattern in patterns)
+
+
+def _date_supported_by_human_text(date_text: str, raw_value: Any, human_text: str) -> bool:
+    if not human_text:
+        return True
+    if not date_text:
+        return False
+
+    raw_text = str(raw_value or "").strip()
+    compact_human = re.sub(r"[\s/]", "-", human_text)
+    if raw_text and raw_text in human_text:
+        return True
+    if date_text in compact_human or date_text in human_text:
+        return True
+
+    parsed = _parse_requirement_date_text(raw_text)
+    if parsed == date_text and _human_text_has_date_hint(human_text):
+        return True
+
+    try:
+        parsed_date = datetime.strptime(date_text, "%Y-%m-%d").date()
+    except ValueError:
+        return False
+    month_day_patterns = (
+        f"{parsed_date.month}月{parsed_date.day}日",
+        f"{parsed_date.month:02d}月{parsed_date.day:02d}日",
+        f"{parsed_date.month}月{parsed_date.day}",
+        f"{parsed_date.month:02d}月{parsed_date.day:02d}",
+    )
+    if any(pattern in human_text for pattern in month_day_patterns):
+        return True
+
+    return _human_text_has_date_hint(human_text)
+
+
+def _normalize_requirement_date(
+    value: Any,
+    runtime: Optional[ToolRuntime] = None,
+) -> tuple[str, bool, bool]:
+    parsed_date = _parse_requirement_date_text(value)
+    if not parsed_date:
+        return PENDING_DEPARTURE_DATE, True, False
+
+    human_text = _runtime_recent_human_text(runtime)
+    if not _date_supported_by_human_text(parsed_date, value, human_text):
+        return PENDING_DEPARTURE_DATE, True, False
+    return parsed_date, False, True
 
 
 def _coerce_positive_int(value: Any, default: int) -> tuple[int, bool]:
@@ -2039,6 +2131,28 @@ def _build_final_report(
     return bundle.markdown
 
 
+def _requirement_has_confirmed_departure_date(requirement: dict[str, Any]) -> bool:
+    departure_date = requirement.get("departure_date")
+    if _is_pending_requirement_value(departure_date):
+        return False
+    if _parse_requirement_date_text(departure_date) is None:
+        return False
+    if requirement.get("departure_date_confirmed") is False:
+        return False
+    return True
+
+
+def _has_confirmed_transport_state(state: TravelState) -> bool:
+    return bool(state.get("selected_transport") or state.get("selected_transport_option"))
+
+
+def _has_confirmed_accommodation_state(state: TravelState) -> bool:
+    return bool(
+        state.get("selected_accommodation_option")
+        or state.get("selected_accommodation_types")
+    )
+
+
 @tool
 def record_requirement_tool(
     departure_city: Any = None,
@@ -2074,9 +2188,14 @@ def record_requirement_tool(
     planning_mode_reason = _normalize_requirement_text(planning_mode_reason)
     planning_mode_confirmed = _coerce_bool(planning_mode_confirmed, default=True)
 
-    departure_date, date_assumed = _normalize_requirement_date(departure_date)
+    departure_date, date_assumed, departure_date_confirmed = _normalize_requirement_date(
+        departure_date,
+        runtime,
+    )
     if date_assumed:
-        assumption_notes.append(f"出发日期未明确，暂按 {departure_date} 占位")
+        assumption_notes.append(
+            "出发日期未明确，日期待确认；真实交通、酒店和票务查询需等用户明确或确认日期后再执行"
+        )
 
     travel_days, days_assumed = _coerce_positive_int(travel_days, default=1)
     if days_assumed:
@@ -2210,6 +2329,7 @@ def record_requirement_tool(
         departure_city=departure_city,
         destination=destination,
         departure_date=departure_date,
+        departure_date_confirmed=departure_date_confirmed,
         travel_days=travel_days,
         adult_count=adult_count or 0,
         children_count=children_count or 0,
@@ -2247,6 +2367,7 @@ def record_requirement_tool(
         "planning_mode": normalized_planning_mode,
         "planning_mode_reason": normalized_reason,
         "planning_mode_confirmed": planning_mode_confirmed,
+        "departure_date_confirmed": departure_date_confirmed,
         "current_step": "destination_recommendation",
         "pending_initial_request_text": "",
         "pending_initial_planning_mode": None,
@@ -2834,16 +2955,24 @@ def generate_order_tool(
     missing_items = []
     if not selected_destination:
         missing_items.append("目的地")
+    if not _requirement_has_confirmed_departure_date(requirement):
+        missing_items.append("出发日期")
     if expected_days <= 0:
         missing_items.append("行程天数")
     if total_people <= 0:
         missing_items.append("出行人数")
-    if not has_budget_hint:
-        missing_items.append("预算")
+    if not _has_confirmed_transport_state(state):
+        missing_items.append("交通方案")
+    if not _has_confirmed_accommodation_state(state):
+        missing_items.append("住宿方案")
+    if not state.get("itinerary"):
+        missing_items.append("完整行程")
+    if not state.get("budget") or not has_budget_hint:
+        missing_items.append("预算汇总")
 
     if missing_items:
         return _command_with_message(
-            f"生成最终报告前还需要先确认：{'、'.join(missing_items)}。",
+            f"生成最终报告前还需要先确认：{'、'.join(missing_items)}。不会在目的地或产品框架阶段提前生成 report_data。",
             runtime,
         )
 

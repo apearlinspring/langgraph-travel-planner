@@ -309,6 +309,7 @@ def test_generate_order_tool_records_non_blocking_governance_boundary():
                 "departure_city": "北京",
                 "destination": "上海",
                 "departure_date": "2026-05-10",
+                "departure_date_confirmed": True,
                 "travel_days": 3,
                 "adult_count": 2,
                 "children_count": 0,
@@ -322,6 +323,15 @@ def test_generate_order_tool_records_non_blocking_governance_boundary():
             "selected_transport": "train",
             "selected_accommodation_types": ["economy_hotel"],
             "selected_food_types": ["local"],
+            "itinerary": [
+                {
+                    "day_number": 1,
+                    "theme": "抵达上海",
+                    "activities": ["外滩"],
+                    "meals": ["本地小吃"],
+                    "accommodation": "经济酒店",
+                }
+            ],
             "budget": {
                 "transport": 1200.0,
                 "accommodation": 1600.0,

@@ -220,7 +220,8 @@ def test_confirmed_minimum_requirement_uses_pending_assumptions():
     assert command.update["current_step"] == "destination_recommendation"
     assert requirement["planning_mode"] == "free_planning"
     assert requirement["departure_city"] == "出发地待确认"
-    assert requirement["departure_date"]
+    assert requirement["departure_date"] == "日期待确认"
+    assert requirement["departure_date_confirmed"] is False
     assert requirement["adult_count"] == 1
     assert requirement["budget_min"] == 1500.0
     assert requirement["budget_max"] == 3500.0
@@ -255,6 +256,8 @@ def test_record_requirement_tool_normalizes_model_text_arguments():
     assert requirement["budget_min"] == 1500.0
     assert requirement["budget_max"] == 3500.0
     assert "出发日期未明确" in requirement["special_needs"]
+    assert requirement["departure_date"] == "日期待确认"
+    assert requirement["departure_date_confirmed"] is False
 
 
 def test_explicit_agency_quote_signal_still_records_agency_plan():
@@ -301,6 +304,7 @@ def test_generate_order_report_data_keeps_free_mode_stable():
                 "departure_city": "北京",
                 "destination": "南京",
                 "departure_date": "2026-06-01",
+                "departure_date_confirmed": True,
                 "travel_days": 3,
                 "adult_count": 2,
                 "children_count": 0,
@@ -321,7 +325,37 @@ def test_generate_order_report_data_keeps_free_mode_stable():
                 "price": 500.0,
                 "source": "测试估算",
             },
+            "selected_accommodation_types": ["star_hotel"],
+            "selected_accommodation_option": {
+                "name": "南京市中心酒店待二次核验",
+                "type": "star_hotel",
+                "location": "新街口/夫子庙",
+                "price_per_night": 600.0,
+                "rating": None,
+                "amenities": [],
+                "source": "测试估算",
+            },
             "selected_food_types": ["local", "specialty"],
+            "itinerary": [
+                {
+                    "day_number": 1,
+                    "theme": "抵达与城市漫步",
+                    "activities": ["夫子庙", "老门东"],
+                    "meals": ["本地小吃"],
+                    "accommodation": "南京市中心酒店待二次核验",
+                }
+            ],
+            "budget": {
+                "transport": 1000.0,
+                "accommodation": 1200.0,
+                "food": 600.0,
+                "attractions": 300.0,
+                "misc": 300.0,
+                "total": 3400.0,
+                "per_person": 1700.0,
+                "line_items": [],
+                "assumptions": ["测试预算"],
+            },
         }
     )
 

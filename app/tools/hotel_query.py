@@ -151,6 +151,19 @@ VALID_PLACE_TYPES = {
     "区/县",
     "详细地址",
 }
+PENDING_DATE_VALUES = {
+    "",
+    "日期",
+    "日期待确认",
+    "入住日期",
+    "入住日期待确认",
+    "出发日期",
+    "出发日期待确认",
+    "待确认",
+    "未确认",
+    "待核验",
+    "待核实",
+}
 
 PREFERENCE_SPLIT_MARKERS = (
     "想住",
@@ -661,6 +674,23 @@ def _looks_like_accommodation_preference(value: object, selected_destination: st
     return bool(re.search(r"(房型|房间|酒店|住宿|附近|周边|商圈|市中心|景点|地铁|机场|高铁站)$", text))
 
 
+def _requirement_departure_date_confirmation(
+    requirement: dict,
+    normalized_date: str,
+) -> tuple[bool | None, str]:
+    if not requirement:
+        return None, ""
+
+    date_text = str(normalized_date or "").strip()
+    if date_text in PENDING_DATE_VALUES:
+        return False, "pending"
+    if requirement.get("departure_date_confirmed") is False:
+        return False, str(requirement.get("departure_date_source") or "unconfirmed")
+    if requirement.get("departure_date_confirmed") is True:
+        return True, str(requirement.get("departure_date_source") or "user_confirmed")
+    return True, str(requirement.get("departure_date_source") or "legacy_confirmed")
+
+
 def _normalize_query_args_from_state(
     *,
     destination: str,
@@ -697,6 +727,10 @@ def _normalize_query_args_from_state(
     normalized_check_in = check_in_date
     if _is_placeholder(check_in_date, {"日期", "入住日期", "未确认", "check_in_date"}):
         normalized_check_in = requirement.get("departure_date") or check_in_date
+    date_confirmed, date_source = _requirement_departure_date_confirmation(
+        requirement,
+        str(normalized_check_in or ""),
+    )
 
     travel_days = requirement.get("travel_days")
     normalized_nights = stay_nights
@@ -733,7 +767,7 @@ def _normalize_query_args_from_state(
     if _is_placeholder(place_type, {"地点类型", "place_type", "未确认"}):
         normalized_place_type = "城市"
 
-    return {
+    normalized_args = {
         "destination": normalized_destination,
         "check_in_date": normalized_check_in,
         "stay_nights": normalized_nights,
@@ -743,6 +777,10 @@ def _normalize_query_args_from_state(
         "preferences": normalized_preferences,
         "place_type": normalized_place_type,
     }
+    if date_confirmed is not None:
+        normalized_args["check_in_date_confirmed"] = date_confirmed
+        normalized_args["check_in_date_source"] = date_source
+    return normalized_args
 
 
 def _build_search_payload_for_candidate(

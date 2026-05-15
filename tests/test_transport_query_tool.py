@@ -1,6 +1,8 @@
 import pytest
 from types import SimpleNamespace
 
+from langchain.tools import ToolRuntime
+
 from app.tools import transport_query
 
 
@@ -12,6 +14,17 @@ class FakeCoordinator:
         self.calls.append(payload)
         self.config = config
         return {"messages": [SimpleNamespace(content="ok")]}
+
+
+def _build_runtime(state):
+    return ToolRuntime(
+        state=state,
+        context=None,
+        config={},
+        stream_writer=lambda _: None,
+        tool_call_id="tool-call-1",
+        store=None,
+    )
 
 
 @pytest.mark.asyncio
@@ -96,5 +109,43 @@ async def test_query_transport_options_skips_invalid_args_without_calling_coordi
     result = command.update["messages"][0].content
     event = command.update["tool_audit_events"][0]
     assert "交通真实查询参数不完整" in result
+    assert event["status"] == "skipped"
+    assert event["error_type"] == "invalid_transport_query_args"
+
+
+@pytest.mark.asyncio
+async def test_query_transport_options_skips_unconfirmed_state_date(monkeypatch):
+    async def fail_create_transport_coordinator():
+        raise AssertionError("coordinator should not be created")
+
+    monkeypatch.setattr(
+        transport_query,
+        "create_transport_coordinator",
+        fail_create_transport_coordinator,
+    )
+    runtime = _build_runtime(
+        {
+            "user_requirement": {
+                "departure_city": "西安",
+                "destination": "上海",
+                "departure_date": "日期待确认",
+                "departure_date_confirmed": False,
+            }
+        }
+    )
+
+    command = await transport_query.query_transport_options.ainvoke(
+        {
+            "origin_city": "出发地",
+            "destination_city": "目的地",
+            "departure_date": "日期",
+            "transport_type": "flight",
+            "runtime": runtime,
+        }
+    )
+
+    result = command.update["messages"][0].content
+    event = command.update["tool_audit_events"][0]
+    assert "需要先由用户明确或确认" in result
     assert event["status"] == "skipped"
     assert event["error_type"] == "invalid_transport_query_args"

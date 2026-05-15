@@ -46,6 +46,48 @@ def _build_runtime(state):
     )
 
 
+def _mark_report_ready(state, *, destination=None):
+    requirement = state.setdefault("user_requirement", {})
+    requirement.setdefault("departure_date", "2026-06-01")
+    requirement["departure_date_confirmed"] = True
+    requirement.setdefault("travel_days", 3)
+    requirement.setdefault("adult_count", 2)
+    requirement.setdefault("children_count", 0)
+    requirement.setdefault("budget_max", 8000.0)
+    destination = destination or state.get("selected_destination") or requirement.get("destination") or "上海"
+    requirement.setdefault("destination", destination)
+    state.setdefault("selected_destination", destination)
+    state.setdefault("selected_transport", "train")
+    state.setdefault("selected_accommodation_types", ["star_hotel"])
+    state.setdefault("selected_food_types", ["local"])
+    state.setdefault(
+        "itinerary",
+        [
+            {
+                "day_number": 1,
+                "theme": "抵达与轻松适应",
+                "activities": [destination],
+                "meals": ["本地小吃"],
+                "accommodation": "住宿待二次核验",
+            }
+        ],
+    )
+    state.setdefault(
+        "budget",
+        {
+            "transport": 0.0,
+            "accommodation": 0.0,
+            "food": 0.0,
+            "attractions": 0.0,
+            "misc": 0.0,
+            "total": 0.0,
+            "per_person": 0.0,
+            "assumptions": ["测试报告前置数据"],
+        },
+    )
+    return state
+
+
 def test_internal_doc_evidence_falls_back_when_documents_unavailable(monkeypatch):
     product_rules_module.internal_doc_evidence.cache_clear()
     monkeypatch.setattr(
@@ -143,8 +185,10 @@ async def test_step_config_covers_all_planning_steps(monkeypatch):
     assert "attractions" in config["destination_recommendation"]["prompt"]
     assert "最高优先级执行规则" in config["transport_planning"]["prompt"]
     assert "最高优先级执行规则" in config["accommodation_planning"]["prompt"]
-    assert "必须立刻调用 query_transport_options" in config["transport_planning"]["prompt"]
-    assert "必须立刻调用 query_hotel_options" in config["accommodation_planning"]["prompt"]
+    assert "只有日期已明确/确认时" in config["transport_planning"]["prompt"]
+    assert "不得调用 query_transport_options" in config["transport_planning"]["prompt"]
+    assert "只有日期已明确/确认时" in config["accommodation_planning"]["prompt"]
+    assert "不得调用 query_hotel_options" in config["accommodation_planning"]["prompt"]
     assert "必须先调用 generate_itinerary_tool" in config["itinerary_generation"]["prompt"]
     assert "不要先输出长篇自然语言行程草案" in config["itinerary_generation"]["prompt"]
     assert "4天3晚 必须有 Day 1、Day 2、Day 3、Day 4" in config["itinerary_generation"]["prompt"]
@@ -948,7 +992,7 @@ def test_final_report_pads_four_day_trip_and_exports_route_bound_data():
     ]
 
 
-def test_generate_order_tool_creates_pending_report_from_basic_requirement():
+def test_generate_order_tool_blocks_pending_report_from_basic_requirement():
     state = create_initial_state(user_id="user-1", session_id="session-1")
     state.update(
         {
@@ -968,38 +1012,15 @@ def test_generate_order_tool_creates_pending_report_from_basic_requirement():
             "selected_food_types": ["local"],
         }
     )
-
     order_command = generate_order_tool.invoke({"runtime": _build_runtime(state)})
 
-    assert "report" in order_command.update
-    assert "report_data" in order_command.update
-    assert order_command.update["selected_destination"] == "\u4e0a\u6d77"
-    assert order_command.update["current_step"] == "order_generation"
-    assert "\u9884\u7b97\u7f6e\u4fe1\u5ea6\u4e0e\u5f85\u6838\u9a8c\u9879" in order_command.update["report"]
-    assert "\u515c\u5e95\u4f30\u7b97" in order_command.update["report"]
-    assert "\u5916\u6ee9" in order_command.update["report"]
-    assert "\u4eba\u6c11\u5e7f\u573a/\u5357\u4eac\u4e1c\u8def" in order_command.update["report"]
-    assert "\u4f4f\u5bbf/\u843d\u811a\u70b9\u5f85\u4e8c\u6b21\u6838\u5b9e" not in order_command.update["report"]
-    assert "\u5177\u4f53 POI \u5f85\u4e8c\u6b21\u7ec6\u5316" not in order_command.update["report"]
-    assert "\u540c\u533a\u57df\u6838\u5fc3\u4f53\u9a8c" not in order_command.update["report"]
-
-    report_data = order_command.update["report_data"]
-    assert report_data["version"] == "travel_report.v1"
-    assert len(report_data["itinerary"]) == 3
-    assert len(report_data["map_routes"]) == 3
-    assert report_data["accommodation"]["option"]["location"] == "\u4eba\u6c11\u5e7f\u573a/\u5357\u4eac\u4e1c\u8def"
-    assert report_data["budget"]["total"] > 0
-    assert len(report_data["budget"]["items"]) == 5
-    assert report_data["budget_confidence"]["level"] == "\u504f\u4f4e"
-    assert any(
-        "\u5916\u6ee9" in route["summary"]
-        for route in report_data["map_routes"]
-    )
-    assert [
-        day["route"]["summary"] for day in report_data["itinerary"]
-    ] == [
-        route["summary"] for route in report_data["map_routes"]
-    ]
+    assert "report" not in order_command.update
+    assert "report_data" not in order_command.update
+    message = order_command.update["messages"][0].content
+    assert "住宿方案" in message
+    assert "完整行程" in message
+    assert "预算汇总" in message
+    assert "不会在目的地或产品框架阶段提前生成 report_data" in message
 
 
 def test_generate_order_tool_adds_changsha_route_nodes_for_map_export():
@@ -1011,6 +1032,7 @@ def test_generate_order_tool_adds_changsha_route_nodes_for_map_export():
                 "departure_city": "\u897f\u5b89",
                 "destination": "\u957f\u6c99",
                 "departure_date": "2026-05-23",
+                "departure_date_confirmed": True,
                 "travel_days": 4,
                 "adult_count": 2,
                 "children_count": 0,
@@ -1020,7 +1042,27 @@ def test_generate_order_tool_adds_changsha_route_nodes_for_map_export():
             },
             "selected_destination": "\u957f\u6c99",
             "selected_transport": "train",
+            "selected_accommodation_types": ["star_hotel"],
             "selected_food_types": ["local", "specialty"],
+            "itinerary": [
+                {
+                    "day_number": 1,
+                    "theme": "\u62b5\u8fbe\u4e0e\u8f7b\u677e\u9002\u5e94",
+                    "activities": ["\u4e94\u4e00\u5e7f\u573a"],
+                    "meals": ["\u957f\u6c99\u5c0f\u5403"],
+                    "accommodation": "\u4e94\u4e00\u5e7f\u573a\u9644\u8fd1\u9152\u5e97",
+                }
+            ],
+            "budget": {
+                "transport": 700.0,
+                "accommodation": 1200.0,
+                "food": 900.0,
+                "attractions": 200.0,
+                "misc": 300.0,
+                "total": 3300.0,
+                "per_person": 1650.0,
+                "assumptions": ["\u6d4b\u8bd5\u9884\u7b97"],
+            },
             "messages": [
                 HumanMessage(
                     content=(
@@ -1031,6 +1073,7 @@ def test_generate_order_tool_adds_changsha_route_nodes_for_map_export():
             ],
         }
     )
+    _mark_report_ready(state, destination="\u4e0a\u6d77")
 
     order_command = generate_order_tool.invoke({"runtime": _build_runtime(state)})
     report_data = order_command.update["report_data"]
@@ -1056,6 +1099,7 @@ def test_generate_order_tool_repairs_weak_changsha_model_route_points():
                 "departure_city": "\u897f\u5b89",
                 "destination": "\u957f\u6c99",
                 "departure_date": "2026-05-23",
+                "departure_date_confirmed": True,
                 "travel_days": 4,
                 "adult_count": 2,
                 "children_count": 0,
@@ -1065,7 +1109,18 @@ def test_generate_order_tool_repairs_weak_changsha_model_route_points():
             },
             "selected_destination": "\u957f\u6c99",
             "selected_transport": "train",
+            "selected_accommodation_types": ["star_hotel"],
             "selected_food_types": ["local", "specialty"],
+            "budget": {
+                "transport": 700.0,
+                "accommodation": 1200.0,
+                "food": 900.0,
+                "attractions": 200.0,
+                "misc": 300.0,
+                "total": 3300.0,
+                "per_person": 1650.0,
+                "assumptions": ["\u6d4b\u8bd5\u9884\u7b97"],
+            },
             "itinerary": [
                 {
                     "day_number": 1,
@@ -1098,6 +1153,7 @@ def test_generate_order_tool_repairs_weak_changsha_model_route_points():
             ],
         }
     )
+    _mark_report_ready(state, destination="\u4e0a\u6d77")
 
     order_command = generate_order_tool.invoke({"runtime": _build_runtime(state)})
     report_data = order_command.update["report_data"]
@@ -1136,6 +1192,7 @@ def test_final_report_infers_agency_mode_from_recent_human_messages():
             ],
         }
     )
+    _mark_report_ready(state, destination="\u4e0a\u6d77")
 
     order_command = generate_order_tool.invoke({"runtime": _build_runtime(state)})
     report_data = order_command.update["report_data"]
@@ -1172,6 +1229,7 @@ def test_final_report_prefers_persisted_planning_mode_over_recent_messages():
         }
     )
 
+    _mark_report_ready(state, destination="\u4e0a\u6d77")
     order_command = generate_order_tool.invoke({"runtime": _build_runtime(state)})
     report_data = order_command.update["report_data"]
 

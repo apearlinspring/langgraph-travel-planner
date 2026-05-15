@@ -83,6 +83,7 @@ class UserRequirement(TypedDict):
     departure_city: str
     destination: Optional[str]
     departure_date: str
+    departure_date_confirmed: NotRequired[bool]
     travel_days: int
     adult_count: int
     children_count: int
@@ -252,6 +253,7 @@ class TravelState(AgentState):
     pending_initial_planning_mode_reason: NotRequired[str]
     turn_id: NotRequired[str]
     observability_context: NotRequired[dict]
+    departure_date_confirmed: NotRequired[bool]
 
     user_requirement: NotRequired[UserRequirement]
 
