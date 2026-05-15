@@ -132,7 +132,7 @@ LLM（大语言模型）创建统一走 `app/utils/llm_factory.py` 的 `build_ch
 
 ### 可提交证据包导出
 
-`.runtime/` 下的 summary（摘要）和 snapshot（快照）属于本地原始产物，不提交。需要把最新 acceptance-core（核心验收）结果转成可提交、可面试展示的脱敏 Markdown（标记文本）时，使用：
+`.runtime/` 下的 summary（摘要）和 snapshot（快照）属于本地原始产物，不提交。需要把最新 acceptance-core（核心验收）结果转成可提交、可项目展示的脱敏 Markdown（标记文本）时，使用：
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\export_acceptance_evidence.py --runtime-dir .runtime --output docs\acceptance-core-report.md

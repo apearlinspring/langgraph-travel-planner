@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts import build_interview_demo_pack as demo_pack
+from scripts import build_project_demo_pack as demo_pack
 
 
 SAFE_DOC_TEXT = """# Demo Source
@@ -27,9 +27,9 @@ def _write_required_sources(repo_root: Path, *, extra_text: str = "") -> None:
 def test_build_demo_pack_creates_sanitized_manifest(tmp_path: Path):
     _write_required_sources(tmp_path)
 
-    manifest = demo_pack.build_demo_pack(tmp_path / ".runtime" / "interview-demo-pack", repo_root=tmp_path)
+    manifest = demo_pack.build_demo_pack(tmp_path / ".runtime" / "project-demo-pack", repo_root=tmp_path)
 
-    output_dir = tmp_path / ".runtime" / "interview-demo-pack"
+    output_dir = tmp_path / ".runtime" / "project-demo-pack"
     manifest_path = output_dir / "manifest.json"
     assert manifest_path.exists()
     saved_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -96,11 +96,11 @@ def test_build_demo_pack_rejects_sensitive_source_document(tmp_path: Path):
 
 
 def test_build_demo_pack_requires_all_source_documents(tmp_path: Path):
-    with pytest.raises(FileNotFoundError, match="Missing interview demo source documents"):
+    with pytest.raises(FileNotFoundError, match="Missing project demo source documents"):
         demo_pack.build_demo_pack(tmp_path / "pack", repo_root=tmp_path)
 
 
-def test_committed_interview_docs_build_without_sensitive_content(tmp_path: Path):
+def test_committed_project_docs_build_without_sensitive_content(tmp_path: Path):
     manifest = demo_pack.build_demo_pack(tmp_path / "pack", repo_root=Path.cwd())
 
     assert manifest["output_policy"]["reads_env_files"] is False
@@ -111,11 +111,11 @@ def test_committed_interview_docs_build_without_sensitive_content(tmp_path: Path
     )
 
 
-def test_interview_docs_cover_required_capabilities_and_demo_paths():
+def test_project_docs_cover_required_capabilities_and_demo_paths():
     combined = "\n".join(
         [
-            Path("docs/interview-demo-pack.md").read_text(encoding="utf-8"),
-            Path("docs/interview-answer-map.md").read_text(encoding="utf-8"),
+            Path("docs/project-demo-pack.md").read_text(encoding="utf-8"),
+            Path("docs/project-capability-map.md").read_text(encoding="utf-8"),
             Path("docs/demo-script.md").read_text(encoding="utf-8"),
             Path("README.md").read_text(encoding="utf-8"),
         ]
