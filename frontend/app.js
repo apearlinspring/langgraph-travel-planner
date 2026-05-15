@@ -928,10 +928,19 @@
 
       function focusJourneyMapFromPlan(button, target = "destination") {
         const plan = button.closest(".travel-plan");
+        const shell = plan?.querySelector(".journey-live-map-shell");
         const node = plan?.querySelector(".journey-live-map[data-map-payload]");
         if (!node) return;
+        shell?.scrollIntoView({ behavior: "smooth", block: "start" });
         const entry = journeyMapInstances.get(node);
         focusJourneyMapTarget(entry, target);
+        if (target === "stay") {
+          showToast("已定位到落脚点和周边参考");
+        } else if (target === "highlights") {
+          showToast("已定位到沿途看点");
+        } else {
+          showToast("已定位到路线地图");
+        }
       }
 
       function focusJourneyMapDayFromPlan(button) {
@@ -1387,7 +1396,7 @@
         if (!list) return;
         if (!events.length) {
           list.innerHTML =
-            '<div class="governance-empty">本轮还没有可展示的工具审计摘要。</div>';
+            '<div class="governance-empty">本轮还没有工具记录。</div>';
           return;
         }
         list.innerHTML = events
@@ -1403,7 +1412,6 @@
                     event.degraded ? "degraded" : "ok"
                   }">${escapeHtml(getStatusLabel(event.status))}</span>
                 </div>
-                <p>仅展示安全摘要：工具名、状态、耗时、重试次数和证据类型。</p>
                 <div class="tool-audit-meta">
                   <span><i class="fa-regular fa-clock"></i>${escapeHtml(elapsed)}</span>
                   <span><i class="fa-solid fa-rotate"></i>${event.retryCount} 次重试</span>
@@ -2481,6 +2489,7 @@
           .filter((line) => {
             const trimmed = line.trim();
             if (!trimmed) return true;
+            if (/^-{1,3}$/.test(trimmed) || /^---+$/.test(trimmed)) return false;
             return !hiddenLinePatterns.some((pattern) => pattern.test(trimmed));
           })
           .join("\n")
@@ -3028,6 +3037,100 @@
         });
       }
 
+      function getKnownCityNearbyPlaces(destination = "") {
+        const city = cleanJourneyLocationValue(destination);
+        const presets = [
+          {
+            test: /南京|金陵/u,
+            places: [
+              ["主要景点", "夫子庙秦淮风光带", "fa-landmark"],
+              ["热闹商业街", "新街口商圈", "fa-store"],
+              ["美食小吃", "老门东美食街", "fa-bowl-food"],
+            ],
+          },
+          {
+            test: /成都|蓉城/u,
+            places: [
+              ["主要景点", "武侯祠", "fa-landmark"],
+              ["热闹商业街", "春熙路", "fa-store"],
+              ["美食小吃", "宽窄巷子", "fa-bowl-food"],
+            ],
+          },
+          {
+            test: /西安|长安/u,
+            places: [
+              ["主要景点", "西安城墙", "fa-landmark"],
+              ["热闹商业街", "钟楼商圈", "fa-store"],
+              ["美食小吃", "回民街", "fa-bowl-food"],
+            ],
+          },
+          {
+            test: /北京/u,
+            places: [
+              ["主要景点", "故宫博物院", "fa-landmark"],
+              ["热闹商业街", "王府井", "fa-store"],
+              ["美食小吃", "簋街", "fa-bowl-food"],
+            ],
+          },
+          {
+            test: /上海/u,
+            places: [
+              ["主要景点", "外滩", "fa-landmark"],
+              ["热闹商业街", "南京东路步行街", "fa-store"],
+              ["美食小吃", "云南南路美食街", "fa-bowl-food"],
+            ],
+          },
+          {
+            test: /杭州/u,
+            places: [
+              ["主要景点", "西湖", "fa-landmark"],
+              ["热闹商业街", "湖滨银泰", "fa-store"],
+              ["美食小吃", "河坊街", "fa-bowl-food"],
+            ],
+          },
+          {
+            test: /长沙/u,
+            places: [
+              ["主要景点", "橘子洲", "fa-landmark"],
+              ["热闹商业街", "五一广场", "fa-store"],
+              ["美食小吃", "坡子街", "fa-bowl-food"],
+            ],
+          },
+        ];
+        return presets.find((preset) => preset.test.test(city))?.places || [];
+      }
+
+      function buildStayNearbyHighlights(previewState = {}) {
+        const destination = cleanJourneyLocationValue(
+          previewState.cityPair?.destination || previewState.destinationSection?.title || ""
+        );
+        const presetPlaces = getKnownCityNearbyPlaces(destination);
+        if (presetPlaces.length) {
+          return presetPlaces.map(([label, name, icon]) => ({
+            label,
+            name,
+            icon,
+            query: destination && !name.includes(destination) ? `${destination} ${name}` : name,
+          }));
+        }
+        const picked = [];
+        const push = (label, pattern, icon, fallback) => {
+          const hit = (previewState.highlights || []).find((item) => pattern.test(item));
+          const name = cleanJourneyLocationValue(hit || fallback || "");
+          if (!name) return;
+          picked.push({
+            label,
+            name,
+            icon,
+            query: destination && !name.includes(destination) ? `${destination} ${name}` : name,
+          });
+        };
+        push("主要景点", /景区|景点|公园|博物馆|寺|山|湖|江|河|古镇/u, "fa-landmark", `${destination} 主要景点`);
+        push("热闹商业街", /商圈|步行街|夜市|老街|街区|广场/u, "fa-store", `${destination} 商业街`);
+        push("美食小吃", /美食|小吃|餐|夜市|咖啡|甜品/u, "fa-bowl-food", `${destination} 小吃街`);
+        return picked.filter((item) => item.name && !/待确认|待补充/.test(item.name));
+      }
+
       function extractJourneyRhythm(summaryBlocks, sections) {
         const rhythmLines = [];
         const directRhythmLines = [...summaryBlocks.flat(), ...sections.flatMap((section) => section.rawLines)]
@@ -3116,8 +3219,18 @@
         return mapping[value] || 0;
       }
 
+      function normalizeJourneyDayHeading(text = "") {
+        return String(text || "")
+          .replace(/^#{1,6}\s+/, "")
+          .replace(/^\*\*/, "")
+          .replace(/\*\*$/, "")
+          .replace(/^[-*•]\s*/, "")
+          .replace(/^[\u{1F300}-\u{1FAFF}\u2600-\u27BF]+\s*/u, "")
+          .trim();
+      }
+
       function parseJourneyDayNumber(text = "") {
-        const normalized = (text || "").trim();
+        const normalized = normalizeJourneyDayHeading(text);
         const dayMatch = normalized.match(/\bday\s*(\d+)\b/i);
         if (dayMatch) return Number(dayMatch[1]);
         const chineseMatch = normalized.match(/^第\s*([一二三四五六七八九十\d]+)\s*天/);
@@ -3177,14 +3290,7 @@
         lines.forEach((rawLine) => {
           const line = (rawLine || "").trim();
           if (!line || /^[-*]{3,}$/.test(line)) return;
-          const dayNumber = parseJourneyDayNumber(
-            line
-              .replace(/^#{1,3}\s+/, "")
-              .replace(/^\*\*/, "")
-              .replace(/\*\*$/, "")
-              .replace(/^[*-]\s*/, "")
-              .trim()
-          );
+          const dayNumber = parseJourneyDayNumber(line);
           if (dayNumber) {
             flush();
             current = {
@@ -3258,11 +3364,11 @@
         if (!previewState?.shouldRender) {
           return "";
         }
+        if (parseJourneyDayNumber(section.title || "")) {
+          return "";
+        }
         if (section.tone === "stay" && !/待补充|待确认/.test(section.title)) {
           return "stay";
-        }
-        if (section.tone === "transport") {
-          return "route";
         }
         if (section.tone === "food") {
           return previewState.highlightCards.length ? "highlights" : "";
@@ -3299,6 +3405,15 @@
 
       function renderJourneyAtlas(previewState, previewStops, previewMetrics) {
         const { cityPair, highlights, highlightCards, dayPlans } = previewState;
+        const stayNearbyHighlights = buildStayNearbyHighlights(previewState);
+        const mapHighlightQueries = [
+          ...stayNearbyHighlights.map((item) => item.query),
+          ...highlights,
+        ]
+          .map((item) => cleanJourneyLocationValue(item || ""))
+          .filter(Boolean)
+          .filter((item, index, list) => list.indexOf(item) === index)
+          .slice(0, 6);
         const routeStops = [
           { ...previewStops[0], target: "origin" },
           { ...previewStops[1], target: "destination" },
@@ -3316,7 +3431,7 @@
           origin: cityPair?.origin || routeStops[0]?.value || "",
           destination: cityPair?.destination || routeStops[1]?.value || "",
           stay: routeStops[3]?.disabled ? "" : routeStops[3]?.value || "",
-          highlights,
+          highlights: mapHighlightQueries,
           days: dayPlans.map((day) => ({
             label: day.label,
             waypoints: day.waypoints,
@@ -3536,6 +3651,36 @@
                         .join("")}
                     </div>
                   </div>
+                  ${
+                    stayNearbyHighlights.length
+                      ? `
+                          <div class="journey-map-sidebar-card">
+                            <div class="journey-map-sidebar-head">
+                              <span>住宿周边</span>
+                              <strong>落脚点怎么选</strong>
+                            </div>
+                            <div class="journey-map-nearby-grid">
+                              ${stayNearbyHighlights
+                                .map(
+                                  (item) => `
+                                    <button
+                                      class="journey-map-focus-btn journey-map-nearby-card"
+                                      type="button"
+                                      data-map-focus="highlights"
+                                    >
+                                      <span><i class="fa-solid ${escapeHtml(item.icon)}"></i>${escapeHtml(
+                                        item.label
+                                      )}</span>
+                                      <strong>${escapeHtml(item.name)}</strong>
+                                    </button>
+                                  `
+                                )
+                                .join("")}
+                            </div>
+                          </div>
+                        `
+                      : ""
+                  }
                   ${
                     highlightCards.length
                       ? `
@@ -3996,7 +4141,7 @@
         let current = null;
 
         lines.forEach((line) => {
-          const normalized = line.replace(/^[-*•]\s*/, "").trim();
+          const normalized = normalizeJourneyDayHeading(line);
           const dayMatch = normalized.match(
             /^(Day\s*\d+|第\s*[一二三四五六七八九十\d]+\s*天)[：:\s-]*(.*)$/iu
           );
@@ -5288,8 +5433,128 @@
             .catch((error) => {
               console.error(error);
               showToast("导出失败，请稍后重试。", true);
-            });
+          });
         }
+      }
+
+      function normalizeTravelBudgetTitle(title = "") {
+        return /预算|费用|花费|价格|成本/u.test(title) ? "预算参考" : normalizeSectionTitle(title);
+      }
+
+      function stripDisplayListPrefix(line = "") {
+        return String(line || "")
+          .replace(/^[-*•]\s*/, "")
+          .replace(/^\d+\.\s*/, "")
+          .trim();
+      }
+
+      function extractTravelBudgetRows(lines = []) {
+        const compactLines = lines
+          .map((line) => line.trim())
+          .filter((line) => line && !/^-{1,3}$/.test(line));
+        if (isMarkdownTable(compactLines)) {
+          const rows = compactLines
+            .slice(2)
+            .map(splitTableCells)
+            .filter((cells) => cells.some(Boolean))
+            .map((cells) => ({
+              label: stripDisplayListPrefix(cells[0] || "费用项"),
+              amount: (cells[1] || cells[cells.length - 1] || "待核验").trim(),
+              note: cells.slice(2).filter(Boolean).join("；"),
+            }));
+          return rows.filter((row) => row.label && row.amount);
+        }
+
+        const joined = compactLines.join("；");
+        const rows = [];
+        const pattern =
+          /(交通|大交通|往返|住宿|酒店|民宿|餐饮|美食|门票|游船|景点|体验|市内交通|伴手礼|其他|机动|合计|总计)[^~￥¥\d]{0,14}([~约￥¥]?\s*\d[\d,.]*(?:\s*[-~]\s*\d[\d,.]*)?\s*元?)/gu;
+        let match;
+        while ((match = pattern.exec(joined))) {
+          const label = match[1].replace(/往返$/, "交通");
+          const amount = match[2].replace(/\s+/g, "");
+          const key = `${label}-${amount}`;
+          if (!amount || rows.some((row) => `${row.label}-${row.amount}` === key)) continue;
+          rows.push({ label, amount, note: "" });
+        }
+        return rows.slice(0, 8);
+      }
+
+      function getTravelBudgetIcon(label = "") {
+        if (/交通|往返|高铁|火车|航班|机票|车/u.test(label)) return "fa-train-subway";
+        if (/住宿|酒店|民宿|房/u.test(label)) return "fa-bed";
+        if (/餐|美食|吃/u.test(label)) return "fa-utensils";
+        if (/门票|景点|游船|体验/u.test(label)) return "fa-ticket";
+        if (/合计|总计|预算/u.test(label)) return "fa-calculator";
+        return "fa-wallet";
+      }
+
+      function renderTravelBudgetCardBody(lines = [], reminderLines = []) {
+        const rows = extractTravelBudgetRows(lines);
+        const reminders = reminderLines
+          .map(stripDisplayListPrefix)
+          .filter(Boolean)
+          .slice(0, 4);
+        if (!rows.length) {
+          return `
+            <div class="travel-budget-layout">
+              <div class="travel-budget-main">${renderAssistantLines(lines)}</div>
+              ${
+                reminders.length
+                  ? `<aside class="travel-budget-reminders">
+                      <span>出发前确认</span>
+                      <ul>${reminders
+                        .map((item) => `<li>${formatInlineText(item)}</li>`)
+                        .join("")}</ul>
+                    </aside>`
+                  : ""
+              }
+            </div>
+          `;
+        }
+
+        const totalRow =
+          rows.find((row) => /合计|总计|总预算|预算/u.test(row.label)) ||
+          rows[rows.length - 1];
+        return `
+          <div class="travel-budget-layout">
+            <div class="travel-budget-main">
+              <div class="travel-budget-total">
+                <span>当前估算</span>
+                <strong>${escapeHtml(totalRow.amount || "待核验")}</strong>
+              </div>
+              <div class="travel-budget-rows">
+                ${rows
+                  .filter((row) => row !== totalRow || rows.length === 1)
+                  .map(
+                    (row) => `
+                      <div class="travel-budget-row">
+                        <span class="travel-budget-row-icon">
+                          <i class="fa-solid ${getTravelBudgetIcon(row.label)}"></i>
+                        </span>
+                        <div>
+                          <strong>${escapeHtml(row.label)}</strong>
+                          ${row.note ? `<small>${formatInlineText(row.note)}</small>` : ""}
+                        </div>
+                        <em>${escapeHtml(row.amount || "待核验")}</em>
+                      </div>
+                    `
+                  )
+                  .join("")}
+              </div>
+            </div>
+            <aside class="travel-budget-reminders">
+              <span>出发前确认</span>
+              ${
+                reminders.length
+                  ? `<ul>${reminders
+                      .map((item) => `<li>${formatInlineText(item)}</li>`)
+                      .join("")}</ul>`
+                  : `<p>交通票价、住宿价格和热门项目名额会随日期变化，正式出发前再核验一次。</p>`
+              }
+            </aside>
+          </div>
+        `;
       }
 
       function renderStructuredTravelPlan(blocks, options = {}) {
@@ -5359,6 +5624,14 @@
         const journeyPreviewHtml = shouldRenderJourneyPreview
           ? renderJourneyPreview(journeyPreviewState)
           : "";
+        const budgetReminderLines = sections
+          .filter((section) => section.tone === "warning")
+          .flatMap((section) => section.rawLines || []);
+        const hasBudgetCard = sections.some((section) => section.tone === "budget");
+        const displaySections =
+          hasBudgetCard && budgetReminderLines.length
+            ? sections.filter((section) => section.tone !== "warning")
+            : sections;
 
         return `
           <div class="travel-plan">
@@ -5376,14 +5649,25 @@
               shouldRenderTravelCards
                 ? `
                     <div class="travel-grid">
-                      ${sections
+                      ${displaySections
                         .map((section) => {
                           const sectionMapFocus = resolveTravelCardMapFocus(
                             section,
                             journeyPreviewState
                           );
+                          const isBudgetSection = section.tone === "budget";
+                          const sectionTitle = isBudgetSection
+                            ? normalizeTravelBudgetTitle(section.title)
+                            : section.title;
+                          const sectionBodyHtml = isBudgetSection
+                            ? renderTravelBudgetCardBody(section.rawLines, budgetReminderLines)
+                            : section.bodyHtml;
+                          const mapButtonLabel =
+                            sectionMapFocus === "stay" ? "看周边" : "看地图";
                           return `
-                            <section class="travel-card ${section.tone}"${
+                            <section class="travel-card ${section.tone}${
+                              isBudgetSection && budgetReminderLines.length ? " with-reminders" : ""
+                            }"${
                               sectionMapFocus ? ` data-map-focus="${sectionMapFocus}"` : ""
                             }>
                               <div class="travel-card-head">
@@ -5391,7 +5675,7 @@
                                   <div class="travel-card-icon">
                                     <i class="fa-solid ${section.icon}"></i>
                                   </div>
-                                  <div class="travel-card-title">${escapeHtml(section.title)}</div>
+                                  <div class="travel-card-title">${escapeHtml(sectionTitle)}</div>
                                 </div>
                                 ${
                                   sectionMapFocus
@@ -5401,13 +5685,13 @@
                                           type="button"
                                           data-map-focus="${sectionMapFocus}"
                                         >
-                                          地图定位
+                                          ${escapeHtml(mapButtonLabel)}
                                         </button>
                                       `
                                     : ""
                                 }
                               </div>
-                              <div class="travel-card-body">${section.bodyHtml}</div>
+                              <div class="travel-card-body">${sectionBodyHtml}</div>
                             </section>
                           `;
                         })

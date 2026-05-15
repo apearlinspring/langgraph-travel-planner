@@ -12,7 +12,7 @@
       href="https://cdn.bootcdn.net/ajax/libs/font-awesome/6.4.0/css/all.min.css"
     />
 
-        <link rel="stylesheet" href="./styles.css?v=20260511-governance-a" />
+        <link rel="stylesheet" href="./styles.css?v=20260515-feedback-a" />
   </head>
   <body>
     <div
@@ -237,7 +237,7 @@
             </div>
             <div class="chat-info">
               <h2 id="chatTitle">旅行顾问</h2>
-              <p id="chatSubtitle">把出发地、时间、人数和预算告诉我，我会按步骤整理到最终旅游报告。</p>
+              <p id="chatSubtitle">告诉我从哪里出发、什么时候走、几个人，我会慢慢整理成清晰的旅游规划。</p>
               <div class="trip-overview" id="tripOverview">
                 <span class="overview-chip primary">
                   <i class="fa-solid fa-route"></i> 未选择行程
@@ -543,7 +543,7 @@
               class="chat-input"
               id="chatInput"
               aria-label="旅行需求输入框"
-              placeholder="要不要来一场马尔代夫的水上飞机体验？也可以直接说：端午从西安出发去眉县住两晚，2 个人，预算 1500 元，想轻松亲水一些。"
+              placeholder="说说出发地、日期、人数和预算，也可以直接描述想要的旅行。"
               rows="1"
               onkeydown="handleInputKeydown(event)"
             ></textarea>
@@ -565,8 +565,8 @@
       >
         <div class="governance-console-head">
           <div>
-            <div class="governance-console-kicker">人工确认与运行边界</div>
-            <h2>服务治理</h2>
+            <div class="governance-console-kicker">行程保障</div>
+            <h2>服务状态</h2>
           </div>
           <button
             class="governance-icon-btn"
@@ -596,91 +596,99 @@
           <div class="readiness-service-grid" id="readinessServiceGrid"></div>
         </section>
 
-        <section class="governance-section approvals" aria-labelledby="approvalTitle">
-          <div class="governance-section-head">
-            <div>
-              <span class="governance-section-label">审批记录</span>
-              <h3 id="approvalTitle">敏感动作审批</h3>
-            </div>
-            <button
-              class="governance-text-btn"
-              id="createDemoApprovalBtn"
-              type="button"
-              onclick="createDemoApproval()"
-            >
-              创建审批记录
-            </button>
-          </div>
-          <div class="approval-filter-row" role="group" aria-label="审批记录筛选">
-            <button
-              class="approval-filter-btn active"
-              type="button"
-              data-approval-filter="all"
-              onclick="setApprovalFilter('all')"
-            >
-              全部
-            </button>
-            <button
-              class="approval-filter-btn"
-              type="button"
-              data-approval-filter="pending"
-              onclick="setApprovalFilter('pending')"
-            >
-              待审批
-            </button>
-          </div>
-          <div class="approval-list" id="approvalList">
-            <div class="governance-empty">登录后展示审批记录。</div>
-          </div>
-          <div class="approval-events" id="approvalEvents">
-            <div class="approval-events-title">审批事件</div>
-            <div id="approvalEventsList" class="governance-empty">
-              选择一条审批记录后展示只追加事件。
-            </div>
-          </div>
-        </section>
+        <details class="governance-details" id="governanceDetails">
+          <summary>
+            <span>查看保障明细</span>
+            <i class="fa-solid fa-chevron-down"></i>
+          </summary>
+          <div class="governance-detail-body">
+            <section class="governance-section approvals" aria-labelledby="approvalTitle">
+              <div class="governance-section-head">
+                <div>
+                  <span class="governance-section-label">审批记录</span>
+                  <h3 id="approvalTitle">敏感动作</h3>
+                </div>
+                <button
+                  class="governance-text-btn"
+                  id="createDemoApprovalBtn"
+                  type="button"
+                  onclick="createDemoApproval()"
+                >
+                  新建记录
+                </button>
+              </div>
+              <div class="approval-filter-row" role="group" aria-label="审批记录筛选">
+                <button
+                  class="approval-filter-btn active"
+                  type="button"
+                  data-approval-filter="all"
+                  onclick="setApprovalFilter('all')"
+                >
+                  全部
+                </button>
+                <button
+                  class="approval-filter-btn"
+                  type="button"
+                  data-approval-filter="pending"
+                  onclick="setApprovalFilter('pending')"
+                >
+                  待确认
+                </button>
+              </div>
+              <div class="approval-list" id="approvalList">
+                <div class="governance-empty">登录后展示审批记录。</div>
+              </div>
+              <div class="approval-events" id="approvalEvents">
+                <div class="approval-events-title">记录轨迹</div>
+                <div id="approvalEventsList" class="governance-empty">
+                  选择一条记录后展示后续状态变化。
+                </div>
+              </div>
+            </section>
 
-        <section class="governance-section audit" aria-labelledby="toolAuditTitle">
-          <div class="governance-section-head">
-            <div>
-              <span class="governance-section-label">工具审计</span>
-              <h3 id="toolAuditTitle">安全摘要</h3>
-            </div>
-            <span class="governance-count-pill" id="toolAuditCount">0</span>
-          </div>
-          <div class="tool-audit-list" id="toolAuditList">
-            <div class="governance-empty">本轮还没有可展示的工具审计摘要。</div>
-          </div>
-        </section>
+            <section class="governance-section audit" aria-labelledby="toolAuditTitle">
+              <div class="governance-section-head">
+                <div>
+                  <span class="governance-section-label">工具记录</span>
+                  <h3 id="toolAuditTitle">本轮摘要</h3>
+                </div>
+                <span class="governance-count-pill" id="toolAuditCount">0</span>
+              </div>
+              <div class="tool-audit-list" id="toolAuditList">
+                <div class="governance-empty">本轮还没有可展示的工具摘要。</div>
+              </div>
+            </section>
 
-        <section class="governance-section observability" aria-labelledby="observabilityTitle">
-          <div class="governance-section-head">
-            <div>
-              <span class="governance-section-label">轮次观测</span>
-              <h3 id="observabilityTitle">轮次观测</h3>
-            </div>
-            <span class="governance-status-pill idle" id="turnStatusPill">待开始</span>
-          </div>
-          <div class="turn-observability-grid" id="turnObservabilityGrid">
-            <div class="governance-empty">
-              完成一轮聊天后展示脱敏运行摘要，不展示个人敏感信息、密钥或完整工具输入输出。
-            </div>
-          </div>
-        </section>
+            <section class="governance-section observability" aria-labelledby="observabilityTitle">
+              <div class="governance-section-head">
+                <div>
+                  <span class="governance-section-label">运行摘要</span>
+                  <h3 id="observabilityTitle">本轮状态</h3>
+                </div>
+                <span class="governance-status-pill idle" id="turnStatusPill">待开始</span>
+              </div>
+              <div class="turn-observability-grid" id="turnObservabilityGrid">
+                <div class="governance-empty">
+                  完成一轮聊天后展示脱敏摘要，不展示个人敏感信息、密钥或完整工具输入输出。
+                </div>
+              </div>
+            </section>
 
-        <section class="governance-section boundary" aria-labelledby="boundaryTitle">
-          <div class="governance-section-head">
-            <div>
-              <span class="governance-section-label">报告治理边界</span>
-              <h3 id="boundaryTitle">不可承诺项</h3>
-            </div>
+            <section class="governance-section boundary" aria-labelledby="boundaryTitle">
+              <div class="governance-section-head">
+                <div>
+                  <span class="governance-section-label">边界说明</span>
+                  <h3 id="boundaryTitle">不会替你下单</h3>
+                </div>
+              </div>
+              <ul class="governance-boundary-list">
+                <li>不接真实支付，不生成支付链接。</li>
+                <li>不接真实预订、短信、客服或供应链下单。</li>
+                <li>不承诺真实库存、真实锁价或履约成功。</li>
+              </ul>
+            </section>
           </div>
-          <ul class="governance-boundary-list">
-            <li>不接真实支付，不生成支付链接。</li>
-            <li>不接真实预订、短信、客服或供应链下单。</li>
-            <li>不承诺真实库存、真实锁价或履约成功。</li>
-          </ul>
-        </section>
+        </details>
       </aside>
     </div>
 
@@ -713,7 +721,7 @@
       <i class="fa-solid fa-info-circle"></i> <span id="toastMsg"></span>
     </div>
 
-        <script src="./app.js?v=20260511-governance-a"></script>
+        <script src="./app.js?v=20260515-feedback-a"></script>
   </body>
 </html>
 

@@ -244,6 +244,7 @@ html {
         gap: 24px;
         max-width: 1600px;
         margin: 0 auto;
+        min-height: 0;
       }
 
       /* 玻璃拟态卡片通用样式 */
@@ -1212,8 +1213,10 @@ html {
         width: 350px;
         flex: 0 0 350px;
         min-width: 0;
+        max-height: calc(100vh - 48px);
         border-radius: var(--radius-lg);
-        overflow: hidden;
+        overflow-y: auto;
+        overscroll-behavior: contain;
         display: flex;
         flex-direction: column;
         background:
@@ -1415,6 +1418,44 @@ html {
       .tool-audit-list {
         display: grid;
         gap: 10px;
+      }
+      .tool-audit-list {
+        max-height: 320px;
+        overflow-y: auto;
+        padding-right: 3px;
+        overscroll-behavior: contain;
+      }
+      .governance-details {
+        border-top: 1px solid rgba(26, 77, 84, 0.08);
+      }
+      .governance-details > summary {
+        list-style: none;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 14px 22px;
+        color: var(--primary);
+        font-size: 13px;
+        font-weight: 900;
+        background: rgba(255, 255, 255, 0.46);
+      }
+      .governance-details > summary::-webkit-details-marker {
+        display: none;
+      }
+      .governance-details > summary i {
+        color: var(--accent);
+        transition: transform 0.2s ease;
+      }
+      .governance-details[open] > summary i {
+        transform: rotate(180deg);
+      }
+      .governance-detail-body {
+        display: grid;
+      }
+      .governance-details .governance-section:first-child {
+        border-top: 1px solid rgba(26, 77, 84, 0.08);
       }
       .approval-card,
       .tool-audit-card {
@@ -2260,6 +2301,35 @@ html {
         width: 100%;
         text-align: left;
       }
+      .message.assistant .message-text .journey-map-nearby-grid {
+        display: grid;
+        gap: 8px;
+      }
+      .message.assistant .message-text .journey-map-nearby-card {
+        width: 100%;
+        display: grid;
+        gap: 4px;
+        text-align: left;
+        padding: 11px 12px;
+        border-radius: 15px;
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        background: rgba(255, 255, 255, 0.1);
+        color: #fffaf0;
+        cursor: pointer;
+      }
+      .message.assistant .message-text .journey-map-nearby-card span {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        color: rgba(255, 232, 200, 0.92);
+        font-size: 11px;
+        font-weight: 900;
+      }
+      .message.assistant .message-text .journey-map-nearby-card strong {
+        color: #fffaf0;
+        font-size: 13px;
+        line-height: 1.35;
+      }
       .message.assistant .message-text .journey-map-inline-link {
         color: rgba(255, 240, 219, 0.82);
         font-size: 11px;
@@ -2774,6 +2844,7 @@ html {
       }
       .message.assistant .message-text .travel-card.budget {
         background: rgba(146, 96, 36, 0.08);
+        grid-column: 1 / -1;
       }
       .message.assistant .message-text .travel-card.warning {
         background: rgba(180, 35, 24, 0.05);
@@ -2821,10 +2892,105 @@ html {
         font-weight: 700;
         cursor: pointer;
       }
+      .message.assistant .message-text .travel-card-link-btn:hover {
+        border-color: rgba(194, 142, 92, 0.32);
+        background: rgba(255, 250, 244, 0.96);
+      }
       .message.assistant .message-text .travel-card-body {
         color: #31484c;
         font-size: 13px;
         line-height: 1.8;
+      }
+      .message.assistant .message-text .travel-budget-layout {
+        display: grid;
+        grid-template-columns: minmax(0, 1.1fr) minmax(220px, 0.9fr);
+        gap: 14px;
+        align-items: stretch;
+      }
+      .message.assistant .message-text .travel-budget-main,
+      .message.assistant .message-text .travel-budget-reminders {
+        min-width: 0;
+      }
+      .message.assistant .message-text .travel-budget-total {
+        padding: 13px 14px;
+        border-radius: 16px;
+        background: linear-gradient(135deg, rgba(26, 77, 84, 0.1), rgba(219, 169, 104, 0.16));
+        border: 1px solid rgba(194, 142, 92, 0.22);
+        margin-bottom: 10px;
+      }
+      .message.assistant .message-text .travel-budget-total span,
+      .message.assistant .message-text .travel-budget-reminders span {
+        display: block;
+        color: var(--accent);
+        font-size: 12px;
+        font-weight: 900;
+      }
+      .message.assistant .message-text .travel-budget-total strong {
+        display: block;
+        margin-top: 3px;
+        color: var(--primary);
+        font-size: 22px;
+        line-height: 1.25;
+      }
+      .message.assistant .message-text .travel-budget-rows {
+        display: grid;
+        gap: 8px;
+      }
+      .message.assistant .message-text .travel-budget-row {
+        display: grid;
+        grid-template-columns: 32px minmax(0, 1fr) auto;
+        gap: 10px;
+        align-items: center;
+        padding: 10px 12px;
+        border-radius: 14px;
+        background: rgba(255, 255, 255, 0.74);
+        border: 1px solid rgba(26, 77, 84, 0.08);
+      }
+      .message.assistant .message-text .travel-budget-row-icon {
+        width: 30px;
+        height: 30px;
+        border-radius: 11px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(26, 77, 84, 0.08);
+        color: var(--primary);
+      }
+      .message.assistant .message-text .travel-budget-row strong {
+        display: block;
+        color: var(--primary);
+        font-size: 13px;
+      }
+      .message.assistant .message-text .travel-budget-row small {
+        display: block;
+        margin-top: 2px;
+        color: var(--text-light);
+        font-size: 11px;
+        line-height: 1.5;
+      }
+      .message.assistant .message-text .travel-budget-row em {
+        color: #8a5a22;
+        font-style: normal;
+        font-size: 13px;
+        font-weight: 900;
+        white-space: nowrap;
+      }
+      .message.assistant .message-text .travel-budget-reminders {
+        padding: 14px;
+        border-radius: 16px;
+        background: rgba(255, 255, 255, 0.72);
+        border: 1px solid rgba(26, 77, 84, 0.08);
+      }
+      .message.assistant .message-text .travel-budget-reminders ul {
+        margin: 8px 0 0;
+        padding-left: 18px;
+      }
+      .message.assistant .message-text .travel-budget-reminders li,
+      .message.assistant .message-text .travel-budget-reminders p {
+        margin: 0 0 7px;
+        color: var(--text-main);
+        font-size: 12px;
+        line-height: 1.65;
       }
       .message.assistant .message-text .travel-card-body p {
         margin: 0 0 10px;
@@ -3403,6 +3569,16 @@ html {
         .message.assistant .message-text .travel-report-route-digest-body {
           grid-template-columns: 1fr;
         }
+        .message.assistant .message-text .travel-budget-layout {
+          grid-template-columns: 1fr;
+        }
+        .message.assistant .message-text .travel-budget-row {
+          grid-template-columns: 30px minmax(0, 1fr);
+        }
+        .message.assistant .message-text .travel-budget-row em {
+          grid-column: 2;
+          justify-self: start;
+        }
       }
       .message.assistant .message-text .travel-fallback {
         display: grid;
@@ -3869,9 +4045,11 @@ html {
       .chat-input {
         flex: 1;
         border: none;
-        padding: 10px 0;
+        padding: 8px 8px 8px 0;
         font-family: inherit;
         font-size: 15px;
+        line-height: 1.45;
+        min-height: 40px;
         resize: none;
         max-height: 120px;
         background: transparent;
