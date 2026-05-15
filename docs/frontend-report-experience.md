@@ -8,7 +8,7 @@
 - 方案依据与模式依据。
 - 产品与报价规则：`agency_product`、`quote_policy` 继续保留估算报价、不锁价、不承诺库存的边界。
 - 每日行程与 `map_routes` 的路线草图联动。
-- 审批治理边界：`tool_audit_summary.approval` 或 `evidence_bundle.approval_governance` 会渲染为“审批治理与不可承诺项”，明确订单号或报告导出不代表真实支付、真实预订、真实锁价或履约成功。
+- 人工确认边界：`tool_audit_summary.approval` 或 `evidence_bundle.approval_governance` 会渲染为“人工确认与不可承诺项”，明确订单号或报告导出不代表真实支付、真实预订、真实锁价或履约成功。
 
 导出的 HTML（超文本标记语言）报告会克隆当前结构化报告节点，因此会保留这些章节；导出时会移除按钮、地图切换控件等交互元素。
 
@@ -18,13 +18,13 @@
 
 治理台当前展示：
 
-- `/health/ready` 的 ready check（就绪检查）摘要，区分 `ready`、`degraded` 和 `not_ready`，并展示 Checkpointer（执行检查点）、Store（长期存储）、MCP（模型上下文协议）、会话锁和审批治理状态。
-- 审批记录和审批事件，支持查看当前用户记录；审批操作者或管理员账号可由后端权限决定是否能批准、拒绝或手动过期。
-- “演示审批”入口只创建未来真实支付的占位审批记录，不接真实支付网关，不生成支付链接。
-- 工具审计安全摘要，只展示工具名、状态、耗时、重试次数和证据类型。
-- SSE（服务器发送事件）轮次观测摘要，只展示脱敏指标，不展示 PII（个人可识别信息）、密钥、完整工具输入或完整工具输出。
+- `/health/ready` 的 ready check（就绪检查）摘要会转译成人话：可用能力、外部服务、人工确认边界和待关注项，不直接展示 `production`、持久化等工程词。
+- 人工确认记录和事件，支持查看当前用户记录；当前不会真实下单，未来接入真实支付、短信通知或客户资料导出时才需要人工确认。
+- “演示记录”入口只创建未来真实支付的占位记录，不接真实支付网关，不生成支付链接。
+- 工具审计安全摘要只展示工具名、展示语义、耗时、重试次数和证据类型；展示语义统一为成功、需核验、未查到、参数不足、服务异常、已跳过。
+- SSE（服务器发送事件）轮次观测摘要只展示脱敏指标，不展示 PII（个人可识别信息）、密钥、完整工具输入或完整工具输出；追踪码只作为弱化的排查信息展示。
 
-治理台是演示与排查入口，不改变聊天、报告渲染、地图预览和导出主链路；服务为 `degraded` 时允许继续演示核心链路，服务为 `not_ready` 时仍阻止登录、聊天和审批动作。
+治理台是演示与排查入口，不改变聊天、报告渲染、地图预览和导出主链路；服务为 `degraded` 时允许继续演示核心链路，服务为 `not_ready` 时仍阻止登录、聊天和人工确认动作。
 
 ## 本地验证
 
@@ -44,7 +44,7 @@ node scripts\verify_frontend_report_renderer.js
 - 也可以使用统一的 npm（Node.js 包管理器，Node.js 是 JavaScript 运行时）入口：`npm run verify:frontend-renderer`、`npm run verify:frontend-browser`，或一次性运行 `npm run verify:frontend`。
 - 轻量静态回归和真实浏览器 E2E（端到端）回归都读取 `tests/fixtures/report_data/` 下的脱敏 fixture（固定测试数据），不依赖真实 `.env`、真实用户、真实订单、真实支付或真实外部库存。
 - 真实浏览器 E2E 回归运行 `node scripts\verify_frontend_browser_regression.js`。脚本使用 Playwright（浏览器自动化测试框架）启动 Chromium（谷歌开源浏览器内核）无头浏览器，分别覆盖 `1440x1000` 桌面视口和 `390x900` 移动视口。
-- 浏览器脚本会加载真实 `frontend/zhixing.html`，模拟 ready check（就绪检查）成功、会话列表和审批治理数据，验证登录入口、主界面、治理台、报告卡片、预算、风险、待核验清单、地图预览入口和报告导出。导出校验会读取浏览器下载的 HTML，确认结构化报告章节被保留，并确认导出件不保留交互按钮。
+- 浏览器脚本会加载真实 `frontend/zhixing.html`，模拟 ready check（就绪检查）成功、会话列表和人工确认数据，验证登录入口、主界面、治理台人话说明、工具审计展示语义、运行摘要、报告卡片、预算、风险、待核验清单、地图预览入口和报告导出。导出校验会读取浏览器下载的 HTML，确认结构化报告章节被保留，并确认导出件不保留交互按钮。
 - 脚本会收集 console error（控制台错误）和页面异常；如果缺少 Playwright 或 Chromium，会明确输出安装命令。本地默认标记为 skip（跳过），`CI=true` 或 `ZHIXING_FRONTEND_BROWSER_STRICT=1` 时会失败退出，避免关键门禁被静默跳过。
 - 截图产物输出到 `.runtime/`，当前包括 `frontend-browser-regression-desktop.png`、`frontend-browser-regression-desktop-report.png`、`frontend-browser-regression-mobile.png`、`frontend-browser-regression-mobile-report.png` 和 `frontend-browser-regression-mobile-governance.png`，属于本地临时验证文件，不纳入提交。
 

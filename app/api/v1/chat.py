@@ -216,10 +216,25 @@ def _update_observation_from_state_update(
         agency_context = report_data.get("agency_context")
         if isinstance(agency_context, dict):
             report_mode = agency_context.get("mode")
+    observability_context = update.get("observability_context")
+    if not isinstance(observability_context, dict):
+        observability_context = {}
     observation.update_context(
-        current_step=update.get("current_step"),
-        planning_mode=update.get("planning_mode") or report_mode,
-        planning_mode_source="state_update",
+        current_step=(
+            update.get("current_step")
+            or observability_context.get("current_step")
+            or update.get("context_last_step")
+        ),
+        planning_mode=(
+            update.get("planning_mode")
+            or report_mode
+            or observability_context.get("planning_mode")
+            or update.get("pending_initial_planning_mode")
+        ),
+        planning_mode_source=(
+            observability_context.get("planning_mode_source")
+            or "state_update"
+        ),
     )
 
 

@@ -7,6 +7,7 @@ from langgraph.types import Command
 
 from app.api.v1.chat import _extract_embedded_tool_audit_events
 from app.core.approval import approval_store
+from app.core.observability import public_tool_audit_event
 from app.core.permissions import (
     decide_tool_execution_permission,
     get_tool_execution_policy,
@@ -20,6 +21,7 @@ from app.tools.audit import (
 from app.tools.contracts import classify_tool_governance
 from app.tools.execution_guard import begin_tool_execution, execute_guarded_call
 from app.tools.guardrails import validate_hotel_query_args, validate_transport_query_args
+from app.tools.result_validation import validate_transport_result
 from app.models.approval import ToolAuditEvent
 from app.tools import mcp_tools
 from app.tools import router_query
@@ -121,6 +123,29 @@ def test_failed_tool_audit_events_feed_budget_and_report_pending_checks():
     assert any("真实查询超时" in item for item in quality["verification_items"])
     assert summary["events"][0]["status"] == "timeout"
     assert any("住宿" in item and "超时" in item for item in summary["pending_checks"])
+
+
+def test_empty_transport_audit_is_presented_as_not_found_not_crash():
+    validation = validate_transport_result("")
+    context = start_tool_audit("query_transport_options")
+    event = build_tool_audit_event(
+        context,
+        status=validation.status,
+        input_summary={"origin_city": "北京", "destination_city": "南京"},
+        output_summary=validation.output_summary,
+        error_type=validation.error_type,
+        evidence_type="live_transport_query",
+    )
+
+    public_event = public_tool_audit_event(event)
+
+    assert validation.status == "degraded"
+    assert public_event["status"] == "degraded"
+    assert public_event["semantic_status"] == "not_found"
+    assert public_event["status_label"] == "未查到合适结果"
+    assert "不是系统崩溃" in public_event["status_explanation"]
+    assert "input_summary" not in public_event
+    assert "output_summary" not in public_event
 
 
 def test_tool_audit_event_redacts_sensitive_output_summary():

@@ -9,7 +9,7 @@ from app.evaluation.runtime_metrics import (
     evaluate_runtime_metrics,
     runtime_budget_from_dict,
 )
-from app.core.observability import TurnObservation
+from app.core.observability import TurnObservation, build_observability_context
 from app.utils.security import redact_sensitive_data
 
 
@@ -330,3 +330,22 @@ def test_turn_observability_internal_snapshot_redacts_identifiers():
     assert snapshot["metadata"]["user_message_chars"] == len("手机号 13800138000")
     assert "test@example.com" not in serialized
     assert "13800138000" not in serialized
+
+
+def test_turn_observability_defaults_to_named_step_and_mode():
+    observation = TurnObservation(
+        conversation_id="conversation-1",
+        user_id="user-1",
+        user_message="先帮我规划一下",
+    )
+    summary = observation.to_public_summary()
+    context = build_observability_context(
+        turn_id=observation.turn_id,
+        current_step=None,
+        planning_mode=None,
+    )
+
+    assert summary["step"] == "requirement_collection"
+    assert summary["planning_mode"] == "pending_confirmation"
+    assert context["current_step"] == "requirement_collection"
+    assert context["planning_mode"] == "pending_confirmation"

@@ -584,12 +584,15 @@
           <div class="governance-section-head">
             <div>
               <span class="governance-section-label">服务就绪</span>
-              <h3 id="readinessTitle">运行状态</h3>
+              <h3 id="readinessTitle">当前能力</h3>
             </div>
             <span class="governance-status-pill checking" id="readinessStatusPill">
               检查中
             </span>
           </div>
+          <p class="governance-section-note">
+            看这里判断现在能聊什么、哪些外部查询可用，以及哪些真实动作仍需要人工确认。
+          </p>
           <div class="readiness-summary" id="readinessSummary">
             正在读取服务就绪摘要。
           </div>
@@ -605,8 +608,8 @@
             <section class="governance-section approvals" aria-labelledby="approvalTitle">
               <div class="governance-section-head">
                 <div>
-                  <span class="governance-section-label">审批记录</span>
-                  <h3 id="approvalTitle">敏感动作</h3>
+                  <span class="governance-section-label">人工确认记录</span>
+                  <h3 id="approvalTitle">确认边界</h3>
                 </div>
                 <button
                   class="governance-text-btn"
@@ -614,10 +617,13 @@
                   type="button"
                   onclick="createDemoApproval()"
                 >
-                  新建记录
+                  演示记录
                 </button>
               </div>
-              <div class="approval-filter-row" role="group" aria-label="审批记录筛选">
+              <p class="governance-section-note">
+                当前只说明边界，不会真实下单；未来接入真实支付、短信通知或客户资料导出时，才需要人工确认。
+              </p>
+              <div class="approval-filter-row" role="group" aria-label="人工确认记录筛选">
                 <button
                   class="approval-filter-btn active"
                   type="button"
@@ -636,7 +642,7 @@
                 </button>
               </div>
               <div class="approval-list" id="approvalList">
-                <div class="governance-empty">登录后展示审批记录。</div>
+                <div class="governance-empty">登录后展示人工确认记录。</div>
               </div>
               <div class="approval-events" id="approvalEvents">
                 <div class="approval-events-title">记录轨迹</div>
@@ -649,11 +655,14 @@
             <section class="governance-section audit" aria-labelledby="toolAuditTitle">
               <div class="governance-section-head">
                 <div>
-                  <span class="governance-section-label">工具记录</span>
-                  <h3 id="toolAuditTitle">本轮摘要</h3>
+                  <span class="governance-section-label">工具审计</span>
+                  <h3 id="toolAuditTitle">查询结果</h3>
                 </div>
                 <span class="governance-count-pill" id="toolAuditCount">0</span>
               </div>
+              <p class="governance-section-note">
+                这里只展示脱敏后的工具结论：查到了、需核验、未查到或因参数不足被跳过。
+              </p>
               <div class="tool-audit-list" id="toolAuditList">
                 <div class="governance-empty">本轮还没有可展示的工具摘要。</div>
               </div>
@@ -667,6 +676,9 @@
                 </div>
                 <span class="governance-status-pill idle" id="turnStatusPill">待开始</span>
               </div>
+              <p class="governance-section-note">
+                用来讲清本轮走到哪个规划阶段、处于哪种规划模式，以及工具调用有没有降级。
+              </p>
               <div class="turn-observability-grid" id="turnObservabilityGrid">
                 <div class="governance-empty">
                   完成一轮聊天后展示脱敏摘要，不展示个人敏感信息、密钥或完整工具输入输出。
@@ -681,6 +693,9 @@
                   <h3 id="boundaryTitle">不会替你下单</h3>
                 </div>
               </div>
+              <p class="governance-section-note">
+                报告和订单号只用于方案交付演示，不代表真实支付、真实预订、锁价或履约成功。
+              </p>
               <ul class="governance-boundary-list">
                 <li>不接真实支付，不生成支付链接。</li>
                 <li>不接真实预订、短信、客服或供应链下单。</li>

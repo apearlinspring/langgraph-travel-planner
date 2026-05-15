@@ -1,4 +1,4 @@
-"""Turn-level production observability helpers for Agent chat runs."""
+"""Turn-level observability helpers for Agent chat runs."""
 from __future__ import annotations
 
 import math
@@ -17,6 +17,8 @@ TURN_OBSERVABILITY_VERSION = "turn_observability.v1"
 PUBLIC_TURN_OBSERVABILITY_VERSION = "turn_observability.public.v1"
 PUBLIC_TOOL_AUDIT_VERSION = "tool_audit.public.v1"
 OBSERVABILITY_CONTEXT_VERSION = "observability_context.v1"
+DEFAULT_OBSERVABILITY_STEP = "requirement_collection"
+DEFAULT_PLANNING_MODE = "pending_confirmation"
 
 TOOL_FAILURE_STATUSES = {
     "failed",
@@ -25,6 +27,79 @@ TOOL_FAILURE_STATUSES = {
     "skipped",
     "approval_required",
 }
+
+
+def _normalize_context_value(value: Any, default: str) -> str:
+    text = str(value or "").strip()
+    if not text or text.lower() == "unknown":
+        return default
+    return text
+
+
+def classify_public_tool_audit_status(
+    status: str | None,
+    error_type: str | None = None,
+) -> dict[str, str]:
+    """Return user-facing tool audit semantics without changing the raw contract."""
+
+    raw_status = str(status or "").strip().lower()
+    raw_error = str(error_type or "").strip()
+    error = raw_error.lower()
+
+    if raw_status == "success":
+        return {
+            "semantic_status": "success",
+            "status_label": "成功",
+            "status_explanation": "工具返回了可用结果。",
+        }
+    if error == "empty_transport_result":
+        return {
+            "semantic_status": "not_found",
+            "status_label": "未查到合适结果",
+            "status_explanation": "工具调用成功，但这次没有查到合适交通结果；不是系统崩溃。",
+        }
+    if error.startswith("empty_") or "empty_or_unavailable" in error:
+        return {
+            "semantic_status": "not_found",
+            "status_label": "未查到",
+            "status_explanation": "工具已完成调用，但没有返回可直接采用的候选结果。",
+        }
+    if raw_status == "degraded":
+        return {
+            "semantic_status": "needs_verification",
+            "status_label": "需核验",
+            "status_explanation": "工具返回了内容，但包含待核验、空结果或降级信号。",
+        }
+    if raw_status == "skipped":
+        if error.startswith("invalid_") or "missing" in error or "placeholder" in error:
+            return {
+                "semantic_status": "insufficient_parameters",
+                "status_label": "参数不足",
+                "status_explanation": "本轮缺少必要信息，补齐参数后再查。",
+            }
+        return {
+            "semantic_status": "skipped",
+            "status_label": "已跳过",
+            "status_explanation": "本轮按保护规则跳过了这次工具调用。",
+        }
+    if raw_status == "approval_required":
+        return {
+            "semantic_status": "skipped",
+            "status_label": "已跳过",
+            "status_explanation": "命中人工确认边界，当前没有继续执行真实支付、短信或下单。",
+        }
+    if raw_status in {"failed", "timeout"}:
+        return {
+            "semantic_status": "service_exception",
+            "status_label": "服务异常",
+            "status_explanation": "外部服务或工具执行异常，需要稍后重试或人工核验。",
+        }
+    return {
+        "semantic_status": "needs_verification",
+        "status_label": "需核验",
+        "status_explanation": "工具状态需要进一步核验后才能作为确定结果使用。",
+    }
+
 
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -95,9 +170,9 @@ def build_observability_context(
     return {
         "version": OBSERVABILITY_CONTEXT_VERSION,
         "turn_id": turn_id,
-        "current_step": current_step or "unknown",
-        "planning_mode": planning_mode or "unknown",
-        "planning_mode_source": planning_mode_source or "unknown",
+        "current_step": _normalize_context_value(current_step, DEFAULT_OBSERVABILITY_STEP),
+        "planning_mode": _normalize_context_value(planning_mode, DEFAULT_PLANNING_MODE),
+        "planning_mode_source": _normalize_context_value(planning_mode_source, "not_inferred"),
         "planning_mode_confirmed": planning_mode_confirmed,
         "available_tool_count": available_tool_count,
         "updated_at": utc_now_iso(),
@@ -108,19 +183,22 @@ def public_tool_audit_event(event: dict[str, Any]) -> dict[str, Any]:
     """Expose only coarse tool status over SSE; keep arguments and outputs internal."""
 
     status = str(event.get("status") or "unknown")
+    error_type = (
+        str(event.get("error_type"))
+        if event.get("error_type") is not None and status in TOOL_FAILURE_STATUSES
+        else None
+    )
+    public_status = classify_public_tool_audit_status(status, error_type)
     return {
         "type": "tool_audit",
         "version": PUBLIC_TOOL_AUDIT_VERSION,
         "tool": str(event.get("name") or "unknown_tool"),
         "status": status,
+        **public_status,
         "elapsed_seconds": _round_seconds(event.get("elapsed_seconds")),
         "retry_count": max(int(event.get("retry_count") or 0), 0),
         "evidence_type": str(event.get("evidence_type") or "unknown"),
-        "error_type": (
-            str(event.get("error_type"))
-            if event.get("error_type") is not None and status in TOOL_FAILURE_STATUSES
-            else None
-        ),
+        "error_type": error_type,
         "degraded": status in TOOL_FAILURE_STATUSES,
     }
 
@@ -133,9 +211,9 @@ class TurnObservation:
     user_id: str
     user_message: str
     turn_id: str = field(default_factory=new_turn_id)
-    current_step: str = "unknown"
-    planning_mode: str = "unknown"
-    planning_mode_source: str = "unknown"
+    current_step: str = DEFAULT_OBSERVABILITY_STEP
+    planning_mode: str = DEFAULT_PLANNING_MODE
+    planning_mode_source: str = "not_inferred"
     started_at: float = field(default_factory=time.time)
     perf_counter_started_at: float = field(default_factory=time.perf_counter)
     finished_at: float | None = None
@@ -191,11 +269,20 @@ class TurnObservation:
         planning_mode_source: str | None = None,
     ) -> None:
         if current_step:
-            self.current_step = str(current_step)
+            self.current_step = _normalize_context_value(
+                current_step,
+                DEFAULT_OBSERVABILITY_STEP,
+            )
         if planning_mode:
-            self.planning_mode = str(planning_mode)
+            self.planning_mode = _normalize_context_value(
+                planning_mode,
+                DEFAULT_PLANNING_MODE,
+            )
         if planning_mode_source:
-            self.planning_mode_source = str(planning_mode_source)
+            self.planning_mode_source = _normalize_context_value(
+                planning_mode_source,
+                "not_inferred",
+            )
 
     def record_token(self, token: str) -> None:
         if self.first_token_seconds is None:

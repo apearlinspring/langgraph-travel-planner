@@ -133,7 +133,7 @@ async function installNetworkStubs(context) {
               event_type: "created",
               actor: "browser-regression",
               created_at: 1778508000,
-              detail: "用于前端浏览器回归的记录型审批事件。",
+              detail: "用于前端浏览器回归的记录型人工确认事件。",
             },
           ],
         });
@@ -145,7 +145,7 @@ async function installNetworkStubs(context) {
               approval_id: "browser-regression-approval",
               action: "generate_order_id",
               label: "生成报告订单号",
-              reason: "验证治理台审批记录渲染。",
+              reason: "验证治理台人工确认记录渲染。",
               status: "none",
               requires_approval: false,
               created_at: 1778508000,
@@ -283,6 +283,75 @@ async function checkMainSurface(page, viewport) {
   await expectVisible(page, "#governanceConsole", `${viewport.name} governance console`);
   await expectVisible(page, ".governance-section.readiness", `${viewport.name} ready check area`);
   await expectText(page, "#readinessSummary", "ready check summary", 20);
+  await expectContainsText(
+    page,
+    "#readinessSummary",
+    ["可用能力", "外部服务", "人工确认边界"],
+    `${viewport.name} readiness human copy`
+  );
+  await page.locator("#governanceDetails").evaluate((node) => {
+    node.open = true;
+  });
+  await page.evaluate(() => {
+    window.rememberToolAuditEvent?.({
+      tool: "query_transport_options",
+      status: "degraded",
+      semantic_status: "not_found",
+      status_label: "未查到合适结果",
+      status_explanation: "工具调用成功，但这次没有查到合适交通结果；不是系统崩溃。",
+      elapsed_seconds: 0.24,
+      retry_count: 0,
+      evidence_type: "live_transport_query",
+      error_type: "empty_transport_result",
+      degraded: true,
+    });
+    window.rememberToolAuditEvent?.({
+      tool: "query_hotel_options",
+      status: "skipped",
+      elapsed_seconds: 0.01,
+      retry_count: 0,
+      evidence_type: "live_hotel_search",
+      error_type: "invalid_hotel_query_args",
+      degraded: true,
+    });
+    window.rememberTurnObservability?.({
+      observability: {
+        turn_id: "turn_browser_regression_123456",
+        status: "completed",
+        step: "transport_planning",
+        planning_mode: "agency_plan",
+        degradation_status: "degraded",
+        first_token_seconds: 0.42,
+        total_elapsed_seconds: 2.4,
+        tool_call_count: 2,
+        tool_failure_count: 1,
+        fallback_count: 1,
+        estimated_total_tokens: 180,
+      },
+    });
+  });
+  await expectContainsText(
+    page,
+    "#governanceConsole",
+    ["不会真实下单", "未来接入真实支付、短信通知或客户资料导出", "查询结果"],
+    `${viewport.name} governance explanation copy`
+  );
+  await expectContainsText(
+    page,
+    "#toolAuditList",
+    ["交通查询", "未查到合适结果", "不是系统崩溃", "住宿查询", "参数不足"],
+    `${viewport.name} tool audit semantic copy`
+  );
+  await expectContainsText(
+    page,
+    "#turnObservabilityGrid",
+    ["交通规划", "旅行社顾问方案", "追踪码"],
+    `${viewport.name} turn observability labels`
+  );
+  const observabilityText = (await page.locator("#turnObservabilityGrid").textContent()) || "";
+  if (observabilityText.includes("unknown")) {
+    throw new Error(`${viewport.name} turn observability should not render unknown.`);
+  }
 }
 
 async function checkReportSurface(page) {
@@ -329,7 +398,7 @@ async function checkReportSurface(page) {
   await expectContainsText(
     page,
     ".travel-report-card.governance",
-    ["审批治理边界", "不代表真实支付", "不生成支付链接"],
+    ["人工确认边界", "不代表真实支付", "不生成支付链接"],
     "governance card"
   );
   await expectContainsText(
@@ -372,7 +441,7 @@ async function checkReportExport(page, viewport) {
     "北京到成都 4 日顾问方案（脱敏演示）",
     "预算置信度",
     "待核验清单",
-    "审批治理边界",
+    "人工确认边界",
     "不代表真实支付",
     "景点地图",
   ];

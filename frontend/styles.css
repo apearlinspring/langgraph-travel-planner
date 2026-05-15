@@ -1305,6 +1305,12 @@ html {
         gap: 12px;
         margin-bottom: 12px;
       }
+      .governance-section-note {
+        margin: -4px 0 12px;
+        color: rgba(72, 97, 102, 0.86);
+        font-size: 12px;
+        line-height: 1.65;
+      }
       .governance-status-pill,
       .governance-count-pill {
         display: inline-flex;
@@ -1322,14 +1328,19 @@ html {
       }
       .governance-status-pill.ready,
       .governance-status-pill.ok,
-      .governance-status-pill.approved {
+      .governance-status-pill.approved,
+      .governance-status-pill.success {
         color: #17603a;
         background: rgba(23, 96, 58, 0.1);
         border-color: rgba(23, 96, 58, 0.18);
       }
       .governance-status-pill.degraded,
       .governance-status-pill.pending,
-      .governance-status-pill.checking {
+      .governance-status-pill.checking,
+      .governance-status-pill.needs_verification,
+      .governance-status-pill.not_found,
+      .governance-status-pill.insufficient_parameters,
+      .governance-status-pill.skipped {
         color: #9a6a2b;
         background: rgba(194, 142, 92, 0.13);
         border-color: rgba(194, 142, 92, 0.24);
@@ -1337,7 +1348,8 @@ html {
       .governance-status-pill.not_ready,
       .governance-status-pill.rejected,
       .governance-status-pill.expired,
-      .governance-status-pill.failed {
+      .governance-status-pill.failed,
+      .governance-status-pill.service_exception {
         color: #b42318;
         background: rgba(180, 35, 24, 0.08);
         border-color: rgba(180, 35, 24, 0.18);
@@ -1389,6 +1401,21 @@ html {
         color: var(--primary);
         font-size: 13px;
         line-height: 1.35;
+        overflow-wrap: anywhere;
+      }
+      .readiness-service-item small {
+        display: block;
+        margin-top: 5px;
+        color: rgba(72, 97, 102, 0.78);
+        font-size: 11px;
+        line-height: 1.45;
+      }
+      .turn-observability-footnote {
+        grid-column: 1 / -1;
+        margin-top: 8px;
+        color: rgba(72, 97, 102, 0.68);
+        font-size: 11px;
+        line-height: 1.5;
         overflow-wrap: anywhere;
       }
       .approval-filter-row {
