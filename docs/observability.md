@@ -1,12 +1,12 @@
-# Production Observability（生产观测）说明
+# 运行观测说明
 
 ## 目标
 
-本项目当前的 Production Observability（生产观测）是轻量雏形：不接 Prometheus（监控指标系统）或 OpenTelemetry（开放遥测标准），先用结构化日志、消息 `extra_info` 和内存最近快照追踪每轮 Agent（智能体）对话。
+本项目当前的运行观测是轻量雏形：不接 Prometheus（监控指标系统）或 OpenTelemetry（开放遥测标准），先用结构化日志、消息 `extra_info` 和内存最近快照追踪每轮 Agent（智能体）对话。
 
 它回答这些问题：
 
-- 本轮对话的 `turn_id`、`conversation_id`、`user_id`、阶段和规划模式是什么。
+- 本轮对话的 `turn_id`、`conversation_id`、`user_id`、阶段和规划模式是什么；公开展示时阶段默认是 `requirement_collection`，模式默认是 `pending_confirmation`，不再展示 `unknown`。
 - 首 token（文本令牌）等待了多久，总耗时多久。
 - 实际工具启动了几次，失败几次，是否触发 fallback（兜底）或 degraded（降级）状态。
 - 输入、输出和总 token 是否有稳定近似估算。
@@ -18,7 +18,7 @@
 
 - `TurnObservation`：单轮对话观测收集器。
 - `turn_observability`：SSE（服务器发送事件）里对前端可见的安全摘要。
-- `public_tool_audit_event()`：工具审计的前端安全摘要，只暴露工具名、状态、耗时、重试次数和证据类型。
+- `public_tool_audit_event()`：工具审计的前端安全摘要，只暴露工具名、原始状态、展示语义、耗时、重试次数和证据类型。
 - `list_recent_turn_observations()`：进程内最近快照，便于测试和本地排查。
 
 内部快照会保留：
@@ -47,6 +47,7 @@ SSE 只返回安全摘要，不返回完整工具参数、工具输出、错误�
 - `turn_id`
 - 工具名
 - 工具状态
+- 工具展示语义，如成功、需核验、未查到、参数不足、服务异常、已跳过
 - 粗粒度耗时
 - 是否降级
 - token 估算
@@ -77,8 +78,8 @@ SSE 只返回安全摘要，不返回完整工具参数、工具输出、错误�
 
 `frontend/app.js` 会消费公开 SSE（服务器发送事件）帧中的两类安全摘要，并展示在右侧治理台：
 
-- `tool_audit`：只显示工具名、状态、粗粒度耗时、重试次数、证据类型和错误类型；不显示完整工具输入、完整工具输出、认证头、密钥或上游原始错误。
-- `turn_observability`：只显示 `turn_id`、状态、阶段、规划模式、首 token（文本令牌）等待、总耗时、工具调用数、失败/兜底计数和 token 估算。
+- `tool_audit`：只显示工具名、展示语义、粗粒度耗时、重试次数、证据类型和已转译原因；不显示完整工具输入、完整工具输出、认证头、密钥或上游原始错误。`empty_transport_result` 会显示为“未查到合适结果”，并说明这是工具调用成功但没有查到候选，不是系统崩溃。
+- `turn_observability`：只显示状态、阶段、规划模式、首个响应片段等待、总耗时、工具调用数、需复查工具数、兜底次数和文本量估算；`turn_id` 弱化成“追踪码（排查用）”。
 
 历史会话加载时，前端只从助手消息 `extra_info.tool_audit_events` 中提取同样的安全字段，忽略输入摘要和输出摘要，避免把内部审计账本当作用户可见明细。前端还会对可能出现的邮箱、手机号、身份证、Bearer token（持有者令牌）、JWT（JSON Web Token，令牌认证）和常见密钥形态做二次脱敏。
 

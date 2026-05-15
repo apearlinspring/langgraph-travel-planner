@@ -23,6 +23,17 @@
 - `approval_required`：命中 HITL（人类在环）审批边界，审批前不得继续执行。
 - `timeout`：兼容既有报告和观测链路的超时扩展状态，统一按待核验失败类处理，错误类型为 `upstream_timeout`。
 
+前端治理台不会直接把这些原始状态当成演示文案，而是通过 SSE（服务器发送事件）公开摘要里的展示语义说明：
+
+| 展示语义 | 典型来源 | 演示解释 |
+|---|---|---|
+| 成功 | `success` | 工具返回了可用结果。 |
+| 需核验 | `degraded` 或带待核验信号的结果 | 有内容可参考，但出发前或交付前仍要复查。 |
+| 未查到 | `empty_transport_result`、`empty_hotel_result` 等空结果 | 工具调用成功，但没有查到合适候选；这不是系统崩溃。 |
+| 参数不足 | `skipped` 且错误类型为 `invalid_*` | 缺出发地、日期、目的地等必要信息，补齐后可重查。 |
+| 服务异常 | `failed`、`timeout` | 外部服务或工具执行异常，需要稍后重试或人工核验。 |
+| 已跳过 | 重复调用保护、未开放能力或人工确认边界 | 本轮按保护规则没有继续执行真实动作。 |
+
 ## Travel Agent 注册工具清单
 
 | 工具 | 覆盖状态 | 理由 |
@@ -88,13 +99,13 @@
 - `send_sms`：未来短信发送占位，必须 HITL 审批。
 - `export_customer_profile`：未来客户资料导出占位，必须 HITL 审批并最小化字段。
 
-命中强制审批时，审计事件状态为 `approval_required`，同时写入审批状态字段；真实动作不会继续执行。
+命中强制审批时，审计事件状态为 `approval_required`，同时写入审批状态字段；真实动作不会继续执行。前端会把这类记录讲成“已跳过 / 命中人工确认边界”，避免被误解成系统错误。
 
 ## 测试保护
 
 新增或强化的保护点：
 
-- `tests/test_tool_audit_governance.py`：验证审批状态、MCP 包装、目的地 Router 审计、治理分类器。
+- `tests/test_tool_audit_governance.py`：验证审批状态、MCP 包装、目的地 Router 审计、治理分类器，以及 `empty_transport_result` 的“未查到且非崩溃”公开语义。
 - `tests/test_travel_agent_tool_registry.py`：验证 Travel Agent 注册工具全量有治理分类。
 - `tests/test_flight_query_tool.py`、`tests/test_train_query_tool.py`、`tests/test_driving_query_tool.py`：验证交通子查询工具保持兼容并走治理包装。
 - `tests/test_hotel_query_tool.py`、`tests/test_transport_query_tool.py`：继续保护酒店和交通顶层真实查询的失败兜底与审计事件。
