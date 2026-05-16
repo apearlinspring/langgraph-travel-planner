@@ -4,24 +4,28 @@
 
 - 状态: failed（失败）
 - 场景: 6 / 9 passed（通过）
-- 状态统计: failed=3, passed=6
+- 状态统计: failed=3, passed=6, degraded=0, blocked=0, skipped=0
 - 运行日期: 2026-05-16
-- 来源摘要: latest `.runtime` acceptance summary（验收摘要）: `20260516-074331-acceptance-summary.json`
+- 基准: `origin/main@620947b`
+- 分支: `codex/acceptance-core-rerun-closeout`
+- 来源摘要: `.runtime/acceptance-core/20260516-102402-acceptance-summary.json`
 - 原始产物: `.runtime/` 仅本地使用，不提交
+
+本轮完整运行了 9 个 core（核心）场景，没有用 1 场景 smoke（冒烟验收）覆盖 core 证据包。`risk_weather_disruption` 本轮已通过；当前阻塞项是 1 个证据闭环失败和 2 个工具覆盖门禁失败。
 
 ## 场景状态地图
 
-| 场景 | 模式 | 状态 | 首 token | 工具调用数 | 证据闭环 | 运行预算 |
+| 场景 | 模式 | 状态 | 首 token（文本令牌） | 工具调用数 | 证据闭环 | 运行预算 |
 |---|---|---:|---:|---:|---|---|
-| free_weekend_nearby | free_planning | passed（通过） | 31.645s | 11 | passed（通过） | passed（通过） |
-| free_city_three_days | free_planning | passed（通过） | 8.819s | 10 | passed（通过） | passed（通过） |
-| agency_couple_relaxed | agency_plan | passed（通过） | 26.337s | 14 | passed（通过） | passed（通过） |
-| agency_family_parent_child | agency_plan | passed（通过） | 20.047s | 15 | passed（通过） | passed（通过） |
-| agency_senior_low_stress | agency_plan | passed（通过） | 27.348s | 10 | passed（通过） | passed（通过） |
-| edge_hotel_tool_fallback | free_planning | failed（失败） | 33.966s | 10 | passed（通过） | passed（通过） |
-| pricing_agency_quote_explanation | agency_plan | passed（通过） | 83.665s | 28 | passed（通过） | passed（通过） |
-| risk_weather_disruption | agency_plan | failed（失败） | 68.422s | 10 | missing: report_data, budget, budget_confidence, risk, verification_items, agency_business_evidence | - |
-| edge_transport_tool_fallback | free_planning | failed（失败） | 35.816s | 11 | passed（通过） | passed（通过） |
+| free_weekend_nearby | free_planning | failed（失败） | 18.453s | 7 | missing: report_data, budget, budget_confidence, risk, verification_items | - |
+| free_city_three_days | free_planning | passed（通过） | 11.754s | 12 | passed（通过） | passed（通过） |
+| agency_couple_relaxed | agency_plan | passed（通过） | 34.629s | 11 | passed（通过） | passed（通过） |
+| agency_family_parent_child | agency_plan | passed（通过） | 21.458s | 13 | passed（通过） | passed（通过） |
+| agency_senior_low_stress | agency_plan | passed（通过） | 15.676s | 13 | passed（通过） | passed（通过） |
+| edge_hotel_tool_fallback | free_planning | failed（失败） | 36.969s | 12 | passed（通过） | passed（通过） |
+| pricing_agency_quote_explanation | agency_plan | passed（通过） | 10.335s | 15 | passed（通过） | passed（通过） |
+| risk_weather_disruption | agency_plan | passed（通过） | 31.990s | 26 | passed（通过） | passed（通过） |
+| edge_transport_tool_fallback | free_planning | failed（失败） | 31.046s | 12 | passed（通过） | passed（通过） |
 
 ## 证据闭环
 
@@ -36,20 +40,21 @@
 | 预算置信度 | 8 |
 | 风险 | 8 |
 | 待核验项 | 8 |
-| 旅行社业务证据 | 8 |
+| 旅行社业务证据 | 9 |
 
 缺口：
-- risk_weather_disruption: report_data, budget, budget_confidence, risk, verification_items, agency_business_evidence
+
+- `free_weekend_nearby`: report_data, budget, budget_confidence, risk, verification_items
 
 ## 运行预算
 
-- 总耗时: 3974.049 秒
-- 平均耗时: 441.561 秒
-- 工具调用: 119 次
-- 工具失败: 63 次
-- fallback（兜底）: 64 次
-- 估算 token（文本令牌）: 38401
-- 工具计数: generate_itinerary_tool=8, generate_order_tool=8, get-station-code-of-citys=1, get-tickets=1, get_weather_forecast=1, query_destination_info=8, query_train_options=1, query_trains=1, query_transport_options=1, record_requirement_tool=8, search_agency_pricing_rules=2, search_agency_product_templates=2, search_agency_risk_playbook=2, search_agency_service_sop=2, search_destination_guide=3, search_food_recommendations=5, search_travel_info=1, select_accommodation_tool=8, select_destination_tool=8, select_food_tool=8, select_transport_tool=8, summarize_budget_tool=8
+- 总耗时: 3509.789 秒
+- 平均耗时: 389.977 秒
+- 工具调用: 121 次
+- 工具失败: 72 次
+- fallback（兜底）: 73 次
+- 估算 token（文本令牌）: 41846
+- 工具计数: generate_itinerary_tool=8, generate_order_tool=8, query_destination_info=8, record_requirement_tool=8, select_accommodation_tool=8, select_destination_tool=8, select_food_tool=8, select_transport_tool=8, summarize_budget_tool=8, search_food_recommendations=6, query_hotel_options=5, search_agency_product_templates=3, query_transport_options=2, search_agency_risk_playbook=2, search_destination_guide=2, search_travel_info=2, get-station-code-of-citys=1, get-tickets=1, query_train_options=1, query_trains=1, search_agency_pricing_rules=1
 
 ## 运行上下文
 
@@ -57,17 +62,17 @@
 - 部分原因: -
 - 已完成场景: free_weekend_nearby, free_city_three_days, agency_couple_relaxed, agency_family_parent_child, agency_senior_low_stress, edge_hotel_tool_fallback, pricing_agency_quote_explanation, risk_weather_disruption, edge_transport_tool_fallback
 - 待运行场景: -
-- 失败分类: acceptance_gate=2, timeout=1
+- 失败分类: acceptance_gate=2, evidence_closure=1
 
 ## 失败分类明细
 
 | 场景 | 分类 | 结论 | 处理状态 |
 |---|---|---|---|
-| edge_hotel_tool_fallback | acceptance_gate（验收门禁）/ 工具覆盖 | 已产出 `report_data` 且证据闭环通过，但 tool governance（工具治理）低于阈值；门禁指出缺少预期 `query_hotel_options` 调用。当前链路因日期未确认保护而直接记录住宿兜底，没有执行真实酒店查询。 | failed（失败），不得记为 passed（通过）。 |
-| risk_weather_disruption | timeout（超时）/ 运行预算 / 证据闭环 | 场景达到 900s 单场预算后停止，未产出 `report_data`，缺少预算、风险、待核验项和旅行社业务证据。 | failed（失败），需要后续排查慢轮次和最终报告推进。 |
-| edge_transport_tool_fallback | acceptance_gate（验收门禁）/ 工具覆盖 | 已产出 `report_data` 且证据闭环通过，但 tool governance（工具治理）低于阈值；门禁指出缺少预期 `query_transport_options` 调用。当前链路因日期未确认保护而直接记录交通兜底，没有执行真实交通查询。 | failed（失败），不得记为 passed（通过）。 |
+| free_weekend_nearby | evidence_closure（证据闭环）/ live_run（真实链路运行） | 场景完成但未产出结构化 `report_data`，因此缺少预算、预算置信度、风险和待核验项。 | failed（失败），不得记为 passed（通过）。 |
+| edge_hotel_tool_fallback | acceptance_gate（验收门禁）/ 工具覆盖 | 已产出 `report_data` 且证据闭环通过，但 tool governance（工具治理）低于阈值；门禁指出缺少预期 `query_hotel_options` 调用。 | failed（失败），不得记为 passed（通过）。 |
+| edge_transport_tool_fallback | acceptance_gate（验收门禁）/ 工具覆盖 | 已产出 `report_data` 且证据闭环通过，但 tool governance（工具治理）低于阈值；门禁指出缺少预期 `query_transport_options` 调用。 | failed（失败），不得记为 passed（通过）。 |
 
-补充说明：本轮曾尝试让“查不到/兜底”语义触发查询工具的日期守卫验证，但单场复跑更不稳定，未纳入最终修复。保留当前严格日期边界，失败按工具覆盖和运行预算如实记录。
+补充说明：本轮 `risk_weather_disruption` 已通过，不再记录为 timeout（超时）失败。当前 6/9 passed 仍未达到发布门禁，不能降门禁或改写结论。
 
 ## 状态说明
 
@@ -80,9 +85,10 @@
 ## 脱敏与提交边界
 
 - 证据包只保留状态、计数、预算和闭环字段，不写入 `.env`、真实密钥、手机号、邮箱或 JWT（JSON Web Token，令牌认证）。
-- 源 JSON（JavaScript 对象表示法）快照和 summary 保持在 `.runtime/`，由 `.gitignore` 忽略，不进入提交。
-- 导出脚本仅读取 `.runtime` 摘要文件，不读取或写入 `.env`。
+- 源 JSON（JavaScript Object Notation，结构化数据格式）快照和 summary（摘要）保持在 `.runtime/`，由 `.gitignore` 忽略，不进入提交。
+- 文档仅读取 `.runtime` 摘要字段，不读取或写入 `.env`。
 
 ## 注意事项
 
 - 整批状态为 failed（失败），不能等同于 passed（通过）。
+- 下一步应修复 `free_weekend_nearby` 的最终报告产出，以及 edge（边界）场景的酒店/交通工具覆盖门禁，再复跑 smoke 和完整 9 场景 core。

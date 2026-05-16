@@ -10,8 +10,9 @@ chcp 65001 | Out-Null
 
 ## 当前分支
 
-- 工作树：`D:\Users\Administrator\PycharmProjects\ZhiXing\langgraph-travel-planner-live-demo-acceptance-refresh`
-- 分支：`codex/live-demo-acceptance-refresh`
+- 工作树：当前本地验收工作区（不记录绝对路径）
+- 分支：`codex/acceptance-core-rerun-closeout`
+- 基准：`origin/main@620947b`
 - 日期：2026-05-16
 
 ## 状态判定
@@ -35,9 +36,10 @@ chcp 65001 | Out-Null
 
 - `.env`：存在且未被 Git 跟踪；未打印真实值。
 - readiness（就绪检查）：PostgreSQL（关系型数据库）、Redis（内存数据结构存储）、RAG（检索增强生成）、LLM（大语言模型）和 MCP（模型上下文协议）均可用；`/health/ready=ready`，MCP 6 healthy / 37 tools。
-- `acceptance-smoke`（冒烟验收）：`.runtime/acceptance-smoke/20260516-063639-acceptance-summary.json`，1/1 passed（通过），`report_data=true`，证据闭环通过。
-- `acceptance-core`（核心验收）：`.runtime/acceptance-core/20260516-074331-acceptance-summary.json`，6/9 passed（通过），总状态 failed（失败）。
-- 失败分类：`edge_hotel_tool_fallback` 和 `edge_transport_tool_fallback` 为 acceptance_gate（验收门禁）/工具覆盖失败，分别缺少预期 `query_hotel_options` 与 `query_transport_options`；`risk_weather_disruption` 为 timeout（超时）/运行预算失败，并缺少最终 `report_data`。
+- `acceptance-smoke`（冒烟验收）：`.runtime/acceptance-smoke/20260516-092127-acceptance-summary.json`，1/1 passed（通过），`report_data=true`，证据闭环通过。
+- `acceptance-core`（核心验收）：`.runtime/acceptance-core/20260516-102402-acceptance-summary.json`，完整运行 9 场景，6/9 passed（通过），总状态 failed（失败）。
+- 失败分类：`free_weekend_nearby` 为 evidence_closure（证据闭环）失败，未产出结构化 `report_data`，缺少预算、预算置信度、风险和待核验项；`edge_hotel_tool_fallback` 和 `edge_transport_tool_fallback` 为 acceptance_gate（验收门禁）/工具覆盖失败，分别缺少预期 `query_hotel_options` 与 `query_transport_options`。
+- 补充：`risk_weather_disruption` 本轮已 passed（通过），不再记录为 timeout（超时）失败。
 - 结论：本轮 smoke 通过但 core 未通过，不能声明部署通过；详见 `docs/acceptance-core-report.md` 与 `docs/predeploy-runtime-acceptance.md`。
 
 Windows 本地后端建议用以下方式启动，避免 direct `uvicorn app.main:app` 在 Windows 事件循环和开发 reload（热重载）上引入干扰：
@@ -46,7 +48,7 @@ Windows 本地后端建议用以下方式启动，避免 direct `uvicorn app.mai
 $env:DEBUG = 'false'
 $env:RUNTIME_MCP_STARTUP_TIMEOUT_SECONDS = '45'
 $env:RUNTIME_MCP_OPTIONAL_STARTUP_TIMEOUT_SECONDS = '45'
-uv run python main.py
+.\.venv\Scripts\python.exe main.py
 ```
 
 ## 2026-05-14 历史部署前真实环境结果
@@ -139,7 +141,7 @@ smoke（冒烟测试）失败时先看 JSON（JavaScript Object Notation，结�
    远端 MCP（模型上下文协议）服务冷启动可能超过 8 秒；当前默认非密钥配置为：
 
    ```text
-   RUNTIME_MCP_STARTUP_TIMEOUT_SECONDS=25
+   RUNTIME_MCP_STARTUP_TIMEOUT_SECONDS=45
    ```
 
    修改该值后需重启后端，再确认 `/health/ready`。core（核心验收）前应看到所需 MCP 服务均为 healthy。
@@ -169,15 +171,16 @@ smoke（冒烟测试）失败时先看 JSON（JavaScript Object Notation，结�
 9. smoke 通过或有明确可接受的 degraded（降级）解释后，再扩展到 core（核心验收）。
 
    ```powershell
-   .\.venv\Scripts\python.exe scripts\run_evaluation_scenarios.py --acceptance-core --base-url http://127.0.0.1:8000 --json --summary-dir .runtime\acceptance-core --scenario-timeout 900 --global-timeout 7200
+   .\.venv\Scripts\python.exe scripts\run_evaluation_scenarios.py --acceptance-core --base-url http://127.0.0.1:8000 --json --summary-dir .runtime\acceptance-core --scenario-timeout 900 --global-timeout 7200 --continue-on-error
    ```
 
 ## acceptance-core 复跑步骤
 
-先确认当前分支和远端状态。若任务明确要求不要先合 `main`，只做 fetch（获取远端引用）和状态检查，不执行 merge（合并）：
+先确认当前分支和远端状态。若任务要求以最新 `origin/main` 为基准，先 fetch（获取远端引用）并执行 fast-forward merge（快进合并）：
 
 ```powershell
-git fetch origin
+git fetch origin --prune
+git merge --ff-only origin/main
 git status --short --branch
 git log --oneline -5
 ```
@@ -198,7 +201,7 @@ uv sync --frozen
 
 ```powershell
 .\.venv\Scripts\python.exe main.py
-.\.venv\Scripts\python.exe scripts\run_evaluation_scenarios.py --acceptance-core --base-url http://127.0.0.1:8000 --json --summary-dir .runtime\acceptance-core --scenario-timeout 900 --global-timeout 7200
+.\.venv\Scripts\python.exe scripts\run_evaluation_scenarios.py --acceptance-core --base-url http://127.0.0.1:8000 --json --summary-dir .runtime\acceptance-core --scenario-timeout 900 --global-timeout 7200 --continue-on-error
 ```
 
 如果需要缩小排查范围，可以显式指定一个场景或重复 `--scenario` 运行子集：
@@ -339,4 +342,4 @@ git fetch origin main
 
 ## 下一步
 
-当前 2026-05-16 `acceptance-core` 未通过。后续修复工具覆盖和风险场景超时后，先复跑 `acceptance-smoke`，再复跑完整 acceptance-core；继续只提交脱敏摘要，不提交 `.runtime/` 原始产物。
+当前 2026-05-16 `acceptance-core` 未通过。后续先修复 `free_weekend_nearby` 的 `report_data` 证据闭环缺口，再修复 `edge_hotel_tool_fallback` 与 `edge_transport_tool_fallback` 的预期工具调用覆盖；修复后先复跑 `acceptance-smoke`，再复跑完整 9 场景 acceptance-core，继续只提交脱敏摘要，不提交 `.runtime/` 原始产物。
