@@ -1221,6 +1221,56 @@ async def test_requirement_collection_defers_first_turn_transport_and_weather_to
 
 
 @pytest.mark.asyncio
+async def test_destination_weather_followup_forces_destination_info_before_selection():
+    captured = {}
+    compatibility = get_model_compatibility()
+    middleware = StepConfigMiddleware(
+        {
+            "destination_recommendation": {
+                "prompt": "目的地推荐阶段",
+                "tools": [
+                    "select_destination_tool",
+                    "query_destination_info",
+                    "search_agency_risk_playbook",
+                ],
+                "requires": ["user_requirement"],
+            }
+        }
+    )
+    state = {
+        "current_step": "destination_recommendation",
+        "planning_mode": "agency_plan",
+        "planning_mode_confirmed": True,
+        "user_requirement": {
+            "destination": "桂林",
+            "planning_mode": "agency_plan",
+            "planning_mode_confirmed": True,
+        },
+    }
+
+    async def handler(request):
+        captured["tool_choice"] = getattr(request, "tool_choice", None)
+        captured["tools"] = getattr(request, "tools", [])
+        captured["system_prompt"] = getattr(request, "system_prompt", "")
+        return "ok"
+
+    await middleware.awrap_model_call(
+        DummyRequest(
+            state,
+            [HumanMessage(content="请先查询桂林7月天气和雨季情况，给老人友好的室内备选。")],
+        ),
+        handler,
+    )
+
+    assert captured["tools"] == ["query_destination_info"]
+    if compatibility.supports_forced_tool_choice:
+        assert captured["tool_choice"] == "query_destination_info"
+    else:
+        assert captured["tool_choice"] is None
+        assert "query_destination_info" in captured["system_prompt"]
+
+
+@pytest.mark.asyncio
 async def test_requirement_collection_defers_first_turn_full_agency_plan_tools():
     captured = {}
     middleware = StepConfigMiddleware(
@@ -1464,6 +1514,66 @@ async def test_order_generation_final_report_allows_pending_date_with_verificati
     else:
         assert captured["tool_choice"] is None
         assert "只能调用 `generate_order_tool`" in captured["system_prompt"]
+
+
+@pytest.mark.asyncio
+async def test_budget_stage_combined_budget_and_report_request_forces_budget_first():
+    captured = {}
+    compatibility = get_model_compatibility()
+    middleware = StepConfigMiddleware(
+        {
+            "budget_summarization": {
+                "prompt": "预算阶段",
+                "tools": ["summarize_budget_tool", "generate_order_tool"],
+                "requires": [],
+            }
+        }
+    )
+    state = {
+        "current_step": "budget_summarization",
+        "user_requirement": {
+            "destination": "桂林",
+            "departure_date": "2026-07-10",
+            "departure_date_confirmed": True,
+            "travel_days": 4,
+            "adult_count": 1,
+            "children_count": 0,
+            "budget_min": 2500,
+        },
+        "selected_destination": "桂林",
+        "selected_transport": "train",
+        "selected_accommodation_types": ["star_hotel"],
+        "itinerary": [{"day_number": 1, "activities": ["两江四湖"]}],
+    }
+
+    async def handler(request):
+        captured["tool_choice"] = getattr(request, "tool_choice", None)
+        captured["tools"] = getattr(request, "tools", [])
+        captured["system_prompt"] = getattr(request, "system_prompt", "")
+        return "ok"
+
+    await middleware.awrap_model_call(
+        DummyRequest(
+            state,
+            [
+                HumanMessage(
+                    content=(
+                        "请汇总预算并直接生成最终旅行规划报告和report_data，"
+                        "保留天气风险、Plan B、预算置信度和待核验项。"
+                    )
+                )
+            ],
+        ),
+        handler,
+    )
+
+    assert captured["tools"] == ["summarize_budget_tool"]
+    if compatibility.supports_forced_tool_choice:
+        assert captured["tool_choice"] == "summarize_budget_tool"
+    else:
+        assert captured["tool_choice"] is None
+        assert "summarize_budget_tool" in captured["system_prompt"]
+    assert "generate_order_tool" not in captured["tools"]
 
 
 @pytest.mark.asyncio
