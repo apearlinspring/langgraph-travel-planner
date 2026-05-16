@@ -136,6 +136,19 @@ def _write_minimal_chroma_metadata(
                 "requires_verification": "false",
                 "chroma:document": content,
             }
+            if visibility == "internal" and category == "products":
+                metadata.update(
+                    {
+                        "product_id": "ZX-PROD-XIAN-FAMILY-3D",
+                        "destination": "西安",
+                        "theme": "亲子省心轻定制",
+                        "duration": "3天2晚",
+                        "audience": "family|child",
+                        "service_level": "light_custom",
+                        "price_band": "comfort",
+                        "evidence_type": "fictional_product_template",
+                    }
+                )
             if bad_metadata:
                 metadata.pop("contract_version")
                 metadata["visibility"] = "public" if visibility == "internal" else "internal"

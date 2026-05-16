@@ -40,6 +40,31 @@ REQUIRED_INTERNAL_METADATA_FIELDS = {
     "evidence_level",
     "last_reviewed",
 }
+REQUIRED_PRODUCT_MATCHING_FIELDS = {
+    "product_id",
+    "destination",
+    "theme",
+    "duration",
+    "audience",
+    "service_level",
+    "price_band",
+    "source",
+    "category",
+    "evidence_type",
+}
+PRODUCT_METADATA_FIELDS = {
+    "product_id",
+    "destination",
+    "theme",
+    "duration",
+    "audience",
+    "service_level",
+    "price_band",
+    "evidence_type",
+    "service_boundary",
+    "quote_basis",
+    "verification_items",
+}
 PROHIBITED_DYNAMIC_COMMITMENTS = (
     "锁价",
     "库存",
@@ -69,6 +94,18 @@ class RetrievedEvidence(TypedDict):
     budget_levels: NotRequired[list[str]]
     travel_days_range: NotRequired[str]
     regions: NotRequired[list[str]]
+    product_id: NotRequired[str]
+    destination: NotRequired[str]
+    theme: NotRequired[str]
+    duration: NotRequired[str]
+    audience: NotRequired[list[str]]
+    service_level: NotRequired[str]
+    price_band: NotRequired[str]
+    product_source: NotRequired[str]
+    evidence_type: NotRequired[str]
+    service_boundary: NotRequired[list[str]]
+    quote_basis: NotRequired[list[str]]
+    verification_items: NotRequired[list[str]]
     last_reviewed: NotRequired[str]
     freshness_status: NotRequired[str]
     requires_verification: NotRequired[bool]
@@ -481,6 +518,11 @@ def metadata_for_document(
     }
     if "title" in declared_metadata:
         metadata["title"] = _metadata_value(declared_metadata["title"])
+    for field in sorted(PRODUCT_METADATA_FIELDS):
+        if field in declared_metadata:
+            metadata[field] = _metadata_value(declared_metadata[field])
+    if effective_category == "products" and "source" in declared_metadata:
+        metadata["product_source"] = _metadata_value(declared_metadata["source"])
 
     metadata["freshness_status"] = freshness_status(effective_last_reviewed)
     metadata["requires_verification"] = _metadata_value(
@@ -603,6 +645,22 @@ def validate_internal_metadata(
                     root=root,
                     field="category",
                     message=f"category={category} 与目录分类 {path_category} 不一致",
+                )
+            )
+
+    if category == "products":
+        missing_product_fields = [
+            field
+            for field in sorted(REQUIRED_PRODUCT_MATCHING_FIELDS)
+            if field not in metadata or metadata.get(field) in (None, "", [])
+        ]
+        for field in missing_product_fields:
+            findings.append(
+                _finding(
+                    path=path,
+                    root=root,
+                    field=field,
+                    message=f"产品知识缺少产品匹配字段: {field}",
                 )
             )
 

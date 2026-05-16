@@ -31,6 +31,20 @@
 - `freshness_status`
 - `requires_verification`
 
+内部产品类文档（`category=products`）还必须带产品匹配字段：
+
+- `product_id`
+- `destination`
+- `theme`
+- `duration`
+- `audience`
+- `service_level`
+- `price_band`
+- `source`
+- `evidence_type`
+
+运行时会把其中的 `product_id`、`destination`、`theme`、`duration`、`audience`、`service_level`、`price_band`、`evidence_type` 以及可选的 `service_boundary`、`quote_basis`、`verification_items` 写入检索证据。原始 `source` 仍保留为 Markdown 文件路径，产品目录来源会映射为 `product_source`，避免覆盖可追溯文件路径。
+
 内部 Markdown（标记文本）文档的 front matter（头部元数据）仍由 `scripts/validate_rag_knowledge.py` 校验，避免分类错位、复审过期或内部资料误标为 public（公开）。
 
 ## Readiness 失败代码
@@ -47,10 +61,23 @@
 | `retrieval_no_hit` | collection 有数据但最小运行时场景无法命中 |
 | `metadata_unreadable` | `chroma.sqlite3` 无法只读解析 |
 
+内部产品文档额外检查产品匹配字段；例如产品 chunk（切片）缺少 `product_id`、`destination` 或 `evidence_type` 时，也会返回 `metadata_missing`，并在 `details.missing_metadata` 中列出缺失字段。`collection_missing`、`metadata_missing` 和 `metadata_mismatch` 是部署排障时最优先区分的三类问题。
+
 最小运行时探针覆盖：
 
 - 公开攻略：目的地攻略、目的地美食。
-- 内部知识：`products`、`sop`、`pricing`、`risk`、`report` 五类。
+- 内部知识：`products`、`sop`、`pricing`、`risk`、`report` 五类；产品探针同时检查 `product_id`、路线、适合人群和服务边界等产品化表达是否存在。
+
+## 产品检索输出边界
+
+`search_agency_product_templates` 会在标准证据契约后附加 2-3 个产品化方向，字段包括：
+
+- 适用人群。
+- 服务边界。
+- 报价口径。
+- 待核验项。
+
+这些方向只代表虚构内部产品模板和成熟路线结构，不能解释为真实供应商、真实客户、真实库存、锁价或履约承诺。用户不接受产品化方向时，Agent（智能体）必须明确切回自由规划，只保留路线、预算、住宿区域和核验建议，不继续强推旅行社方案。
 
 ## 运行命令
 

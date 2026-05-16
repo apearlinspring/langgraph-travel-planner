@@ -1,0 +1,80 @@
+---
+source_type: agency_internal
+category: products
+visibility: internal
+source: fictional_internal_catalog
+applicable_modes:
+  - free_planning
+evidence_level: standard
+last_reviewed: "2026-05-11"
+title: 桂林自由行路线优化 4 天
+product_id: ZX-PROD-GUILIN-FREE-4D
+destination: 桂林
+theme: 自由行路线优化
+duration: 4天3晚
+audience:
+  - free_planning
+  - family
+  - general
+service_level: route_optimization
+price_band: economy_comfort
+evidence_type: fictional_product_template
+service_boundary:
+  - 路线优化
+  - 住宿区域建议
+  - 预算拆分
+  - 核验清单
+quote_basis:
+  - 自由规划服务口径
+  - 不包装旅行社省心套餐
+verification_items:
+  - 漓江游船
+  - 天气水位
+  - 住宿位置
+  - 市内交通
+---
+
+# 桂林自由行路线优化 4 天
+
+> 虚构内部产品模板，用于检索评测和顾问表达，不代表真实供应商、真实库存或锁价承诺。
+
+## 产品匹配字段
+
+| field | value |
+|---|---|
+| product_id | ZX-PROD-GUILIN-FREE-4D |
+| destination | 桂林 |
+| theme | 自由行路线优化 |
+| duration | 4天3晚 |
+| audience | free_planning / family / general |
+| service_level | route_optimization |
+| price_band | economy_comfort |
+| source | fictional_internal_catalog |
+| category | products |
+| evidence_type | fictional_product_template |
+
+## 适用人群
+
+用户明确自己预订、自己决策，只需要路线、住宿区域、预算拆分和核验建议。
+
+## 路线骨架
+
+- Day 1：抵达桂林，住方便换乘和补给的区域。
+- Day 2：核心山水体验，避免把跨城和高强度徒步叠在一天。
+- Day 3：阳朔或周边慢节奏体验，保留天气和水位备选。
+- Day 4：返程前轻量活动，避免行李和交通冲突。
+
+## 服务边界
+
+- 只提供自由规划优化、预算拆分、住宿区域和核验清单。
+- 不表达托管服务，不推旅行社套餐，不承诺票务、用车、酒店或导游资源。
+- 用户拒绝产品化方向后，应优先引用此类自由规划口径。
+
+## 报价口径
+
+- 报价只作为自由行预算估算，区分用户自订费用和待核验价格。
+- 不写成旅行社打包价，不暗示已锁定资源。
+
+## 待核验项
+
+漓江游船班次与价格、天气水位、住宿位置、市内交通、景区预约。

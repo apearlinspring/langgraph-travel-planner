@@ -79,7 +79,16 @@ LLM（大语言模型）创建统一走 `app/utils/llm_factory.py` 的 `build_ch
 
 - `data/evaluation/rag_quality_scenarios.json`：检查省心方案是否覆盖产品、SOP（标准作业流程）、报价、风险、报告标准等证据类别；自由行场景则重点看模式适配和避免硬推旅行社表达。
 - `data/evaluation/tool_call_scenarios.json`：检查交通、酒店、目的地天气等工具是否按用户意图调用，是否避免同轮重复调用高成本查询工具，以及失败后是否进入待核验兜底。
-- `data/evaluation/rag_retrieval_scenarios.json`：小型 RAG（检索增强生成）召回率评估集，标注查询应命中的知识源、知识分类和来源类型，用 Top-K source recall（来源召回）、category recall（分类召回）和 MRR（平均倒数排名）对比朴素 BM25（词频检索算法）与元数据增强检索。
+- `data/evaluation/rag_retrieval_scenarios.json`：小型 RAG（检索增强生成）召回率评估集，标注查询应命中的知识源、知识分类和来源类型，用 Top-K source recall（来源召回）、category recall（分类召回）和 MRR（平均倒数排名）对比纯正文 BM25（词频检索算法）与 metadata-aware BM25（带元数据的词频检索算法）。
+
+当前召回评测样本规模是 12 条查询、16 份本地 Markdown（标记文本）文档，覆盖公开目的地攻略、内部产品目录、SOP（标准作业流程）、报价、风险和报告交付。2026-05-16 复跑 `uv run python scripts\evaluate_rag_retrieval.py --json` 的 Top-3（前三）结果为：
+
+| strategy | source recall@3 | category recall@3 | hit rate@3 | MRR |
+|---|---:|---:|---:|---:|
+| `baseline_bm25`（纯正文） | 83.33% | 87.50% | 91.67% | 0.9167 |
+| `metadata_aware_bm25`（带元数据） | 95.83% | 100.00% | 100.00% | 0.9444 |
+
+这些指标由脚本现场计算，不是硬写 100%；由于样本较小，它只能证明当前产品目录和元数据契约在小型离线集上的改进方向，不能外推为线上全量召回率。
 
 列出场景：
 
@@ -182,7 +191,7 @@ LLM（大语言模型）创建统一走 `app/utils/llm_factory.py` 的 `build_ch
 .\.venv\Scripts\python.exe scripts\validate_rag_knowledge.py
 ```
 
-该脚本只读取 `data/documents/internal/` 的 Markdown（标记文本）文档头部 metadata（元数据），不会读取 `.env` 密钥，也不会输出真实合同、价格表或客户资料。它会在以下情况失败：缺少 `source_type`、`category`、`visibility`、`applicable_modes`、`evidence_level`、`last_reviewed`，目录分类和 metadata 分类不一致，内部知识被标成 `public`，或文档超过复审期限。低置信证据允许存在，但检索证据必须携带 `requires_verification` 和 `prohibited_commitments`，最终报告质量评分会阻止它支撑锁价、库存、支付或预订承诺。
+该脚本只读取 `data/documents/internal/` 的 Markdown（标记文本）文档头部 metadata（元数据），不会读取 `.env` 密钥，也不会输出真实合同、价格表或客户资料。它会在以下情况失败：缺少 `source_type`、`category`、`visibility`、`applicable_modes`、`evidence_level`、`last_reviewed`，产品文档缺少 `product_id`、`destination`、`theme`、`duration`、`audience`、`service_level`、`price_band`、`source` 或 `evidence_type`，目录分类和 metadata 分类不一致，内部知识被标成 `public`，或文档超过复审期限。低置信证据允许存在，但检索证据必须携带 `requires_verification` 和 `prohibited_commitments`，最终报告质量评分会阻止它支撑锁价、库存、支付或预订承诺。
 
 GraphRAG（图检索增强生成）不作为当前门禁的必选实现。后续只有在内部知识需要稳定维护“产品、供应商、城市、季节、人群、风险”这类实体关系时，再评估把图谱作为可选增强层；当前阶段仍以可校验 metadata、可追溯证据和确定性质量门禁为主。
 

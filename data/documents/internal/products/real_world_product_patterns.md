@@ -2,11 +2,26 @@
 source_type: agency_internal
 category: products
 visibility: internal
+source: public_pattern_abstraction
 applicable_modes:
   - agency_plan
   - free_planning
 evidence_level: reference
 last_reviewed: "2026-05-11"
+title: 真实旅行社产品结构参考
+product_id: ZX-PROD-PATTERN-REFERENCE
+destination: general
+theme: public_product_pattern_abstraction
+duration: varied
+audience:
+  - family
+  - couple
+  - senior
+  - team
+  - general
+service_level: reference
+price_band: varied
+evidence_type: public_reference_abstraction
 ---
 
 # 真实旅行社产品结构参考
@@ -29,6 +44,23 @@ last_reviewed: "2026-05-11"
 - 服务模块：顾问规划、行前提醒、行中响应、异常协助、最终交付物。
 - 价格模块：已包含项目、可选项目、个人自理项目、价格波动和退改风险。
 - 适配模块：亲子、情侣、银发、团建、研学等不同人群的节奏和风险控制。
+
+## 产品匹配字段
+
+| field | value |
+|---|---|
+| product_id | ZX-PROD-PATTERN-REFERENCE |
+| destination | general |
+| theme | public_product_pattern_abstraction |
+| duration | varied |
+| audience | family / couple / senior / team / general |
+| service_level | reference |
+| price_band | varied |
+| source | public_pattern_abstraction |
+| category | products |
+| evidence_type | public_reference_abstraction |
+
+这些字段只用于抽象产品表达结构，不能被解释为第三方平台的真实产品复制或库存承诺。
 
 ## 知行产品化规则
 

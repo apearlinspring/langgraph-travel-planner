@@ -65,11 +65,23 @@ INTERNAL_VECTORSTORE_CONTRACT = {
         "freshness_status",
         "requires_verification",
     ),
+    "category_required_metadata": {
+        "products": (
+            "product_id",
+            "destination",
+            "theme",
+            "duration",
+            "audience",
+            "service_level",
+            "price_band",
+            "evidence_type",
+        ),
+    },
     "retrieval_probes": (
         {
             "name": "agency_products",
             "metadata": {"category": "products", "visibility": "internal"},
-            "terms_any": ("路线", "产品", "适合人群"),
+            "terms_any": ("product_id", "路线", "产品", "适合人群", "服务边界"),
         },
         {
             "name": "agency_sop",
@@ -299,6 +311,7 @@ def check_chroma_collection_readiness(
     label: str,
     expected_metadata: Mapping[str, str],
     required_metadata: Iterable[str],
+    category_required_metadata: Mapping[str, Iterable[str]] | None = None,
     project_root: Path | None = None,
     sample_size: int = 5,
     retrieval_probes: Iterable[Mapping[str, Any]] | None = None,
@@ -312,6 +325,10 @@ def check_chroma_collection_readiness(
         "path": str(vectorstore_path),
         "collection_name": collection_name,
         "required_metadata": list(required_metadata),
+        "category_required_metadata": {
+            str(category): list(fields)
+            for category, fields in (category_required_metadata or {}).items()
+        },
         "expected_metadata": dict(expected_metadata),
     }
 
@@ -384,7 +401,11 @@ def check_chroma_collection_readiness(
         required_keys = tuple(required_metadata)
         for embedding_id in sample_embedding_ids:
             metadata = _metadata_values_for_embedding(connection, embedding_id)
-            missing_keys = [key for key in required_keys if key not in metadata]
+            category_specific_keys = tuple(
+                (category_required_metadata or {}).get(metadata.get("category", ""), ())
+            )
+            required_for_row = tuple(dict.fromkeys((*required_keys, *category_specific_keys)))
+            missing_keys = [key for key in required_for_row if key not in metadata]
             if missing_keys:
                 details["bad_embedding_id"] = str(embedding_id)
                 details["missing_metadata"] = missing_keys
