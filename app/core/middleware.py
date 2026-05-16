@@ -764,6 +764,61 @@ def _transport_selection_fallback_instruction() -> str:
     )
 
 
+def _is_transport_selection_request(text: str) -> bool:
+    if not text or any(keyword in text for keyword in ("重新", "换个", "改成")):
+        return False
+
+    has_transport_context = any(
+        keyword in text
+        for keyword in (
+            "交通",
+            "方式",
+            "班次",
+            "出行",
+            "高铁",
+            "火车",
+            "航班",
+            "飞机",
+            "自驾",
+        )
+    )
+    if not has_transport_context:
+        return False
+
+    explicit_record = any(
+        keyword in text
+        for keyword in (
+            "请直接记录",
+            "直接记录",
+            "记录推荐",
+            "记录你推荐",
+            "按推荐",
+            "按省心",
+            "交通按",
+            "优先记录",
+            "锁定",
+        )
+    )
+    selection_signal = any(keyword in text for keyword in SELECTION_KEYWORDS) or any(
+        keyword in text for keyword in ("优先", "推荐方式", "推荐的方式")
+    )
+    preference_signal = any(
+        keyword in text
+        for keyword in ("省心", "时间合理", "少折腾", "优先高铁", "待核验", "待二次核验")
+    )
+    return selection_signal and (explicit_record or preference_signal)
+
+
+def _recent_transport_selection_request(
+    request: ModelRequest,
+    latest_human_text: str,
+    *,
+    limit: int = 4,
+) -> bool:
+    texts = [latest_human_text, _recent_human_text(request, limit=limit)]
+    return any(_is_transport_selection_request(text) for text in texts if text)
+
+
 def _accommodation_candidate_instruction() -> str:
     return (
         "当前已经有酒店候选或住宿查询结果。"
@@ -1005,6 +1060,18 @@ def _live_query_date_gate_instruction(blocked_tools: set[str] | frozenset[str]) 
 def _requirement_context_text(state_dict: dict[str, Any], latest_human_text: str) -> str:
     requirement = state_dict.get("user_requirement") or {}
     requirement_parts: list[str] = [latest_human_text]
+    for message in (state_dict.get("messages") or [])[-12:]:
+        content = None
+        if isinstance(message, HumanMessage):
+            content = message.content
+        elif isinstance(message, dict):
+            role = message.get("role") or message.get("type")
+            if role in {"user", "human"}:
+                content = message.get("content")
+        elif getattr(message, "type", None) == "human" or getattr(message, "role", None) == "user":
+            content = getattr(message, "content", None)
+        if content:
+            requirement_parts.append(content if isinstance(content, str) else str(content))
     if isinstance(requirement, dict):
         for key in (
             "special_needs",
@@ -1035,8 +1102,18 @@ def _wants_fallback_audit_query(
     fallback_keywords = (
         "查不到",
         "没有查到",
+        "查不到具体",
         "如果没有",
+        "没有真实",
+        "没有锁定",
+        "没有真实锁价",
+        "没有真实价格",
+        "未锁价",
+        "没锁价",
         "兜底",
+        "待核验",
+        "待二次核验",
+        "二次核验",
     )
     if not any(keyword in text for keyword in fallback_keywords):
         return False
@@ -1136,7 +1213,17 @@ def _progress_tool_for_explicit_request(
         return None
 
     if _looks_like_final_report_request(text):
-        return "generate_order_tool" if _can_generate_final_report(state_dict) else None
+        if _can_generate_final_report(state_dict):
+            return "generate_order_tool"
+        if not _state_value_ready(state_dict.get("itinerary")) and _has_itinerary_prerequisites(
+            state_dict
+        ):
+            return "generate_itinerary_tool"
+        if _state_value_ready(state_dict.get("itinerary")) and not _state_value_ready(
+            state_dict.get("budget")
+        ):
+            return "summarize_budget_tool"
+        return None
 
     if any(keyword in text for keyword in ("预算", "费用", "报价")) and any(
         keyword in text for keyword in ("汇总", "生成", "记录", "确认", "说明")
@@ -1155,7 +1242,17 @@ def _progress_tool_for_explicit_request(
 
 def _preferred_tool_for_intent(intent: TravelIntent, state_dict: dict[str, Any]) -> str | None:
     if intent.name in {"final_report", "export_report"}:
-        return "generate_order_tool" if _can_generate_final_report(state_dict) else None
+        if _can_generate_final_report(state_dict):
+            return "generate_order_tool"
+        if not _state_value_ready(state_dict.get("itinerary")) and _has_itinerary_prerequisites(
+            state_dict
+        ):
+            return "generate_itinerary_tool"
+        if _state_value_ready(state_dict.get("itinerary")) and not _state_value_ready(
+            state_dict.get("budget")
+        ):
+            return "summarize_budget_tool"
+        return None
     return intent.preferred_tool
 
 
@@ -1512,7 +1609,8 @@ def _looks_like_initial_complex_trip_request(text: str) -> bool:
         _has_budget_hint(normalized)
         and any(keyword in normalized for keyword in FIRST_TURN_AGENCY_PLAN_KEYWORDS)
     )
-    return has_slow_intent or has_full_agency_plan_intent
+    has_budgeted_style_trip = _has_budget_hint(normalized) and _has_style_hint(normalized)
+    return has_slow_intent or has_full_agency_plan_intent or has_budgeted_style_trip
 
 
 def _should_defer_initial_slow_tools(request: ModelRequest, text: str) -> bool:
@@ -1532,6 +1630,15 @@ def _initial_slow_tool_deferral_instruction() -> str:
         "请用 1-2 句确认你已理解用户的目的地、天数、同行人和慢项诉求；"
         "说明会在需求确认后核验真实交通、酒店、天气和风险证据，"
         "然后请用户确认是否按此记录并推进。"
+    )
+
+
+def _post_initial_requirement_record_instruction() -> str:
+    return (
+        "本轮已经完成需求记录。请只用 1-2 句确认需求已记录，"
+        "说明下一轮会继续做目的地推荐、真实候选核验和报价依据整理。"
+        "不要继续调用目的地、天气、攻略、报价或内部资料工具，"
+        "也不要展开长篇方案。"
     )
 
 
@@ -2012,7 +2119,18 @@ class StepConfigMiddleware(AgentMiddleware):
         )
         middleware_forced_tool = None
         latest_tool_result_names = _latest_tool_result_names(request)
-        progress_forced_tool = _progress_tool_for_explicit_request(latest_human_text, state_dict)
+        if (
+            current_step == "destination_recommendation"
+            and "record_requirement_tool" in latest_tool_result_names
+            and _is_first_user_turn_without_assistant_text(request)
+        ):
+            override_kwargs["tools"] = []
+            available_tool_names = set()
+            override_kwargs["system_prompt"] = _post_initial_requirement_record_instruction()
+            app_logger.info(
+                "首轮需求记录后停止同轮慢工具扇出，降低首个可见响应延迟"
+            )
+        progress_forced_tool = _progress_tool_for_explicit_request(active_human_text, state_dict)
         if progress_forced_tool and progress_forced_tool not in recent_tool_names:
             progress_tool = _find_tool_by_name(self._step_config, progress_forced_tool)
             if progress_tool is not None:
@@ -2033,26 +2151,16 @@ class StepConfigMiddleware(AgentMiddleware):
                 )
         if current_step == "transport_planning":
             transport_human_text = latest_human_text or _recent_human_text(request, limit=1)
-            transport_selection_requested = (
-                not any(keyword in transport_human_text for keyword in ("重新", "换个", "改成"))
-                and (
-                    (
-                        any(keyword in transport_human_text for keyword in SELECTION_KEYWORDS)
-                        and any(
-                            keyword in transport_human_text
-                            for keyword in ("交通", "方式", "推荐", "省心", "时间合理")
-                        )
-                        and any(
-                            keyword in transport_human_text
-                            for keyword in ("交通", "方式", "班次", "出行", "省心和时间合理")
-                        )
-                    )
-                    or any(keyword in transport_human_text for keyword in CROSS_STEP_HOTEL_KEYWORDS)
-                )
+            transport_selection_requested = _is_transport_selection_request(
+                transport_human_text
+            ) or any(keyword in transport_human_text for keyword in CROSS_STEP_HOTEL_KEYWORDS)
+            recent_transport_selection_requested = _recent_transport_selection_request(
+                request,
+                transport_human_text,
             )
             if "query_transport_options" in latest_tool_result_names:
-                allow_transport_selection = any(
-                    keyword in transport_human_text for keyword in SELECTION_KEYWORDS
+                allow_transport_selection = (
+                    transport_selection_requested or recent_transport_selection_requested
                 )
                 excluded_after_transport_query = {"query_transport_options"}
                 if not allow_transport_selection:

@@ -374,7 +374,7 @@ async def test_step_middleware_removes_repeated_state_transition_tool():
             "accommodation_planning",
             "住宿按省心、干净、动线方便的方案记录；真实酒店价格待核验。",
             ["query_hotel_options", "select_accommodation_tool"],
-            "select_accommodation_tool",
+            "query_hotel_options",
         ),
         (
             "food_planning",
@@ -2062,7 +2062,7 @@ async def test_accommodation_stage_without_candidates_forces_hotel_query():
 
 
 @pytest.mark.asyncio
-async def test_accommodation_record_request_without_candidates_forces_selection_not_query():
+async def test_accommodation_record_request_with_price_verification_queries_first():
     captured = {}
     compatibility = get_model_compatibility()
     middleware = StepConfigMiddleware(
@@ -2103,13 +2103,13 @@ async def test_accommodation_record_request_without_candidates_forces_selection_
         handler,
     )
 
-    assert captured["tools"] == ["select_accommodation_tool"]
+    assert captured["tools"] == ["query_hotel_options"]
     if compatibility.supports_forced_tool_choice:
-        assert captured["tool_choice"] == "select_accommodation_tool"
+        assert captured["tool_choice"] == "query_hotel_options"
     else:
         assert captured["tool_choice"] is None
-        assert "select_accommodation_tool" in captured["system_prompt"]
-    assert "query_hotel_options" not in captured["tools"]
+        assert "query_hotel_options" in captured["system_prompt"]
+    assert "select_accommodation_tool" not in captured["tools"]
     assert "update_accommodation_preference_tool" not in captured["tools"]
 
 

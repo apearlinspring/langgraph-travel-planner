@@ -779,6 +779,97 @@ def _runtime_recent_human_text(runtime: Optional[ToolRuntime]) -> str:
     return "\n".join(texts)
 
 
+def _runtime_message_tool_names(message: Any) -> set[str]:
+    names: set[str] = set()
+    if isinstance(message, ToolMessage):
+        name = getattr(message, "name", None)
+        if name:
+            names.add(str(name))
+
+    if isinstance(message, dict):
+        if message.get("type") == "tool" and message.get("name"):
+            names.add(str(message["name"]))
+        tool_calls = message.get("tool_calls") or []
+    else:
+        tool_calls = getattr(message, "tool_calls", None) or []
+
+    for tool_call in tool_calls:
+        if isinstance(tool_call, dict):
+            name = tool_call.get("name") or tool_call.get("function", {}).get("name")
+        else:
+            name = getattr(tool_call, "name", None)
+        if name:
+            names.add(str(name))
+    return names
+
+
+def _runtime_has_tool_result(runtime: Optional[ToolRuntime], tool_name: str) -> bool:
+    state = runtime.state if runtime and runtime.state else {}
+    return any(
+        tool_name in _runtime_message_tool_names(message)
+        for message in (state.get("messages") or [])
+    )
+
+
+def _needs_hotel_audit_before_accommodation_selection(runtime: Optional[ToolRuntime]) -> bool:
+    state = _runtime_state(runtime)
+    if _runtime_has_tool_result(runtime, "query_hotel_options"):
+        return False
+    if state.get("accommodation_options"):
+        return False
+
+    text = _runtime_recent_human_text(runtime)
+    if not text:
+        return False
+
+    hotel_keywords = ("酒店", "住宿", "住", "江景", "海景", "房", "民宿", "锁价")
+    fallback_keywords = (
+        "查不到",
+        "查不到具体",
+        "没有真实",
+        "没有锁定",
+        "没有真实锁价",
+        "没有真实价格",
+        "未锁价",
+        "没锁价",
+        "兜底",
+        "待核验",
+        "待二次核验",
+        "二次核验",
+    )
+    return any(keyword in text for keyword in hotel_keywords) and any(
+        keyword in text for keyword in fallback_keywords
+    )
+
+
+def _needs_transport_audit_before_transport_selection(runtime: Optional[ToolRuntime]) -> bool:
+    state = _runtime_state(runtime)
+    if _runtime_has_tool_result(runtime, "query_transport_options"):
+        return False
+    if state.get("transport_options"):
+        return False
+
+    text = _runtime_recent_human_text(runtime)
+    if not text:
+        return False
+
+    transport_keywords = ("交通", "高铁", "火车", "车次", "航班", "飞机", "班次", "票价", "自驾")
+    fallback_keywords = (
+        "查不到",
+        "没有查到",
+        "查不到合适",
+        "查不到具体",
+        "如果没有",
+        "兜底",
+        "待核验",
+        "待二次核验",
+        "二次核验",
+    )
+    return any(keyword in text for keyword in transport_keywords) and any(
+        keyword in text for keyword in fallback_keywords
+    )
+
+
 def _parse_requirement_date_text(value: Any) -> str | None:
     text = str(value or "").strip()
     if not text or _is_pending_requirement_value(text):
@@ -2285,8 +2376,19 @@ def record_requirement_tool(
             if item
         ),
     }
+    user_mode_inference_seed = {
+        **mode_seed,
+        "special_needs": " ".join(
+            item
+            for item in [
+                str(mode_seed.get("special_needs") or ""),
+                pending_initial_request_text,
+            ]
+            if item
+        ),
+    }
     mode_context_text = agency_product_rules.requirement_text(
-        mode_inference_seed,
+        user_mode_inference_seed,
         runtime.state if runtime else None,
     )
     inferred_text_mode = None
@@ -2299,7 +2401,7 @@ def record_requirement_tool(
             runtime.state if runtime else None,
         )
     inferred_state_agency_mode = _agency_signal_mode(
-        mode_inference_seed,
+        user_mode_inference_seed,
         runtime.state if runtime else None,
     )
     tool_planning_mode = _normalize_planning_mode(planning_mode)
@@ -2467,6 +2569,15 @@ def select_transport_tool(
 ) -> Command:
     """Persist the selected transport mode or concrete transport option and move to accommodation planning."""
 
+    if _needs_transport_audit_before_transport_selection(runtime):
+        return _command_with_message(
+            "交通记录暂缓：用户要求查不到车次或真实班次时也要保留兜底/待核验证据。"
+            "请先调用 query_transport_options；如果日期仍未确认，就用“日期待确认”让工具返回 skipped 审计结果，"
+            "再记录高铁优先或可执行交通兜底方案。",
+            runtime,
+            current_step="transport_planning",
+        )
+
     app_logger.info(f"用户选择交通方式: {transport_type}")
     transport_type = _normalize_choice(transport_type, TRANSPORT_LABELS, TRANSPORT_ALIASES)
     if transport_type not in TRANSPORT_LABELS:
@@ -2525,6 +2636,14 @@ def select_accommodation_tool(
     """Persist accommodation preferences or a concrete hotel choice and move to food planning."""
 
     state = _runtime_state(runtime)
+    if _needs_hotel_audit_before_accommodation_selection(runtime):
+        return _command_with_message(
+            "住宿记录暂缓：用户要求没有真实锁价或查不到具体酒店时也要保留兜底/待核验证据。"
+            "请先调用 query_hotel_options；如果日期仍未确认，就用“日期待确认”让工具返回 skipped 审计结果，"
+            "再记录湘江边/核心商圈等可执行住宿兜底方案。",
+            runtime,
+        )
+
     selected_option = _find_accommodation_option(
         state,
         hotel_id=hotel_id,
@@ -2617,6 +2736,19 @@ def select_food_tool(
     runtime: ToolRuntime[None, TravelState] = None,
 ) -> Command:
     """Persist food preferences and move to itinerary generation."""
+
+    state = _runtime_state(runtime)
+    if state.get("current_step") == "food_planning" and not _has_confirmed_accommodation_state(
+        state
+    ):
+        return _command_with_message(
+            "餐饮记录暂缓：住宿方案还没有通过 query_hotel_options 和 "
+            "select_accommodation_tool 完成审计与记录。请先回到住宿阶段；"
+            "如果日期仍未确认，就用“日期待确认”调用 query_hotel_options 返回 skipped 审计结果，"
+            "再调用 select_accommodation_tool 记录兜底住宿方案。",
+            runtime,
+            current_step="accommodation_planning",
+        )
 
     app_logger.info(f"用户选择餐饮偏好: {food_types}")
     food_types = _normalize_choices(_as_string_list(food_types), FOOD_LABELS, FOOD_ALIASES)

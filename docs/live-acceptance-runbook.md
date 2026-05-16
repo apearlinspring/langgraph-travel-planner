@@ -11,9 +11,9 @@ chcp 65001 | Out-Null
 ## 当前分支
 
 - 工作树：当前本地验收工作区（不记录绝对路径）
-- 分支：`codex/acceptance-core-rerun-closeout`
-- 基准：`origin/main@620947b`
-- 日期：2026-05-16
+- 分支：`codex/acceptance-core-final-gates-fix`
+- 基准：`origin/main@3b02f41`
+- 日期：2026-05-17
 
 ## 状态判定
 
@@ -32,15 +32,15 @@ chcp 65001 | Out-Null
 
 缺真实依赖或缺 `report_data` 时，任何命令都不能返回 `passed`。
 
-## 2026-05-16 当前真实复跑记录
+## 2026-05-17 当前真实复跑记录
 
 - `.env`：存在且未被 Git 跟踪；未打印真实值。
-- readiness（就绪检查）：PostgreSQL（关系型数据库）、Redis（内存数据结构存储）、RAG（检索增强生成）、LLM（大语言模型）和 MCP（模型上下文协议）均可用；`/health/ready=ready`，MCP 6 healthy / 37 tools。
-- `acceptance-smoke`（冒烟验收）：`.runtime/acceptance-smoke/20260516-092127-acceptance-summary.json`，1/1 passed（通过），`report_data=true`，证据闭环通过。
-- `acceptance-core`（核心验收）：`.runtime/acceptance-core/20260516-102402-acceptance-summary.json`，完整运行 9 场景，6/9 passed（通过），总状态 failed（失败）。
-- 失败分类：`free_weekend_nearby` 为 evidence_closure（证据闭环）失败，未产出结构化 `report_data`，缺少预算、预算置信度、风险和待核验项；`edge_hotel_tool_fallback` 和 `edge_transport_tool_fallback` 为 acceptance_gate（验收门禁）/工具覆盖失败，分别缺少预期 `query_hotel_options` 与 `query_transport_options`。
-- 补充：`risk_weather_disruption` 本轮已 passed（通过），不再记录为 timeout（超时）失败。
-- 结论：本轮 smoke 通过但 core 未通过，不能声明部署通过；详见 `docs/acceptance-core-report.md` 与 `docs/predeploy-runtime-acceptance.md`。
+- readiness（就绪检查）：PostgreSQL（关系型数据库）、Redis（内存数据结构存储）、RAG（检索增强生成）、LLM（大语言模型）和 MCP（模型上下文协议）均可用；`/health/live=alive`，`/health/ready=ready`。
+- 重点 4 场景：`.runtime/acceptance-fix-singles/20260517-four-after-transport-guard/20260516-212155-four-after-transport-guard.json`，4/4 passed（通过）。
+- `acceptance-smoke`（冒烟验收）：`.runtime/acceptance-smoke/20260517-transport-guard/20260516-212958-acceptance-smoke.json`，1/1 passed（通过），`report_data=true`，证据闭环通过。
+- `acceptance-core`（核心验收）：`.runtime/acceptance-core/20260517-transport-guard/20260516-223916-acceptance-core.json`，完整运行 9 场景，9/9 passed（通过），总状态 passed（通过）。
+- 补充：`free_weekend_nearby` 已产出结构化 `report_data`；`edge_hotel_tool_fallback` 和 `edge_transport_tool_fallback` 分别保留 `query_hotel_options` 与 `query_transport_options` 审计式调用。
+- 结论：本轮 smoke 与完整 core 均通过；详见 `docs/acceptance-core-report.md` 与 `docs/predeploy-runtime-acceptance.md`。
 
 Windows 本地后端建议用以下方式启动，避免 direct `uvicorn app.main:app` 在 Windows 事件循环和开发 reload（热重载）上引入干扰：
 
@@ -291,7 +291,7 @@ uv sync --frozen
 
 ## 2026-05-14 历史验证记录
 
-该轮详细脱敏结果曾集中记录在 `docs/predeploy-runtime-acceptance.md`。以下命令和指标仅作为历史参考，当前 2026-05-16 结论以本文前部的“当前真实复跑记录”和 `docs/acceptance-core-report.md` 为准。实际执行的关键命令包括：
+该轮详细脱敏结果曾集中记录在 `docs/predeploy-runtime-acceptance.md`。以下命令和指标仅作为历史参考，当前 2026-05-17 结论以本文前部的“当前真实复跑记录”和 `docs/acceptance-core-report.md` 为准。实际执行的关键命令包括：
 
 ```powershell
 git fetch origin main
@@ -342,4 +342,4 @@ git fetch origin main
 
 ## 下一步
 
-当前 2026-05-16 `acceptance-core` 未通过。后续先修复 `free_weekend_nearby` 的 `report_data` 证据闭环缺口，再修复 `edge_hotel_tool_fallback` 与 `edge_transport_tool_fallback` 的预期工具调用覆盖；修复后先复跑 `acceptance-smoke`，再复跑完整 9 场景 acceptance-core，继续只提交脱敏摘要，不提交 `.runtime/` 原始产物。
+当前 2026-05-17 `acceptance-smoke` 和完整 9 场景 `acceptance-core` 均已通过。后续如模型、RAG、MCP、外部 API、报告契约或运行环境变化，仍需先复跑 smoke，再复跑完整 9 场景 core；继续只提交脱敏摘要，不提交 `.runtime/` 原始产物。

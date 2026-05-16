@@ -2,13 +2,18 @@ from types import SimpleNamespace
 
 import pytest
 from langchain.tools import ToolRuntime
+from langchain_core.messages import HumanMessage, ToolMessage
 from langgraph.graph import END, START, StateGraph
 
 from app.core.state import TravelState, create_initial_state
 from app.tools import transport_query
 from app.tools.execution_guard import _LOOP_GUARD_MEMORY
 from app.tools.rag_tools import _guarded_rag_retrieval
-from app.tools.state_transition import select_accommodation_tool, select_food_tool
+from app.tools.state_transition import (
+    select_accommodation_tool,
+    select_food_tool,
+    select_transport_tool,
+)
 
 
 def _build_runtime(state):
@@ -294,6 +299,139 @@ def test_select_accommodation_accepts_model_string_arguments():
     assert option["price_per_night"] == 320.0
     assert option["rating"] == 4.6
     assert option["amenities"] == ["近商圈、安静"]
+
+
+def test_select_accommodation_requires_hotel_audit_for_unlocked_price_request():
+    state = create_initial_state(user_id="user-1", session_id="session-1")
+    state.update(
+        {
+            "current_step": "accommodation_planning",
+            "messages": [
+                HumanMessage(
+                    content="住宿按省心、干净、动线方便的方案记录；如果没有真实锁价，请标注待核验。"
+                )
+            ],
+        }
+    )
+
+    command = select_accommodation_tool.invoke(
+        {
+            "accommodation_types": ["舒适型酒店"],
+            "runtime": _build_runtime(state),
+        }
+    )
+
+    assert "query_hotel_options" in command.update["messages"][0].content
+    assert "current_step" not in command.update
+    assert "selected_accommodation_types" not in command.update
+
+
+def test_select_accommodation_allows_selection_after_hotel_audit_result():
+    state = create_initial_state(user_id="user-1", session_id="session-1")
+    state.update(
+        {
+            "current_step": "accommodation_planning",
+            "messages": [
+                HumanMessage(
+                    content="住宿按省心、干净、动线方便的方案记录；如果没有真实锁价，请标注待核验。"
+                ),
+                ToolMessage(
+                    content="日期待确认，已跳过真实酒店库存查询，需二次核验。",
+                    name="query_hotel_options",
+                    tool_call_id="call-hotel-query",
+                ),
+            ],
+        }
+    )
+
+    command = select_accommodation_tool.invoke(
+        {
+            "accommodation_types": ["舒适型酒店"],
+            "runtime": _build_runtime(state),
+        }
+    )
+
+    assert command.update["current_step"] == "food_planning"
+    assert command.update["selected_accommodation_types"] == ["star_hotel"]
+
+
+def test_select_transport_requires_transport_audit_for_fallback_request():
+    state = create_initial_state(user_id="user-1", session_id="session-1")
+    state.update(
+        {
+            "current_step": "transport_planning",
+            "messages": [
+                HumanMessage(
+                    content="优先高铁；如果查不到合适车次，请明确待核验并给可执行交通兜底。"
+                )
+            ],
+        }
+    )
+
+    command = select_transport_tool.invoke(
+        {
+            "transport_type": "高铁",
+            "runtime": _build_runtime(state),
+        }
+    )
+
+    assert command.update["current_step"] == "transport_planning"
+    assert "query_transport_options" in command.update["messages"][0].content
+    assert "selected_transport" not in command.update
+
+
+def test_select_transport_allows_selection_after_transport_audit_result():
+    state = create_initial_state(user_id="user-1", session_id="session-1")
+    state.update(
+        {
+            "current_step": "transport_planning",
+            "messages": [
+                HumanMessage(
+                    content="优先高铁；如果查不到合适车次，请明确待核验并给可执行交通兜底。"
+                ),
+                ToolMessage(
+                    content="日期待确认，已跳过真实交通班次查询，需二次核验。",
+                    name="query_transport_options",
+                    tool_call_id="call-transport-query",
+                ),
+            ],
+        }
+    )
+
+    command = select_transport_tool.invoke(
+        {
+            "transport_type": "高铁",
+            "runtime": _build_runtime(state),
+        }
+    )
+
+    assert command.update["current_step"] == "accommodation_planning"
+    assert command.update["selected_transport"] == "train"
+
+
+def test_select_food_tool_keeps_flow_at_accommodation_when_accommodation_missing():
+    state = create_initial_state(user_id="user-1", session_id="session-1")
+    state.update(
+        {
+            "current_step": "food_planning",
+            "messages": [
+                HumanMessage(
+                    content="住宿按江景房兜底方案记录；如果没有真实锁价，请标注待核验。"
+                )
+            ],
+        }
+    )
+
+    command = select_food_tool.invoke(
+        {
+            "food_types": ["本地小吃"],
+            "runtime": _build_runtime(state),
+        }
+    )
+
+    assert command.update["current_step"] == "accommodation_planning"
+    assert "query_hotel_options" in command.update["messages"][0].content
+    assert "selected_food_types" not in command.update
 
 
 def test_state_transition_duplicate_food_does_not_rewrite_state():

@@ -857,6 +857,8 @@ def run_live_scenario(
                             str(event.get("message") or "SSE error event")
                         )
                         break
+                    elif event_type == "done":
+                        break
                     _raise_if_scenario_deadline_exceeded(
                         deadline=deadline,
                         scenario_id=scenario.id,

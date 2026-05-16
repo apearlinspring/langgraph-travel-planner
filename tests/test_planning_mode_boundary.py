@@ -98,6 +98,36 @@ def test_transport_fallback_convenience_wording_stays_free_planning():
     assert command.update["user_requirement"]["planning_mode"] == "free_planning"
 
 
+def test_hotel_fallback_does_not_accept_self_justified_agency_reason():
+    state = create_initial_state(user_id="user-1", session_id="session-1")
+    state["pending_initial_request_text"] = (
+        "我想去长沙，住湘江边江景房，4天3晚，"
+        "如果查不到具体酒店也请给我可执行的兜底方案。"
+    )
+
+    command = record_requirement_tool.invoke(
+        {
+            "departure_city": "出发地待确认",
+            "destination": "长沙",
+            "departure_date": "日期待确认",
+            "travel_days": 4,
+            "adult_count": 1,
+            "children_count": 0,
+            "budget_min": 1500.0,
+            "budget_max": 3500.0,
+            "travel_styles": ["轻松舒适"],
+            "special_needs": "住宿优先湘江边江景房；查不到具体酒店时给兜底方案。",
+            "planning_mode": "agency_plan",
+            "planning_mode_reason": "用户表达旅行社顾问方案或省心方案倾向",
+            "runtime": _build_runtime(state),
+        }
+    )
+
+    assert command.update["planning_mode"] == "free_planning"
+    assert command.update["user_requirement"]["planning_mode"] == "free_planning"
+    assert "保持自由规划" in command.update["planning_mode_reason"]
+
+
 def test_full_service_weather_risk_convenience_signal_enters_agency_plan():
     prompt = "我计划7月带父母去桂林4天3晚，担心下雨和老人走不动，请给省心安排并把天气、交通、酒店和Plan B风险写清楚。"
     state = create_initial_state(user_id="user-1", session_id="session-1")

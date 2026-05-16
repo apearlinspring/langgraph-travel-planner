@@ -912,6 +912,59 @@ def test_live_session_busy_is_classified_without_waiting_for_all_followups(monke
     assert "test@example.com" not in Path(result.snapshot_path).read_text(encoding="utf-8")
 
 
+def test_live_runner_stops_reading_each_turn_after_done(monkeypatch, tmp_path: Path):
+    scenario = EvaluationScenario(
+        id="done_turn",
+        name="Done turn",
+        category="agency_plan",
+        prompt="Plan a trip",
+        expected_mode="agency_plan",
+        min_score=80,
+        focus=["contract"],
+        tags=["agency"],
+        followups=["Finalize"],
+    )
+    requests: list[str] = []
+
+    class DoneClient:
+        def __init__(self, base_url: str, timeout_seconds: float = 900.0):
+            self.base_url = base_url
+            self.timeout_seconds = timeout_seconds
+
+        def post_json(self, path, payload, *, token=None, timeout_seconds=None):
+            if path.endswith("/login"):
+                return {"access_token": "token"}
+            return {"id": "conversation-id"}
+
+        def stream_json_events(self, path, payload, *, token, timeout_seconds=None):
+            requests.append(payload["content"])
+            if len(requests) == 1:
+                yield {"type": "token", "content": "需求已记录"}
+                yield {"type": "turn_observability", "observability": {"degradation_status": "ok"}}
+                yield {"type": "done", "turn_id": "turn-1"}
+                raise AssertionError("runner must not consume events after done")
+            yield {"type": "report_data", "report_data": _valid_report_data()}
+            yield {"type": "turn_observability", "observability": {"degradation_status": "ok"}}
+            yield {"type": "done", "turn_id": "turn-2"}
+            raise AssertionError("runner must not consume events after done")
+
+    monkeypatch.setattr("app.evaluation.live_runner.EvaluationApiClient", DoneClient)
+
+    result = run_live_scenario(
+        scenario,
+        LiveRunConfig(
+            output_dir=tmp_path,
+            timeout_seconds=1.0,
+            scenario_timeout_seconds=1.0,
+        ),
+    )
+
+    assert requests == ["Plan a trip", "Finalize"]
+    assert result.snapshot_path is not None
+    assert result.evidence_closure is not None
+    assert result.evidence_closure["checks"]["report_data"] is True
+
+
 def test_failure_category_prefers_runtime_budget_and_evidence_closure():
     runtime_gate = {
         "passed": False,
