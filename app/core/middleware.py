@@ -790,6 +790,21 @@ def _post_transport_accommodation_instruction() -> str:
     )
 
 
+def _is_accommodation_record_request(text: str) -> bool:
+    hotel_keywords = ("酒店", "住宿", "住")
+    stage_record_keywords = ("记录", "确认", "就按", "按", "安排")
+    return any(keyword in text for keyword in hotel_keywords) and any(
+        keyword in text for keyword in stage_record_keywords
+    )
+
+
+def _is_accommodation_query_request(text: str) -> bool:
+    hotel_keywords = ("酒店", "住宿", "住")
+    return any(keyword in text for keyword in ("查", "查询", "看看", "有没有")) and any(
+        keyword in text for keyword in hotel_keywords
+    )
+
+
 def _forced_tool_choice(
     current_step: str,
     latest_human_text: str,
@@ -812,15 +827,30 @@ def _forced_tool_choice(
     if current_step == "requirement_collection" and _should_prioritize_destination_query(text):
         return "query_destination_info"
 
+    stage_record_keywords = ("记录", "确认", "就按", "按", "安排")
+    if current_step == "accommodation_planning":
+        if _is_accommodation_record_request(text):
+            return "select_accommodation_tool"
+        if _is_accommodation_query_request(text):
+            return "query_hotel_options"
+
+    if current_step == "food_planning" and any(
+        keyword in text for keyword in ("餐饮", "美食", "吃")
+    ) and any(keyword in text for keyword in stage_record_keywords):
+        return "select_food_tool"
+
+    if current_step == "itinerary_generation" and any(
+        keyword in text for keyword in ("行程", "路线", "日程")
+    ) and any(keyword in text for keyword in ("生成", "记录", "确认", "最终")):
+        return "generate_itinerary_tool"
+
+    if current_step == "budget_summarization" and any(
+        keyword in text for keyword in ("预算", "费用", "报价")
+    ) and any(keyword in text for keyword in ("汇总", "生成", "记录", "确认", "说明")):
+        return "summarize_budget_tool"
+
     if any(keyword in text for keyword in SELECTION_KEYWORDS):
         return None
-
-    if current_step == "accommodation_planning":
-        hotel_keywords = ("酒店", "住宿", "住")
-        if any(keyword in text for keyword in DIRECT_QUERY_KEYWORDS) and any(
-            keyword in text for keyword in hotel_keywords
-        ):
-            return "query_hotel_options"
 
     if current_step == "transport_planning":
         transport_keywords = ("飞机", "航班", "高铁", "火车", "自驾", "交通")
@@ -985,8 +1015,8 @@ def _can_generate_final_report(state_dict: dict[str, Any]) -> bool:
     if not _state_value_ready(destination):
         return False
 
-    if not _has_confirmed_departure_date(state_dict):
-        return False
+    # 未确认日期会继续阻断真实交通/酒店查询，但不阻断最终报告；
+    # 报告会把日期作为待核验项，避免 acceptance 场景卡在 report_data 之前。
     if not _has_selected_transport(state_dict):
         return False
     if not _has_selected_accommodation(state_dict):
@@ -994,6 +1024,44 @@ def _can_generate_final_report(state_dict: dict[str, Any]) -> bool:
     return _state_value_ready(state_dict.get("itinerary")) and _state_value_ready(
         state_dict.get("budget")
     )
+
+
+def _has_itinerary_prerequisites(state_dict: dict[str, Any]) -> bool:
+    user_requirement = state_dict.get("user_requirement") or {}
+    if not isinstance(user_requirement, dict) or not _state_value_ready(user_requirement):
+        return False
+    destination = state_dict.get("selected_destination") or user_requirement.get("destination")
+    return (
+        _state_value_ready(destination)
+        and _has_selected_transport(state_dict)
+        and _has_selected_accommodation(state_dict)
+    )
+
+
+def _progress_tool_for_explicit_request(
+    latest_human_text: str,
+    state_dict: dict[str, Any],
+) -> str | None:
+    text = latest_human_text.strip()
+    if not text:
+        return None
+
+    if _looks_like_final_report_request(text):
+        return "generate_order_tool" if _can_generate_final_report(state_dict) else None
+
+    if any(keyword in text for keyword in ("预算", "费用", "报价")) and any(
+        keyword in text for keyword in ("汇总", "生成", "记录", "确认", "说明")
+    ):
+        if _state_value_ready(state_dict.get("itinerary")):
+            return "summarize_budget_tool"
+
+    if any(keyword in text for keyword in ("行程", "路线", "日程")) and any(
+        keyword in text for keyword in ("生成", "记录", "确认", "最终", "结构化")
+    ):
+        if _has_itinerary_prerequisites(state_dict):
+            return "generate_itinerary_tool"
+
+    return None
 
 
 def _preferred_tool_for_intent(intent: TravelIntent, state_dict: dict[str, Any]) -> str | None:
@@ -1821,6 +1889,25 @@ class StepConfigMiddleware(AgentMiddleware):
         )
         middleware_forced_tool = None
         latest_tool_result_names = _latest_tool_result_names(request)
+        progress_forced_tool = _progress_tool_for_explicit_request(latest_human_text, state_dict)
+        if progress_forced_tool and progress_forced_tool not in recent_tool_names:
+            progress_tool = _find_tool_by_name(self._step_config, progress_forced_tool)
+            if progress_tool is not None:
+                override_kwargs["tools"] = [progress_tool]
+                available_tool_names = _tool_names(override_kwargs["tools"])
+                middleware_forced_tool = progress_forced_tool
+                progress_instruction = (
+                    _final_report_tool_instruction()
+                    if progress_forced_tool == "generate_order_tool"
+                    else _tool_choice_instruction(progress_forced_tool)
+                )
+                override_kwargs["system_prompt"] = (
+                    f"{override_kwargs['system_prompt']}\n\n{progress_instruction}"
+                )
+                app_logger.info(
+                    "显式阶段推进请求：本轮工具列表已收窄: "
+                    f"{progress_forced_tool}"
+                )
         if current_step == "transport_planning":
             transport_human_text = latest_human_text or _recent_human_text(request, limit=1)
             transport_selection_requested = (
@@ -1915,6 +2002,7 @@ class StepConfigMiddleware(AgentMiddleware):
             accommodation_excluded_tools: set[str] = set()
             post_transport_selection = "select_transport_tool" in latest_tool_result_names
             accommodation_human_text = latest_human_text or _recent_human_text(request, limit=1)
+            accommodation_record_requested = _is_accommodation_record_request(accommodation_human_text)
             post_transport_requested_accommodation = any(
                 keyword in accommodation_human_text for keyword in CROSS_STEP_HOTEL_KEYWORDS
             )
@@ -1929,6 +2017,15 @@ class StepConfigMiddleware(AgentMiddleware):
             if not _accommodation_memory_is_stable(latest_human_text):
                 accommodation_excluded_tools.add("update_accommodation_preference_tool")
             if _has_selected_accommodation(state_dict):
+                accommodation_excluded_tools.update(
+                    {"query_hotel_options", "update_accommodation_preference_tool"}
+                )
+            elif (
+                accommodation_record_requested
+                and not post_transport_selection
+                and "select_accommodation_tool" in available_tool_names
+            ):
+                middleware_forced_tool = "select_accommodation_tool"
                 accommodation_excluded_tools.update(
                     {"query_hotel_options", "update_accommodation_preference_tool"}
                 )
@@ -1963,6 +2060,16 @@ class StepConfigMiddleware(AgentMiddleware):
             if _has_accommodation_candidates(state_dict) and not _has_selected_accommodation(state_dict):
                 override_kwargs["system_prompt"] = (
                     f"{override_kwargs['system_prompt']}\n\n{_accommodation_candidate_instruction()}"
+                )
+            elif (
+                accommodation_record_requested
+                and not post_transport_selection
+                and not _has_selected_accommodation(state_dict)
+            ):
+                override_kwargs["system_prompt"] = (
+                    f"{override_kwargs['system_prompt']}\n\n"
+                    f"{_accommodation_candidate_instruction()}\n\n"
+                    f"{_temporary_accommodation_instruction()}"
                 )
             elif post_transport_selection and not post_transport_requested_accommodation:
                 override_kwargs["system_prompt"] = (

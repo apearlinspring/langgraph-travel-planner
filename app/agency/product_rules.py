@@ -347,7 +347,32 @@ def fallback_internal_evidence(category: str) -> dict[str, Any]:
         "travel_days_range": contract.travel_days_range,
         "regions": list(contract.regions),
         "last_reviewed": contract.last_reviewed,
+        "freshness_status": "current",
+        "requires_verification": True,
+        "prohibited_commitments": [],
     }
+
+
+def _evidence_applies_to_mode(item: dict[str, Any], mode: PlanningMode) -> bool:
+    modes = {str(value).strip() for value in item.get("applicable_modes") or [] if str(value).strip()}
+    return mode in modes or "all" in {value.lower() for value in modes}
+
+
+def _internal_doc_evidence_for_mode(category: str, mode: PlanningMode) -> dict[str, Any]:
+    """Pick internal evidence that can be cited under the current planning mode."""
+
+    for item in internal_doc_evidence(category, 8):
+        evidence = dict(item)
+        if _evidence_applies_to_mode(evidence, mode):
+            return evidence
+
+    fallback = fallback_internal_evidence(category)
+    if _evidence_applies_to_mode(fallback, mode):
+        return fallback
+
+    contract = get_contract(category, "internal")
+    fallback["applicable_modes"] = list(contract.applicable_modes)
+    return fallback
 
 
 def _pick_highlight(lines: list[str], keywords: tuple[str, ...], fallback_index: int = 0) -> str | None:
@@ -382,9 +407,8 @@ def build_agency_context(
     risk_lines = list(internal_doc_highlights("risk", 2))
     report_lines = list(internal_doc_highlights("report", 2))
     evidence = [
-        item
+        _internal_doc_evidence_for_mode(category, mode)
         for category in ("products", "sop", "pricing", "risk", "report")
-        for item in internal_doc_evidence(category, 1)
     ]
 
     if mode == "agency_plan":

@@ -1354,6 +1354,8 @@ def _ensure_budget_quality_contract(
         if not normalized.get(key):
             normalized[key] = list(quality_notes[key])
 
+    _add_departure_date_verification_item(normalized, requirement)
+
     if not normalized.get("line_items"):
         normalized["line_items"] = _build_budget_line_items(
             state,
@@ -2142,6 +2144,18 @@ def _requirement_has_confirmed_departure_date(requirement: dict[str, Any]) -> bo
     return True
 
 
+def _add_departure_date_verification_item(
+    budget: dict[str, Any],
+    requirement: dict[str, Any],
+) -> None:
+    if _requirement_has_confirmed_departure_date(requirement):
+        return
+    item = "出发日期：当前为日期待确认，真实交通、酒店、门票和天气窗口需在用户确认日期后复核。"
+    verification_items = budget.setdefault("verification_items", [])
+    if item not in verification_items:
+        verification_items.append(item)
+
+
 def _has_confirmed_transport_state(state: TravelState) -> bool:
     return bool(state.get("selected_transport") or state.get("selected_transport_option"))
 
@@ -2598,14 +2612,14 @@ def select_accommodation_tool(
 
 @tool
 def select_food_tool(
-    food_types: list[str],
+    food_types: list[str] | str,
     food_pois: Optional[list[dict]] = None,
     runtime: ToolRuntime[None, TravelState] = None,
 ) -> Command:
     """Persist food preferences and move to itinerary generation."""
 
     app_logger.info(f"用户选择餐饮偏好: {food_types}")
-    food_types = _normalize_choices(food_types, FOOD_LABELS, FOOD_ALIASES)
+    food_types = _normalize_choices(_as_string_list(food_types), FOOD_LABELS, FOOD_ALIASES)
     invalid_types = sorted(set(food_types) - set(FOOD_LABELS))
     if invalid_types:
         valid_types = ", ".join(sorted(FOOD_LABELS))
@@ -2652,7 +2666,6 @@ def generate_itinerary_tool(
         "selected_destination",
         "selected_transport",
         "selected_accommodation_types",
-        "selected_food_types",
     ]
     missing = [field for field in required_fields if not state.get(field)]
     if missing:
@@ -2670,7 +2683,7 @@ def generate_itinerary_tool(
     selected_accommodation = state.get("selected_accommodation_option") or {}
     transport_summary = _format_transport_option(selected_transport_option)
     accommodation_summary = _format_accommodation_option(selected_accommodation)
-    selected_food_types = state.get("selected_food_types") or []
+    selected_food_types = state.get("selected_food_types") or ["local", "specialty"]
     selected_food_pois = _get_food_pois(state)
     food_summary = "、".join(FOOD_LABELS.get(item, item) for item in selected_food_types)
     travel_styles = "、".join(requirement.get("travel_styles") or [])
@@ -2805,6 +2818,7 @@ def generate_itinerary_tool(
         f"已生成 {travel_days} 天的行程草案。",
         runtime,
         itinerary=itinerary,
+        selected_food_types=selected_food_types,
         current_step="budget_summarization",
     )
 
@@ -2955,8 +2969,6 @@ def generate_order_tool(
     missing_items = []
     if not selected_destination:
         missing_items.append("目的地")
-    if not _requirement_has_confirmed_departure_date(requirement):
-        missing_items.append("出发日期")
     if expected_days <= 0:
         missing_items.append("行程天数")
     if total_people <= 0:

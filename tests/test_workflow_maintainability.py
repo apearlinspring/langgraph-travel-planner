@@ -590,6 +590,20 @@ def test_select_food_tool_normalizes_common_chinese_labels():
     assert command.update["current_step"] == "itinerary_generation"
 
 
+def test_select_food_tool_accepts_model_string_argument():
+    state = create_initial_state(user_id="user-1", session_id="session-1")
+
+    command = select_food_tool.invoke(
+        {
+            "food_types": "本地小吃加特色餐厅，照顾轻松节奏",
+            "runtime": _build_runtime(state),
+        }
+    )
+
+    assert command.update["selected_food_types"] == ["specialty", "local"]
+    assert command.update["current_step"] == "itinerary_generation"
+
+
 def test_check_current_progress_uses_shared_step_labels():
     state = create_initial_state(user_id="user-1", session_id="session-1")
     state.update(
@@ -871,6 +885,44 @@ def test_itinerary_budget_and_order_report_use_selected_real_options():
     assert "未接入真实支付服务" in order_command.update["messages"][0].content
 
 
+def test_generate_itinerary_tool_defaults_missing_food_preference():
+    state = create_initial_state(user_id="user-1", session_id="session-1")
+    state.update(
+        {
+            "current_step": "itinerary_generation",
+            "user_requirement": {
+                "departure_city": "北京",
+                "destination": "南京",
+                "departure_date": "日期待确认",
+                "departure_date_confirmed": False,
+                "travel_days": 2,
+                "adult_count": 2,
+                "children_count": 0,
+                "budget_min": 1500.0,
+                "budget_max": 3000.0,
+                "budget_level": "comfort",
+                "travel_styles": ["culture"],
+                "special_needs": None,
+            },
+            "selected_destination": "南京",
+            "selected_transport": "train",
+            "selected_accommodation_types": ["star_hotel"],
+        }
+    )
+
+    itinerary_command = generate_itinerary_tool.invoke({"runtime": _build_runtime(state)})
+
+    assert itinerary_command.update["current_step"] == "budget_summarization"
+    assert itinerary_command.update["selected_food_types"] == ["local", "specialty"]
+    assert len(itinerary_command.update["itinerary"]) == 2
+    all_meal_text = "\n".join(
+        meal
+        for day in itinerary_command.update["itinerary"]
+        for meal in day["meals"]
+    )
+    assert "本地" in all_meal_text
+
+
 def test_final_report_pads_four_day_trip_and_exports_route_bound_data():
     state = create_initial_state(user_id="user-1", session_id="session-1")
     state.update(
@@ -1021,6 +1073,27 @@ def test_generate_order_tool_blocks_pending_report_from_basic_requirement():
     assert "完整行程" in message
     assert "预算汇总" in message
     assert "不会在目的地或产品框架阶段提前生成 report_data" in message
+
+
+def test_generate_order_tool_allows_pending_date_as_verification_item():
+    state = create_initial_state(user_id="user-1", session_id="session-1")
+    _mark_report_ready(state, destination="南京")
+    state["user_requirement"].update(
+        {
+            "departure_city": "出发地待确认",
+            "departure_date": "日期待确认",
+            "departure_date_confirmed": False,
+            "destination": "南京",
+        }
+    )
+
+    order_command = generate_order_tool.invoke({"runtime": _build_runtime(state)})
+
+    assert "report_data" in order_command.update
+    report_data = order_command.update["report_data"]
+    verification_items = report_data["budget_confidence"]["verification_items"]
+    assert any("出发日期" in item and "日期待确认" in item for item in verification_items)
+    assert validate_report_data(report_data).ok is True
 
 
 def test_generate_order_tool_adds_changsha_route_nodes_for_map_export():

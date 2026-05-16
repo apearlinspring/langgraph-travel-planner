@@ -367,6 +367,177 @@ async def test_step_middleware_removes_repeated_state_transition_tool():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("current_step", "message", "tools", "expected_tool"),
+    [
+        (
+            "accommodation_planning",
+            "住宿按省心、干净、动线方便的方案记录；真实酒店价格待核验。",
+            ["query_hotel_options", "select_accommodation_tool"],
+            "select_accommodation_tool",
+        ),
+        (
+            "food_planning",
+            "餐饮按本地特色和轻松节奏安排，请直接记录推荐方向。",
+            ["select_food_tool"],
+            "select_food_tool",
+        ),
+        (
+            "itinerary_generation",
+            "请生成并记录最终行程，天数必须和需求一致。",
+            ["generate_itinerary_tool"],
+            "generate_itinerary_tool",
+        ),
+        (
+            "budget_summarization",
+            "请汇总预算，包含交通、住宿、餐饮、景点体验和其他机动费用。",
+            ["summarize_budget_tool"],
+            "summarize_budget_tool",
+        ),
+    ],
+)
+async def test_stage_record_confirmation_forces_state_tool(
+    current_step,
+    message,
+    tools,
+    expected_tool,
+):
+    captured = {}
+    compatibility = get_model_compatibility()
+    middleware = StepConfigMiddleware(
+        {
+            current_step: {
+                "prompt": "阶段提示",
+                "tools": tools,
+                "requires": [],
+            }
+        }
+    )
+    state = {
+        "current_step": current_step,
+        "user_requirement": {
+            "departure_date": "日期待确认",
+            "departure_date_confirmed": False,
+        },
+    }
+
+    async def handler(request):
+        captured["tool_choice"] = getattr(request, "tool_choice", None)
+        captured["tools"] = getattr(request, "tools", [])
+        captured["system_prompt"] = getattr(request, "system_prompt", "")
+        return "ok"
+
+    await middleware.awrap_model_call(DummyRequest(state, [HumanMessage(content=message)]), handler)
+
+    assert captured["tools"] == [expected_tool]
+    if compatibility.supports_forced_tool_choice:
+        assert captured["tool_choice"] == expected_tool
+    else:
+        assert captured["tool_choice"] is None
+        assert expected_tool in captured["system_prompt"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("current_step", "message", "extra_state", "expected_tool"),
+    [
+        (
+            "requirement_collection",
+            "请生成并记录3天2晚结构化行程，动线要合理。",
+            {},
+            "generate_itinerary_tool",
+        ),
+        (
+            "requirement_collection",
+            "请汇总预算，包含交通、住宿、餐饮、景点体验和机动费用。",
+            {"itinerary": [{"day_number": 1, "activities": ["夫子庙"]}]},
+            "summarize_budget_tool",
+        ),
+        (
+            "food_planning",
+            "请直接生成最终旅行规划报告和 report_data。",
+            {
+                "itinerary": [{"day_number": 1, "activities": ["夫子庙"]}],
+                "budget": {"total": 5000},
+            },
+            "generate_order_tool",
+        ),
+    ],
+)
+async def test_explicit_progress_request_forces_state_tool_after_step_regression(
+    current_step,
+    message,
+    extra_state,
+    expected_tool,
+):
+    captured = {}
+    compatibility = get_model_compatibility()
+    middleware = StepConfigMiddleware(
+        {
+            "requirement_collection": {
+                "prompt": "需求阶段",
+                "tools": ["record_requirement_tool"],
+                "requires": [],
+            },
+            "food_planning": {
+                "prompt": "餐饮阶段",
+                "tools": ["select_food_tool"],
+                "requires": [],
+            },
+            "itinerary_generation": {
+                "prompt": "行程阶段",
+                "tools": ["generate_itinerary_tool"],
+                "requires": [],
+            },
+            "budget_summarization": {
+                "prompt": "预算阶段",
+                "tools": ["summarize_budget_tool"],
+                "requires": [],
+            },
+            "order_generation": {
+                "prompt": "报告阶段",
+                "tools": ["generate_order_tool"],
+                "requires": [],
+            },
+        }
+    )
+    state = {
+        "current_step": current_step,
+        "user_requirement": {
+            "destination": "南京",
+            "departure_date": "日期待确认",
+            "departure_date_confirmed": False,
+            "travel_days": 3,
+            "adult_count": 2,
+            "children_count": 0,
+            "budget_min": 1500,
+        },
+        "selected_destination": "南京",
+        "selected_transport": "train",
+        "selected_accommodation_types": ["star_hotel"],
+    }
+    state.update(extra_state)
+
+    async def handler(request):
+        captured["tool_choice"] = getattr(request, "tool_choice", None)
+        captured["tools"] = getattr(request, "tools", [])
+        captured["system_prompt"] = getattr(request, "system_prompt", "")
+        return "ok"
+
+    await middleware.awrap_model_call(
+        DummyRequest(state, [HumanMessage(content=message)]),
+        handler,
+    )
+
+    assert captured["tools"] == [expected_tool]
+    if compatibility.supports_forced_tool_choice:
+        assert captured["tool_choice"] == expected_tool
+    else:
+        assert captured["tool_choice"] is None
+        assert expected_tool in captured["system_prompt"]
+
+
+@pytest.mark.asyncio
 async def test_step_middleware_forces_direct_transport_query():
     captured = {}
     compatibility = get_model_compatibility()
@@ -1243,6 +1414,59 @@ async def test_order_generation_final_report_request_forces_report_tool():
 
 
 @pytest.mark.asyncio
+async def test_order_generation_final_report_allows_pending_date_with_verification():
+    captured = {}
+    compatibility = get_model_compatibility()
+    middleware = StepConfigMiddleware(
+        {
+            "order_generation": {
+                "prompt": "订单阶段",
+                "tools": ["generate_order_tool", "go_back_to_budget"],
+                "requires": [],
+            }
+        }
+    )
+    state = {
+        "current_step": "order_generation",
+        "user_requirement": {
+            "destination": "南京",
+            "departure_date": "日期待确认",
+            "departure_date_confirmed": False,
+            "travel_days": 3,
+            "adult_count": 2,
+            "children_count": 0,
+            "budget_min": 1500,
+        },
+        "selected_destination": "南京",
+        "selected_transport": "train",
+        "selected_accommodation_types": ["star_hotel"],
+        "budget": {"total": 5000},
+        "itinerary": [{"day_number": 1, "activities": ["夫子庙"]}],
+    }
+
+    async def handler(request):
+        captured["tool_choice"] = getattr(request, "tool_choice", None)
+        captured["tools"] = getattr(request, "tools", [])
+        captured["system_prompt"] = getattr(request, "system_prompt", "")
+        return "ok"
+
+    await middleware.awrap_model_call(
+        DummyRequest(
+            state,
+            [HumanMessage(content="请直接生成最终旅行规划报告和report_data。")],
+        ),
+        handler,
+    )
+
+    assert captured["tools"] == ["generate_order_tool"]
+    if compatibility.supports_forced_tool_choice:
+        assert captured["tool_choice"] == "generate_order_tool"
+    else:
+        assert captured["tool_choice"] is None
+        assert "只能调用 `generate_order_tool`" in captured["system_prompt"]
+
+
+@pytest.mark.asyncio
 async def test_order_generation_does_not_generate_report_before_key_confirmations():
     captured = {}
     middleware = StepConfigMiddleware(
@@ -1668,6 +1892,58 @@ async def test_accommodation_stage_without_candidates_forces_hotel_query():
     else:
         assert captured["tool_choice"] is None
         assert "query_hotel_options" in captured["system_prompt"]
+    assert "update_accommodation_preference_tool" not in captured["tools"]
+
+
+@pytest.mark.asyncio
+async def test_accommodation_record_request_without_candidates_forces_selection_not_query():
+    captured = {}
+    compatibility = get_model_compatibility()
+    middleware = StepConfigMiddleware(
+        {
+            "accommodation_planning": {
+                "prompt": "住宿阶段",
+                "tools": [
+                    "select_accommodation_tool",
+                    "query_hotel_options",
+                    "update_accommodation_preference_tool",
+                ],
+                "requires": ["user_requirement", "selected_destination", "selected_transport"],
+            }
+        }
+    )
+    state = {
+        "current_step": "accommodation_planning",
+        "user_requirement": {
+            "departure_date": "日期待确认",
+            "departure_date_confirmed": False,
+            "travel_days": 2,
+        },
+        "selected_destination": "眉县",
+        "selected_transport": "train",
+    }
+
+    async def handler(request):
+        captured["tool_choice"] = getattr(request, "tool_choice", None)
+        captured["tools"] = getattr(request, "tools", [])
+        captured["system_prompt"] = getattr(request, "system_prompt", "")
+        return "ok"
+
+    await middleware.awrap_model_call(
+        DummyRequest(
+            state,
+            [HumanMessage(content="住宿按省心、干净、动线方便的方案记录；真实价格标注待核验。")],
+        ),
+        handler,
+    )
+
+    assert captured["tools"] == ["select_accommodation_tool"]
+    if compatibility.supports_forced_tool_choice:
+        assert captured["tool_choice"] == "select_accommodation_tool"
+    else:
+        assert captured["tool_choice"] is None
+        assert "select_accommodation_tool" in captured["system_prompt"]
+    assert "query_hotel_options" not in captured["tools"]
     assert "update_accommodation_preference_tool" not in captured["tools"]
 
 

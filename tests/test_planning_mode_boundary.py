@@ -367,4 +367,8 @@ def test_generate_order_report_data_keeps_free_mode_stable():
     assert report_data["agency_context"]["mode"] == "free_planning"
     assert report_data["agency_product"]["mode"] == "free_planning"
     assert report_data["agency_product"]["code"] == "free_planning_optimizer"
+    assert all(
+        "free_planning" in set(item.get("applicable_modes") or [])
+        for item in report_data["agency_context"]["evidence"]
+    )
     assert "旅行社顾问方案" not in report_data["agency_context"]["summary"]
