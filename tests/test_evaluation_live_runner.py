@@ -34,7 +34,7 @@ from app.evaluation.live_runner import (
     select_scenarios,
     snapshot_path_for,
 )
-from app.evaluation.scenarios import EvaluationScenario
+from app.evaluation.scenarios import EvaluationScenario, get_scenario
 from app.evaluation.scenarios import ACCEPTANCE_SMOKE_TAG, acceptance_smoke_scenarios
 from scripts.run_evaluation_scenarios import (
     RUNTIME_ARTIFACT_ROOT,
@@ -193,6 +193,22 @@ def test_scenario_message_sequence_uses_scenario_followups():
     )
 
     assert scenario_message_sequence(scenario) == ["Plan a trip", "Finalize now"]
+
+
+def test_risk_weather_disruption_uses_explicit_stage_progression_followups():
+    scenario = get_scenario("risk_weather_disruption")
+    messages = scenario_message_sequence(scenario)
+
+    assert messages[0] == scenario.prompt
+    assert messages[1].startswith("需求确认")
+    assert "2026-07-10" in messages[1]
+    assert "天气" in messages[2]
+    assert "室内Plan B" in messages[2]
+    assert "目的地确认桂林" in messages[3]
+    assert any("低强度路线" in message and "天气Plan B" in message for message in messages)
+    assert "汇总预算" in messages[-1]
+    assert "report_data" in messages[-1]
+    assert "旅行社业务证据" in messages[-1]
 
 
 def test_runtime_budget_for_scenario_uses_long_context_profile_and_overrides():
