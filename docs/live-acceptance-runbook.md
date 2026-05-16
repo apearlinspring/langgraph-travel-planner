@@ -10,9 +10,9 @@ chcp 65001 | Out-Null
 
 ## 当前分支
 
-- 工作树：`D:\Users\Administrator\PycharmProjects\ZhiXing\langgraph-travel-planner-predeploy-runtime-acceptance`
-- 分支：`codex/predeploy-runtime-acceptance`
-- 日期：2026-05-14
+- 工作树：`D:\Users\Administrator\PycharmProjects\ZhiXing\langgraph-travel-planner-live-demo-acceptance-refresh`
+- 分支：`codex/live-demo-acceptance-refresh`
+- 日期：2026-05-16
 
 ## 状态判定
 
@@ -31,9 +31,27 @@ chcp 65001 | Out-Null
 
 缺真实依赖或缺 `report_data` 时，任何命令都不能返回 `passed`。
 
-## 2026-05-14 部署前真实环境结果
+## 2026-05-16 当前真实复跑记录
 
-本轮部署前 readiness（就绪检查）和 `acceptance-smoke`（验收冒烟测试）脱敏记录见 `docs/predeploy-runtime-acceptance.md`。该记录只证明最小报价说明链路 `pricing_agency_quote_explanation` 1/1 passed（通过），不能替代 `docs/acceptance-core-report.md` 中已有的完整 9 场景 acceptance-core（核心验收）。
+- `.env`：存在且未被 Git 跟踪；未打印真实值。
+- readiness（就绪检查）：PostgreSQL（关系型数据库）、Redis（内存数据结构存储）、RAG（检索增强生成）、LLM（大语言模型）和 MCP（模型上下文协议）均可用；`/health/ready=ready`，MCP 6 healthy / 37 tools。
+- `acceptance-smoke`（冒烟验收）：`.runtime/acceptance-smoke/20260516-063639-acceptance-summary.json`，1/1 passed（通过），`report_data=true`，证据闭环通过。
+- `acceptance-core`（核心验收）：`.runtime/acceptance-core/20260516-074331-acceptance-summary.json`，6/9 passed（通过），总状态 failed（失败）。
+- 失败分类：`edge_hotel_tool_fallback` 和 `edge_transport_tool_fallback` 为 acceptance_gate（验收门禁）/工具覆盖失败，分别缺少预期 `query_hotel_options` 与 `query_transport_options`；`risk_weather_disruption` 为 timeout（超时）/运行预算失败，并缺少最终 `report_data`。
+- 结论：本轮 smoke 通过但 core 未通过，不能声明部署通过；详见 `docs/acceptance-core-report.md` 与 `docs/predeploy-runtime-acceptance.md`。
+
+Windows 本地后端建议用以下方式启动，避免 direct `uvicorn app.main:app` 在 Windows 事件循环和开发 reload（热重载）上引入干扰：
+
+```powershell
+$env:DEBUG = 'false'
+$env:RUNTIME_MCP_STARTUP_TIMEOUT_SECONDS = '45'
+$env:RUNTIME_MCP_OPTIONAL_STARTUP_TIMEOUT_SECONDS = '45'
+uv run python main.py
+```
+
+## 2026-05-14 历史部署前真实环境结果
+
+该轮部署前 readiness（就绪检查）和 `acceptance-smoke`（验收冒烟测试）只证明当时的最小报价说明链路 `pricing_agency_quote_explanation` 1/1 passed（通过），不能替代当前 `docs/acceptance-core-report.md` 的最新 9 场景 acceptance-core（核心验收）结论。
 
 生产发布前若模型、RAG（检索增强生成）、MCP（模型上下文协议）、报告契约或外部 API（应用程序接口）配置变化，应重跑完整 acceptance-core。所有真实本机 `.env` 只在本地运行时使用，不写入手册、摘要或提交。
 
@@ -268,9 +286,9 @@ uv sync --frozen
 
 结论：smoke 已经证明最小旅行社报价说明链路可进入真实聊天 API（应用程序接口）、生成 `report_data` 并通过确定性门禁。下一步应运行 9 个核心场景，不要用 smoke 通过结果直接代表核心验收通过。
 
-## 本轮验证记录
+## 2026-05-14 历史验证记录
 
-本轮详细脱敏结果集中记录在 `docs/predeploy-runtime-acceptance.md`，`docs/acceptance-core-report.md` 已恢复为完整 9 场景 acceptance-core（核心验收）证据。实际执行的关键命令包括：
+该轮详细脱敏结果曾集中记录在 `docs/predeploy-runtime-acceptance.md`。以下命令和指标仅作为历史参考，当前 2026-05-16 结论以本文前部的“当前真实复跑记录”和 `docs/acceptance-core-report.md` 为准。实际执行的关键命令包括：
 
 ```powershell
 git fetch origin main
@@ -321,4 +339,4 @@ git fetch origin main
 
 ## 下一步
 
-如果后续改动影响模型、RAG（检索增强生成）、MCP（模型上下文协议）或报告结构，先复跑 `acceptance-smoke`，再复跑完整 acceptance-core。当前 smoke 历史链路、core preflight 和完整 9 场景均已通过；后续继续只提交脱敏摘要，不提交 `.runtime/` 原始产物。
+当前 2026-05-16 `acceptance-core` 未通过。后续修复工具覆盖和风险场景超时后，先复跑 `acceptance-smoke`，再复跑完整 acceptance-core；继续只提交脱敏摘要，不提交 `.runtime/` 原始产物。

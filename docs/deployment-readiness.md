@@ -16,13 +16,26 @@
 8. 至少有一个审批操作者或管理员账号，用户对象 `role` 或 `preferences.role` 为 `approver` / `admin`，普通用户不能批准、拒绝或手动过期审批。
 9. `/health/ready` 返回 `ready` 或经确认可接受的 `degraded`；生产发布不接受 `not_ready`。
 
-## 2026-05-14 部署前本地真实验收记录
+## 2026-05-16 部署就绪判定
 
-本轮在 `codex/predeploy-runtime-acceptance` 分支、真实本机 `.env` 和真实本地 PostgreSQL（关系型数据库）/ Redis（内存数据结构存储）条件下执行；脱敏记录拆分到 `docs/predeploy-runtime-acceptance.md`，避免覆盖 `docs/acceptance-core-report.md` 中完整 9 场景 acceptance-core（核心验收）证据。
+本轮在 `codex/live-demo-acceptance-refresh` 分支使用真实本机 `.env` 复跑。环境依赖本身 ready：PostgreSQL（关系型数据库）、Redis（内存数据结构存储）、RAG（检索增强生成）、LLM（大语言模型）和 MCP（模型上下文协议）均可用，后端 `/health/ready=ready`，MCP 6 healthy / 37 tools。`acceptance-smoke`（冒烟验收）`pricing_agency_quote_explanation` 1/1 passed（通过）。
+
+部署结论仍为 failed（失败）/ not ready（未就绪）：完整 `acceptance-core`（核心验收）为 6/9 passed（通过），失败分类为 `acceptance_gate=2` 和 `timeout=1`。失败场景包括酒店工具覆盖、交通工具覆盖和天气风险场景超时。上线前必须修复并重跑完整 9 场景，不得用本轮 smoke 通过覆盖 core 失败。
+
+脱敏证据：
+
+- `.runtime/acceptance-smoke/20260516-063639-acceptance-summary.json`
+- `.runtime/acceptance-core/20260516-074331-acceptance-summary.json`
+- `docs/acceptance-core-report.md`
+- `docs/predeploy-runtime-acceptance.md`
+
+## 2026-05-14 历史部署前本地真实验收记录
+
+该轮在 `codex/predeploy-runtime-acceptance` 分支、真实本机 `.env` 和真实本地 PostgreSQL（关系型数据库）/ Redis（内存数据结构存储）条件下执行；以下内容仅作历史参考，当前部署判定以 2026-05-16 记录和 `docs/acceptance-core-report.md` 为准。
 
 摘要：RAG（检索增强生成）public/internal 向量库分别为 18/61 个 embedding（嵌入向量）；staging readiness（预生产就绪检查）和 acceptance backend readiness（验收后端就绪检查）均为 ready；MCP（模型上下文协议）6 个服务 healthy，37 个工具；`acceptance-smoke`（验收冒烟测试）`pricing_agency_quote_explanation` 1/1 passed（通过）。
 
-边界：本轮 smoke 1/1 passed 只是部署前最小链路验收，不能替代 `docs/acceptance-core-report.md` 中已有的 9 场景 acceptance-core。生产发布前若模型、RAG、MCP、报告契约或外部 API（应用程序接口）配置变化，应重跑完整 acceptance-core。`.env`、`.runtime/`、`.venv/`、`data/vectorstore/` 和 `data/vectorstore_internal/` 均只保留本地，不提交。
+边界：该轮 smoke 1/1 passed 只是部署前最小链路验收，不能替代最新 9 场景 acceptance-core。生产发布前若模型、RAG、MCP、报告契约或外部 API（应用程序接口）配置变化，应重跑完整 acceptance-core。`.env`、`.runtime/`、`.venv/`、`data/vectorstore/` 和 `data/vectorstore_internal/` 均只保留本地，不提交。
 
 ## 2026-05-15 线上部署与 RAG 检查记录
 
