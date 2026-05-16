@@ -2,11 +2,26 @@
 source_type: agency_internal
 category: products
 visibility: internal
+source: fictional_internal_catalog
 applicable_modes:
   - agency_plan
   - free_planning
 evidence_level: standard
 last_reviewed: "2026-05-11"
+title: 知行旅行社产品路线模板
+product_id: ZX-PROD-CATALOG-OVERVIEW
+destination: general
+theme: product_line_overview
+duration: varied
+audience:
+  - family
+  - couple
+  - senior
+  - team
+  - free_planning
+service_level: route_template
+price_band: varied
+evidence_type: fictional_product_catalog
 ---
 
 # 知行旅行社产品路线模板
@@ -19,6 +34,23 @@ last_reviewed: "2026-05-11"
 
 - 自由规划型：用户自己出行，需要清晰路线、预算、住宿区域和避坑提醒，不强调旅行社托管。
 - 省心方案型：用户希望减少决策成本，由顾问按成熟路线、服务标准和预算档位整合为可落地方案。
+
+## 产品匹配字段
+
+| field | value |
+|---|---|
+| product_id | ZX-PROD-CATALOG-OVERVIEW |
+| destination | general |
+| theme | product_line_overview |
+| duration | varied |
+| audience | family / couple / senior / team / free_planning |
+| service_level | route_template |
+| price_band | varied |
+| source | fictional_internal_catalog |
+| category | products |
+| evidence_type | fictional_product_catalog |
+
+上述字段用于检索和匹配，不代表真实库存、真实供应商报价或客户资料。
 
 ## 轻量产品线
 
