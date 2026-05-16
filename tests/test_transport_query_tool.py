@@ -149,3 +149,41 @@ async def test_query_transport_options_skips_unconfirmed_state_date(monkeypatch)
     assert "需要先由用户明确或确认" in result
     assert event["status"] == "skipped"
     assert event["error_type"] == "invalid_transport_query_args"
+
+
+@pytest.mark.asyncio
+async def test_query_transport_options_skips_unconfirmed_state_date_even_with_iso_arg(monkeypatch):
+    async def fail_create_transport_coordinator():
+        raise AssertionError("coordinator should not be created")
+
+    monkeypatch.setattr(
+        transport_query,
+        "create_transport_coordinator",
+        fail_create_transport_coordinator,
+    )
+    runtime = _build_runtime(
+        {
+            "user_requirement": {
+                "departure_city": "武汉",
+                "destination": "张家界",
+                "departure_date": "日期待确认",
+                "departure_date_confirmed": False,
+            }
+        }
+    )
+
+    command = await transport_query.query_transport_options.ainvoke(
+        {
+            "origin_city": "武汉",
+            "destination_city": "张家界",
+            "departure_date": "2026-06-01",
+            "transport_type": "train",
+            "runtime": runtime,
+        }
+    )
+
+    result = command.update["messages"][0].content
+    event = command.update["tool_audit_events"][0]
+    assert "需要先由用户明确或确认" in result
+    assert event["status"] == "skipped"
+    assert event["error_type"] == "invalid_transport_query_args"

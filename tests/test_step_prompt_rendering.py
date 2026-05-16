@@ -621,6 +621,62 @@ async def test_transport_stage_missing_date_does_not_open_live_query():
 
 
 @pytest.mark.asyncio
+async def test_transport_fallback_missing_date_keeps_auditable_guarded_query():
+    captured = {}
+    compatibility = get_model_compatibility()
+    middleware = StepConfigMiddleware(
+        {
+            "transport_planning": {
+                "prompt": "交通阶段",
+                "tools": ["query_transport_options", "select_transport_tool"],
+                "requires": ["user_requirement", "selected_destination"],
+            }
+        }
+    )
+    state = {
+        "current_step": "transport_planning",
+        "user_requirement": {
+            "departure_city": "武汉",
+            "departure_date": "日期待确认",
+            "departure_date_confirmed": False,
+            "special_needs": "优先高铁，如果查不到合适车次也请明确待核验并给出可执行交通兜底。",
+        },
+        "selected_destination": "张家界",
+    }
+
+    async def handler(request):
+        captured["tool_choice"] = getattr(request, "tool_choice", None)
+        captured["tools"] = getattr(request, "tools", [])
+        captured["system_prompt"] = getattr(request, "system_prompt", "")
+        return "ok"
+
+    await middleware.awrap_model_call(
+        DummyRequest(
+            state,
+            [
+                HumanMessage(
+                    content=(
+                        "交通按省心和时间合理优先，请直接记录你推荐的方式；"
+                        "实时班次和价格标注待核验。"
+                    )
+                )
+            ],
+        ),
+        handler,
+    )
+
+    assert captured["tools"] == ["query_transport_options"]
+    if compatibility.supports_forced_tool_choice:
+        assert captured["tool_choice"] == "query_transport_options"
+    else:
+        assert captured["tool_choice"] is None
+        assert "query_transport_options" in captured["system_prompt"]
+    assert "保留一次交通查询工具调用作为治理证据" in captured["system_prompt"]
+    assert "让工具守卫返回 skipped 审计结果" in captured["system_prompt"]
+    assert "不要编造 YYYY-MM-DD 日期" in captured["system_prompt"]
+
+
+@pytest.mark.asyncio
 async def test_step_middleware_does_not_force_transport_query_on_selection_turn():
     captured = {}
     middleware = StepConfigMiddleware(
@@ -1991,3 +2047,64 @@ async def test_accommodation_stage_missing_date_does_not_open_live_hotel_query()
     assert captured["tool_choice"] is None
     assert "query_hotel_options" not in captured["tools"]
     assert "暂缓真实酒店查询" in captured["system_prompt"]
+
+
+@pytest.mark.asyncio
+async def test_hotel_fallback_missing_date_keeps_auditable_guarded_query():
+    captured = {}
+    compatibility = get_model_compatibility()
+    middleware = StepConfigMiddleware(
+        {
+            "accommodation_planning": {
+                "prompt": "住宿阶段",
+                "tools": [
+                    "select_accommodation_tool",
+                    "query_hotel_options",
+                    "update_accommodation_preference_tool",
+                ],
+                "requires": ["user_requirement", "selected_destination", "selected_transport"],
+            }
+        }
+    )
+    state = {
+        "current_step": "accommodation_planning",
+        "user_requirement": {
+            "departure_date": "日期待确认",
+            "departure_date_confirmed": False,
+            "travel_days": 4,
+            "special_needs": "住湘江边江景房，如果查不到具体酒店也给可执行兜底方案。",
+        },
+        "selected_destination": "长沙",
+        "selected_transport": "train",
+    }
+
+    async def handler(request):
+        captured["tool_choice"] = getattr(request, "tool_choice", None)
+        captured["tools"] = getattr(request, "tools", [])
+        captured["system_prompt"] = getattr(request, "system_prompt", "")
+        return "ok"
+
+    await middleware.awrap_model_call(
+        DummyRequest(
+            state,
+            [
+                HumanMessage(
+                    content=(
+                        "住宿按省心、干净、动线方便的方案记录；"
+                        "如果没有真实锁价，请标注待核验。"
+                    )
+                )
+            ],
+        ),
+        handler,
+    )
+
+    assert captured["tools"] == ["query_hotel_options"]
+    if compatibility.supports_forced_tool_choice:
+        assert captured["tool_choice"] == "query_hotel_options"
+    else:
+        assert captured["tool_choice"] is None
+        assert "query_hotel_options" in captured["system_prompt"]
+    assert "保留一次酒店查询工具调用作为治理证据" in captured["system_prompt"]
+    assert "让工具守卫返回 skipped 审计结果" in captured["system_prompt"]
+    assert "update_accommodation_preference_tool" not in captured["tools"]

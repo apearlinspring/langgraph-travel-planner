@@ -1002,6 +1002,95 @@ def _live_query_date_gate_instruction(blocked_tools: set[str] | frozenset[str]) 
     )
 
 
+def _requirement_context_text(state_dict: dict[str, Any], latest_human_text: str) -> str:
+    requirement = state_dict.get("user_requirement") or {}
+    requirement_parts: list[str] = [latest_human_text]
+    if isinstance(requirement, dict):
+        for key in (
+            "special_needs",
+            "travel_styles",
+            "destination",
+            "departure_city",
+            "planning_mode_reason",
+        ):
+            value = requirement.get(key)
+            if isinstance(value, (list, tuple, set)):
+                requirement_parts.extend(str(item) for item in value if item)
+            elif value:
+                requirement_parts.append(str(value))
+    return " ".join(part.strip() for part in requirement_parts if part and part.strip())
+
+
+def _wants_fallback_audit_query(
+    tool_name: str,
+    latest_human_text: str,
+    state_dict: dict[str, Any],
+) -> bool:
+    """Return whether a fallback request should leave an auditable guarded query."""
+
+    text = _requirement_context_text(state_dict, latest_human_text)
+    if not text:
+        return False
+
+    fallback_keywords = (
+        "查不到",
+        "没有查到",
+        "如果没有",
+        "兜底",
+    )
+    if not any(keyword in text for keyword in fallback_keywords):
+        return False
+
+    if tool_name == "query_transport_options":
+        return any(
+            keyword in text
+            for keyword in (
+                "交通",
+                "高铁",
+                "火车",
+                "车次",
+                "航班",
+                "飞机",
+                "班次",
+                "票价",
+                "自驾",
+            )
+        )
+    if tool_name == "query_hotel_options":
+        return any(
+            keyword in text
+            for keyword in (
+                "酒店",
+                "住宿",
+                "住",
+                "江景",
+                "海景",
+                "房",
+                "民宿",
+                "锁价",
+            )
+        )
+    return False
+
+
+def _fallback_audit_query_instruction(tool_names: set[str] | frozenset[str]) -> str:
+    if not tool_names:
+        return ""
+    labels = []
+    if "query_transport_options" in tool_names:
+        labels.append("交通")
+    if "query_hotel_options" in tool_names:
+        labels.append("酒店")
+    label_text = "、".join(labels) or "查询"
+    return (
+        f"用户要求“查不到/兜底/待核验”也要可执行方案，本轮保留一次{label_text}查询工具调用作为治理证据。"
+        "如果日期仍未确认，调用工具时必须使用状态中的“日期待确认/入住日期待确认”等占位信息，"
+        "让工具守卫返回 skipped 审计结果；不要编造 YYYY-MM-DD 日期，"
+        "不要执行真实库存、班次、票价或锁价查询，也不要承诺真实价格。"
+        "工具返回后，再基于审计结果记录待核验兜底方案。"
+    )
+
+
 def _state_value_ready(value: Any) -> bool:
     return value not in (None, "", [], {})
 
@@ -1739,22 +1828,36 @@ class StepConfigMiddleware(AgentMiddleware):
             [] if defer_initial_slow_tools else _cross_step_verification_tools(latest_human_text)
         )
         date_blocked_cross_step_tools = set()
+        date_guard_audit_tools: set[str] = set()
         if not confirmed_departure_date and cross_step_tool_names:
             date_blocked_cross_step_tools = set(cross_step_tool_names) & LIVE_DATE_REQUIRED_TOOL_NAMES
             if date_blocked_cross_step_tools:
+                cross_step_audit_tools = {
+                    tool_name
+                    for tool_name in date_blocked_cross_step_tools
+                    if _wants_fallback_audit_query(tool_name, latest_human_text, state_dict)
+                }
+                date_guard_audit_tools.update(cross_step_audit_tools)
+                cross_step_tools_to_block = date_blocked_cross_step_tools - cross_step_audit_tools
                 cross_step_tool_names = [
                     tool_name
                     for tool_name in cross_step_tool_names
-                    if tool_name not in LIVE_DATE_REQUIRED_TOOL_NAMES
+                    if tool_name not in cross_step_tools_to_block
                 ]
-                override_kwargs["system_prompt"] = (
-                    f"{override_kwargs['system_prompt']}\n\n"
-                    f"{_live_query_date_gate_instruction(date_blocked_cross_step_tools)}"
-                )
+                if cross_step_tools_to_block:
+                    override_kwargs["system_prompt"] = (
+                        f"{override_kwargs['system_prompt']}\n\n"
+                        f"{_live_query_date_gate_instruction(cross_step_tools_to_block)}"
+                    )
+                if cross_step_audit_tools:
+                    override_kwargs["system_prompt"] = (
+                        f"{override_kwargs['system_prompt']}\n\n"
+                        f"{_fallback_audit_query_instruction(cross_step_audit_tools)}"
+                    )
                 if (
                     current_step == "transport_planning"
                     and not _has_selected_transport(state_dict)
-                    and "query_hotel_options" in date_blocked_cross_step_tools
+                    and "query_hotel_options" in cross_step_tools_to_block
                 ):
                     override_kwargs["system_prompt"] = (
                         f"{override_kwargs['system_prompt']}\n\n"
@@ -1831,22 +1934,42 @@ class StepConfigMiddleware(AgentMiddleware):
         if not confirmed_departure_date:
             date_blocked_available_tools = available_tool_names & LIVE_DATE_REQUIRED_TOOL_NAMES
             if date_blocked_available_tools:
-                filtered_tools = _exclude_tools_by_name(
-                    override_kwargs["tools"],
-                    date_blocked_available_tools,
+                available_audit_tools = {
+                    tool_name
+                    for tool_name in date_blocked_available_tools
+                    if _wants_fallback_audit_query(tool_name, latest_human_text, state_dict)
+                }
+                date_guard_audit_tools.update(available_audit_tools)
+                blocked_tools_to_remove = date_blocked_available_tools - available_audit_tools
+                if available_audit_tools:
+                    override_kwargs["system_prompt"] = (
+                        f"{override_kwargs['system_prompt']}\n\n"
+                        f"{_fallback_audit_query_instruction(available_audit_tools)}"
+                    )
+                    app_logger.info(
+                        "缺少已确认日期：保留兜底审计式查询工具: "
+                        f"{sorted(available_audit_tools)}"
+                    )
+                filtered_tools = (
+                    _exclude_tools_by_name(
+                        override_kwargs["tools"],
+                        blocked_tools_to_remove,
+                    )
+                    if blocked_tools_to_remove
+                    else override_kwargs["tools"]
                 )
-                if len(filtered_tools) != len(override_kwargs["tools"]):
+                if blocked_tools_to_remove and len(filtered_tools) != len(override_kwargs["tools"]):
                     override_kwargs["tools"] = filtered_tools
                     available_tool_names = _tool_names(override_kwargs["tools"])
                     override_kwargs["system_prompt"] = (
                         f"{override_kwargs['system_prompt']}\n\n"
-                        f"{_live_query_date_gate_instruction(date_blocked_available_tools)}"
+                        f"{_live_query_date_gate_instruction(blocked_tools_to_remove)}"
                     )
-                    if intent_preferred_tool in date_blocked_available_tools:
+                    if intent_preferred_tool in blocked_tools_to_remove:
                         intent_preferred_tool = None
                     app_logger.info(
                         "缺少已确认日期：本轮移除真实查询工具: "
-                        f"{sorted(date_blocked_available_tools)}"
+                        f"{sorted(blocked_tools_to_remove)}"
                     )
 
         if travel_intent.name in {"final_report", "export_report"} and intent_preferred_tool:
@@ -1953,6 +2076,13 @@ class StepConfigMiddleware(AgentMiddleware):
                 )
             elif (
                 not _has_selected_transport(state_dict)
+                and "query_transport_options" in available_tool_names
+                and "query_transport_options" in date_guard_audit_tools
+                and "select_destination_tool" not in latest_tool_result_names
+            ):
+                middleware_forced_tool = "query_transport_options"
+            elif (
+                not _has_selected_transport(state_dict)
                 and "select_transport_tool" in available_tool_names
                 and transport_selection_requested
             ):
@@ -2020,6 +2150,17 @@ class StepConfigMiddleware(AgentMiddleware):
                 accommodation_excluded_tools.update(
                     {"query_hotel_options", "update_accommodation_preference_tool"}
                 )
+            elif (
+                "query_hotel_options" in available_tool_names
+                and "query_hotel_options" in date_guard_audit_tools
+                and "query_hotel_options" not in _latest_tool_result_names(request)
+                and (
+                    "select_transport_tool" not in _latest_tool_result_names(request)
+                    or post_transport_requested_accommodation
+                )
+            ):
+                middleware_forced_tool = "query_hotel_options"
+                accommodation_excluded_tools.add("update_accommodation_preference_tool")
             elif (
                 accommodation_record_requested
                 and not post_transport_selection

@@ -6,6 +6,17 @@ from langchain.tools import ToolRuntime
 from app.tools import hotel_query
 
 
+def _build_runtime(state):
+    return ToolRuntime(
+        state=state,
+        context=None,
+        config={},
+        stream_writer=lambda _: None,
+        tool_call_id="tool-call-1",
+        store=None,
+    )
+
+
 def _mcp_result(payload: dict) -> list[dict]:
     return [{"type": "text", "text": json.dumps(payload, ensure_ascii=False)}]
 
@@ -380,5 +391,43 @@ async def test_query_hotel_options_skips_invalid_args_before_mcp(monkeypatch):
     result = command.update["messages"][0].content
     audit_event = command.update["tool_audit_events"][0]
     assert "酒店真实查询参数不完整" in result
+    assert audit_event["status"] == "skipped"
+    assert audit_event["error_type"] == "invalid_hotel_query_args"
+
+
+@pytest.mark.asyncio
+async def test_query_hotel_options_skips_unconfirmed_state_date_even_with_iso_arg(monkeypatch):
+    async def fail_get_hotel_tool(tool_name: str):
+        raise AssertionError("MCP should not be touched for unconfirmed dates")
+
+    monkeypatch.setattr(hotel_query, "_get_hotel_tool", fail_get_hotel_tool)
+    runtime = _build_runtime(
+        {
+            "user_requirement": {
+                "destination": "长沙",
+                "departure_date": "日期待确认",
+                "departure_date_confirmed": False,
+                "travel_days": 4,
+            },
+            "selected_destination": "长沙",
+        }
+    )
+
+    command = await hotel_query.query_hotel_options.ainvoke(
+        {
+            "destination": "长沙",
+            "check_in_date": "2026-06-01",
+            "stay_nights": 3,
+            "adult_count": 2,
+            "children_count": 0,
+            "budget_level": "comfort",
+            "preferences": "湘江边江景房，如果查不到也给兜底方案",
+            "runtime": runtime,
+        }
+    )
+
+    result = command.update["messages"][0].content
+    audit_event = command.update["tool_audit_events"][0]
+    assert "需要先由用户明确或确认" in result
     assert audit_event["status"] == "skipped"
     assert audit_event["error_type"] == "invalid_hotel_query_args"
