@@ -33,6 +33,17 @@ class RouteAlignmentResult:
     findings: list[str] = field(default_factory=list)
 
 
+ROUTE_POINT_TYPE_LABELS = {
+    "transport": "交通节点",
+    "accommodation": "住宿/落脚",
+    "attraction": "景点/体验",
+    "business_district": "商业街区",
+    "food": "美食",
+    "city": "城市节点",
+    "other": "路线点",
+}
+
+
 def dedupe_route_points(points: list[str], max_items: int = 6) -> list[str]:
     picked = []
     for point in points:
@@ -43,6 +54,146 @@ def dedupe_route_points(points: list[str], max_items: int = 6) -> list[str]:
         if len(picked) >= max_items:
             break
     return picked
+
+
+def _route_point_name(point: Any) -> str:
+    if isinstance(point, dict):
+        for key in ("name", "label", "title", "address"):
+            value = point.get(key)
+            if value is not None and str(value).strip():
+                return str(value).strip()
+        return ""
+    return str(point or "").strip()
+
+
+def _route_text_items(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else []
+
+
+def _classify_route_point(
+    name: str,
+    *,
+    day: dict[str, Any],
+    index: int,
+    point_count: int,
+) -> str:
+    text = "\n".join(
+        str(item)
+        for item in [
+            day.get("title"),
+            day.get("theme"),
+            *_route_text_items(day.get("activities")),
+            *_route_text_items(day.get("time_blocks")),
+            *_route_text_items(day.get("meals")),
+            day.get("accommodation"),
+        ]
+        if item
+    )
+    source = f"{name} {text}"
+    if any(token in name for token in ("机场", "车站", "高铁", "火车", "航站", "码头", "返程", "交通")):
+        return "transport"
+    if any(token in name for token in ("酒店", "民宿", "客栈", "住宿", "入住")):
+        return "accommodation"
+    if any(token in source for token in ("餐", "小吃", "美食", "菜馆", "咖啡", "茶", "夜宵", "饮品")) and any(
+        token in name for token in ("小吃", "餐", "菜", "咖啡", "茶", "夜市", "美食", "文和友")
+    ):
+        return "food"
+    if any(token in name for token in ("商圈", "步行街", "商业", "太古里", "广场", "老街", "街区", "夜市")):
+        return "business_district"
+    if any(
+        token in name
+        for token in (
+            "博物",
+            "景区",
+            "公园",
+            "书院",
+            "寺",
+            "山",
+            "湖",
+            "岛",
+            "园",
+            "阁",
+            "故宫",
+            "城墙",
+            "中山陵",
+            "外滩",
+            "锦里",
+            "宽窄巷子",
+        )
+    ):
+        return "attraction"
+    if index == 0 or index == point_count - 1:
+        return "transport" if any(token in source for token in ("抵达", "返程", "出发")) else "city"
+    return "attraction"
+
+
+def _route_point_description(point_type: str, *, index: int, point_count: int) -> str:
+    if point_type == "transport":
+        return "出发、抵达或返程衔接点，建议预留交通缓冲。"
+    if point_type == "accommodation":
+        return "当天落脚区域，适合作为动线起止点。"
+    if point_type == "food":
+        return "餐饮或小吃节点，可按排队情况灵活替换。"
+    if point_type == "business_district":
+        return "商业街区节点，适合穿插购物、休息和餐饮。"
+    if point_type == "city":
+        return "城市级路线节点，用于串联抵达和核心区域。"
+    if index == 0:
+        return "当天首个体验节点，建议先确认开放时间。"
+    if index == point_count - 1:
+        return "当天收尾节点，保留返程或回酒店缓冲。"
+    return "当天核心体验节点，适合结合停留时长继续细化。"
+
+
+def build_route_map(
+    itinerary: list[dict[str, Any]],
+    route_summaries: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Build an optional frontend-friendly cartoon route map payload."""
+
+    days = []
+    for index, route in enumerate(route_summaries):
+        day = itinerary[index] if index < len(itinerary) else {}
+        day_number = route.get("day_number") or day.get("day_number") or index + 1
+        raw_points = route.get("route_points") or route.get("points") or []
+        names = dedupe_route_points([_route_point_name(point) for point in raw_points])
+        typed_points = []
+        for point_index, name in enumerate(names):
+            point_type = _classify_route_point(
+                name,
+                day=day,
+                index=point_index,
+                point_count=len(names),
+            )
+            typed_points.append(
+                {
+                    "name": name,
+                    "type": point_type,
+                    "type_label": ROUTE_POINT_TYPE_LABELS.get(point_type, "路线点"),
+                    "description": _route_point_description(
+                        point_type,
+                        index=point_index,
+                        point_count=len(names),
+                    ),
+                }
+            )
+
+        days.append(
+            {
+                "day_number": day_number,
+                "title": day.get("title") or day.get("theme") or f"Day {day_number}",
+                "summary": route.get("summary") or " → ".join(names),
+                "route_note": route.get("route_note") or day.get("route_note") or "",
+                "route_points": names,
+                "points": typed_points,
+            }
+        )
+
+    return {
+        "version": "route_map.v1",
+        "style": "cartoon_daily_route",
+        "days": days,
+    }
 
 
 def is_pending_route_point(point: str) -> bool:

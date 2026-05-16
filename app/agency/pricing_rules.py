@@ -59,6 +59,85 @@ def build_budget_line_item(
     }
 
 
+BUDGET_DISPLAY_GROUPS = (
+    ("transport", "交通"),
+    ("accommodation", "住宿"),
+    ("food", "餐饮"),
+    ("attractions", "景点/体验"),
+    ("service_reserve", "服务/预留"),
+    ("other", "其他"),
+)
+
+
+def _budget_display_group(item: dict[str, Any]) -> str:
+    source = f"{item.get('key') or item.get('category') or ''} {item.get('label') or ''}".lower()
+    if any(token in source for token in ("transport", "traffic", "交通", "高铁", "航班", "机票")):
+        return "transport"
+    if any(token in source for token in ("accommodation", "hotel", "lodging", "住宿", "酒店", "民宿")):
+        return "accommodation"
+    if any(token in source for token in ("food", "dining", "meal", "餐", "美食", "小吃")):
+        return "food"
+    if any(token in source for token in ("attraction", "scenic", "sight", "experience", "景点", "门票", "体验")):
+        return "attractions"
+    if any(token in source for token in ("service", "reserve", "contingency", "buffer", "misc", "预留", "服务", "机动")):
+        return "service_reserve"
+    return "other"
+
+
+def _budget_table_cell(value: Any) -> str:
+    return str(value or "待补充").replace("|", "｜").replace("\n", " ").strip()
+
+
+def _budget_display_items(budget: dict[str, Any]) -> list[dict[str, Any]]:
+    grouped = {
+        key: {
+            "key": key,
+            "label": label,
+            "amount": 0.0,
+            "basis": "",
+            "confidence": "",
+        }
+        for key, label in BUDGET_DISPLAY_GROUPS
+    }
+    for item in budget.get("line_items") or []:
+        if not isinstance(item, dict):
+            continue
+        target = grouped[_budget_display_group(item)]
+        amount = item.get("amount")
+        if isinstance(amount, (int, float)):
+            target["amount"] += float(amount)
+        if item.get("basis") and not target["basis"]:
+            target["basis"] = str(item["basis"])
+        if item.get("confidence") and not target["confidence"]:
+            target["confidence"] = str(item["confidence"])
+
+    field_fallbacks = {
+        "transport": "transport",
+        "accommodation": "accommodation",
+        "food": "food",
+        "attractions": "attractions",
+        "service_reserve": "service_reserve" if "service_reserve" in budget else "misc",
+        "other": "other",
+    }
+    for key, budget_key in field_fallbacks.items():
+        amount = budget.get(budget_key)
+        if isinstance(amount, (int, float)) and not grouped[key]["amount"]:
+            grouped[key]["amount"] = float(amount)
+
+    defaults = {
+        "transport": "交通实时票价和余票需复核。",
+        "accommodation": "住宿房型、晚数和取消政策需复核。",
+        "food": "按餐饮偏好和餐次估算。",
+        "attractions": "按门票、预约项目和临时展览估算。",
+        "service_reserve": "覆盖市内交通、寄存、临时休息和价格波动缓冲。",
+        "other": "个人购物和临时加项按实际发生处理。",
+    }
+    for key, _label in BUDGET_DISPLAY_GROUPS:
+        grouped[key]["basis"] = grouped[key]["basis"] or defaults[key]
+        grouped[key]["confidence"] = grouped[key]["confidence"] or "待核验"
+    return [grouped[key] for key, _label in BUDGET_DISPLAY_GROUPS]
+
+
 def build_budget_quality_notes(
     *,
     selected_transport_option: dict[str, Any] | None,
@@ -159,34 +238,52 @@ def build_budget_quality_notes(
 
 
 def format_budget_breakdown(budget: dict[str, Any]) -> list[str]:
+    display_items = _budget_display_items(budget)
+    has_any_amount = any((item.get("amount") or 0) > 0 for item in display_items)
     line_items = budget.get("line_items") or []
     if line_items:
-        lines = []
-        for item in line_items:
-            if not isinstance(item, dict):
-                continue
+        lines = [
+            "| 类别 | 金额 | 置信度 | 依据 |",
+            "| --- | ---: | --- | --- |",
+        ]
+        for item in display_items:
             lines.append(
-                "- {label}：{amount}（人均 {per_person}）｜{confidence}｜依据：{basis}".format(
-                    label=item.get("label", "费用"),
+                "| {label} | {amount} | {confidence} | {basis} |".format(
+                    label=_budget_table_cell(item.get("label", "费用")),
                     amount=_format_money(item.get("amount")),
-                    per_person=_format_money(item.get("per_person")),
-                    confidence=item.get("confidence", "估算"),
-                    basis=item.get("basis", "依据待补充"),
+                    confidence=_budget_table_cell(item.get("confidence", "估算")),
+                    basis=_budget_table_cell(item.get("basis", "依据待补充")),
                 )
             )
         lines.append(
-            f"- 合计：{_format_money(budget.get('total'))}，人均：{_format_money(budget.get('per_person'))}"
+            f"| 合计 | {_format_money(budget.get('total'))} | 待正式锁价 | 当前为规划估算，正式预订前需复核。 |"
         )
         return lines
 
-    return [
-        f"- 交通：{_format_money(budget.get('transport'))}",
-        f"- 住宿：{_format_money(budget.get('accommodation'))}",
-        f"- 餐饮：{_format_money(budget.get('food'))}",
-        f"- 景点/体验：{_format_money(budget.get('attractions'))}",
-        f"- 其他机动：{_format_money(budget.get('misc'))}",
-        f"- 总计：{_format_money(budget.get('total'))}，人均：{_format_money(budget.get('per_person'))}",
+    if not has_any_amount:
+        return [
+            "| 类别 | 金额 | 置信度 | 依据 |",
+            "| --- | ---: | --- | --- |",
+            f"| 合计 | {_format_money(budget.get('total'))} | 待正式锁价 | 当前为规划估算，正式预订前需复核。 |",
+        ]
+
+    lines = [
+        "| 类别 | 金额 | 置信度 | 依据 |",
+        "| --- | ---: | --- | --- |",
     ]
+    for item in display_items:
+        lines.append(
+            "| {label} | {amount} | {confidence} | {basis} |".format(
+                label=_budget_table_cell(item.get("label")),
+                amount=_format_money(item.get("amount")),
+                confidence=_budget_table_cell(item.get("confidence")),
+                basis=_budget_table_cell(item.get("basis")),
+            )
+        )
+    lines.append(
+        f"| 合计 | {_format_money(budget.get('total'))} | 待正式锁价 | 当前为规划估算，正式预订前需复核。 |"
+    )
+    return lines
 
 
 def format_budget_assumptions(budget: dict[str, Any]) -> list[str]:
@@ -371,7 +468,7 @@ def build_quote_policy(
         ],
         "included": [
             "规划服务：需求确认、路线骨架、每日动线、强度控制和 Plan B 建议。",
-            "预算说明：交通、住宿、餐饮、景点/体验和其他机动费用拆分。",
+            "预算说明：交通、住宿、餐饮、景点/体验、服务/预留和其他费用拆分。",
             "风险管理：预算置信度、待核验清单、降本/升级方向和出发前提醒。",
         ],
         "excluded": [

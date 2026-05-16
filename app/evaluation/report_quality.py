@@ -20,6 +20,7 @@ REQUIRED_BUDGET_GROUPS = {
     "accommodation",
     "food",
     "attractions",
+    "service_reserve",
     "other",
 }
 
@@ -153,8 +154,10 @@ def _route_points(route: dict[str, Any]) -> list[str]:
 
 def _budget_group(key: str) -> str:
     normalized = key.lower().strip()
-    if normalized in {"misc", "other", "contingency", "buffer"}:
+    if normalized in {"other"}:
         return "other"
+    if normalized in {"misc", "contingency", "buffer", "reserve", "service", "service_reserve"}:
+        return "service_reserve"
     if normalized in {"scenic", "sights", "experience", "attraction", "attractions"}:
         return "attractions"
     if normalized in {"hotel", "lodging", "accommodation"}:
@@ -446,6 +449,10 @@ def _criterion_frontend_export(report_data: dict[str, Any]) -> CriterionResult:
     score = 0.0
     map_routes = [_as_dict(route) for route in _as_list(report_data.get("map_routes"))]
     itinerary = [_as_dict(day) for day in _as_list(report_data.get("itinerary"))]
+    route_map_days = [
+        _as_dict(day)
+        for day in _as_list(_as_dict(report_data.get("route_map")).get("days"))
+    ]
     section_ids = _section_ids(report_data)
 
     score += _score(
@@ -463,6 +470,14 @@ def _criterion_frontend_export(report_data: dict[str, Any]) -> CriterionResult:
         findings,
         "Daily route summaries must align with map_routes summaries",
     )
+    if route_map_days:
+        score += _score(
+            len(route_map_days) == len(itinerary)
+            and all(len(_as_list(day.get("points"))) >= 2 for day in route_map_days),
+            0,
+            findings,
+            "route_map.days must align with itinerary and include typed route points",
+        )
     score += _score(
         {"map_routes", "budget", "risk"}.issubset(section_ids),
         3,

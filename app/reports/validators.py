@@ -78,6 +78,8 @@ def validate_report_data(report_data: dict[str, Any]) -> ReportValidationResult:
 
     itinerary = [_as_dict(day) for day in _as_list(report_data.get("itinerary"))]
     map_routes = [_as_dict(route) for route in _as_list(report_data.get("map_routes"))]
+    route_map = _as_dict(report_data.get("route_map"))
+    route_map_days = [_as_dict(day) for day in _as_list(route_map.get("days"))]
     route_mismatches: list[str] = []
     if not itinerary:
         route_mismatches.append("每日行程不能为空。")
@@ -102,6 +104,17 @@ def validate_report_data(report_data: dict[str, Any]) -> ReportValidationResult:
             if day_summary != route_summary:
                 day_number = day.get("day_number") or route.get("day_number") or "?"
                 route_mismatches.append(f"Day {day_number} 行程路线摘要与地图摘要不一致。")
+
+    if route_map:
+        if not route_map_days:
+            route_mismatches.append("route_map.days 不能为空。")
+        if itinerary and route_map_days and len(route_map_days) != len(itinerary):
+            route_mismatches.append("route_map.days 数量必须和每日行程数量一致。")
+        for index, route_day in enumerate(route_map_days):
+            day_number = route_day.get("day_number") or index + 1
+            points = _as_list(route_day.get("points"))
+            if len(points) < 2:
+                route_mismatches.append(f"route_map Day {day_number} 至少需要 2 个路线点。")
 
     agency_context = _as_dict(report_data.get("agency_context"))
     if "agency_context" not in missing_fields and agency_context.get("mode") not in REPORT_PLANNING_MODES:

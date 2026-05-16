@@ -68,6 +68,44 @@
       "route_points": ["沙坡尾", "厦门站"]
     }
   ],
+  "route_map": {
+    "version": "route_map.v1",
+    "style": "cartoon_daily_route",
+    "days": [
+      {
+        "day_number": 1,
+        "title": "抵达与中山路夜游",
+        "summary": "厦门站 -> 中山路 -> 八市",
+        "route_points": ["厦门站", "中山路", "八市"],
+        "points": [
+          {"name": "厦门站", "type": "transport", "type_label": "交通节点", "description": "抵达交通衔接点。"},
+          {"name": "中山路", "type": "business_district", "type_label": "商业街区", "description": "夜游和步行街节点。"},
+          {"name": "八市", "type": "food", "type_label": "美食", "description": "小吃和在地餐饮节点。"}
+        ]
+      },
+      {
+        "day_number": 2,
+        "title": "鼓浪屿与海边摄影",
+        "summary": "码头 -> 鼓浪屿 -> 菽庄花园",
+        "route_points": ["码头", "鼓浪屿", "菽庄花园"],
+        "points": [
+          {"name": "码头", "type": "transport", "type_label": "交通节点", "description": "轮渡衔接节点，需复核船票。"},
+          {"name": "鼓浪屿", "type": "attraction", "type_label": "景点/体验", "description": "当天核心海岛体验。"},
+          {"name": "菽庄花园", "type": "attraction", "type_label": "景点/体验", "description": "顺路拍照和园林节点。"}
+        ]
+      },
+      {
+        "day_number": 3,
+        "title": "沙坡尾与返程",
+        "summary": "沙坡尾 -> 厦门站",
+        "route_points": ["沙坡尾", "厦门站"],
+        "points": [
+          {"name": "沙坡尾", "type": "business_district", "type_label": "商业街区", "description": "返程前轻量街区和咖啡节点。"},
+          {"name": "厦门站", "type": "transport", "type_label": "交通节点", "description": "返程交通节点。"}
+        ]
+      }
+    ]
+  },
   "agency_context": {
     "mode": "free_planning",
     "summary": "按自由规划交付，重点保留自订弹性、预算依据和出发前复核项。",
@@ -92,10 +130,28 @@
         "confidence": "规则估算"
       },
       {
-        "label": "餐饮与门票",
-        "amount": 680,
-        "basis": "按小吃、咖啡和鼓浪屿相关门票估算",
+        "label": "餐饮",
+        "amount": 420,
+        "basis": "按小吃、咖啡和简餐估算",
         "confidence": "规则估算"
+      },
+      {
+        "label": "景点/体验",
+        "amount": 160,
+        "basis": "按鼓浪屿相关门票和预约项目估算",
+        "confidence": "待核验"
+      },
+      {
+        "label": "服务/预留",
+        "amount": 100,
+        "basis": "按轮渡改签、市内交通和临时休息预留",
+        "confidence": "规则估算"
+      },
+      {
+        "label": "其他",
+        "amount": 0,
+        "basis": "个人购物和临时加项按实际发生处理",
+        "confidence": "待核验"
       }
     ]
   },

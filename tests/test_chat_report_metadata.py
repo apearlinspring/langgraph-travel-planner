@@ -26,6 +26,7 @@ def test_report_extra_info_from_command_output():
         "version": "travel_report.v1",
         "overview": {"route_label": "北京 -> 上海"},
         "agency_context": {"mode": "free_planning"},
+        "route_map": {"days": [{"day_number": 1, "points": [{"name": "外滩"}]}]},
         "traveler": {"email": "test@example.com"},
     }
     output = SimpleNamespace(
@@ -41,6 +42,7 @@ def test_report_extra_info_from_command_output():
     assert extra_info["order_id"] == "ORDER-1234"
     assert extra_info["report_data"]["version"] == "travel_report.v1"
     assert extra_info["report_data"]["agency_context"]["mode"] == "free_planning"
+    assert extra_info["report_data"]["route_map"]["days"][0]["day_number"] == 1
     assert extra_info["report_data"]["traveler"]["email"] == "[REDACTED]"
 
 

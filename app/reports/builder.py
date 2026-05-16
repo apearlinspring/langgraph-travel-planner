@@ -15,7 +15,7 @@ from app.agency.product_rules import build_agency_context, build_light_product
 from app.agency.risk_rules import build_report_risk_lines
 from app.reports.contracts import REPORT_VERSION, report_sections
 from app.reports.render_markdown import render_report_markdown
-from app.reports.route_builder import normalize_report_route_alignment
+from app.reports.route_builder import build_route_map, normalize_report_route_alignment
 from app.reports.validators import ReportValidationResult, validate_report_data
 from app.tools.audit import pending_checks_from_audit_events, summarize_audit_events_for_report
 
@@ -176,6 +176,101 @@ def _sections_with_product_quote() -> list[dict[str, str]]:
     return sections
 
 
+BUDGET_DISPLAY_GROUPS: tuple[dict[str, str], ...] = (
+    {"key": "transport", "label": "交通"},
+    {"key": "accommodation", "label": "住宿"},
+    {"key": "food", "label": "餐饮"},
+    {"key": "attractions", "label": "景点/体验"},
+    {"key": "service_reserve", "label": "服务/预留"},
+    {"key": "other", "label": "其他"},
+)
+
+
+def _budget_group_key(item: dict[str, Any]) -> str:
+    source = f"{item.get('key') or item.get('category') or ''} {item.get('label') or ''}".lower()
+    if any(token in source for token in ("transport", "traffic", "交通", "高铁", "航班", "机票")):
+        return "transport"
+    if any(token in source for token in ("accommodation", "hotel", "lodging", "住宿", "酒店", "民宿")):
+        return "accommodation"
+    if any(token in source for token in ("food", "dining", "meal", "餐", "美食", "小吃")):
+        return "food"
+    if any(token in source for token in ("attraction", "scenic", "sight", "experience", "景点", "门票", "体验")):
+        return "attractions"
+    if any(token in source for token in ("service", "reserve", "contingency", "buffer", "misc", "预留", "服务", "机动")):
+        return "service_reserve"
+    return "other"
+
+
+def _merge_budget_item(target: dict[str, Any], item: dict[str, Any]) -> None:
+    amount = item.get("amount")
+    if isinstance(amount, (int, float)):
+        target["amount"] = float(target.get("amount") or 0) + float(amount)
+    basis = str(item.get("basis") or "").strip()
+    if basis:
+        bases = target.setdefault("_bases", [])
+        if basis not in bases:
+            bases.append(basis)
+    confidence = str(item.get("confidence") or "").strip()
+    if confidence:
+        confidences = target.setdefault("_confidences", [])
+        if confidence not in confidences:
+            confidences.append(confidence)
+
+
+def normalize_budget_display_items(budget: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return six stable report budget groups for readable tables."""
+
+    grouped: dict[str, dict[str, Any]] = {
+        group["key"]: {
+            "key": group["key"],
+            "label": group["label"],
+            "amount": 0.0,
+            "_bases": [],
+            "_confidences": [],
+        }
+        for group in BUDGET_DISPLAY_GROUPS
+    }
+
+    line_items = [item for item in budget.get("line_items") or budget.get("items") or [] if isinstance(item, dict)]
+    for item in line_items:
+        group_key = _budget_group_key(item)
+        _merge_budget_item(grouped.get(group_key) or grouped["other"], item)
+
+    fallback_fields = {
+        "transport": "transport",
+        "accommodation": "accommodation",
+        "food": "food",
+        "attractions": "attractions",
+        "service_reserve": "service_reserve",
+        "other": "other",
+    }
+    if "misc" in budget and not grouped["service_reserve"].get("amount"):
+        fallback_fields["service_reserve"] = "misc"
+
+    for group_key, budget_key in fallback_fields.items():
+        amount = budget.get(budget_key)
+        if isinstance(amount, (int, float)) and not grouped[group_key].get("amount"):
+            grouped[group_key]["amount"] = float(amount)
+
+    default_basis = {
+        "transport": "交通票价、余票和退改签规则需在正式预订前复核。",
+        "accommodation": "住宿按区域、房型、晚数和取消政策估算。",
+        "food": "餐饮按用餐偏好、餐次和热门餐厅排队情况估算。",
+        "attractions": "景点/体验按门票、预约项目和临时展览收费估算。",
+        "service_reserve": "服务/预留覆盖市内交通、寄存、临时休息和价格波动缓冲。",
+        "other": "其他个人消费、购物和临时加项按实际发生处理。",
+    }
+    display_items = []
+    for group in BUDGET_DISPLAY_GROUPS:
+        item = grouped[group["key"]]
+        bases = item.pop("_bases", [])
+        confidences = item.pop("_confidences", [])
+        item["basis"] = "；".join(bases[:2]) if bases else default_basis[group["key"]]
+        item["confidence"] = " / ".join(confidences[:2]) if confidences else "待核验"
+        display_items.append(item)
+    return display_items
+
+
 def build_travel_report_data(
     *,
     state: dict[str, Any],
@@ -217,7 +312,7 @@ def build_travel_report_data(
             }
         )
 
-    budget_items = budget.get("line_items") or []
+    budget_items = normalize_budget_display_items(budget)
     budget_confidence = budget_confidence_payload(budget)
     risks = [
         _clean_report_line(line)
@@ -294,6 +389,7 @@ def build_travel_report_data(
         },
         "itinerary": itinerary_data,
         "map_routes": route_summaries,
+        "route_map": build_route_map(itinerary_data, route_summaries),
         "agency_context": agency_context,
         "agency_product": light_product,
         "budget": {

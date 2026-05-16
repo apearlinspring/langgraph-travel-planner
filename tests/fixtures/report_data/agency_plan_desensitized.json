@@ -84,6 +84,55 @@
       "route_points": ["春熙路", "成都东站"]
     }
   ],
+  "route_map": {
+    "version": "route_map.v1",
+    "style": "cartoon_daily_route",
+    "days": [
+      {
+        "day_number": 1,
+        "title": "抵达成都与老街慢游",
+        "summary": "成都东站 -> 宽窄巷子 -> 春熙路",
+        "route_points": ["成都东站", "宽窄巷子", "春熙路"],
+        "points": [
+          {"name": "成都东站", "type": "transport", "type_label": "交通节点", "description": "抵达与城市交通衔接点。"},
+          {"name": "宽窄巷子", "type": "attraction", "type_label": "景点/体验", "description": "抵达日低强度老街体验。"},
+          {"name": "春熙路", "type": "business_district", "type_label": "商业街区", "description": "晚餐和住宿周边活动区域。"}
+        ]
+      },
+      {
+        "day_number": 2,
+        "title": "城市公园与烟火气",
+        "summary": "人民公园 -> 太古里 -> 锦里",
+        "route_points": ["人民公园", "太古里", "锦里"],
+        "points": [
+          {"name": "人民公园", "type": "attraction", "type_label": "景点/体验", "description": "茶馆和城市慢生活节点。"},
+          {"name": "太古里", "type": "business_district", "type_label": "商业街区", "description": "商业街区和休息补给节点。"},
+          {"name": "锦里", "type": "food", "type_label": "美食", "description": "夜间小吃和街区体验节点。"}
+        ]
+      },
+      {
+        "day_number": 3,
+        "title": "都江堰轻户外",
+        "summary": "春熙路 -> 都江堰景区 -> 南桥",
+        "route_points": ["春熙路", "都江堰景区", "南桥"],
+        "points": [
+          {"name": "春熙路", "type": "accommodation", "type_label": "住宿/落脚", "description": "从住宿区域出发。"},
+          {"name": "都江堰景区", "type": "attraction", "type_label": "景点/体验", "description": "当天核心轻户外体验。"},
+          {"name": "南桥", "type": "attraction", "type_label": "景点/体验", "description": "顺路收尾和夜景节点。"}
+        ]
+      },
+      {
+        "day_number": 4,
+        "title": "伴手礼与返程",
+        "summary": "春熙路 -> 成都东站",
+        "route_points": ["春熙路", "成都东站"],
+        "points": [
+          {"name": "春熙路", "type": "business_district", "type_label": "商业街区", "description": "返程前补买伴手礼区域。"},
+          {"name": "成都东站", "type": "transport", "type_label": "交通节点", "description": "返程交通节点。"}
+        ]
+      }
+    ]
+  },
   "agency_context": {
     "mode": "agency_plan",
     "summary": "按旅行社顾问方案交付，重点保留服务节点、预订前核验和不可承诺边界。",
@@ -114,9 +163,21 @@
         "confidence": "规则估算"
       },
       {
-        "label": "门票与市内交通",
-        "amount": 820,
-        "basis": "按都江堰门票、市内地铁和打车缓冲估算",
+        "label": "景点/体验",
+        "amount": 320,
+        "basis": "按都江堰门票和可选体验估算",
+        "confidence": "待核验"
+      },
+      {
+        "label": "服务/预留",
+        "amount": 500,
+        "basis": "按市内地铁、打车缓冲、寄存和价格波动预留",
+        "confidence": "规则估算"
+      },
+      {
+        "label": "其他",
+        "amount": 0,
+        "basis": "个人购物和临时加项按实际发生处理",
         "confidence": "待核验"
       }
     ]

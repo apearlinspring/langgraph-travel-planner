@@ -25,6 +25,8 @@ def test_report_bundle_renders_markdown_from_valid_report_data():
     assert "顾问交付清单" in bundle.markdown
     assert "verify ticket price" in bundle.markdown
     assert "产品与报价规则" in bundle.markdown
+    assert "| 类别 | 金额 | 置信度 | 依据 |" in bundle.markdown
+    assert "人均：" not in bundle.markdown
 
 
 def test_report_validator_blocks_pseudo_report_without_required_contract():
@@ -131,6 +133,15 @@ def test_report_builder_assembles_report_data_from_domain_inputs():
     assert report_data["version"] == "travel_report.v1"
     assert report_data["quote_policy"]["locked_price"] is False
     assert report_data["agency_product"]["non_commitments"]
+    assert report_data["route_map"]["days"][0]["points"][0]["type_label"]
+    assert [item["key"] for item in report_data["budget"]["items"]] == [
+        "transport",
+        "accommodation",
+        "food",
+        "attractions",
+        "service_reserve",
+        "other",
+    ]
     assert any(section["id"] == "product_quote" for section in report_data["sections"])
     assert validate_report_data(report_data).ok is True
 
@@ -199,6 +210,7 @@ def test_report_builder_pads_missing_routes_instead_of_zip_truncating():
 
     assert len(report_data["itinerary"]) == 2
     assert len(report_data["map_routes"]) == 2
+    assert len(report_data["route_map"]["days"]) == 2
     assert report_data["itinerary"][1]["route"]["summary"] == report_data["map_routes"][1]["summary"]
     assert report_data["evidence_bundle"]["route_alignment_findings"] == [
         "Day 2 缺少地图路线，已按行程内容补齐。"

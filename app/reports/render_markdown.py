@@ -18,8 +18,33 @@ def _format_money(value: Any) -> str:
     return "待确认"
 
 
+def _table_cell(value: Any) -> str:
+    return str(value or "待补充").replace("|", "｜").replace("\n", " ").strip()
+
+
 def _clean_line(value: Any) -> str:
     return str(value or "").strip().lstrip("-").strip()
+
+
+def _clean_markdown_lines(lines: list[str]) -> list[str]:
+    cleaned: list[str] = []
+    previous_blank = False
+    for raw_line in lines:
+        line = str(raw_line or "").rstrip()
+        stripped = line.strip()
+        if stripped in {"-", "--", "---"} or set(stripped) == {"-"}:
+            continue
+        if not stripped:
+            if previous_blank:
+                continue
+            previous_blank = True
+            cleaned.append("")
+            continue
+        previous_blank = False
+        cleaned.append(line)
+    while cleaned and not cleaned[-1].strip():
+        cleaned.pop()
+    return cleaned
 
 
 def _format_report_highlights(itinerary: list[dict[str, Any]], max_days: int = 5) -> list[str]:
@@ -81,26 +106,30 @@ def _format_daily_itinerary(itinerary: list[dict[str, Any]], max_days: int = 8) 
 def _format_budget_items(budget: dict[str, Any]) -> list[str]:
     items = _as_list(budget.get("items"))
     if items:
-        lines = []
+        lines = [
+            "| 类别 | 金额 | 置信度 | 依据 |",
+            "| --- | ---: | --- | --- |",
+        ]
         for item in items:
             if not isinstance(item, dict):
                 continue
             lines.append(
-                "- {label}：{amount}（人均 {per_person}）｜{confidence}｜依据：{basis}".format(
-                    label=item.get("label", "费用"),
+                "| {label} | {amount} | {confidence} | {basis} |".format(
+                    label=_table_cell(item.get("label", "费用")),
                     amount=_format_money(item.get("amount")),
-                    per_person=_format_money(item.get("per_person")),
-                    confidence=item.get("confidence", "估算"),
-                    basis=item.get("basis", "依据待补充"),
+                    confidence=_table_cell(item.get("confidence", "估算")),
+                    basis=_table_cell(item.get("basis", "依据待补充")),
                 )
             )
         lines.append(
-            f"- 合计：{_format_money(budget.get('total'))}，人均：{_format_money(budget.get('per_person'))}"
+            f"| 合计 | {_format_money(budget.get('total'))} | 待正式锁价 | 以上为当前规划估算，正式预订前需复核。 |"
         )
         return lines
 
     return [
-        f"- 总计：{_format_money(budget.get('total'))}，人均：{_format_money(budget.get('per_person'))}",
+        "| 类别 | 金额 | 置信度 | 依据 |",
+        "| --- | ---: | --- | --- |",
+        f"| 合计 | {_format_money(budget.get('total'))} | 待正式锁价 | 费用依据待补充，建议以正式预订页面为准。 |",
     ]
 
 
@@ -285,4 +314,4 @@ def render_report_markdown(report_data: dict[str, Any]) -> str:
         "顾问交付清单：",
         *_format_tool_audit(tool_audit),
     ]
-    return "\n".join(lines)
+    return "\n".join(_clean_markdown_lines(lines))
