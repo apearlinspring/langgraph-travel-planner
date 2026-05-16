@@ -27,10 +27,49 @@
       "id": "retrieval_product_senior_accessible",
       "name": "Internal products: senior accessible route",
       "query": "老人同行的省心路线，要求低强度、少步行、近地铁或打车方便。",
-      "expected_sources": ["data/documents/internal/products/route_templates.md"],
+      "expected_sources": [
+        "data/documents/internal/products/route_templates.md",
+        "data/documents/internal/products/suzhou_senior_slow_custom.md"
+      ],
       "expected_categories": ["products"],
       "expected_source_types": ["agency_internal"],
       "tags": ["internal", "agency_plan", "products", "senior"]
+    },
+    {
+      "id": "retrieval_product_xian_family_catalog_fields",
+      "name": "Internal products: Xi'an family catalog fields",
+      "query": "product_id ZX-PROD-XIAN-FAMILY-3D 的西安亲子省心轻定制，适合带孩子、短动线、可午休。",
+      "expected_sources": ["data/documents/internal/products/xian_family_light_custom.md"],
+      "expected_categories": ["products"],
+      "expected_source_types": ["agency_internal"],
+      "tags": ["internal", "agency_plan", "products", "family", "metadata"]
+    },
+    {
+      "id": "retrieval_product_team_budget_transparency",
+      "name": "Internal products: team budget transparency",
+      "query": "长沙团建透明预算方案，需要统一集合、餐饮容量、团队活动空间、人均和总价双口径。",
+      "expected_sources": ["data/documents/internal/products/changsha_team_budget_transparency.md"],
+      "expected_categories": ["products"],
+      "expected_source_types": ["agency_internal"],
+      "tags": ["internal", "agency_plan", "products", "team", "pricing"]
+    },
+    {
+      "id": "retrieval_product_couple_relaxed",
+      "name": "Internal products: couple relaxed route",
+      "query": "厦门情侣氛围轻路线，纪念日、夜景、特色餐厅、咖啡拍照留白，3天2晚舒适档。",
+      "expected_sources": ["data/documents/internal/products/xiamen_couple_relaxed.md"],
+      "expected_categories": ["products"],
+      "expected_source_types": ["agency_internal"],
+      "tags": ["internal", "agency_plan", "products", "couple"]
+    },
+    {
+      "id": "retrieval_product_free_planning_boundary",
+      "name": "Internal products: free-planning boundary",
+      "query": "用户不接受产品化方向，只想自己预订和自由规划，桂林4天需要路线优化、住宿区域、预算拆分和核验清单。",
+      "expected_sources": ["data/documents/internal/products/guilin_free_planning_optimizer.md"],
+      "expected_categories": ["products"],
+      "expected_source_types": ["agency_internal"],
+      "tags": ["internal", "free_planning", "products", "boundary"]
     },
     {
       "id": "retrieval_pricing_inclusions_exclusions",

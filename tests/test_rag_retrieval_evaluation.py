@@ -35,8 +35,14 @@ def test_load_default_rag_retrieval_scenarios_cover_business_categories():
         for source_type in scenario.expected_source_types
     }
 
-    assert len(scenarios) >= 8
+    assert len(scenarios) >= 12
     assert len(scenario_ids) == len(scenarios)
+    assert {
+        "retrieval_product_xian_family_catalog_fields",
+        "retrieval_product_team_budget_transparency",
+        "retrieval_product_couple_relaxed",
+        "retrieval_product_free_planning_boundary",
+    }.issubset(scenario_ids)
     assert {"destinations", "products", "pricing", "risk", "report", "sop"}.issubset(
         categories
     )
@@ -49,12 +55,13 @@ def test_default_rag_retrieval_evaluation_runs_offline():
     metadata_top_3 = _summary_by_strategy(result, "metadata_aware_bm25", 3)
     metadata_top_5 = _summary_by_strategy(result, "metadata_aware_bm25", 5)
 
-    assert result.scenario_count >= 8
+    assert result.scenario_count >= 12
     assert result.document_count >= 10
     assert baseline_top_3.scenario_count == result.scenario_count
     assert metadata_top_3.source_recall >= baseline_top_3.source_recall
     assert metadata_top_3.category_recall >= baseline_top_3.category_recall
     assert metadata_top_5.category_recall >= metadata_top_3.category_recall
+    assert any(summary.source_recall < 1.0 for summary in result.summaries)
     assert result.improvement["top_k"] == 3.0
 
 
