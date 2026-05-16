@@ -1,4 +1,6 @@
+import sqlite3
 from datetime import date
+from pathlib import Path
 
 from langchain_core.documents import Document
 import pytest
@@ -14,6 +16,10 @@ from app.rag.agency_retrieval import document_to_evidence, format_evidence_respo
 from app.rag.pipeline import AdvancedRAGPipeline
 from app.rag.query_optimizer import AdvancedQueryOptimizer
 from app.rag.readiness import RagReadinessError
+from app.rag.readiness import (
+    INTERNAL_VECTORSTORE_CONTRACT,
+    check_chroma_collection_readiness,
+)
 from app.rag.text_splitter import AdvancedParentDocumentSplitter
 from app.tools import rag_tools
 
@@ -22,6 +28,21 @@ def test_document_manager_loads_internal_documents_with_business_metadata():
     documents = DocumentManager().load_internal_documents()
 
     categories = {doc.metadata.get("category") for doc in documents}
+    product_documents = [
+        doc for doc in documents if doc.metadata.get("category") == "products"
+    ]
+    product_required_fields = {
+        "product_id",
+        "destination",
+        "theme",
+        "duration",
+        "audience",
+        "service_level",
+        "price_band",
+        "source",
+        "product_source",
+        "evidence_type",
+    }
 
     assert {"products", "sop", "pricing", "risk", "report"}.issubset(categories)
     assert all(doc.metadata.get("source_type") == "agency_internal" for doc in documents)
@@ -35,6 +56,20 @@ def test_document_manager_loads_internal_documents_with_business_metadata():
     assert all(doc.metadata.get("requires_verification") in {"true", "false"} for doc in documents)
     assert all(doc.metadata.get("constraints") for doc in documents)
     assert all("source_type:" not in doc.page_content for doc in documents)
+    assert len(product_documents) >= 7
+    assert all(
+        product_required_fields.issubset(doc.metadata)
+        for doc in product_documents
+    )
+    assert {
+        doc.metadata.get("product_id") for doc in product_documents
+    } >= {
+        "ZX-PROD-XIAN-FAMILY-3D",
+        "ZX-PROD-SUZHOU-SENIOR-4D",
+        "ZX-PROD-CHANGSHA-TEAM-4D",
+        "ZX-PROD-XIAMEN-COUPLE-3D",
+        "ZX-PROD-GUILIN-FREE-4D",
+    }
 
 
 def test_document_manager_filters_internal_documents_by_category():
@@ -129,6 +164,77 @@ def test_low_confidence_evidence_requires_verification_and_blocks_commitments():
     assert "禁止承诺：锁价" in response
 
 
+def test_product_evidence_includes_matching_fields_and_direction_summary():
+    documents = [
+        Document(
+            page_content="# 西安亲子省心轻定制\n- 短动线、可午休、少排队。",
+            metadata={
+                "source": "data/documents/internal/products/xian_family_light_custom.md",
+                "source_type": "agency_internal",
+                "category": "products",
+                "visibility": "internal",
+                "evidence_level": "standard",
+                "last_reviewed": "2026-05-11",
+                "applicable_modes": "agency_plan",
+                "product_id": "ZX-PROD-XIAN-FAMILY-3D",
+                "destination": "西安",
+                "theme": "亲子省心轻定制",
+                "duration": "3天2晚",
+                "audience": "family|child",
+                "service_level": "light_custom",
+                "price_band": "comfort",
+                "product_source": "fictional_internal_catalog",
+                "evidence_type": "fictional_product_template",
+                "service_boundary": "路线规划|预约提醒|风险预案",
+                "quote_basis": "规划服务口径|动态费用待二次核验",
+                "verification_items": "交通票价|酒店库存|博物馆预约",
+            },
+        ),
+        Document(
+            page_content="# 苏州银发舒缓省心\n- 少步行、少换乘、休息点充足。",
+            metadata={
+                "source": "data/documents/internal/products/suzhou_senior_slow_custom.md",
+                "source_type": "agency_internal",
+                "category": "products",
+                "visibility": "internal",
+                "evidence_level": "standard",
+                "last_reviewed": "2026-05-11",
+                "applicable_modes": "agency_plan",
+                "product_id": "ZX-PROD-SUZHOU-SENIOR-4D",
+                "destination": "苏州",
+                "theme": "银发舒缓路线",
+                "duration": "4天3晚",
+                "audience": "senior|family",
+                "service_level": "escorted_planning",
+                "price_band": "comfort",
+                "product_source": "fictional_internal_catalog",
+                "evidence_type": "fictional_product_template",
+                "service_boundary": "低强度路线规划|休息点设计",
+                "quote_basis": "舒缓节奏服务口径|资源待二次核验",
+                "verification_items": "酒店电梯与无障碍|园林预约",
+            },
+        ),
+    ]
+
+    evidence = document_to_evidence(documents[0])
+    response = format_evidence_response(
+        query="省心产品方向",
+        documents=documents,
+        visibility="internal",
+        include_product_directions=True,
+    )
+
+    assert evidence["product_id"] == "ZX-PROD-XIAN-FAMILY-3D"
+    assert evidence["audience"] == ["family", "child"]
+    assert evidence["service_boundary"] == ["路线规划", "预约提醒", "风险预案"]
+    assert "【产品化方向】" in response
+    assert "适用人群" in response
+    assert "服务边界" in response
+    assert "报价口径" in response
+    assert "待核验项" in response
+    assert "切回自由规划" in response
+
+
 def test_validate_internal_knowledge_base_passes_current_corpus():
     report = validate_internal_knowledge_base(
         "data/documents/internal",
@@ -138,6 +244,43 @@ def test_validate_internal_knowledge_base_passes_current_corpus():
     assert report.passed is True
     assert report.checked_files >= 10
     assert not report.errors
+
+
+def test_validate_product_document_requires_matching_fields(tmp_path):
+    path = tmp_path / "internal" / "products" / "missing_product_fields.md"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        """---
+source_type: agency_internal
+category: products
+visibility: internal
+applicable_modes:
+  - agency_plan
+evidence_level: standard
+last_reviewed: "2026-05-11"
+---
+# 缺少产品匹配字段
+""",
+        encoding="utf-8",
+    )
+
+    findings = validate_internal_document_file(
+        path,
+        internal_root=tmp_path / "internal",
+        today=date(2026, 5, 11),
+    )
+
+    assert {
+        "product_id",
+        "destination",
+        "theme",
+        "duration",
+        "audience",
+        "service_level",
+        "price_band",
+        "source",
+        "evidence_type",
+    }.issubset({finding.field for finding in findings})
 
 
 def test_validate_internal_document_fails_missing_metadata(tmp_path):
@@ -191,6 +334,125 @@ last_reviewed: "2024-01-01"
     assert "目录分类" in messages
     assert "evidence_level" in messages
     assert "超过 365 天" in messages
+
+
+def _write_readiness_fixture(
+    path: Path,
+    *,
+    collection_name: str = "agency_internal_knowledge",
+    metadata_overrides: dict[str, str | None] | None = None,
+) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    metadata = {
+        "contract_version": CONTRACT_VERSION,
+        "knowledge_base": INTERNAL_KNOWLEDGE_BASE,
+        "source": "data/documents/internal/products/xian_family_light_custom.md",
+        "source_type": "agency_internal",
+        "category": "products",
+        "visibility": "internal",
+        "evidence_level": "standard",
+        "applicable_modes": "agency_plan",
+        "constraints": "不得承诺锁价",
+        "last_reviewed": "2026-05-11",
+        "freshness_status": "current",
+        "requires_verification": "false",
+        "product_id": "ZX-PROD-XIAN-FAMILY-3D",
+        "destination": "西安",
+        "theme": "亲子省心轻定制",
+        "duration": "3天2晚",
+        "audience": "family|child",
+        "service_level": "light_custom",
+        "price_band": "comfort",
+        "evidence_type": "fictional_product_template",
+        "chroma:document": "product_id 西安亲子省心轻定制 路线 产品 适合人群 服务边界",
+    }
+    for key, value in (metadata_overrides or {}).items():
+        if value is None:
+            metadata.pop(key, None)
+        else:
+            metadata[key] = value
+
+    connection = sqlite3.connect(path / "chroma.sqlite3")
+    try:
+        connection.execute("CREATE TABLE collections (id TEXT PRIMARY KEY, name TEXT NOT NULL)")
+        connection.execute("CREATE TABLE segments (id TEXT PRIMARY KEY, collection TEXT NOT NULL)")
+        connection.execute(
+            "CREATE TABLE embeddings (id INTEGER PRIMARY KEY, segment_id TEXT, embedding_id TEXT)"
+        )
+        connection.execute(
+            """
+            CREATE TABLE embedding_metadata (
+                id INTEGER,
+                key TEXT,
+                string_value TEXT,
+                int_value INTEGER,
+                float_value REAL,
+                bool_value INTEGER
+            )
+            """
+        )
+        connection.execute(
+            "INSERT INTO collections (id, name) VALUES (?, ?)",
+            ("collection-id", collection_name),
+        )
+        connection.execute(
+            "INSERT INTO segments (id, collection) VALUES (?, ?)",
+            ("segment-id", "collection-id"),
+        )
+        connection.execute(
+            "INSERT INTO embeddings (id, segment_id, embedding_id) VALUES (?, ?, ?)",
+            (1, "segment-id", "embedding-1"),
+        )
+        for key, value in metadata.items():
+            connection.execute(
+                """
+                INSERT INTO embedding_metadata
+                    (id, key, string_value, int_value, float_value, bool_value)
+                VALUES (?, ?, ?, NULL, NULL, NULL)
+                """,
+                (1, key, value),
+            )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def _internal_readiness(path: Path, *, collection_name: str = "agency_internal_knowledge"):
+    return check_chroma_collection_readiness(
+        configured_path=str(path),
+        collection_name=collection_name,
+        label=INTERNAL_VECTORSTORE_CONTRACT["label"],
+        expected_metadata={
+            "contract_version": CONTRACT_VERSION,
+            "knowledge_base": INTERNAL_VECTORSTORE_CONTRACT["knowledge_base"],
+            "visibility": INTERNAL_VECTORSTORE_CONTRACT["visibility"],
+        },
+        required_metadata=INTERNAL_VECTORSTORE_CONTRACT["required_metadata"],
+        category_required_metadata=INTERNAL_VECTORSTORE_CONTRACT[
+            "category_required_metadata"
+        ],
+        retrieval_probes=(),
+    )
+
+
+def test_readiness_finding_codes_cover_collection_metadata_missing_and_mismatch(tmp_path):
+    missing_collection_path = tmp_path / "missing-collection"
+    missing_metadata_path = tmp_path / "missing-metadata"
+    mismatch_path = tmp_path / "mismatch"
+
+    _write_readiness_fixture(missing_collection_path, collection_name="wrong")
+    _write_readiness_fixture(missing_metadata_path, metadata_overrides={"product_id": None})
+    _write_readiness_fixture(mismatch_path, metadata_overrides={"visibility": "public"})
+
+    missing_collection = _internal_readiness(missing_collection_path)
+    missing_metadata = _internal_readiness(missing_metadata_path)
+    mismatch = _internal_readiness(mismatch_path)
+
+    assert missing_collection.details["finding_code"] == "collection_missing"
+    assert missing_metadata.details["finding_code"] == "metadata_missing"
+    assert "product_id" in missing_metadata.details["missing_metadata"]
+    assert mismatch.details["finding_code"] == "metadata_mismatch"
+    assert mismatch.details["metadata_mismatch"]["key"] == "visibility"
 
 
 def test_internal_rag_tools_are_separate_from_public_rag_tools():

@@ -102,6 +102,7 @@ def _ensure_vectorstore_ready(
             "visibility": contract["visibility"],
         },
         required_metadata=contract["required_metadata"],
+        category_required_metadata=contract.get("category_required_metadata"),
         retrieval_probes=contract["retrieval_probes"],
         project_root=PROJECT_ROOT,
     )
@@ -215,6 +216,7 @@ def _format_rag_results(
     *,
     visibility: str = "public",
     empty_message: str | None = None,
+    include_product_directions: bool = False,
 ) -> str:
     """格式化 RAG 检索结果"""
     return format_evidence_response(
@@ -222,6 +224,7 @@ def _format_rag_results(
         documents=documents,
         visibility=visibility,
         empty_message=empty_message,
+        include_product_directions=include_product_directions,
     )
 
 
@@ -407,6 +410,7 @@ async def _retrieve_internal(
         query,
         visibility="internal",
         empty_message=empty_message,
+        include_product_directions=expected_category == "products",
     )
 
 

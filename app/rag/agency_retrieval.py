@@ -100,6 +100,22 @@ def document_to_evidence(
         "requires_verification": requires_verification,
         "prohibited_commitments": prohibited_commitments,
     }
+    for field in (
+        "product_id",
+        "destination",
+        "theme",
+        "duration",
+        "service_level",
+        "price_band",
+        "product_source",
+        "evidence_type",
+    ):
+        if metadata.get(field):
+            evidence[field] = str(metadata[field])
+    for field in ("audience", "service_boundary", "quote_basis", "verification_items"):
+        values = metadata_list(metadata.get(field))
+        if values:
+            evidence[field] = values
     return evidence
 
 
@@ -145,12 +161,67 @@ def filter_documents_by_category(
     return []
 
 
+def _product_direction_lines(evidence: list[RetrievedEvidence]) -> list[str]:
+    products = [
+        item
+        for item in evidence
+        if item.get("category") == "products" and item.get("product_id")
+    ][:3]
+    if not products:
+        return []
+
+    lines = [
+        "",
+        "【产品化方向】",
+        "以下方向只代表成熟路线与服务口径，不能解释为真实库存、锁价或供应商承诺。",
+    ]
+    for index, item in enumerate(products, 1):
+        title = item.get("theme") or item.get("title") or "产品化路线方向"
+        product_id = item.get("product_id") or "未标注"
+        destination = item.get("destination") or "目的地待定"
+        duration = item.get("duration") or "天数待定"
+        price_band = item.get("price_band") or "预算档待定"
+        audience = "、".join(item.get("audience") or item.get("user_segments") or ["通用人群"])
+        service_boundary = "；".join(
+            item.get("service_boundary")
+            or item.get("constraints")
+            or ["仅提供路线结构、服务边界和核验清单"]
+        )
+        quote_basis = "；".join(
+            item.get("quote_basis")
+            or ["按规划服务口径说明，交通、住宿、门票等动态费用待二次核验"]
+        )
+        verification_items = "；".join(
+            item.get("verification_items")
+            or ["交通票价", "酒店库存", "景区预约", "天气与人流"]
+        )
+        lines.extend(
+            [
+                f"{index}. {title}（{product_id}，{destination}，{duration}，{price_band}）",
+                f"- 适用人群：{audience}",
+                f"- 服务边界：{service_boundary}",
+                f"- 报价口径：{quote_basis}",
+                f"- 待核验项：{verification_items}",
+            ]
+        )
+    lines.extend(
+        [
+            "",
+            "【模式边界】",
+            "- 如果用户不接受这些产品化方向，必须明确切回自由规划，只保留路线、预算、住宿区域和核验建议。",
+            "- 切回自由规划后，不要继续强推旅行社方案或省心套餐。",
+        ]
+    )
+    return lines
+
+
 def format_evidence_response(
     *,
     query: str,
     documents: Iterable[Document],
     visibility: str,
     empty_message: str | None = None,
+    include_product_directions: bool = False,
 ) -> str:
     """Format evidence as agent-readable text with a JSON contract block."""
 
@@ -202,4 +273,6 @@ def format_evidence_response(
         )
         if prohibited:
             lines.append(f"禁止承诺：{prohibited}")
+    if include_product_directions:
+        lines.extend(_product_direction_lines(evidence))
     return "\n".join(lines)
