@@ -87,12 +87,19 @@ for (const [mode, reportData] of fixtures) {
       "人工确认边界",
       "不代表真实支付",
       "路线联动",
+      "分日路线",
+      "商业街区",
+      "服务/预留",
+      "travel-report-budget-table",
       "顾问核验与下一步",
       "查看路线地图",
       "导出报告",
     ],
     mode
   );
+  if (html.includes("人均参考") || html.includes("预算粗估（每人）")) {
+    throw new Error(`${mode} should not default to per-person budget copy.`);
+  }
 }
 
 const feedbackMarkdown = `

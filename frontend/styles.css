@@ -3198,6 +3198,76 @@ html {
         grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
         gap: 10px;
       }
+      .message.assistant .message-text .travel-report-budget-table-wrap {
+        display: grid;
+        gap: 12px;
+      }
+      .message.assistant .message-text .travel-report-budget-table {
+        width: 100%;
+        border-collapse: collapse;
+        overflow: hidden;
+        border-radius: 16px;
+        background: rgba(255, 255, 255, 0.96);
+        border: 1px solid rgba(26, 77, 84, 0.1);
+      }
+      .message.assistant .message-text .travel-report-budget-table th,
+      .message.assistant .message-text .travel-report-budget-table td {
+        padding: 11px 12px;
+        text-align: left;
+        vertical-align: top;
+        border-bottom: 1px solid rgba(26, 77, 84, 0.08);
+        color: var(--text-main);
+        font-size: 13px;
+        line-height: 1.55;
+      }
+      .message.assistant .message-text .travel-report-budget-table thead th {
+        background: rgba(26, 77, 84, 0.07);
+        color: var(--primary);
+        font-weight: 900;
+      }
+      .message.assistant .message-text .travel-report-budget-table tbody tr:last-child th,
+      .message.assistant .message-text .travel-report-budget-table tbody tr:last-child td {
+        border-bottom: 0;
+      }
+      .message.assistant .message-text .travel-report-budget-table tbody th {
+        min-width: 112px;
+        color: var(--primary);
+        font-weight: 900;
+      }
+      .message.assistant .message-text .travel-report-budget-table tbody th i {
+        width: 20px;
+        color: var(--accent);
+      }
+      .message.assistant .message-text .travel-report-budget-table td:nth-child(2) {
+        white-space: nowrap;
+        color: var(--primary);
+        font-weight: 900;
+      }
+      .message.assistant .message-text .travel-report-budget-total-line {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        align-items: center;
+        padding: 12px 14px;
+        border-radius: 16px;
+        background: linear-gradient(135deg, rgba(26, 77, 84, 0.08), rgba(219, 169, 104, 0.1));
+        border: 1px solid rgba(26, 77, 84, 0.08);
+      }
+      .message.assistant .message-text .travel-report-budget-total-line span {
+        color: var(--text-muted);
+        font-size: 12px;
+        font-weight: 900;
+      }
+      .message.assistant .message-text .travel-report-budget-total-line strong {
+        color: var(--primary);
+        font-size: 20px;
+      }
+      .message.assistant .message-text .travel-report-budget-fit {
+        margin: 0;
+        color: var(--text-muted);
+        font-size: 13px;
+        line-height: 1.7;
+      }
       .message.assistant .message-text .travel-report-budget-item {
         display: grid;
         grid-template-columns: 38px minmax(0, 1fr);
@@ -3561,6 +3631,31 @@ html {
         font-size: 12px;
         line-height: 1.6;
       }
+      .message.assistant .message-text .travel-report-route-point-chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-top: 9px;
+      }
+      .message.assistant .message-text .travel-report-route-point-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        min-width: 0;
+        max-width: 100%;
+        padding: 5px 8px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.82);
+        border: 1px solid rgba(26, 77, 84, 0.1);
+        color: var(--primary);
+        font-size: 11px;
+        line-height: 1.4;
+      }
+      .message.assistant .message-text .travel-report-route-point-chip strong {
+        color: var(--accent);
+        font-size: 10px;
+        white-space: nowrap;
+      }
       .message.assistant .message-text .travel-report-map .journey-live-map-shell {
         margin-top: 0;
       }
@@ -3574,6 +3669,12 @@ html {
         }
         .message.assistant .message-text .travel-report-budget-grid {
           grid-template-columns: 1fr;
+        }
+        .message.assistant .message-text .travel-report-budget-table {
+          min-width: 620px;
+        }
+        .message.assistant .message-text .travel-report-budget-table-wrap {
+          overflow-x: auto;
         }
         .message.assistant .message-text .travel-report-insight-grid,
         .message.assistant .message-text .travel-report-insight-grid.compact {

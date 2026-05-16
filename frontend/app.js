@@ -4443,6 +4443,12 @@
             note: "含门票、预约项目和体验活动，热门项目建议提前确认。",
           };
         }
+        if (/服务|预留|机动|缓冲/u.test(label)) {
+          return {
+            icon: "fa-shield-heart",
+            note: "覆盖市内交通、寄存、临时休息和价格波动缓冲。",
+          };
+        }
         if (/人均/u.test(label)) {
           return {
             icon: "fa-user-group",
@@ -4467,7 +4473,7 @@
         const source = [lines.join(" "), combinedText].filter(Boolean).join(" ");
         const normalized = source.replace(/\s+/g, " ");
         const pattern =
-          /(交通|大交通|市内交通|住宿|酒店|民宿|餐饮|美食|吃饭|景点体验|景点|门票|体验|其他|机动|总计|合计|总预算|预算|人均)[：:\s|，,、]*([¥￥]?\s*\d[\d,.]*\s*元?)/gu;
+          /(交通|大交通|市内交通|住宿|酒店|民宿|餐饮|美食|吃饭|景点体验|景点|门票|体验|服务\/预留|服务|预留|其他|机动|总计|合计|总预算|预算)[：:\s|，,、]*([¥￥]?\s*\d[\d,.]*\s*元?)/gu;
         const picked = [];
         const seen = new Set();
         let match;
@@ -4609,6 +4615,148 @@
         return (Array.isArray(items) ? items : [])
           .map((item) => String(item || "").trim())
           .filter(Boolean);
+      }
+
+      const REPORT_BUDGET_GROUPS = [
+        { key: "transport", label: "交通", icon: "fa-train-subway" },
+        { key: "accommodation", label: "住宿", icon: "fa-bed" },
+        { key: "food", label: "餐饮", icon: "fa-utensils" },
+        { key: "attractions", label: "景点/体验", icon: "fa-ticket" },
+        { key: "service_reserve", label: "服务/预留", icon: "fa-shield-heart" },
+        { key: "other", label: "其他", icon: "fa-wallet" },
+      ];
+
+      function reportBudgetGroupKey(item = {}) {
+        const source = `${item.key || item.category || ""} ${item.label || ""}`.toLowerCase();
+        if (/transport|traffic|交通|高铁|航班|机票|火车/.test(source)) return "transport";
+        if (/accommodation|hotel|lodging|住宿|酒店|民宿|房/.test(source)) return "accommodation";
+        if (/food|dining|meal|餐|美食|小吃/.test(source)) return "food";
+        if (/attraction|scenic|sight|experience|景点|门票|体验|游船/.test(source)) return "attractions";
+        if (/service|reserve|contingency|buffer|misc|服务|预留|机动/.test(source)) return "service_reserve";
+        return "other";
+      }
+
+      function normalizeReportBudgetItems(budget = {}) {
+        const grouped = new Map(
+          REPORT_BUDGET_GROUPS.map((group) => [
+            group.key,
+            {
+              ...group,
+              amount: 0,
+              basis: "",
+              confidence: "",
+            },
+          ])
+        );
+        (Array.isArray(budget.items) ? budget.items : []).forEach((item) => {
+          if (!item || typeof item !== "object") return;
+          const group = grouped.get(reportBudgetGroupKey(item)) || grouped.get("other");
+          if (typeof item.amount === "number" && !Number.isNaN(item.amount)) {
+            group.amount += item.amount;
+          }
+          if (item.basis && !group.basis) group.basis = String(item.basis);
+          if (item.confidence && !group.confidence) group.confidence = String(item.confidence);
+        });
+
+        const fieldFallbacks = {
+          transport: "transport",
+          accommodation: "accommodation",
+          food: "food",
+          attractions: "attractions",
+          service_reserve: budget.service_reserve !== undefined ? "service_reserve" : "misc",
+          other: "other",
+        };
+        Object.entries(fieldFallbacks).forEach(([groupKey, budgetKey]) => {
+          const group = grouped.get(groupKey);
+          const value = budget[budgetKey];
+          if (group && !group.amount && typeof value === "number" && !Number.isNaN(value)) {
+            group.amount = value;
+          }
+        });
+
+        const defaults = {
+          transport: "交通票价、余票和退改签规则需在正式预订前复核。",
+          accommodation: "住宿按区域、房型、晚数和取消政策估算。",
+          food: "餐饮按用餐偏好、餐次和热门餐厅排队情况估算。",
+          attractions: "景点/体验按门票、预约项目和临时展览收费估算。",
+          service_reserve: "覆盖市内交通、寄存、临时休息和价格波动缓冲。",
+          other: "个人购物、伴手礼和临时加项按实际发生处理。",
+        };
+        return REPORT_BUDGET_GROUPS.map((group) => {
+          const item = grouped.get(group.key);
+          return {
+            ...item,
+            basis: item.basis || defaults[group.key],
+            confidence: item.confidence || "待核验",
+          };
+        });
+      }
+
+      function parseReportDataExpectedDays(reportData = {}) {
+        const duration = String(reportData.overview?.duration || "");
+        const digitMatch = duration.match(/(\d+)\s*天/u);
+        const chineseMatch = duration.match(/([一二三四五六七八九十])\s*天/u);
+        const parsed = digitMatch
+          ? Number(digitMatch[1])
+          : chineseMatch
+          ? parseJourneyChineseDayNumber(chineseMatch[1])
+          : 0;
+        const itineraryDays = Array.isArray(reportData.itinerary)
+          ? reportData.itinerary.map((day) => Number(day.day_number || day.day || 0))
+          : [];
+        const routeDays = Array.isArray(reportData.map_routes)
+          ? reportData.map_routes.map((route) => Number(route.day_number || route.day || 0))
+          : [];
+        const routeMapDays = Array.isArray(reportData.route_map?.days)
+          ? reportData.route_map.days.map((day) => Number(day.day_number || day.day || 0))
+          : [];
+        return Math.max(parsed, ...itineraryDays, ...routeDays, ...routeMapDays, 0);
+      }
+
+      function routePointName(point = "") {
+        if (point && typeof point === "object") {
+          return String(point.name || point.label || point.title || "").trim();
+        }
+        return String(point || "").trim();
+      }
+
+      function normalizeRouteMapDayPoints(routeMapDay = {}, route = {}) {
+        const typedPoints = Array.isArray(routeMapDay.points) ? routeMapDay.points : [];
+        if (typedPoints.length) {
+          return typedPoints
+            .map((point) => ({
+              name: routePointName(point),
+              typeLabel: point.type_label || point.type || "路线点",
+              description: point.description || point.note || "",
+            }))
+            .filter((point) => point.name);
+        }
+        return normalizeReportDataList(routeMapDay.route_points || route.route_points || []).map(
+          (name) => ({
+            name,
+            typeLabel: "路线点",
+            description: "当天路线节点，后续可继续细化停留时间。",
+          })
+        );
+      }
+
+      function renderReportRoutePointChips(points = []) {
+        if (!points.length) return "";
+        return `
+          <div class="travel-report-route-point-chips">
+            ${points
+              .slice(0, 6)
+              .map(
+                (point) => `
+                  <span class="travel-report-route-point-chip">
+                    <strong>${escapeHtml(point.typeLabel || "路线点")}</strong>
+                    ${escapeHtml(point.name)}
+                  </span>
+                `
+              )
+              .join("")}
+          </div>
+        `;
       }
 
       function getReportPlanningModeMeta(reportData = {}) {
@@ -4843,67 +4991,103 @@
       }
 
       function renderReportDataBudgetItems(budget = {}) {
-        const items = Array.isArray(budget.items) ? budget.items : [];
-        if (!items.length) {
-          return renderReportDataList(
-            [
-              budget.total ? `预算总计：${formatReportDataMoney(budget.total)}` : "",
-              budget.per_person
-                ? `人均参考：${formatReportDataMoney(budget.per_person)}`
-                : "",
-              budget.fit || "",
-            ],
-            "预算明细待补充"
-          );
-        }
+        const items = normalizeReportBudgetItems(budget);
+        const total = formatReportDataMoney(budget.total);
 
         return `
-          <div class="travel-report-budget-grid">
-            ${items
-              .map((item) => {
-                const label = item.label || item.key || "预算项";
-                const amount = formatReportDataMoney(item.amount);
-                const note = [item.basis, item.confidence]
-                  .filter(Boolean)
-                  .join(" · ");
-                return `
-                  <article class="travel-report-budget-item">
-                    <div class="travel-report-budget-icon">
-                      <i class="fa-solid fa-wallet"></i>
-                    </div>
-                    <div>
-                      <span>${escapeHtml(label)}</span>
-                      <strong>${escapeHtml(amount || "待核验")}</strong>
-                      <p>${escapeHtml(note || "出发前需要二次核验")}</p>
-                    </div>
-                  </article>
-                `;
-              })
-              .join("")}
+          <div class="travel-report-budget-table-wrap">
+            <table class="travel-report-budget-table">
+              <thead>
+                <tr>
+                  <th>类别</th>
+                  <th>金额</th>
+                  <th>置信度</th>
+                  <th>依据</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${items
+                  .map(
+                    (item) => `
+                      <tr>
+                        <th scope="row">
+                          <i class="fa-solid ${escapeHtml(item.icon || "fa-wallet")}"></i>
+                          ${escapeHtml(item.label || "预算项")}
+                        </th>
+                        <td>${escapeHtml(formatReportDataMoney(item.amount) || "待核验")}</td>
+                        <td>${escapeHtml(item.confidence || "待核验")}</td>
+                        <td>${escapeHtml(item.basis || "出发前需要二次核验")}</td>
+                      </tr>
+                    `
+                  )
+                  .join("")}
+              </tbody>
+            </table>
+            <div class="travel-report-budget-total-line">
+              <span>当前估算合计</span>
+              <strong>${escapeHtml(total || "待核验")}</strong>
+            </div>
+            ${budget.fit ? `<p class="travel-report-budget-fit">${escapeHtml(budget.fit)}</p>` : ""}
           </div>
         `;
       }
 
-      function renderReportDataDailyItinerary(days = [], mapRoutes = []) {
+      function renderReportDataDailyItinerary(
+        days = [],
+        mapRoutes = [],
+        routeMap = {},
+        expectedDayCount = 0
+      ) {
         const safeDays = Array.isArray(days) ? days : [];
-        if (!safeDays.length) return "<p>每日行程待补充。</p>";
+        const safeRoutes = Array.isArray(mapRoutes) ? mapRoutes : [];
+        const routeMapDays = Array.isArray(routeMap?.days) ? routeMap.days : [];
+        const maxDay = Math.max(
+          expectedDayCount || 0,
+          ...safeDays.map((day) => Number(day.day_number || day.day || 0)),
+          ...safeRoutes.map((route) => Number(route.day_number || route.day || 0)),
+          ...routeMapDays.map((day) => Number(day.day_number || day.day || 0)),
+          safeDays.length
+        );
+        if (!maxDay) return "<p>每日行程待补充。</p>";
         const routeByDay = new Map(
-          (Array.isArray(mapRoutes) ? mapRoutes : []).map((route) => [
+          safeRoutes.map((route) => [
             Number(route.day_number || route.day || 0),
             route,
           ])
         );
+        const routeMapByDay = new Map(
+          routeMapDays.map((day) => [Number(day.day_number || day.day || 0), day])
+        );
+        const dayByNumber = new Map(
+          safeDays.map((day, index) => [
+            Number(day.day_number || day.day || index + 1),
+            day,
+          ])
+        );
+        const entries = Array.from({ length: maxDay }, (_, index) => {
+          const dayNumber = index + 1;
+          const day = dayByNumber.get(dayNumber) || {
+            day_number: dayNumber,
+            title: "待补齐当天安排",
+            time_blocks: ["这一天还没有出现在当前报告数据里，需要继续补齐玩法、餐饮和动线。"],
+            missing: true,
+          };
+          return { ...day, day_number: dayNumber, missing: Boolean(day.missing) };
+        });
 
         return `
           <div class="travel-report-days">
-            ${safeDays
+            ${entries
               .map((day) => {
                 const route = routeByDay.get(Number(day.day_number || 0)) || day.route || {};
+                const routeMapDay = routeMapByDay.get(Number(day.day_number || 0)) || {};
                 const routeSummary =
-                  route.summary || day.route?.summary || day.route_summary || "";
-                const routePoints = normalizeReportDataList(
-                  route.route_points || day.waypoints || []
-                );
+                  routeMapDay.summary ||
+                  route.summary ||
+                  day.route?.summary ||
+                  day.route_summary ||
+                  "";
+                const routePoints = normalizeRouteMapDayPoints(routeMapDay, route);
                 const timeBlocks = Array.isArray(day.time_blocks)
                   ? day.time_blocks
                   : [];
@@ -4912,7 +5096,7 @@
                   ? day.risk_notes
                   : [];
                 return `
-                  <article class="travel-report-day">
+                  <article class="travel-report-day ${day.missing ? "missing" : ""}">
                     <div class="travel-report-day-badge">Day ${escapeHtml(
                       day.day_number || ""
                     )}</div>
@@ -4948,12 +5132,16 @@
                     </div>
                     <div class="travel-report-day-map">
                       <div class="travel-report-day-map-head">
-                        <span>路线联动</span>
+                        <span>${escapeHtml(day.missing ? "待补齐路线" : "分日路线")}</span>
                         <strong>${escapeHtml(
-                          route.summary || routeSummary || "路线待核验"
+                          routeMapDay.summary || route.summary || routeSummary || "路线待核验"
                         )}</strong>
                       </div>
-                      ${renderReportRouteSketch(routePoints, `Day ${day.day_number || ""}`)}
+                      ${renderReportRouteSketch(
+                        routePoints.map((point) => point.name),
+                        `Day ${day.day_number || ""}`
+                      )}
+                      ${renderReportRoutePointChips(routePoints)}
                     </div>
                   </article>
                 `;
@@ -4965,9 +5153,24 @@
 
       function renderReportDataMapDigest(reportData = {}) {
         const routes = Array.isArray(reportData.map_routes) ? reportData.map_routes : [];
+        const routeMapDays = Array.isArray(reportData.route_map?.days)
+          ? reportData.route_map.days
+          : [];
         const routeLabel = reportData.overview?.route_label || "路线总览";
-        const waypoints = routes
-          .flatMap((route) => route.route_points || [])
+        const dailyRoutes = routeMapDays.length
+          ? routeMapDays
+          : routes.map((route) => ({
+              day_number: route.day_number,
+              summary: route.summary,
+              route_points: route.route_points || [],
+              points: [],
+            }));
+        const waypoints = dailyRoutes
+          .flatMap((day) =>
+            Array.isArray(day.points) && day.points.length
+              ? day.points.map(routePointName)
+              : day.route_points || []
+          )
           .map((item) => cleanJourneyLocationValue(item || ""))
           .filter(Boolean)
           .filter((item, index, list) => list.indexOf(item) === index)
@@ -4981,19 +5184,30 @@
                 <span>景点地图</span>
                 <h4>${escapeHtml(routeLabel)}</h4>
               </div>
-              <p>导出版使用结构化路线点生成静态示意；线上仍可继续打开实时地图细化路线。</p>
+              <p>路线联动使用结构化路线点生成静态示意；线上仍可继续打开实时地图细化路线。</p>
             </div>
             <div class="travel-report-route-digest-body">
               ${renderReportRouteSketch(waypoints, routeLabel)}
               <div class="travel-report-route-day-list">
-                ${routes
+                ${dailyRoutes
                   .map(
-                    (route) => `
+                    (routeDay) => {
+                      const pointNames = normalizeRouteMapDayPoints(
+                        routeDay,
+                        routes.find(
+                          (route) =>
+                            Number(route.day_number || 0) ===
+                            Number(routeDay.day_number || 0)
+                        ) || {}
+                      );
+                      return `
                       <div class="travel-report-route-day-pill">
-                        <strong>Day ${escapeHtml(route.day_number || "")}</strong>
-                        <span>${escapeHtml(route.summary || "当天路线待补齐")}</span>
+                        <strong>Day ${escapeHtml(routeDay.day_number || "")}</strong>
+                        <span>${escapeHtml(routeDay.summary || "当天路线待补齐")}</span>
+                        ${renderReportRoutePointChips(pointNames)}
                       </div>
-                    `
+                    `;
+                    }
                   )
                   .join("")}
               </div>
@@ -5033,6 +5247,7 @@
         const viewModel = buildReportDataViewModel(reportData);
         const routeLabel = overview.route_label || "专属旅程";
         const dayCount = overview.duration || "分日规划";
+        const expectedDayCount = parseReportDataExpectedDays(reportData);
         const budgetLabel =
           formatReportDataMoney(budget.total) ||
           reportData.budget_confidence?.level ||
@@ -5114,7 +5329,9 @@
                 title: "按天执行",
                 body: renderReportDataDailyItinerary(
                   reportData.itinerary,
-                  reportData.map_routes
+                  reportData.map_routes,
+                  reportData.route_map,
+                  expectedDayCount
                 ),
               })}
               ${renderReportDataCard({
@@ -5718,7 +5935,7 @@
         const joined = compactLines.join("；");
         const rows = [];
         const pattern =
-          /(交通|大交通|往返|住宿|酒店|民宿|餐饮|美食|门票|游船|景点|体验|市内交通|伴手礼|其他|机动|合计|总计)[^~￥¥\d]{0,14}([~约￥¥]?\s*\d[\d,.]*(?:\s*[-~]\s*\d[\d,.]*)?\s*元?)/gu;
+          /(交通|大交通|往返|住宿|酒店|民宿|餐饮|美食|门票|游船|景点|体验|市内交通|服务\/预留|服务|预留|伴手礼|其他|机动|合计|总计)[^~￥¥\d]{0,14}([~约￥¥]?\s*\d[\d,.]*(?:\s*[-~]\s*\d[\d,.]*)?\s*元?)/gu;
         let match;
         while ((match = pattern.exec(joined))) {
           const label = match[1].replace(/往返$/, "交通");
@@ -5735,6 +5952,7 @@
         if (/住宿|酒店|民宿|房/u.test(label)) return "fa-bed";
         if (/餐|美食|吃/u.test(label)) return "fa-utensils";
         if (/门票|景点|游船|体验/u.test(label)) return "fa-ticket";
+        if (/服务|预留|机动|缓冲/u.test(label)) return "fa-shield-heart";
         if (/合计|总计|预算/u.test(label)) return "fa-calculator";
         return "fa-wallet";
       }

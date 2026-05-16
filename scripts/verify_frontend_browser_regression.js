@@ -374,7 +374,7 @@ async function checkReportSurface(page) {
   await expectContainsText(
     page,
     ".travel-report-card.budget",
-    ["交通", "住宿", "规则估算", "待核验"],
+    ["交通", "住宿", "服务/预留", "规则估算", "待核验"],
     "budget card"
   );
   await expectContainsText(
@@ -404,7 +404,7 @@ async function checkReportSurface(page) {
   await expectContainsText(
     page,
     ".travel-report-route-digest",
-    ["景点地图", "成都东站", "都江堰景区"],
+    ["景点地图", "成都东站", "都江堰景区", "商业街区"],
     "route digest"
   );
   const cardCount = await page.locator(".travel-report-card").count();
