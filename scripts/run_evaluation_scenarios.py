@@ -533,11 +533,27 @@ def _print_results(results: list[dict[str, Any]]) -> None:
 def _print_json(payload: dict[str, Any]) -> None:
     text = json.dumps(payload, ensure_ascii=False, indent=2)
     if _JSON_MODE_REQUESTED:
-        _ORIGINAL_STDOUT.write(text)
-        _ORIGINAL_STDOUT.write("\n")
-        _ORIGINAL_STDOUT.flush()
+        _write_original_stdout_text(f"{text}\n")
     else:
         print(text)
+
+
+def _write_original_stdout_text(text: str) -> None:
+    reconfigure = getattr(_ORIGINAL_STDOUT, "reconfigure", None)
+    if callable(reconfigure):
+        try:
+            reconfigure(encoding="utf-8", errors="strict")
+        except (OSError, ValueError):
+            pass
+
+    try:
+        _ORIGINAL_STDOUT.write(text)
+    except UnicodeEncodeError:
+        buffer = getattr(_ORIGINAL_STDOUT, "buffer", None)
+        if buffer is None:
+            raise
+        buffer.write(text.encode("utf-8"))
+    _ORIGINAL_STDOUT.flush()
 
 
 def _preflight_skip_reason(preflight: dict[str, Any]) -> str:

@@ -62,6 +62,49 @@ async def test_step_middleware_renders_python_style_placeholders():
 
 
 @pytest.mark.asyncio
+async def test_step_middleware_heals_missing_accommodation_type_from_selected_option():
+    captured = {}
+    middleware = StepConfigMiddleware(
+        {
+            "itinerary_generation": {
+                "prompt": "住宿：{selected_accommodation_summary}",
+                "tools": ["generate_itinerary_tool"],
+                "requires": [
+                    "user_requirement",
+                    "selected_destination",
+                    "selected_transport",
+                    "selected_accommodation_types",
+                    "selected_food_types",
+                ],
+            }
+        }
+    )
+    state = {
+        "current_step": "itinerary_generation",
+        "user_requirement": {"destination": "北京", "travel_days": 5},
+        "selected_destination": "北京",
+        "selected_transport": "train",
+        "selected_accommodation_option": {
+            "name": "北京核心区舒适酒店",
+            "type": "comfort_hotel",
+            "location": "核心区",
+        },
+        "selected_food_types": ["local"],
+    }
+
+    async def handler(request):
+        captured["system_prompt"] = request.system_prompt
+        captured["tools"] = request.tools
+        return "ok"
+
+    await middleware.awrap_model_call(DummyRequest(state), handler)
+
+    assert state["selected_accommodation_types"] == ["star_hotel"]
+    assert "北京核心区舒适酒店" in captured["system_prompt"]
+    assert captured["tools"] == ["generate_itinerary_tool"]
+
+
+@pytest.mark.asyncio
 async def test_step_middleware_injects_order_stage_summaries():
     captured = {}
     middleware = StepConfigMiddleware(

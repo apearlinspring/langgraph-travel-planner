@@ -284,6 +284,7 @@ def _scenario_expectations(scenario: EvaluationScenario) -> dict[str, Any]:
                 if item in _as_list(_as_dict(raw.get("stage")).get("expected_transition_tools"))
                 else 0,
             ),
+            "strict": bool(_as_dict(raw.get("stage")).get("strict", False)),
         },
         "unsupported_claims": {
             "strict": bool(_as_dict(raw.get("unsupported_claims")).get("strict", True)),
@@ -431,6 +432,7 @@ def _criterion_stage_transition(
         if isinstance(item, str) and item
     ]
     observed = [record.tool for record in records if record.tool in STATE_TRANSITION_TOOLS]
+    strict = bool(_as_dict(expectations.get("stage")).get("strict", False))
     if not expected:
         return (
             CriterionResult("stage_transition_accuracy", 20.0, 20.0, []),
@@ -439,6 +441,7 @@ def _criterion_stage_transition(
                 "expected_transition_tools": [],
                 "observed_transition_tools": observed,
                 "matched_transition_count": 0,
+                "strict": strict,
             },
         )
 
@@ -457,6 +460,7 @@ def _criterion_stage_transition(
             "expected_transition_tools": expected,
             "observed_transition_tools": observed,
             "matched_transition_count": matched,
+            "strict": strict,
         },
     )
 
@@ -617,6 +621,7 @@ def evaluate_agent_metrics(
     failed_findings = [
         f"{criterion.name}: {finding}"
         for criterion in criteria
+        if criterion.name != "stage_transition_accuracy" or stage_details["strict"]
         for finding in criterion.findings
     ]
     passed = (

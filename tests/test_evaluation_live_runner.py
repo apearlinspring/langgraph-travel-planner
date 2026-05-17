@@ -1,3 +1,4 @@
+import io
 import json
 import time
 from datetime import datetime, timezone
@@ -5,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+import scripts.run_evaluation_scenarios as run_evaluation_scenarios_cli
 from app.evaluation.acceptance_gate import (
     build_acceptance_gate_result,
     build_error_acceptance_gate_result,
@@ -309,6 +311,54 @@ def test_build_quality_summary_contains_agent_scores():
     assert summary["runtime_governance"]["status"] == "pass"
 
 
+def test_build_quality_summary_marks_transient_api_connection_error_recovered():
+    scenario = _scenario("agency_recovered")
+    report_evaluation = {
+        "normalized_score": 100,
+        "passed": True,
+        "grade": "A",
+        "total_score": 100,
+        "max_score": 100,
+        "summary": [],
+        "criteria": [],
+    }
+
+    summary = build_quality_summary(
+        scenario=scenario,
+        events=[
+            {"type": "error", "error_type": "APIConnectionError", "turn_index": 1},
+            {"type": "token", "content": "hello", "turn_index": 2, "elapsed_since_scenario_start": 0.5},
+            {"type": "report_data", "turn_index": 2},
+            {
+                "type": "turn_observability",
+                "observability": {
+                    "tool_call_count": 0,
+                    "tool_failure_count": 0,
+                    "fallback_count": 0,
+                    "degradation_status": "ok",
+                    "estimated_input_tokens": 1,
+                    "estimated_output_tokens": 2,
+                    "estimated_total_tokens": 3,
+                },
+            },
+        ],
+        turns=[
+            {"turn_index": 1, "user_message": "Plan", "elapsed_seconds": 0.4, "error": "APIConnectionError"},
+            {"turn_index": 2, "user_message": "Continue", "elapsed_seconds": 0.6, "produced_report_data": True},
+        ],
+        assistant_text="hello",
+        report_data=_valid_report_data(),
+        report_evaluation=report_evaluation,
+        elapsed_seconds=1.0,
+        timeout_seconds=900.0,
+    )
+
+    assert summary["runtime_metrics"]["error_event_count"] == 0
+    assert summary["runtime_metrics"]["recoverable_error_event_count"] == 1
+    assert summary["runtime_quality"]["budget_gate"]["passed"] is True
+    assert summary["aggregate"]["passed"] is True
+
+
 def test_acceptance_evidence_closure_tracks_live_report_requirements():
     scenario = _scenario("agency_couple")
 
@@ -479,7 +529,85 @@ def test_acceptance_gate_passes_valid_quality_summary(tmp_path: Path):
     assert Path(paths["markdown"]).exists()
 
 
-def test_acceptance_gate_marks_runtime_warnings_as_degraded():
+def test_acceptance_gate_does_not_fail_non_strict_stage_transition_finding():
+    scenario = EvaluationScenario(
+        id="pricing_like",
+        name="Pricing Like",
+        category="pricing",
+        prompt="Plan",
+        expected_mode="agency_plan",
+        min_score=80,
+        focus=["pricing"],
+        tags=["agency", "pricing"],
+        metric_expectations={
+            "intent": {"expected": "pricing_query", "accepted": ["agency_plan", "pricing_query"]},
+            "stage": {
+                "strict": False,
+                "expected_transition_tools": [
+                    "record_requirement_tool",
+                    "select_destination_tool",
+                    "select_food_tool",
+                    "generate_order_tool",
+                ],
+            },
+            "unsupported_claims": {
+                "strict": True,
+                "categories": ["price", "inventory"],
+            },
+        },
+    )
+    report_data = _valid_report_data()
+    report_evaluation = {
+        "normalized_score": 100,
+        "passed": True,
+        "grade": "A",
+        "total_score": 100,
+        "max_score": 100,
+        "summary": [],
+        "criteria": [],
+    }
+    quality_summary = build_quality_summary(
+        scenario=scenario,
+        events=[
+            {"type": "tool_call", "tool": "record_requirement_tool", "turn_index": 1},
+            {"type": "tool_call", "tool": "select_destination_tool", "turn_index": 2},
+            {"type": "tool_call", "tool": "generate_order_tool", "turn_index": 3},
+            {"type": "token", "content": "hello", "turn_index": 3, "elapsed_since_scenario_start": 0.5},
+            {"type": "report_data", "turn_index": 3},
+            {
+                "type": "turn_observability",
+                "observability": {
+                    "tool_call_count": 3,
+                    "tool_failure_count": 0,
+                    "fallback_count": 0,
+                    "degradation_status": "ok",
+                    "estimated_input_tokens": 3,
+                    "estimated_output_tokens": 2,
+                    "estimated_total_tokens": 5,
+                },
+            },
+        ],
+        turns=[{"turn_index": 1, "user_message": "Plan", "elapsed_seconds": 1.0}],
+        assistant_text="hello",
+        report_data=report_data,
+        report_evaluation=report_evaluation,
+        elapsed_seconds=1.0,
+        timeout_seconds=900.0,
+    )
+
+    gate = build_acceptance_gate_result(
+        scenario=scenario,
+        quality_summary=quality_summary,
+        report_data=report_data,
+    )
+
+    assert quality_summary["agent_metrics"]["passed"] is True
+    assert quality_summary["agent_metrics"]["criteria"][3]["findings"]
+    assert gate["dimensions"]["agent_industrial_metrics"]["passed"] is True
+    assert gate["passed"] is True
+
+
+def test_acceptance_gate_keeps_runtime_warnings_as_non_blocking_findings():
     scenario = _scenario("agency_couple")
     report_data = _valid_report_data()
     report_evaluation = {
@@ -539,10 +667,11 @@ def test_acceptance_gate_marks_runtime_warnings_as_degraded():
         report_data=report_data,
     )
 
-    assert gate["status"] == "degraded"
-    assert gate["passed"] is False
-    assert gate["dimensions"]["runtime_budget"]["status"] == "degraded"
-    assert gate["degradations"][0]["dimension"] == "runtime_budget"
+    assert gate["status"] == "passed"
+    assert gate["passed"] is True
+    assert gate["dimensions"]["runtime_budget"]["status"] == "passed"
+    assert gate["dimensions"]["runtime_budget"]["findings"]
+    assert gate["degradations"] == []
 
 
 def test_acceptance_gate_flags_budget_confidence_gap():
@@ -1239,6 +1368,31 @@ def test_cli_json_payload_preflight_blocked_overrides_stale_passed_summary():
     assert payload["status"] == "blocked"
     assert payload["passed"] is False
     assert payload["missing_required"] == ["real_llm"]
+
+
+def test_cli_json_print_falls_back_to_utf8_when_stdout_uses_gbk(monkeypatch):
+    class GbkFailingStdout:
+        def __init__(self) -> None:
+            self.buffer = io.BytesIO()
+            self.flushed = False
+
+        def write(self, text: str) -> int:
+            raise UnicodeEncodeError("gbk", text, 0, 1, "illegal multibyte sequence")
+
+        def flush(self) -> None:
+            self.flushed = True
+
+    stdout = GbkFailingStdout()
+    monkeypatch.setattr(run_evaluation_scenarios_cli, "_JSON_MODE_REQUESTED", True)
+    monkeypatch.setattr(run_evaluation_scenarios_cli, "_ORIGINAL_STDOUT", stdout)
+
+    run_evaluation_scenarios_cli._print_json({"status": "✅ passed", "message": "中文"})
+
+    rendered = stdout.buffer.getvalue().decode("utf-8")
+    assert '"status": "✅ passed"' in rendered
+    assert '"message": "中文"' in rendered
+    assert rendered.endswith("\n")
+    assert stdout.flushed is True
 
 
 def test_acceptance_artifact_dirs_must_stay_under_runtime(tmp_path: Path):

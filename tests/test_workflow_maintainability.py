@@ -885,6 +885,39 @@ def test_itinerary_budget_and_order_report_use_selected_real_options():
     assert "未接入真实支付服务" in order_command.update["messages"][0].content
 
 
+def test_generate_itinerary_persists_safe_accommodation_type_fallback():
+    state = create_initial_state(user_id="user-1", session_id="session-1")
+    state.update(
+        {
+            "current_step": "itinerary_generation",
+            "user_requirement": {
+                "departure_city": "西安",
+                "destination": "北京",
+                "departure_date": "2026-05-10",
+                "travel_days": 2,
+                "adult_count": 2,
+                "children_count": 0,
+                "budget_max": 5000.0,
+                "travel_styles": ["relaxation"],
+            },
+            "selected_destination": "北京",
+            "selected_transport": "train",
+            "selected_accommodation_option": {
+                "name": "北京核心区舒适酒店",
+                "type": "comfort_hotel",
+                "location": "核心区",
+            },
+            "selected_food_types": ["local"],
+        }
+    )
+
+    command = generate_itinerary_tool.invoke({"runtime": _build_runtime(state)})
+
+    assert command.update["current_step"] == "budget_summarization"
+    assert command.update["selected_accommodation_types"] == ["star_hotel"]
+    assert command.update["itinerary"][0]["accommodation"] == "北京核心区舒适酒店"
+
+
 def test_generate_itinerary_tool_defaults_missing_food_preference():
     state = create_initial_state(user_id="user-1", session_id="session-1")
     state.update(

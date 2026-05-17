@@ -121,6 +121,16 @@ ACCOMMODATION_ALIASES = {
     "青年旅舍": "youth_hostel",
     "青旅": "youth_hostel",
 }
+ACCOMMODATION_STATE_TYPE_ALIASES = {
+    "comfort_hotel": "star_hotel",
+    "comfortable_hotel": "star_hotel",
+    "business_hotel": "star_hotel",
+    "midscale_hotel": "star_hotel",
+    "upscale_hotel": "star_hotel",
+    "budget_hotel": "economy_hotel",
+    "hotel": "star_hotel",
+    **ACCOMMODATION_ALIASES,
+}
 
 FOOD_LABELS = {
     "specialty": "特色美食",
@@ -2258,6 +2268,52 @@ def _has_confirmed_accommodation_state(state: TravelState) -> bool:
     )
 
 
+def _normalize_accommodation_type_for_state(value: Any) -> str | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    if raw in ACCOMMODATION_LABELS:
+        return raw
+    lowered = raw.lower().replace("-", "_").replace(" ", "_")
+    if lowered in ACCOMMODATION_LABELS:
+        return lowered
+    if lowered in ACCOMMODATION_STATE_TYPE_ALIASES:
+        return ACCOMMODATION_STATE_TYPE_ALIASES[lowered]
+    if raw in ACCOMMODATION_STATE_TYPE_ALIASES:
+        return ACCOMMODATION_STATE_TYPE_ALIASES[raw]
+    for keyword, normalized in ACCOMMODATION_STATE_TYPE_ALIASES.items():
+        if keyword and keyword in raw:
+            return normalized
+    return None
+
+
+def _infer_selected_accommodation_types_for_state(state: TravelState) -> list[str]:
+    existing = _as_string_list(state.get("selected_accommodation_types"))
+    normalized_existing = []
+    for item in existing:
+        normalized = _normalize_accommodation_type_for_state(item)
+        if normalized and normalized not in normalized_existing:
+            normalized_existing.append(normalized)
+    if normalized_existing:
+        return normalized_existing
+
+    accommodation_sources = []
+    selected = state.get("selected_accommodation_option")
+    if isinstance(selected, dict):
+        accommodation_sources.append(selected)
+    accommodation_sources.extend(
+        option for option in state.get("accommodation_options") or [] if isinstance(option, dict)
+    )
+    for option in accommodation_sources:
+        for key in ("type", "category", "hotel_type", "type_label", "name", "location"):
+            normalized = _normalize_accommodation_type_for_state(option.get(key))
+            if normalized:
+                return [normalized]
+    if accommodation_sources:
+        return ["star_hotel"]
+    return []
+
+
 @tool
 def record_requirement_tool(
     departure_city: Any = None,
@@ -2761,10 +2817,13 @@ def select_food_tool(
         )
 
     selected_labels = [FOOD_LABELS[item] for item in food_types]
+    selected_accommodation_types = _infer_selected_accommodation_types_for_state(state)
     state_update = {
         "selected_food_types": food_types,
         "current_step": "itinerary_generation",
     }
+    if selected_accommodation_types and not state.get("selected_accommodation_types"):
+        state_update["selected_accommodation_types"] = selected_accommodation_types
     if food_pois:
         state_update["selected_food_pois"] = [
             poi for poi in (_normalize_food_poi(item) for item in food_pois) if poi.get("name")
@@ -2793,6 +2852,9 @@ def generate_itinerary_tool(
 
     app_logger.info("开始生成行程")
     state = _runtime_state(runtime)
+    selected_accommodation_types = _infer_selected_accommodation_types_for_state(state)
+    if selected_accommodation_types and not state.get("selected_accommodation_types"):
+        state["selected_accommodation_types"] = selected_accommodation_types
     required_fields = [
         "user_requirement",
         "selected_destination",
@@ -2951,6 +3013,7 @@ def generate_itinerary_tool(
         runtime,
         itinerary=itinerary,
         selected_food_types=selected_food_types,
+        selected_accommodation_types=selected_accommodation_types,
         current_step="budget_summarization",
     )
 

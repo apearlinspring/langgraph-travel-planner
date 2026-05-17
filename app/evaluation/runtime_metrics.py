@@ -24,6 +24,7 @@ class RuntimeMetrics:
     degraded_event_count: int
     report_event_count: int
     error_event_count: int
+    recoverable_error_event_count: int
     session_busy_event_count: int
     assistant_chars: int
     user_chars: int
@@ -235,6 +236,14 @@ def _observed_degraded_event_count(events: list[dict[str, Any]]) -> int:
     return count
 
 
+def _is_recoverable_runtime_error_event(event: dict[str, Any]) -> bool:
+    return (
+        isinstance(event, dict)
+        and _event_type(event) == "error"
+        and bool(event.get("recovered") or event.get("recoverable"))
+    )
+
+
 def _turn_user_chars(turns: list[dict[str, Any]]) -> int:
     total = 0
     for turn in turns:
@@ -272,6 +281,18 @@ def collect_runtime_metrics(
         raise TypeError("turns must be a list")
 
     event_types = [_event_type(event) for event in events if isinstance(event, dict)]
+    unrecovered_error_event_count = sum(
+        1
+        for event in events
+        if isinstance(event, dict)
+        and _event_type(event) == "error"
+        and not _is_recoverable_runtime_error_event(event)
+    )
+    recoverable_error_event_count = sum(
+        1
+        for event in events
+        if isinstance(event, dict) and _is_recoverable_runtime_error_event(event)
+    )
     turn_observability_event_count = sum(
         1 for event_type in event_types if event_type == "turn_observability"
     )
@@ -302,7 +323,11 @@ def collect_runtime_metrics(
         for event in events
         if isinstance(event, dict)
         and (
-            _event_type(event) in {"error", "session_busy"}
+            (
+                _event_type(event) == "error"
+                and not _is_recoverable_runtime_error_event(event)
+            )
+            or _event_type(event) == "session_busy"
             or str(event.get("degradation_status") or "").lower()
             in {"degraded", "failed"}
         )
@@ -324,7 +349,8 @@ def collect_runtime_metrics(
         fallback_count=observed_fallbacks,
         degraded_event_count=degraded_event_count,
         report_event_count=sum(1 for event_type in event_types if event_type == "report_data"),
-        error_event_count=sum(1 for event_type in event_types if event_type == "error"),
+        error_event_count=unrecovered_error_event_count,
+        recoverable_error_event_count=recoverable_error_event_count,
         session_busy_event_count=sum(1 for event_type in event_types if event_type == "session_busy"),
         assistant_chars=assistant_chars,
         user_chars=user_chars,
@@ -553,6 +579,7 @@ def build_runtime_governance_summary(
         },
         "errors": {
             "error_event_count": metrics.error_event_count,
+            "recoverable_error_event_count": metrics.recoverable_error_event_count,
             "max_error_event_count": runtime_budget.max_error_event_count,
             "findings": error_findings,
         },

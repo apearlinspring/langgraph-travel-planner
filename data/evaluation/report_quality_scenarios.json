@@ -285,6 +285,7 @@
           ]
         },
         "stage": {
+          "strict": false,
           "expected_transition_tools": [
             "record_requirement_tool",
             "select_destination_tool",

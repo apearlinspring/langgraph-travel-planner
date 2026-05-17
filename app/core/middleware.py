@@ -52,6 +52,34 @@ CROSS_STEP_VERIFY_KEYWORDS = (
 CROSS_STEP_TRANSPORT_KEYWORDS = ("交通", "高铁", "火车", "航班", "飞机", "自驾")
 CROSS_STEP_HOTEL_KEYWORDS = ("住宿", "酒店", "住哪里", "住哪", "民宿")
 
+STATE_ACCOMMODATION_TYPES = frozenset(
+    {"star_hotel", "economy_hotel", "hostel", "youth_hostel"}
+)
+ACCOMMODATION_TYPE_ALIASES = {
+    "comfort_hotel": "star_hotel",
+    "comfortable_hotel": "star_hotel",
+    "business_hotel": "star_hotel",
+    "midscale_hotel": "star_hotel",
+    "upscale_hotel": "star_hotel",
+    "hotel": "star_hotel",
+    "酒店": "star_hotel",
+    "舒适型酒店": "star_hotel",
+    "舒适型": "star_hotel",
+    "舒适酒店": "star_hotel",
+    "星级酒店": "star_hotel",
+    "中档酒店": "star_hotel",
+    "核心商圈酒店": "star_hotel",
+    "economy": "economy_hotel",
+    "budget_hotel": "economy_hotel",
+    "快捷酒店": "economy_hotel",
+    "经济酒店": "economy_hotel",
+    "民宿": "hostel",
+    "特色民宿": "hostel",
+    "客栈": "hostel",
+    "青旅": "youth_hostel",
+    "青年旅舍": "youth_hostel",
+}
+
 REQUIREMENT_RECORD_KEYWORDS = (
     "记录",
     "整理需求",
@@ -615,6 +643,80 @@ def _has_selected_accommodation(state_dict: dict[str, Any]) -> bool:
     return bool(
         state_dict.get("selected_accommodation_option")
         or state_dict.get("selected_accommodation_types")
+    )
+
+
+def _normalize_state_accommodation_type(value: Any) -> str | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    if raw in STATE_ACCOMMODATION_TYPES:
+        return raw
+    lowered = raw.lower().replace("-", "_").replace(" ", "_")
+    if lowered in STATE_ACCOMMODATION_TYPES:
+        return lowered
+    if lowered in ACCOMMODATION_TYPE_ALIASES:
+        return ACCOMMODATION_TYPE_ALIASES[lowered]
+    if raw in ACCOMMODATION_TYPE_ALIASES:
+        return ACCOMMODATION_TYPE_ALIASES[raw]
+    for keyword, normalized in ACCOMMODATION_TYPE_ALIASES.items():
+        if keyword and keyword in raw:
+            return normalized
+    return None
+
+
+def _infer_selected_accommodation_types(state_dict: dict[str, Any]) -> list[str]:
+    current = state_dict.get("selected_accommodation_types")
+    if isinstance(current, str):
+        normalized = _normalize_state_accommodation_type(current)
+        if normalized:
+            return [normalized]
+    if isinstance(current, list):
+        normalized_types = []
+        for item in current:
+            normalized = _normalize_state_accommodation_type(item)
+            if normalized and normalized not in normalized_types:
+                normalized_types.append(normalized)
+        if normalized_types:
+            return normalized_types
+
+    accommodation_sources = []
+    selected_option = state_dict.get("selected_accommodation_option")
+    if isinstance(selected_option, dict):
+        accommodation_sources.append(selected_option)
+    accommodation_sources.extend(
+        item for item in state_dict.get("accommodation_options") or [] if isinstance(item, dict)
+    )
+    for option in accommodation_sources:
+        for key in ("type", "category", "hotel_type", "type_label", "name", "location"):
+            normalized = _normalize_state_accommodation_type(option.get(key))
+            if normalized:
+                return [normalized]
+    if accommodation_sources:
+        return ["star_hotel"]
+    return []
+
+
+def _heal_missing_accommodation_prerequisites(
+    state: TravelState,
+    state_dict: dict[str, Any],
+    *,
+    current_step: str,
+    required_fields: list[str],
+) -> None:
+    if "selected_accommodation_types" not in required_fields:
+        return
+    if _state_value_ready(state_dict.get("selected_accommodation_types")):
+        return
+    inferred_types = _infer_selected_accommodation_types(state_dict)
+    if not inferred_types:
+        return
+    state_dict["selected_accommodation_types"] = inferred_types
+    if hasattr(state, "__setitem__"):
+        state["selected_accommodation_types"] = inferred_types
+    app_logger.warning(
+        "住宿前置状态缺少 selected_accommodation_types，已基于已有住宿候选/酒店信息补齐安全默认值: "
+        f"current_step={current_step}, selected_accommodation_types={inferred_types}"
     )
 
 
@@ -1736,8 +1838,15 @@ class StepConfigMiddleware(AgentMiddleware):
             raise ValueError(f"未知步骤: {current_step}")
 
         step_config = self._step_config[current_step]
+        required_fields = list(step_config["requires"])
+        _heal_missing_accommodation_prerequisites(
+            state,
+            state_dict,
+            current_step=current_step,
+            required_fields=required_fields,
+        )
 
-        for required_field in step_config["requires"]:
+        for required_field in required_fields:
             if required_field not in state or state[required_field] is None:
                 error_msg = f"步骤 {current_step} 需要完整状态，{required_field} 未设置"
                 app_logger.error(error_msg)

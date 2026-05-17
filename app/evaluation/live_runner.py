@@ -206,6 +206,54 @@ def _is_timeout_exception(exc: BaseException) -> bool:
     return isinstance(exc, TimeoutError) or "timed out" in message or "timeout" in message
 
 
+def _is_transient_llm_api_error_event(event: dict[str, Any]) -> bool:
+    if not isinstance(event, dict):
+        return False
+    if str(event.get("type") or event.get("event") or "") != "error":
+        return False
+    error_type = str(event.get("error_type") or "").lower()
+    message = str(event.get("message") or event.get("content") or "").lower()
+    if "apiconnectionerror" in error_type or "api connection error" in message:
+        return True
+    if "api connection" in error_type or "llm_api_connection" in error_type:
+        return True
+    return False
+
+
+def _mark_recovered_runtime_errors(
+    events: list[dict[str, Any]],
+    *,
+    report_data: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """Tag transient LLM API connection errors recovered before final report_data."""
+
+    if not isinstance(report_data, dict) or not report_data:
+        return events
+    report_indexes = [
+        index
+        for index, event in enumerate(events)
+        if isinstance(event, dict)
+        and str(event.get("type") or event.get("event") or "") == "report_data"
+    ]
+    if not report_indexes:
+        return events
+    first_report_index = min(report_indexes)
+    marked_events: list[dict[str, Any]] = []
+    for index, event in enumerate(events):
+        if index < first_report_index and _is_transient_llm_api_error_event(event):
+            marked_events.append(
+                {
+                    **event,
+                    "recovered": True,
+                    "recovery_category": "transient_llm_api_connection",
+                    "recovery_status": "final_report_data_produced",
+                }
+            )
+        else:
+            marked_events.append(event)
+    return marked_events
+
+
 def _has_conversation_busy_event(events: list[dict[str, Any]]) -> bool:
     return any(
         isinstance(event, dict)
@@ -676,6 +724,7 @@ def build_quality_summary(
 ) -> dict[str, Any]:
     """Build the combined Agent run quality score saved in live snapshots."""
 
+    events = _mark_recovered_runtime_errors(events, report_data=report_data)
     tool_policy = infer_tool_policy_from_scenario(scenario)
     scenario_runtime_budget = runtime_budget or runtime_budget_for_scenario(
         scenario,
@@ -920,6 +969,7 @@ def run_live_scenario(
             expected_mode=scenario.expected_mode,
             pass_threshold=scenario.min_score,
         ).to_dict()
+        events = _mark_recovered_runtime_errors(events, report_data=report_data)
         assistant_text = "".join(assistant_parts)
         elapsed_seconds = time.perf_counter() - started_at
         quality_summary = build_quality_summary(

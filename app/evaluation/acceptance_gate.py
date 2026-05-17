@@ -235,6 +235,28 @@ def _result_findings(result: dict[str, Any]) -> list[str]:
     return [*summary_items, *criteria_findings][:10]
 
 
+def _agent_metrics_blocking_findings(result: dict[str, Any]) -> list[str]:
+    expectations = _as_dict(result.get("expectations"))
+    stage_strict = bool(_as_dict(expectations.get("stage")).get("strict", False))
+    summary_items = (
+        []
+        if result.get("passed") is True
+        else [str(item) for item in _as_list(result.get("summary")) if str(item).strip()]
+    )
+    criteria_findings = []
+    for criterion in _as_list(result.get("criteria")):
+        if not isinstance(criterion, dict):
+            continue
+        name = str(criterion.get("name") or "")
+        if name == "stage_transition_accuracy" and not stage_strict:
+            continue
+        criteria_findings.extend(
+            f"{name}: {finding}"
+            for finding in _as_list(criterion.get("findings"))
+        )
+    return [*summary_items, *criteria_findings][:10]
+
+
 def _dimension_result(
     *,
     key: str,
@@ -415,7 +437,7 @@ def _agent_industrial_metrics_dimension(
     unsupported_claims = _as_dict(result.get("unsupported_claims"))
     claim_rate = _as_number(unsupported_claims.get("unsupported_claim_rate"))
     unsupported_count = _as_int(unsupported_claims.get("unsupported_claim_count")) or 0
-    findings = _result_findings(result)
+    findings = _agent_metrics_blocking_findings(result)
     if not result:
         findings.append("quality_summary.agent_metrics result is missing")
     if numeric_score is None:
@@ -504,21 +526,25 @@ def _runtime_budget_dimension(
     runtime_quality = _as_dict(quality_summary.get("runtime_quality"))
     budget_gate = _as_dict(runtime_quality.get("budget_gate"))
     passed = bool(budget_gate.get("passed")) or not thresholds.require_runtime_budget_pass
-    findings = [
+    violations = [
         str(item)
-        for item in [
-            *_as_list(budget_gate.get("violations")),
-            *_as_list(budget_gate.get("warnings")),
-        ]
+        for item in _as_list(budget_gate.get("violations"))
         if str(item).strip()
+    ]
+    warnings = [
+        str(item)
+        for item in _as_list(budget_gate.get("warnings"))
+        if str(item).strip()
+    ]
+    findings = [
+        *violations,
+        *warnings,
     ]
     if thresholds.require_runtime_budget_pass and not budget_gate:
         findings.insert(0, "runtime_quality.budget_gate is missing")
     status = "passed"
     if not passed:
         status = "failed"
-    elif findings:
-        status = "degraded"
     return _dimension_result(
         key="runtime_budget",
         score=100.0 if passed else 0.0,

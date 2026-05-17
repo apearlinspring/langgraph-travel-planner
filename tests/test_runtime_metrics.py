@@ -92,6 +92,46 @@ def test_evaluate_runtime_metrics_passes_observable_snapshot():
     assert result.governance_summary["status"] == "pass"
 
 
+def test_recovered_transient_error_does_not_fail_runtime_budget():
+    metrics = collect_runtime_metrics(
+        events=[
+            {
+                "type": "error",
+                "error_type": "APIConnectionError",
+                "recovered": True,
+                "recovery_category": "transient_llm_api_connection",
+            },
+            {"type": "token", "content": "hello", "elapsed_since_scenario_start": 0.5},
+            {"type": "report_data", "elapsed_since_scenario_start": 1.0},
+            {
+                "type": "turn_observability",
+                "observability": {
+                    "tool_call_count": 0,
+                    "tool_failure_count": 0,
+                    "fallback_count": 0,
+                    "degradation_status": "ok",
+                    "estimated_input_tokens": 1,
+                    "estimated_output_tokens": 2,
+                    "estimated_total_tokens": 3,
+                },
+            },
+        ],
+        turns=[
+            {"turn_index": 1, "user_message": "Plan", "elapsed_seconds": 0.4, "error": "APIConnectionError"},
+            {"turn_index": 2, "user_message": "Continue", "elapsed_seconds": 0.6, "produced_report_data": True},
+        ],
+        assistant_text="hello",
+        elapsed_seconds=1.0,
+    )
+
+    result = evaluate_runtime_metrics(metrics)
+
+    assert metrics.error_event_count == 0
+    assert metrics.recoverable_error_event_count == 1
+    assert result.passed is True
+    assert result.budget_gate.passed is True
+
+
 def test_evaluate_runtime_metrics_flags_missing_report_event():
     metrics = collect_runtime_metrics(
         events=[{"type": "token", "content": "hello", "elapsed_since_scenario_start": 0.5}],

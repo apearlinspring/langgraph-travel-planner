@@ -131,6 +131,68 @@ def test_agent_metrics_scores_stage_transition_order():
     assert result["metric_values"]["stage_transition_accuracy"] == 1.0
 
 
+def test_agent_metrics_keeps_non_strict_stage_mismatch_as_finding_only():
+    scenario = _scenario(
+        metric_expectations={
+            "stage": {
+                "strict": False,
+                "expected_transition_tools": [
+                    "record_requirement_tool",
+                    "select_destination_tool",
+                    "select_food_tool",
+                    "generate_order_tool",
+                ],
+            }
+        }
+    )
+
+    result = evaluate_agent_metrics(
+        [
+            {"type": "tool_call", "tool": "record_requirement_tool", "turn_index": 1},
+            {"type": "tool_call", "tool": "select_destination_tool", "turn_index": 2},
+            {"type": "tool_call", "tool": "generate_order_tool", "turn_index": 3},
+        ],
+        scenario=scenario,
+        report_data=_valid_report_data(),
+    ).to_dict()
+
+    assert result["passed"] is True
+    assert result["metric_values"]["stage_transition_accuracy"] == 0.5
+    assert any(
+        criterion["name"] == "stage_transition_accuracy" and criterion["findings"]
+        for criterion in result["criteria"]
+    )
+
+
+def test_agent_metrics_fails_strict_stage_mismatch():
+    scenario = _scenario(
+        metric_expectations={
+            "stage": {
+                "strict": True,
+                "expected_transition_tools": [
+                    "record_requirement_tool",
+                    "select_destination_tool",
+                    "select_food_tool",
+                    "generate_order_tool",
+                ],
+            }
+        }
+    )
+
+    result = evaluate_agent_metrics(
+        [
+            {"type": "tool_call", "tool": "record_requirement_tool", "turn_index": 1},
+            {"type": "tool_call", "tool": "select_destination_tool", "turn_index": 2},
+            {"type": "tool_call", "tool": "generate_order_tool", "turn_index": 3},
+        ],
+        scenario=scenario,
+        report_data=_valid_report_data(),
+    ).to_dict()
+
+    assert result["passed"] is False
+    assert any("Stage transition tool sequence" in item for item in result["summary"])
+
+
 def test_agent_metrics_flags_unsupported_dynamic_claims():
     scenario = _scenario(
         metric_expectations={

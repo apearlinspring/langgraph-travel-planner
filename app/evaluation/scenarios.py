@@ -222,6 +222,8 @@ def _as_optional_metric_expectations(
                 field_name="metric_expectations.stage.expected_transition_tools",
                 scenario_id=scenario_id,
             )
+        if "strict" in stage and not isinstance(stage["strict"], bool):
+            raise ValueError(f"Scenario {scenario_id!r} metric_expectations.stage.strict must be a boolean")
 
     unsupported_claims = expectations.get("unsupported_claims")
     if unsupported_claims is not None:
