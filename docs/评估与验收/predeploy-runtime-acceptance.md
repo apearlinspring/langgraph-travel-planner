@@ -69,7 +69,7 @@ smoke 结果只证明最小报价说明链路可用；本轮已继续复跑完�
 | 总耗时 | 4015.637s |
 | 工具调用 | 169 |
 
-场景结果见 `docs/acceptance-core-report.md`。
+场景结果见 `docs/评估与验收/acceptance-core-report.md`。
 
 ## 已执行关键命令
 

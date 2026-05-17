@@ -55,13 +55,26 @@ CATEGORY_QUERY_HINTS: dict[str, tuple[str, ...]] = {
         "产品",
         "路线",
         "成熟路线",
+        "路线样板",
+        "合作产品",
         "省心",
+        "小团",
+        "包车",
+        "轻定制",
         "亲子",
         "银发",
         "老人",
         "团建",
         "低强度",
         "少步行",
+        "西藏",
+        "新疆",
+        "云南",
+        "西安",
+        "拉萨",
+        "乌鲁木齐",
+        "大理",
+        "丽江",
     ),
     "pricing": (
         "报价",
@@ -348,16 +361,25 @@ def _metadata_text(document: IndexedDocument) -> str:
         document.visibility,
         str(metadata.get("title") or ""),
         str(metadata.get("product_id") or ""),
+        str(metadata.get("source_kind") or ""),
+        str(metadata.get("inventory_status") or ""),
+        str(metadata.get("external_product_ref") or ""),
         str(metadata.get("destination") or ""),
         str(metadata.get("theme") or ""),
         str(metadata.get("duration") or ""),
         str(metadata.get("audience") or ""),
+        str(metadata.get("persona_tags") or ""),
         str(metadata.get("service_level") or ""),
         str(metadata.get("price_band") or ""),
+        str(metadata.get("demo_price_label") or ""),
+        str(metadata.get("price_basis") or ""),
         str(metadata.get("evidence_type") or ""),
         str(metadata.get("product_source") or ""),
         str(metadata.get("service_boundary") or ""),
         str(metadata.get("quote_basis") or ""),
+        str(metadata.get("included") or ""),
+        str(metadata.get("excluded") or ""),
+        str(metadata.get("transport_lodging_basis") or ""),
         str(metadata.get("verification_items") or ""),
         str(metadata.get("evidence_level") or ""),
         str(metadata.get("applicable_modes") or ""),
@@ -375,8 +397,10 @@ def _infer_category_hints(query: str) -> set[str]:
     for category, terms in CATEGORY_QUERY_HINTS.items():
         if any(term.lower() in normalized for term in terms):
             hints.add(category)
-    if "旅行社" in normalized or "省心" in normalized:
+    if any(term in normalized for term in ("旅行社", "省心", "合作产品", "路线样板", "小团", "包车")):
         hints.update({"products", "sop", "pricing", "risk", "report"})
+    if any(term in normalized for term in ("新疆", "西藏", "云南", "西安", "大理", "丽江", "拉萨")):
+        hints.add("products")
     if not hints:
         hints.add("destinations")
     return hints
@@ -384,7 +408,10 @@ def _infer_category_hints(query: str) -> set[str]:
 
 def _infer_source_type_hints(query: str) -> set[str]:
     normalized = query.lower()
-    if any(term in normalized for term in ("旅行社", "省心", "报价", "sop", "报告标准", "风险")):
+    if any(
+        term in normalized
+        for term in ("旅行社", "省心", "报价", "sop", "报告标准", "风险", "合作产品", "路线样板")
+    ):
         return {"agency_internal"}
     return {"destination_guide", "agency_internal"}
 
@@ -635,14 +662,16 @@ def render_rag_retrieval_markdown(result: RagRetrievalEvaluationResult) -> str:
     """Render a concise human-readable benchmark report."""
 
     lines = [
-        "# RAG Retrieval Evaluation",
+        "# RAG（检索增强生成）Retrieval Evaluation（召回评估）",
+        "",
+        "本报告用于验证本地知识库能否把查询召回到正确的产品样板、知识分类和依据来源；它不连接真实向量库或外部模型。",
         "",
         f"- version: `{result.version}`",
         f"- scenarios: `{result.scenario_count}`",
         f"- documents: `{result.document_count}`",
         f"- top_k_values: `{', '.join(str(item) for item in result.top_k_values)}`",
         "",
-        "## Summary",
+        "## Summary（汇总）",
         "",
         "| strategy | top_k | source recall | category recall | source type recall | hit rate | MRR |",
         "|---|---:|---:|---:|---:|---:|---:|",
@@ -660,7 +689,7 @@ def render_rag_retrieval_markdown(result: RagRetrievalEvaluationResult) -> str:
         lines.extend(
             [
                 "",
-                "## Metadata-aware Delta",
+                "## Metadata-aware Delta（元数据增强差值）",
                 "",
                 f"- top_k: `{int(result.improvement['top_k'])}`",
                 f"- source_recall_delta: `{result.improvement['source_recall_delta']:.2%}`",
@@ -673,7 +702,7 @@ def render_rag_retrieval_markdown(result: RagRetrievalEvaluationResult) -> str:
     lines.extend(
         [
             "",
-            "## Scenario Details",
+            "## Scenario Details（场景明细）",
             "",
             "| scenario | strategy | top_k | source recall | category recall | first relevant rank | top sources |",
             "|---|---|---:|---:|---:|---:|---|",
@@ -687,5 +716,4 @@ def render_rag_retrieval_markdown(result: RagRetrievalEvaluationResult) -> str:
             f"{item.source_recall:.2%} | {item.category_recall:.2%} | "
             f"{item.first_relevant_rank or ''} | {top_sources} |"
         )
-    lines.append("")
     return "\n".join(lines)

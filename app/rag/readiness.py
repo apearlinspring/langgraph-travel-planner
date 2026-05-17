@@ -68,10 +68,13 @@ INTERNAL_VECTORSTORE_CONTRACT = {
     "category_required_metadata": {
         "products": (
             "product_id",
+            "source_kind",
+            "inventory_status",
             "destination",
             "theme",
             "duration",
             "audience",
+            "persona_tags",
             "service_level",
             "price_band",
             "evidence_type",

@@ -134,7 +134,41 @@ COMMON_CITY_NAMES = (
     "丽江",
     "大理",
     "昆明",
+    "云南",
+    "新疆",
+    "西藏",
+    "拉萨",
+    "乌鲁木齐",
     "张家界",
+)
+
+PRODUCT_DEMO_DESTINATION_KEYWORDS = (
+    "新疆",
+    "西藏",
+    "云南",
+    "西安",
+    "厦门",
+    "桂林",
+    "苏州",
+    "长沙",
+    "拉萨",
+    "乌鲁木齐",
+    "大理",
+    "丽江",
+)
+
+PRODUCT_SOFT_REJECTION_KEYWORDS = (
+    "自由行",
+    "自己订",
+    "自己安排",
+    "不要旅行社",
+    "不需要旅行社",
+    "不要产品",
+    "不需要产品",
+    "别推产品",
+    "不要推销",
+    "不跟团",
+    "不要跟团",
 )
 
 AGENCY_INTERNAL_TOOL_NAMES = frozenset(
@@ -158,6 +192,13 @@ MODE_MANAGEMENT_TOOL_NAMES = frozenset(
 INTENT_INTERNAL_TOOL_ALLOWLIST = {
     "pricing_query": frozenset({"search_agency_pricing_rules"}),
     "risk_query": frozenset({"search_agency_risk_playbook"}),
+    "product_candidate_query": frozenset(
+        {
+            "search_agency_product_templates",
+            "search_agency_service_sop",
+            "search_agency_risk_playbook",
+        }
+    ),
     "agency_plan_query": frozenset(
         {
             "search_agency_product_templates",
@@ -1417,9 +1458,18 @@ def _intent_instruction(
     if intent.name == "agency_plan_query":
         return (
             "本轮用户倾向旅行社省心方案或成熟产品路线。"
-            " 请先匹配内部产品或路线模板，给 2-3 个方向，并说明适用人群、服务边界和报价口径；"
+            " 请先匹配内部产品或成熟路线样板，给 2-3 个方向，并说明适用人群、服务边界和报价口径；"
             " 再参考服务标准和风险避坑经验，把它自然转化为方案依据；"
             " 不要暴露内部知识库、RAG 或工具名，也不要承诺真实库存、锁价或支付能力。"
+        )
+
+    if intent.name == "product_candidate_query":
+        return (
+            "本轮用户没有拒绝产品化方向，且目的地、人群或风格可能与成熟路线样板重合。"
+            " 可以先检索产品模板，并把命中内容自然表达为“成熟路线样板”“合作产品候选”或“省心路线方向”；"
+            " 不要求用户条件完全匹配后才推荐，目的地级命中也可以给一个候选方向。"
+            " 回复必须同时保留自由规划选项，避免销售感；"
+            " 不要暴露内部知识库、RAG、工具名或产品编号，也不要承诺真实库存、成团、锁价或支付能力。"
         )
 
     if intent.name == "free_planning_query":
@@ -1715,12 +1765,44 @@ def _looks_like_initial_complex_trip_request(text: str) -> bool:
     return has_slow_intent or has_full_agency_plan_intent or has_budgeted_style_trip
 
 
+def _has_productized_route_soft_match(text: str) -> bool:
+    normalized = (text or "").strip()
+    if not normalized:
+        return False
+    if any(keyword in normalized for keyword in PRODUCT_SOFT_REJECTION_KEYWORDS):
+        return False
+    target_destinations = [
+        destination
+        for destination in PRODUCT_DEMO_DESTINATION_KEYWORDS
+        if (
+            re.search(rf"(想去|计划去|去|到|目的地).{{0,8}}{re.escape(destination)}", normalized)
+            or re.search(
+                rf"{re.escape(destination)}.{{0,10}}(路线|行程|省心|产品|候选|成熟|小团|包车|预算|亲子|情侣)",
+                normalized,
+            )
+        )
+        and not re.search(rf"从{re.escape(destination)}.{{0,6}}(出发|走)", normalized)
+    ]
+    if not target_destinations:
+        return False
+    if any(keyword in normalized for keyword in ("真实酒店", "具体酒店", "江景房", "天气", "下雨", "交通", "Plan B", "风险")) and not any(
+        keyword in normalized for keyword in ("产品", "成熟路线", "路线样板", "小团", "包车", "旅行社方案")
+    ):
+        return False
+    return any(
+        keyword in normalized
+        for keyword in ("想去", "计划去", "路线", "行程", "省心", "预算", "亲子", "情侣", "小团", "包车", "旅行社方案")
+    )
+
+
 def _should_defer_initial_slow_tools(request: ModelRequest, text: str) -> bool:
     """Keep the first visible response ahead of slow external lookups."""
 
     if not _is_first_user_turn_without_assistant_text(request):
         return False
     if _should_prioritize_requirement_record(text):
+        return False
+    if _has_productized_route_soft_match(text):
         return False
     return _looks_like_initial_complex_trip_request(text)
 
@@ -1730,6 +1812,7 @@ def _initial_slow_tool_deferral_instruction() -> str:
         "你是知行旅行顾问。本轮只做首轮轻量响应，不调用任何工具，"
         "也不编造实时价格、库存、班次或天气。"
         "请用 1-2 句确认你已理解用户的目的地、天数、同行人和慢项诉求；"
+        "如果用户没有拒绝产品化方向，可以顺带说明后续会同时查看是否有成熟路线样板可参考；"
         "说明会在需求确认后核验真实交通、酒店、天气和风险证据，"
         "然后请用户确认是否按此记录并推进。"
     )

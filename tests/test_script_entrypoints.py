@@ -246,10 +246,10 @@ def test_container_files_keep_liveness_and_proxy_configurable():
 
 
 def test_readiness_docs_cover_ci_staging_and_production_layers():
-    deployment = Path("docs/deployment-readiness.md").read_text(encoding="utf-8")
-    runtime = Path("docs/runtime-environment.md").read_text(encoding="utf-8")
-    evaluation = Path("docs/evaluation-system.md").read_text(encoding="utf-8")
-    db_migration = Path("docs/db-migration-readiness.md").read_text(encoding="utf-8")
+    deployment = Path("docs/部署与运行/deployment-readiness.md").read_text(encoding="utf-8")
+    runtime = Path("docs/部署与运行/runtime-environment.md").read_text(encoding="utf-8")
+    evaluation = Path("docs/评估与验收/evaluation-system.md").read_text(encoding="utf-8")
+    db_migration = Path("docs/部署与运行/db-migration-readiness.md").read_text(encoding="utf-8")
 
     for content in [deployment, runtime, evaluation]:
         assert "CI" in content

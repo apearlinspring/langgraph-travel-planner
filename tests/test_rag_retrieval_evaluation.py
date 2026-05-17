@@ -41,6 +41,9 @@ def test_load_default_rag_retrieval_scenarios_cover_business_categories():
         "retrieval_product_xian_family_catalog_fields",
         "retrieval_product_team_budget_transparency",
         "retrieval_product_couple_relaxed",
+        "retrieval_product_xinjiang_destination_only",
+        "retrieval_product_tibet_budgeted_couple",
+        "retrieval_product_xian_family_value",
         "retrieval_product_free_planning_boundary",
     }.issubset(scenario_ids)
     assert {"destinations", "products", "pricing", "risk", "report", "sop"}.issubset(
@@ -63,13 +66,28 @@ def test_default_rag_retrieval_evaluation_runs_offline():
     assert metadata_top_5.category_recall >= metadata_top_3.category_recall
     assert any(summary.source_recall < 1.0 for summary in result.summaries)
     assert result.improvement["top_k"] == 3.0
+    product_demo_results = [
+        item
+        for item in result.scenario_results
+        if item.strategy == "metadata_aware_bm25"
+        and item.top_k == 3
+        and item.scenario_id
+        in {
+            "retrieval_product_xinjiang_destination_only",
+            "retrieval_product_tibet_budgeted_couple",
+            "retrieval_product_xian_family_value",
+        }
+    ]
+    assert len(product_demo_results) == 3
+    assert all(item.source_recall == pytest.approx(1.0) for item in product_demo_results)
+    assert all(item.first_relevant_rank == 1 for item in product_demo_results)
 
 
 def test_rag_retrieval_markdown_contains_metrics():
     result = evaluate_rag_retrieval(top_k_values=(3,))
     rendered = render_rag_retrieval_markdown(result)
 
-    assert "# RAG Retrieval Evaluation" in rendered
+    assert "# RAG（检索增强生成）Retrieval Evaluation（召回评估）" in rendered
     assert "metadata_aware_bm25" in rendered
     assert "source recall" in rendered
     assert "Scenario Details" in rendered

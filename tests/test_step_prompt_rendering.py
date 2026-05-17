@@ -1372,6 +1372,7 @@ async def test_destination_weather_followup_forces_destination_info_before_selec
 @pytest.mark.asyncio
 async def test_requirement_collection_defers_first_turn_full_agency_plan_tools():
     captured = {}
+    compatibility = get_model_compatibility()
     middleware = StepConfigMiddleware(
         {
             "requirement_collection": {
@@ -1389,6 +1390,7 @@ async def test_requirement_collection_defers_first_turn_full_agency_plan_tools()
     message = "我们两个人想从西安出发，2026年5月23日去长沙4天3晚，总预算7000，希望省心一点，帮我按旅行社方案安排。"
 
     async def handler(request):
+        captured["tool_choice"] = getattr(request, "tool_choice", None)
         captured["tools"] = getattr(request, "tools", [])
         captured["system_prompt"] = getattr(request, "system_prompt", "")
         return "ok"
@@ -1398,10 +1400,54 @@ async def test_requirement_collection_defers_first_turn_full_agency_plan_tools()
         handler,
     )
 
-    assert captured["tools"] == []
-    assert state["pending_initial_request_text"] == message
-    assert state["pending_initial_planning_mode"] == "agency_plan"
-    assert "首轮轻量响应" in captured["system_prompt"]
+    assert "search_agency_product_templates" in captured["tools"]
+    assert "pending_initial_request_text" not in state
+    assert state.get("pending_initial_planning_mode") is None
+    assert "成熟路线样板" in captured["system_prompt"]
+    assert "不要暴露内部知识库、RAG 或工具名" in captured["system_prompt"]
+    if compatibility.supports_forced_tool_choice:
+        assert captured.get("tool_choice") == "search_agency_product_templates"
+    else:
+        assert captured.get("tool_choice") is None
+
+
+@pytest.mark.asyncio
+async def test_requirement_collection_soft_product_candidate_for_destination_match():
+    captured = {}
+    compatibility = get_model_compatibility()
+    middleware = StepConfigMiddleware(
+        {
+            "requirement_collection": {
+                "prompt": "需求收集阶段",
+                "tools": [
+                    "record_requirement_tool",
+                    "query_destination_info",
+                    "search_agency_product_templates",
+                ],
+                "requires": [],
+            }
+        }
+    )
+    state = {"current_step": "requirement_collection"}
+
+    async def handler(request):
+        captured["tool_choice"] = getattr(request, "tool_choice", None)
+        captured["tools"] = getattr(request, "tools", [])
+        captured["system_prompt"] = getattr(request, "system_prompt", "")
+        return "ok"
+
+    await middleware.awrap_model_call(
+        DummyRequest(state, [HumanMessage(content="我想去新疆，先看看有没有成熟一点的路线。")]),
+        handler,
+    )
+
+    assert "search_agency_product_templates" in captured["tools"]
+    assert "目的地级命中也可以给一个候选方向" in captured["system_prompt"]
+    assert "同时保留自由规划选项" in captured["system_prompt"]
+    if compatibility.supports_forced_tool_choice:
+        assert captured["tool_choice"] == "search_agency_product_templates"
+    else:
+        assert captured["tool_choice"] is None
 
 
 @pytest.mark.asyncio

@@ -12,7 +12,7 @@ from typing import Any, Iterable
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_RUNTIME_DIR = PROJECT_ROOT / ".runtime"
-DEFAULT_OUTPUT_PATH = PROJECT_ROOT / "docs" / "acceptance-core-report.md"
+DEFAULT_OUTPUT_PATH = PROJECT_ROOT / "docs" / "评估与验收" / "acceptance-core-report.md"
 ACCEPTANCE_SUMMARY_VERSION = "acceptance_run_summary.v1"
 REDACTED_VALUE = "[REDACTED]"
 

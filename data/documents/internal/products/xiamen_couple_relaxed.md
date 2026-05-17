@@ -3,6 +3,9 @@ source_type: agency_internal
 category: products
 visibility: internal
 source: fictional_internal_catalog
+source_kind: demo_catalog
+inventory_status: demo_only
+external_product_ref: null
 applicable_modes:
   - agency_plan
 evidence_level: standard
@@ -16,8 +19,16 @@ audience:
   - couple
   - anniversary
   - relaxed
+persona_tags:
+  - experience_priority
+  - relaxed_pace
+  - couple
 service_level: light_custom
 price_band: comfort
+demo_price_label: 情侣轻路线示例价待核验
+price_basis:
+  - 氛围体验和住宿区域决定预算口径
+  - 酒店餐厅和交通按日期核验
 evidence_type: fictional_product_template
 service_boundary:
   - 氛围路线规划
@@ -27,6 +38,20 @@ service_boundary:
 quote_basis:
   - 舒适档轻定制口径
   - 餐厅预约和酒店价格待核验
+included:
+  - 2晚住宿建议口径
+  - 海边和老城轻路线骨架
+  - 餐饮与夜景建议
+  - 雨天备选安排
+excluded:
+  - 往返大交通
+  - 餐厅实际订位
+  - 私人消费
+  - 旅拍或包车加项
+transport_lodging_basis:
+  - 住宿优先交通便利和夜间安全区域
+  - 船票或跨岛交通按日期核验
+  - 避免连续高强度换乘
 verification_items:
   - 海边天气
   - 餐厅预约

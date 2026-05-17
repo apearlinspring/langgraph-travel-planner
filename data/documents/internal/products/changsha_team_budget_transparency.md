@@ -3,6 +3,9 @@ source_type: agency_internal
 category: products
 visibility: internal
 source: fictional_internal_catalog
+source_kind: demo_catalog
+inventory_status: demo_only
+external_product_ref: null
 applicable_modes:
   - agency_plan
 evidence_level: standard
@@ -16,8 +19,16 @@ audience:
   - team
   - company
   - group
+persona_tags:
+  - price_sensitivity
+  - group_coordination
+  - transparent_budget
 service_level: group_coordination
 price_band: value_comfort
+demo_price_label: 按团建人数核算（演示口径）
+price_basis:
+  - 团建人数和餐饮容量决定预算口径
+  - 交通住宿与活动场地按日期二次核验
 evidence_type: fictional_product_template
 service_boundary:
   - 集合动线规划
@@ -27,6 +38,20 @@ service_boundary:
 quote_basis:
   - 人均与总价双口径
   - 大交通和住宿按实时资源二次核验
+included:
+  - 3晚团队住宿建议口径
+  - 集合动线和活动空间建议
+  - 餐饮容量与预算拆分
+  - 团队风险和备选安排
+excluded:
+  - 往返大交通实时票价
+  - 团队拓展场地押金
+  - 私人消费
+  - 临时加人或改期费用
+transport_lodging_basis:
+  - 长沙市区交通便利区域优先
+  - 团队房量和会务空间需二次核验
+  - 集合点到餐饮和活动场地控制短动线
 verification_items:
   - 团队房量
   - 餐厅包间容量

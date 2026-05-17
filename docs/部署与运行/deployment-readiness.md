@@ -1,6 +1,6 @@
 # Production Deployment Runbook（生产部署运行手册）
 
-本文是更新线上服务的唯一部署入口。旧的多轮验收记录不再放在这里；历史证据继续保留在 `docs/acceptance-core-report.md`、`docs/predeploy-runtime-acceptance.md` 和 `docs/live-acceptance-runbook.md`。
+本文是更新线上服务的唯一部署入口。旧的多轮验收记录不再放在这里；历史证据继续保留在 `docs/评估与验收/acceptance-core-report.md`、`docs/评估与验收/predeploy-runtime-acceptance.md` 和 `docs/评估与验收/live-acceptance-runbook.md`。
 
 ## 当前生产环境
 

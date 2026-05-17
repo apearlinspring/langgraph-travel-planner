@@ -21,7 +21,9 @@ def _write_required_sources(repo_root: Path, *, extra_text: str = "") -> None:
     docs_dir = repo_root / "docs"
     docs_dir.mkdir(parents=True, exist_ok=True)
     for relative_path in demo_pack.SOURCE_DOCUMENTS:
-        (repo_root / relative_path).write_text(SAFE_DOC_TEXT + extra_text, encoding="utf-8")
+        target = repo_root / relative_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(SAFE_DOC_TEXT + extra_text, encoding="utf-8")
 
 
 def test_build_demo_pack_creates_sanitized_manifest(tmp_path: Path):
@@ -114,9 +116,9 @@ def test_committed_project_docs_build_without_sensitive_content(tmp_path: Path):
 def test_project_docs_cover_required_capabilities_and_demo_paths():
     combined = "\n".join(
         [
-            Path("docs/project-demo-pack.md").read_text(encoding="utf-8"),
-            Path("docs/project-capability-map.md").read_text(encoding="utf-8"),
-            Path("docs/demo-script.md").read_text(encoding="utf-8"),
+            Path("docs/前端与演示/project-demo-pack.md").read_text(encoding="utf-8"),
+            Path("docs/项目总览/project-capability-map.md").read_text(encoding="utf-8"),
+            Path("docs/前端与演示/demo-script.md").read_text(encoding="utf-8"),
             Path("README.md").read_text(encoding="utf-8"),
         ]
     )

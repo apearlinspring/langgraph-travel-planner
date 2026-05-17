@@ -246,7 +246,7 @@ uv run --frozen python scripts\run_evaluation_scenarios.py --acceptance-core --d
 
 ## 2026-05-11 第三批生产化收口追加
 
-本分支继续收口真实 live acceptance（在线验收）语义，详见 `docs/round3-live-acceptance.md`。
+本分支继续收口真实 live acceptance（在线验收）语义，详见 `docs/历史轮次/round3-live-acceptance.md`。
 
 新增结论：
 
@@ -285,7 +285,7 @@ uv run --frozen python scripts\run_evaluation_scenarios.py --acceptance-core --d
 
 ## 2026-05-11 live acceptance（在线验收）runbook（运行手册）复跑
 
-本轮继续在本地真实执行验收入口，详见 `docs/live-acceptance-runbook.md`。结论仍为 `blocked（环境阻塞）`，但阻塞证据更完整：
+本轮继续在本地真实执行验收入口，详见 `docs/评估与验收/live-acceptance-runbook.md`。结论仍为 `blocked（环境阻塞）`，但阻塞证据更完整：
 
 - 实际尝试启动后端：进程进入 application startup（应用启动）阶段，25 秒内 `/health/live` 和 `/health/ready` 都不可达。
 - 实际跑了 preflight（预检）：`--acceptance-core --preflight-only --json --no-summary` 返回非零退出，9 个核心场景均为 `blocked`。
@@ -342,4 +342,4 @@ uv run --frozen python scripts\run_evaluation_scenarios.py --acceptance-core --d
 - `.runtime\evaluations\20260512-064458-acceptance-summary.json`
 - `.runtime\evaluations\20260512-064458-acceptance-summary.md`
 
-这些 `.runtime/` 原始产物不提交。可提交的证据只保留在本报告、`docs/live-acceptance-runbook.md` 和 `docs/round-live-acceptance.md`。
+这些 `.runtime/` 原始产物不提交。可提交的证据只保留在本报告、`docs/评估与验收/live-acceptance-runbook.md` 和 `docs/历史轮次/round-live-acceptance.md`。

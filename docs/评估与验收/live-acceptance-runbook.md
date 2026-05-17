@@ -40,7 +40,7 @@ chcp 65001 | Out-Null
 - `acceptance-smoke`（冒烟验收）：`.runtime/acceptance-smoke/20260517-transport-guard/20260516-212958-acceptance-smoke.json`，1/1 passed（通过），`report_data=true`，证据闭环通过。
 - `acceptance-core`（核心验收）：`.runtime/acceptance-core/20260517-transport-guard/20260516-223916-acceptance-core.json`，完整运行 9 场景，9/9 passed（通过），总状态 passed（通过）。
 - 补充：`free_weekend_nearby` 已产出结构化 `report_data`；`edge_hotel_tool_fallback` 和 `edge_transport_tool_fallback` 分别保留 `query_hotel_options` 与 `query_transport_options` 审计式调用。
-- 结论：本轮 smoke 与完整 core 均通过；详见 `docs/acceptance-core-report.md` 与 `docs/predeploy-runtime-acceptance.md`。
+- 结论：本轮 smoke 与完整 core 均通过；详见 `docs/评估与验收/acceptance-core-report.md` 与 `docs/评估与验收/predeploy-runtime-acceptance.md`。
 
 Windows 本地后端建议用以下方式启动，避免 direct `uvicorn app.main:app` 在 Windows 事件循环和开发 reload（热重载）上引入干扰：
 
@@ -53,7 +53,7 @@ $env:RUNTIME_MCP_OPTIONAL_STARTUP_TIMEOUT_SECONDS = '45'
 
 ## 2026-05-14 历史部署前真实环境结果
 
-该轮部署前 readiness（就绪检查）和 `acceptance-smoke`（验收冒烟测试）只证明当时的最小报价说明链路 `pricing_agency_quote_explanation` 1/1 passed（通过），不能替代当前 `docs/acceptance-core-report.md` 的最新 9 场景 acceptance-core（核心验收）结论。
+该轮部署前 readiness（就绪检查）和 `acceptance-smoke`（验收冒烟测试）只证明当时的最小报价说明链路 `pricing_agency_quote_explanation` 1/1 passed（通过），不能替代当前 `docs/评估与验收/acceptance-core-report.md` 的最新 9 场景 acceptance-core（核心验收）结论。
 
 生产发布前若模型、RAG（检索增强生成）、MCP（模型上下文协议）、报告契约或外部 API（应用程序接口）配置变化，应重跑完整 acceptance-core。所有真实本机 `.env` 只在本地运行时使用，不写入手册、摘要或提交。
 
@@ -260,7 +260,7 @@ uv sync --frozen
 - `agency_couple_relaxed` 不再因首轮内部产品检索导致工具预算 warning。
 - `edge_transport_tool_fallback` 保持 `agency_context.mode=free_planning`，没有回到 `agency_plan`。
 
-该段是历史验收记录；完整 9 场景证据保留在 `docs/acceptance-core-report.md`。合入或发布前仍要在目标环境复跑 `/health/ready`、preflight（预检）和完整 acceptance-core。
+该段是历史验收记录；完整 9 场景证据保留在 `docs/评估与验收/acceptance-core-report.md`。合入或发布前仍要在目标环境复跑 `/health/ready`、preflight（预检）和完整 acceptance-core。
 
 ## smoke 历史真实结果（仅供参考）
 
@@ -291,7 +291,7 @@ uv sync --frozen
 
 ## 2026-05-14 历史验证记录
 
-该轮详细脱敏结果曾集中记录在 `docs/predeploy-runtime-acceptance.md`。以下命令和指标仅作为历史参考，当前 2026-05-17 结论以本文前部的“当前真实复跑记录”和 `docs/acceptance-core-report.md` 为准。实际执行的关键命令包括：
+该轮详细脱敏结果曾集中记录在 `docs/评估与验收/predeploy-runtime-acceptance.md`。以下命令和指标仅作为历史参考，当前 2026-05-17 结论以本文前部的“当前真实复跑记录”和 `docs/评估与验收/acceptance-core-report.md` 为准。实际执行的关键命令包括：
 
 ```powershell
 git fetch origin main

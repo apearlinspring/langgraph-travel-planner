@@ -17,9 +17,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT_DIR = PROJECT_ROOT / ".runtime" / "project-demo-pack"
 
 SOURCE_DOCUMENTS = (
-    Path("docs/project-demo-pack.md"),
-    Path("docs/project-capability-map.md"),
-    Path("docs/demo-script.md"),
+    Path("docs/前端与演示/project-demo-pack.md"),
+    Path("docs/项目总览/project-capability-map.md"),
+    Path("docs/前端与演示/demo-script.md"),
 )
 
 GENERATED_FILENAMES = (
@@ -35,7 +35,7 @@ DEMO_PATHS = (
         "id": "local-briefing",
         "name": "本地纯讲解路径",
         "requires_real_secrets": False,
-        "entry": "docs/project-demo-pack.md#本地纯讲解路径",
+        "entry": "docs/前端与演示/project-demo-pack.md#本地纯讲解路径",
         "commands": [
             r".\.venv\Scripts\python scripts\build_project_demo_pack.py",
             r".\.venv\Scripts\python -m pytest tests\test_project_demo_pack.py -q",
@@ -45,7 +45,7 @@ DEMO_PATHS = (
         "id": "acceptance-smoke",
         "name": "acceptance-smoke 验收烟测路径",
         "requires_real_secrets": True,
-        "entry": "docs/demo-script.md#路径二acceptance-smoke-真实链路",
+        "entry": "docs/前端与演示/demo-script.md#路径二acceptance-smoke-真实链路",
         "commands": [
             r".\.venv\Scripts\python main.py",
             (
@@ -59,7 +59,7 @@ DEMO_PATHS = (
         "id": "frontend-report",
         "name": "前端报告路径",
         "requires_real_secrets": "backend_report_data",
-        "entry": "docs/demo-script.md#路径三前端报告可视化",
+        "entry": "docs/前端与演示/demo-script.md#路径三前端报告可视化",
         "commands": [
             r".\.venv\Scripts\python main.py",
             "打开 frontend\\zhixing.html，使用同一会话查看 report_data 报告卡片和导出结果。",

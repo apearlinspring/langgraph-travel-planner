@@ -3,6 +3,9 @@ source_type: agency_internal
 category: products
 visibility: internal
 source: fictional_internal_catalog
+source_kind: demo_catalog
+inventory_status: demo_only
+external_product_ref: null
 applicable_modes:
   - free_planning
 evidence_level: standard
@@ -16,8 +19,16 @@ audience:
   - free_planning
   - family
   - general
+persona_tags:
+  - self_service
+  - balanced_budget
+  - route_optimizer
 service_level: route_optimization
 price_band: economy_comfort
+demo_price_label: 自由行路线优化服务口径（演示）
+price_basis:
+  - 只提供路线与预算拆分口径
+  - 交通住宿门票由用户自行核验和预订
 evidence_type: fictional_product_template
 service_boundary:
   - 路线优化
@@ -27,6 +38,20 @@ service_boundary:
 quote_basis:
   - 自由规划服务口径
   - 不包装旅行社省心套餐
+included:
+  - 3晚住宿区域建议
+  - 桂林阳朔路线骨架
+  - 自由行预算拆分
+  - 游船与天气核验清单
+excluded:
+  - 真实交通票价
+  - 酒店占房或门票代订
+  - 私人消费
+  - 旅行社托管服务
+transport_lodging_basis:
+  - 桂林或阳朔住宿按用户自订偏好选择
+  - 城际和市内交通只给核验建议
+  - 漓江段需按水位天气二次确认
 verification_items:
   - 漓江游船
   - 天气水位

@@ -25,6 +25,7 @@ TravelIntentName = Literal[
     "itinerary_query",
     "map_route_query",
     "agency_plan_query",
+    "product_candidate_query",
     "free_planning_query",
     "pricing_query",
     "risk_query",
@@ -184,6 +185,48 @@ _AGENCY_QUOTE_SERVICE_KEYWORDS = (
     "单房差",
     "SOP",
     "sop",
+)
+
+_PRODUCT_SOFT_MATCH_DESTINATIONS = (
+    "新疆",
+    "西藏",
+    "云南",
+    "西安",
+    "厦门",
+    "桂林",
+    "苏州",
+    "长沙",
+    "拉萨",
+    "乌鲁木齐",
+    "大理",
+    "丽江",
+)
+
+_PRODUCT_SOFT_MATCH_KEYWORDS = (
+    "想去",
+    "计划去",
+    "去",
+    "路线",
+    "行程",
+    "省心",
+    "预算",
+    "亲子",
+    "情侣",
+    "老人",
+    "小团",
+    "包车",
+    "成熟",
+    "推荐",
+)
+
+_PRODUCT_SOFT_MATCH_BLOCKERS = (
+    "天气",
+    "气温",
+    "攻略",
+    "景点",
+    "好玩吗",
+    "值得去",
+    "适合吗",
 )
 
 _FREE_PLANNING_KEYWORDS = (
@@ -436,6 +479,37 @@ def _detect_planning_mode_from_text(text: str) -> PlanningModeDecision:
     )
 
 
+def _has_product_candidate_signal(text: str, state: dict[str, Any] | None = None) -> bool:
+    normalized = (text or "").strip()
+    if not normalized:
+        return False
+    if has_explicit_free_signal(normalized) or _state_planning_mode(state) == "free_planning":
+        return False
+    target_destinations = [
+        destination
+        for destination in _PRODUCT_SOFT_MATCH_DESTINATIONS
+        if (
+            re.search(rf"(想去|计划去|去|到|目的地).{{0,8}}{re.escape(destination)}", normalized)
+            or re.search(
+                rf"{re.escape(destination)}.{{0,10}}(路线|行程|省心|产品|候选|成熟|小团|包车|预算|亲子|情侣)",
+                normalized,
+            )
+        )
+        and not re.search(rf"从{re.escape(destination)}.{{0,6}}(出发|走)", normalized)
+    ]
+    if not target_destinations:
+        return False
+    has_soft_signal = any(keyword in normalized for keyword in _PRODUCT_SOFT_MATCH_KEYWORDS)
+    if not has_soft_signal:
+        return False
+    has_blocker = any(keyword in normalized for keyword in _PRODUCT_SOFT_MATCH_BLOCKERS)
+    has_productish_signal = any(
+        keyword in normalized
+        for keyword in ("省心", "路线", "行程", "产品", "候选", "成熟", "小团", "包车", "预算")
+    )
+    return has_productish_signal or not has_blocker
+
+
 def resolve_planning_mode(
     text: str,
     *,
@@ -584,6 +658,17 @@ def detect_travel_intent(
             planning_mode="agency_plan",
             slots=slots,
             reason=planning_decision.reason or "用户表达旅行社省心方案或产品化路线意图",
+        )
+
+    if _has_product_candidate_signal(normalized, state):
+        return TravelIntent(
+            "product_candidate_query",
+            confidence=0.76,
+            preferred_tool="search_agency_product_templates",
+            target_step=current_step,
+            planning_mode=None,
+            slots=slots,
+            reason="用户未拒绝产品化方向，目的地或风格与成熟路线样板可能匹配",
         )
 
     if planning_decision.mode == "free_planning":

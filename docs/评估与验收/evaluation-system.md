@@ -144,7 +144,7 @@ LLM（大语言模型）创建统一走 `app/utils/llm_factory.py` 的 `build_ch
 `.runtime/` 下的 summary（摘要）和 snapshot（快照）属于本地原始产物，不提交。需要把最新 acceptance-core（核心验收）结果转成可提交、可项目展示的脱敏 Markdown（标记文本）时，使用：
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\export_acceptance_evidence.py --runtime-dir .runtime --output docs\acceptance-core-report.md
+.\.venv\Scripts\python.exe scripts\export_acceptance_evidence.py --runtime-dir .runtime --output docs\评估与验收\acceptance-core-report.md
 ```
 
 导出脚本会自动扫描 `.runtime` 下最新的 `acceptance_run_summary.v1` JSON（JavaScript 对象表示法）摘要，生成稳定的 9 场景状态地图，包含每个场景的状态、首 token（文本令牌）、工具调用数、证据闭环、运行预算和工业指标结论。脚本只输出脱敏后的聚合字段，不读取或写入 `.env`，也不会把真实密钥、手机号、邮箱、JWT（JSON Web Token，令牌认证）或原始工具响应写进文档。

@@ -42,10 +42,13 @@ REQUIRED_INTERNAL_METADATA_FIELDS = {
 }
 REQUIRED_PRODUCT_MATCHING_FIELDS = {
     "product_id",
+    "source_kind",
+    "inventory_status",
     "destination",
     "theme",
     "duration",
     "audience",
+    "persona_tags",
     "service_level",
     "price_band",
     "source",
@@ -54,15 +57,24 @@ REQUIRED_PRODUCT_MATCHING_FIELDS = {
 }
 PRODUCT_METADATA_FIELDS = {
     "product_id",
+    "source_kind",
+    "inventory_status",
+    "external_product_ref",
     "destination",
     "theme",
     "duration",
     "audience",
+    "persona_tags",
     "service_level",
     "price_band",
+    "demo_price_label",
+    "price_basis",
     "evidence_type",
     "service_boundary",
     "quote_basis",
+    "included",
+    "excluded",
+    "transport_lodging_basis",
     "verification_items",
 }
 PROHIBITED_DYNAMIC_COMMITMENTS = (
@@ -95,16 +107,25 @@ class RetrievedEvidence(TypedDict):
     travel_days_range: NotRequired[str]
     regions: NotRequired[list[str]]
     product_id: NotRequired[str]
+    source_kind: NotRequired[str]
+    inventory_status: NotRequired[str]
+    external_product_ref: NotRequired[str]
     destination: NotRequired[str]
     theme: NotRequired[str]
     duration: NotRequired[str]
     audience: NotRequired[list[str]]
+    persona_tags: NotRequired[list[str]]
     service_level: NotRequired[str]
     price_band: NotRequired[str]
+    demo_price_label: NotRequired[str]
+    price_basis: NotRequired[list[str]]
     product_source: NotRequired[str]
     evidence_type: NotRequired[str]
     service_boundary: NotRequired[list[str]]
     quote_basis: NotRequired[list[str]]
+    included: NotRequired[list[str]]
+    excluded: NotRequired[list[str]]
+    transport_lodging_basis: NotRequired[list[str]]
     verification_items: NotRequired[list[str]]
     last_reviewed: NotRequired[str]
     freshness_status: NotRequired[str]
@@ -289,6 +310,8 @@ def _split(value: object, fallback: tuple[str, ...] = ()) -> list[str]:
 
 
 def _metadata_value(value: Any) -> str:
+    if value is None:
+        return "null"
     if isinstance(value, date):
         return value.isoformat()
     if isinstance(value, bool):

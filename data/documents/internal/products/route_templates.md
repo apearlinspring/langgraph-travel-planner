@@ -3,6 +3,9 @@ source_type: agency_internal
 category: products
 visibility: internal
 source: fictional_internal_catalog
+source_kind: demo_catalog
+inventory_status: demo_only
+external_product_ref: null
 applicable_modes:
   - agency_plan
   - free_planning
@@ -19,8 +22,35 @@ audience:
   - senior
   - team
   - free_planning
+persona_tags:
+  - catalog_overview
+  - low_decision_cost
+  - route_template
 service_level: route_template
 price_band: varied
+demo_price_label: 按具体路线样板选择（演示口径）
+price_basis:
+  - 不同目的地和人群采用不同路线样板
+  - 动态交通住宿门票均需二次核验
+included:
+  - 产品线分类
+  - 人群和风格匹配口径
+  - 费用边界模板
+  - 待核验项模板
+excluded:
+  - 真实库存
+  - 真实锁价
+  - 支付或履约承诺
+  - 第三方供应商资料
+transport_lodging_basis:
+  - 按产品样板记录交通和住宿口径
+  - 实际出行日期必须二次核验
+  - 后续可映射真实库存 API
+verification_items:
+  - 目的地季节
+  - 交通住宿资源
+  - 人群适配风险
+  - 报价边界
 evidence_type: fictional_product_catalog
 ---
 
@@ -60,6 +90,8 @@ evidence_type: fictional_product_catalog
 - 情侣氛围轻路线：适合情侣或纪念日出行，强调夜景、特色餐厅、轻松街区漫步和弹性留白。
 - 通用省心轻定制：适合没有强人群标签但希望省心的用户，强调成熟路线结构、同区动线、预算拆分和风险预案。
 - 自由行路线优化：适合明确不跟团、自己预订的用户，只提供路线、预算、住宿区域和核验建议，不做旅行社方案推销。
+- 长线目的地样板：西藏、新疆、云南等长线产品可以按目的地弱匹配先给省心路线方向，再根据用户画像和预算调整。
+- 合作产品候选：未来接入真实产品服务后，`external_product_ref` 可映射到供应商产品；当前演示目录统一为 `demo_only`，不得承诺真实库存。
 
 ## 主推路线结构
 

@@ -513,7 +513,7 @@ class ToolAuditEvent(TypedDict):
 - `app/evaluation/live_runner.py`
 - `scripts/evaluate_report_snapshot.py`
 - `scripts/run_evaluation_scenarios.py`
-- `docs/evaluation-system.md`
+- `docs/评估与验收/evaluation-system.md`
 
 当前落地状态：
 

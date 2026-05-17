@@ -102,17 +102,31 @@ def document_to_evidence(
     }
     for field in (
         "product_id",
+        "source_kind",
+        "inventory_status",
+        "external_product_ref",
         "destination",
         "theme",
         "duration",
         "service_level",
         "price_band",
+        "demo_price_label",
         "product_source",
         "evidence_type",
     ):
         if metadata.get(field):
             evidence[field] = str(metadata[field])
-    for field in ("audience", "service_boundary", "quote_basis", "verification_items"):
+    for field in (
+        "audience",
+        "persona_tags",
+        "service_boundary",
+        "quote_basis",
+        "price_basis",
+        "included",
+        "excluded",
+        "transport_lodging_basis",
+        "verification_items",
+    ):
         values = metadata_list(metadata.get(field))
         if values:
             evidence[field] = values
@@ -173,7 +187,7 @@ def _product_direction_lines(evidence: list[RetrievedEvidence]) -> list[str]:
     lines = [
         "",
         "【产品化方向】",
-        "以下方向只代表成熟路线与服务口径，不能解释为真实库存、锁价或供应商承诺。",
+        "以下方向只代表成熟路线样板与服务口径，不能解释为真实库存、锁价或供应商承诺。",
     ]
     for index, item in enumerate(products, 1):
         title = item.get("theme") or item.get("title") or "产品化路线方向"
@@ -181,7 +195,10 @@ def _product_direction_lines(evidence: list[RetrievedEvidence]) -> list[str]:
         destination = item.get("destination") or "目的地待定"
         duration = item.get("duration") or "天数待定"
         price_band = item.get("price_band") or "预算档待定"
+        demo_price = item.get("demo_price_label") or "示例价待补充"
+        inventory_status = item.get("inventory_status") or "demo_only"
         audience = "、".join(item.get("audience") or item.get("user_segments") or ["通用人群"])
+        persona_tags = "、".join(item.get("persona_tags") or ["通用画像"])
         service_boundary = "；".join(
             item.get("service_boundary")
             or item.get("constraints")
@@ -197,17 +214,20 @@ def _product_direction_lines(evidence: list[RetrievedEvidence]) -> list[str]:
         )
         lines.extend(
             [
-                f"{index}. {title}（{product_id}，{destination}，{duration}，{price_band}）",
+                f"{index}. {title}（{product_id}，{destination}，{duration}，{price_band}，{demo_price}）",
                 f"- 适用人群：{audience}",
+                f"- 画像标签：{persona_tags}",
                 f"- 服务边界：{service_boundary}",
                 f"- 报价口径：{quote_basis}",
                 f"- 待核验项：{verification_items}",
+                f"- 库存口径：{inventory_status}，不得解释为已成团、已占位或已锁价。",
             ]
         )
     lines.extend(
         [
             "",
             "【模式边界】",
+            "- 面向用户时不要说内部知识库、RAG、工具名或产品编号；只表达为成熟路线样板、合作产品候选或省心路线方向。",
             "- 如果用户不接受这些产品化方向，必须明确切回自由规划，只保留路线、预算、住宿区域和核验建议。",
             "- 切回自由规划后，不要继续强推旅行社方案或省心套餐。",
         ]

@@ -110,7 +110,7 @@ blocked（环境阻塞）不再只表现为“场景 skipped（跳过）”。�
 - `.\.venv\Scripts\python -m scripts.init_rag`：退出码 1，文档加载和切分成功，但缺 `DASHSCOPE_API_KEY`，无法创建 DashScope Embeddings（通义千问向量模型）；当前 `data/vectorstore` 缺 `chroma.sqlite3`。
 - `.\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-core --base-url http://127.0.0.1:8000 --json`：退出码 1，在 preflight（预检）阶段阻断，未调用真实对话场景，生成 `.runtime\evaluations\20260511-151720-acceptance-summary.*` blocked 摘要。
 
-最新可复现流程和完整阻塞证据见 `docs/live-acceptance-runbook.md`。本次仍没有降低门禁阈值，也没有提交 `.runtime/` 原始摘要、日志或任何真实密钥。
+最新可复现流程和完整阻塞证据见 `docs/评估与验收/live-acceptance-runbook.md`。本次仍没有降低门禁阈值，也没有提交 `.runtime/` 原始摘要、日志或任何真实密钥。
 
 ## 复跑步骤
 

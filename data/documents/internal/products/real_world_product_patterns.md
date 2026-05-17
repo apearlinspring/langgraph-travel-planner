@@ -3,6 +3,9 @@ source_type: agency_internal
 category: products
 visibility: internal
 source: public_pattern_abstraction
+source_kind: public_pattern_abstraction
+inventory_status: reference_only
+external_product_ref: null
 applicable_modes:
   - agency_plan
   - free_planning
@@ -19,8 +22,35 @@ audience:
   - senior
   - team
   - general
+persona_tags:
+  - reference
+  - product_structure
+  - compliance_boundary
 service_level: reference
 price_band: varied
+demo_price_label: 公开产品结构抽象，不含真实价格
+price_basis:
+  - 仅抽象公开页面常见结构
+  - 不复制第三方价格、库存或文案
+included:
+  - 产品结构字段示例
+  - 费用包含和不含拆分方法
+  - 每日行程节奏抽象
+  - 核验和合规边界
+excluded:
+  - 第三方品牌文案
+  - 真实库存
+  - 实时价格
+  - 供应商联系方式
+transport_lodging_basis:
+  - 只抽象交通和住宿表达字段
+  - 不落真实供应商资源
+  - 后续真实库存接入时通过 external_product_ref 映射
+verification_items:
+  - 合同口径
+  - 价格波动
+  - 库存状态
+  - 版权与品牌边界
 evidence_type: public_reference_abstraction
 ---
 

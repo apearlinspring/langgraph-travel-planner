@@ -63,6 +63,33 @@
       "tags": ["internal", "agency_plan", "products", "couple"]
     },
     {
+      "id": "retrieval_product_xinjiang_destination_only",
+      "name": "Productized demo: Xinjiang weak destination match",
+      "query": "我想去新疆，想先看看有没有成熟一点的省心路线样板。",
+      "expected_sources": ["data/documents/internal/products/xinjiang_private_group_8d.md"],
+      "expected_categories": ["products"],
+      "expected_source_types": ["agency_internal"],
+      "tags": ["internal", "agency_plan", "products", "weak_match", "xinjiang"]
+    },
+    {
+      "id": "retrieval_product_tibet_budgeted_couple",
+      "name": "Productized demo: Tibet couple budget route",
+      "query": "西藏 两个人 预算一万多 省心点，不想自己查太多。",
+      "expected_sources": ["data/documents/internal/products/tibet_couple_light_custom_7d.md"],
+      "expected_categories": ["products"],
+      "expected_source_types": ["agency_internal"],
+      "tags": ["internal", "agency_plan", "products", "tibet", "couple"]
+    },
+    {
+      "id": "retrieval_product_xian_family_value",
+      "name": "Productized demo: Xi'an parent-child value route",
+      "query": "西安 三天 亲子 性价比，想要少排队、短动线的路线候选。",
+      "expected_sources": ["data/documents/internal/products/xian_family_light_custom.md"],
+      "expected_categories": ["products"],
+      "expected_source_types": ["agency_internal"],
+      "tags": ["internal", "agency_plan", "products", "xian", "family", "value"]
+    },
+    {
       "id": "retrieval_product_free_planning_boundary",
       "name": "Internal products: free-planning boundary",
       "query": "用户不接受产品化方向，只想自己预订和自由规划，桂林4天需要路线优化、住宿区域、预算拆分和核验清单。",

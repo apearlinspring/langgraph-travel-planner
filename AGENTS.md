@@ -57,7 +57,16 @@
 - `scripts/`：数据库初始化、RAG 初始化、模型联调、评估脚本。
 - `data/documents/`：公开目的地知识和内部旅行社业务知识。
 - `data/evaluation/`：固定评估场景。
-- `docs/`：架构、问题日志、模型切换、评估体系等项目文档。
+- `docs/`：项目文档，已按中文功能目录整理；入口索引是 `docs/README.md`。
+  - `docs/项目总览/`：能力地图、新会话知识库和文档说明。
+  - `docs/架构与流程/`：架构速览、状态机、模型切换、规划边界和会话一致性。
+  - `docs/RAG与知识库/`：RAG 运行契约、向量库 readiness、召回评测和产品化演示指南。
+  - `docs/评估与验收/`：acceptance-core、acceptance-smoke、真实链路 runbook 和评估体系。
+  - `docs/部署与运行/`：数据库、运行环境、MCP 健康检查和线上部署。
+  - `docs/前端与演示/`：面试演示脚本、演示包和前端报告体验。
+  - `docs/治理与可观测/`：审批、工具治理、运行预算和观测。
+  - `docs/问题记录/`：问题日志。
+  - `docs/历史轮次/`：历史验收和历史方案，仅作参考。
 - `deploy/`、`Dockerfile`、`docker-compose.yml`：容器化和部署配置。
 
 ## 后端启动与健康检查
@@ -244,7 +253,7 @@ RAG 管道在 `app/rag/pipeline.py`，流程是：
 5. 长上下文重排。
 6. 缓存。
 
-内部 RAG 工具由 `app/tools/rag_tools.py` 暴露。自由行场景下，中间件会移除部分旅行社内部工具，避免硬推省心方案。
+内部 RAG 工具由 `app/tools/rag_tools.py` 暴露。用户未明确拒绝产品/跟团/省心方案时，Agent 可以按目的地、风格或人群弱匹配成熟路线样板；自由行或明确拒绝场景下，中间件会移除部分旅行社内部工具，避免硬推省心方案。路线样板只作为 `demo_catalog` 演示资料，不承诺真实库存、成团或锁价。
 
 ## 数据层
 
@@ -304,10 +313,13 @@ LangGraph 还使用两类持久化：
 - `app/evaluation/report_quality.py`：100 分规则评分。
 - `app/evaluation/scenarios.py`：固定评估场景加载与校验。
 - `app/evaluation/live_runner.py`：真实后端链路跑批。
+- `app/evaluation/rag_retrieval.py`：RAG 小型召回评测，覆盖目的地、产品、SOP、报价、风险和报告依据。
 - `data/evaluation/report_quality_scenarios.json`：场景目录。
+- `data/evaluation/rag_retrieval_scenarios.json`：RAG 召回标注集，包含产品化弱匹配样例。
 - `scripts/evaluate_report_snapshot.py`：评估已有快照。
 - `scripts/run_evaluation_scenarios.py`：把场景发给本地后端，保存快照并评分。
-- `docs/evaluation-system.md`：评估体系说明。
+- `docs/评估与验收/evaluation-system.md`：评估体系说明。
+- `docs/RAG与知识库/rag-demo-evaluation-guide.md`：面试解释 RAG 评测和产品化召回的说明。
 
 评分维度：
 

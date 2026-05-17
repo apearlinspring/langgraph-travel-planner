@@ -6,18 +6,20 @@
 
 - 产品定位：面向自由行规划和旅行社省心方案交付的旅行顾问 Agent（智能体）系统，不是普通攻略问答页。
 - 线上入口：最近一次一体化 Docker（容器化平台）部署使用 `https://travel.403edr.cn`，线上验证仍以 `/health/ready`、`acceptance-smoke`（验收冒烟）和 `acceptance-core`（核心验收）为准。
-- 更新服务：新对话需要直接发布线上服务时，优先执行 [docs/deployment-readiness.md](docs/deployment-readiness.md) 中的生产部署运行手册。
-- 核心证据：`docs/acceptance-core-report.md` 保留完整 9 场景核心验收证据，`docs/predeploy-runtime-acceptance.md` 只记录部署前最小 smoke，不覆盖 core 结论。
-- RAG 证据：`docs/rag-retrieval-evaluation.md` 记录 8 条小型标注查询的离线召回评估；metadata-aware BM25（元数据感知 BM25）相对正文 BM25 在 source/category recall@3 上提升 6.25 个百分点。
+- 更新服务：新对话需要直接发布线上服务时，优先执行 [docs/部署与运行/deployment-readiness.md](docs/部署与运行/deployment-readiness.md) 中的生产部署运行手册。
+- 核心证据：`docs/评估与验收/acceptance-core-report.md` 保留完整 9 场景核心验收证据，`docs/评估与验收/predeploy-runtime-acceptance.md` 只记录部署前最小 smoke，不覆盖 core 结论。
+- 文档索引：先读 [docs/README.md](docs/README.md)，再按“项目总览 / RAG与知识库 / 评估与验收 / 部署与运行 / 前端与演示”等中文目录进入专题。
+- RAG 证据：`docs/RAG与知识库/rag-retrieval-evaluation.md` 记录 15 条小型标注查询、19 份本地知识文档的离线召回评估；`docs/RAG与知识库/rag-demo-evaluation-guide.md` 说明面试时如何解释产品化 RAG。
+- 产品化 RAG：用户未明确拒绝产品/跟团/省心方案时，系统允许按目的地或风格弱匹配成熟路线样板；回复中只表达示例价、待核验、不锁价和自由行替代，不暴露内部工具或知识库名称。
 - 目录卫生：`.env`、`.runtime/`、`.venv/`、`node_modules/`、`data/vectorstore*/`、本地截图和 Playwright（浏览器自动化测试框架）产物均为本地忽略项，不应进入提交或演示包。
 
 ## 项目演示包
 
 如果需要把项目能力整理成可讲述、可复跑的 AI-Agent（人工智能智能体）项目展示材料，优先看：
 
-- [docs/project-demo-pack.md](docs/project-demo-pack.md)：演示包主入口，覆盖本地讲解、acceptance-smoke（验收烟测）和前端报告三条路径。
-- [docs/project-capability-map.md](docs/project-capability-map.md)：AI-Agent 项目问题、架构回答、代码定位和验证命令。
-- [docs/demo-script.md](docs/demo-script.md)：现场演示脚本。
+- [docs/前端与演示/project-demo-pack.md](docs/前端与演示/project-demo-pack.md)：演示包主入口，覆盖本地讲解、acceptance-smoke（验收烟测）和前端报告三条路径。
+- [docs/项目总览/project-capability-map.md](docs/项目总览/project-capability-map.md)：AI-Agent 项目问题、架构回答、代码定位和验证命令。
+- [docs/前端与演示/demo-script.md](docs/前端与演示/demo-script.md)：现场演示脚本。
 
 生成脱敏演示包目录：
 
@@ -113,7 +115,7 @@ Windows PowerShell 下建议统一使用：
 - 日常只需要修改 `.env` 里的 `QWEN_MODEL_NAME`。
 - 如果希望“未配置 `.env` 时的默认行为”也同步变化，需要同时检查 [app/config.py](D:/Users/Administrator/PycharmProjects/ZhiXing/langgraph-travel-planner/app/config.py)。
 - 如果你在调试脚本、联调脚本或测试里单独创建 LLM，优先统一走 [app/utils/llm_factory.py](D:/Users/Administrator/PycharmProjects/ZhiXing/langgraph-travel-planner/app/utils/llm_factory.py)，不要再直接混用 `ChatTongyi`。
-- 更完整的切换说明见 [docs/model-switch-notes.md](D:/Users/Administrator/PycharmProjects/ZhiXing/langgraph-travel-planner/docs/model-switch-notes.md)。
+- 更完整的切换说明见 [docs/架构与流程/model-switch-notes.md](D:/Users/Administrator/PycharmProjects/ZhiXing/langgraph-travel-planner/docs/架构与流程/model-switch-notes.md)。
 
 ## 推荐测试顺序
 

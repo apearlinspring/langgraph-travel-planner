@@ -10,8 +10,8 @@
 
 马上打开：
 
-- `docs/project-demo-pack.md`
-- `docs/project-capability-map.md`
+- `docs/前端与演示/project-demo-pack.md`
+- `docs/项目总览/project-capability-map.md`
 - `app/core/state.py`
 - `app/agents/handoffs/step_config.py`
 - `app/tools/state_transition.py`
@@ -45,7 +45,7 @@ chcp 65001 | Out-Null
 1. 打开 `.runtime\project-demo-pack\manifest.json`。
 2. 指出 `reads_env_files=false`、`copies_runtime_snapshots=false`、三条 `demo_paths`。
 3. 打开 `redaction-check.txt`，说明演示包只保存脱敏材料。
-4. 打开 `docs/project-capability-map.md`，用表格回答“为什么不是普通 RAG”。
+4. 打开 `docs/项目总览/project-capability-map.md` 和 `docs/RAG与知识库/rag-demo-evaluation-guide.md`，用表格回答“为什么不是普通 RAG”。
 5. 打开 `scripts\run_evaluation_scenarios.py --acceptance-smoke --dry-run` 输出，说明真实链路入口存在，但 dry-run 不调用后端。
 
 推荐说法：
@@ -55,7 +55,7 @@ chcp 65001 | Out-Null
 如果命令失败：
 
 - 如果 `.venv` 不存在，说明当前机器没有安装项目依赖；可改用 `uv run --frozen python -m pytest tests\test_project_demo_pack.py -q`。
-- 如果 dry-run 因依赖缺失失败，只展示 `docs/project-capability-map.md` 和代码定位，不把它说成验收通过。
+- 如果 dry-run 因依赖缺失失败，只展示 `docs/项目总览/project-capability-map.md` 和代码定位，不把它说成验收通过。
 
 ## 路径二：acceptance-smoke 真实链路
 
@@ -124,7 +124,7 @@ node scripts\verify_frontend_report_renderer.js
 1. 打开 `frontend\zhixing.html`。
 2. 登录或注册测试用户。
 3. 创建会话。
-4. 输入省心方案需求，例如：“我想从上海出发，找一个适合情侣的西安 3 天旅行社省心方案，预算舒适一点，帮我解释费用包含和待核验项。”
+4. 输入省心方案需求，例如：“我们两个人想去西藏 7 天左右，预算一万多，省心点；也想知道能不能按自由行拆开规划。”
 5. 等待最终报告。
 6. 展示报告卡片：
    - 规划模式。
@@ -168,6 +168,7 @@ node scripts\verify_frontend_report_renderer.js
 | 为什么要 `report_data`？ | 自然语言不可稳定评估和渲染；`report_data` 是后端、评估、前端导出的共同契约。 |
 | 工具失败会不会影响体验？ | 会降级，但不能编造。失败进入待核验项，报告继续交付可执行方案。 |
 | 怎么防止泄露密钥？ | `.env` 不提交，`.runtime` 原始产物不提交，生成演示包会扫描常见手机号、邮箱、JWT、Bearer token（持有者令牌）和赋值型密钥。 |
+| RAG 怎么体现？ | 展示 `rag-demo-evaluation-guide.md` 和 `rag-retrieval-evaluation.md`，说明评测看产品样板、类别和依据召回；现场输入“想去新疆”这类弱匹配需求，看是否给成熟路线候选和自由行替代。 |
 | CI/CD（持续集成/持续交付） 怎么讲？ | 默认 CI 跑本地回归和前端检查；真实 smoke 由手动 workflow_dispatch 触发，并使用 GitHub Secrets（GitHub 密钥管理项）。 |
 | 目前最大短板是什么？ | 还没有真实供应链、支付和生产级分布式观测；这些需要在 HITL、权限、审计和供应链契约完备后再接。 |
 

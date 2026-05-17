@@ -3,6 +3,9 @@ source_type: agency_internal
 category: products
 visibility: internal
 source: fictional_internal_catalog
+source_kind: demo_catalog
+inventory_status: demo_only
+external_product_ref: null
 applicable_modes:
   - agency_plan
 evidence_level: standard
@@ -16,8 +19,16 @@ audience:
   - family
   - child
   - parent_child
+persona_tags:
+  - price_sensitivity
+  - parent_child
+  - low_decision_cost
 service_level: light_custom
 price_band: comfort
+demo_price_label: 3999 起/2大1小（演示口径）
+price_basis:
+  - 西安3天2晚亲子短动线样板
+  - 高铁酒店门票和博物馆预约按日期二次核验
 evidence_type: fictional_product_template
 service_boundary:
   - 路线规划
@@ -27,6 +38,20 @@ service_boundary:
 quote_basis:
   - 规划服务口径
   - 交通住宿按实时工具二次核验
+included:
+  - 2晚住宿建议口径
+  - 亲子短动线行程骨架
+  - 博物馆预约提醒
+  - 午休和室内备选安排
+excluded:
+  - 往返大交通
+  - 酒店占房
+  - 门票预约承诺
+  - 私人消费和临时用车
+transport_lodging_basis:
+  - 优先钟楼或地铁便利区域
+  - 高铁或机场到酒店交通按实际日期核验
+  - 景点间保留儿童午休和低步行强度
 verification_items:
   - 交通票价
   - 酒店库存

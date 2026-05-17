@@ -993,9 +993,9 @@ Advanced RAG 是当前仓库中除主流程外最完整的一个子系统。
 
 若要快速重新进入项目，建议按以下顺序读：
 
-1. `docs/new-session-knowledge-base.md`
-2. `docs/architecture-overview.md`
-3. `docs/project-doc-notes.md`
+1. `docs/项目总览/new-session-knowledge-base.md`
+2. `docs/架构与流程/architecture-overview.md`
+3. `docs/项目总览/project-doc-notes.md`
 4. `app/main.py`
 5. `app/api/v1/chat.py`
 6. `app/core/state.py`

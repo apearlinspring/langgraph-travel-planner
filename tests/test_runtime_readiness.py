@@ -140,10 +140,13 @@ def _write_minimal_chroma_metadata(
                 metadata.update(
                     {
                         "product_id": "ZX-PROD-XIAN-FAMILY-3D",
+                        "source_kind": "demo_catalog",
+                        "inventory_status": "demo_only",
                         "destination": "西安",
                         "theme": "亲子省心轻定制",
                         "duration": "3天2晚",
                         "audience": "family|child",
+                        "persona_tags": "price_sensitivity|parent_child",
                         "service_level": "light_custom",
                         "price_band": "comfort",
                         "evidence_type": "fictional_product_template",

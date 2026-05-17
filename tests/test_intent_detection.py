@@ -98,6 +98,18 @@ def test_detect_agency_plan_prefers_internal_product_tool():
     assert intent.preferred_tool == "search_agency_product_templates"
 
 
+def test_detect_destination_soft_product_candidate_without_rejection():
+    intent = detect_travel_intent(
+        "我想去新疆，先看看有没有成熟一点的路线样板。",
+        current_step="requirement_collection",
+        state={},
+    )
+
+    assert intent.name == "product_candidate_query"
+    assert intent.planning_mode is None
+    assert intent.preferred_tool == "search_agency_product_templates"
+
+
 def test_detect_free_planning_keeps_neutral_mode():
     intent = detect_travel_intent(
         "我不跟团，只想自己出去玩，帮我做自由行规划。",
@@ -138,6 +150,16 @@ def test_detect_rejected_agency_plan_stays_free_planning():
     assert intent.name == "free_planning_query"
     assert intent.planning_mode == "free_planning"
     assert intent.preferred_tool is None
+
+
+def test_product_candidate_respects_existing_free_planning_state():
+    intent = detect_travel_intent(
+        "我想去新疆，看看路线。",
+        current_step="requirement_collection",
+        state={"planning_mode": "free_planning", "planning_mode_confirmed": True},
+    )
+
+    assert intent.name != "product_candidate_query"
 
 
 def test_accommodation_selection_with_price_verification_queries_hotels():

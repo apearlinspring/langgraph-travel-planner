@@ -3,6 +3,9 @@ source_type: agency_internal
 category: products
 visibility: internal
 source: fictional_internal_catalog
+source_kind: demo_catalog
+inventory_status: demo_only
+external_product_ref: null
 applicable_modes:
   - agency_plan
 evidence_level: standard
@@ -16,8 +19,16 @@ audience:
   - senior
   - family
   - low_stress
+persona_tags:
+  - low_stress
+  - senior_care
+  - relaxed_pace
 service_level: escorted_planning
 price_band: comfort
+demo_price_label: 低强度舒缓路线示例价待核验
+price_basis:
+  - 长辈同行节奏和住宿便利性优先
+  - 交通住宿和园林预约按日期核验
 evidence_type: fictional_product_template
 service_boundary:
   - 低强度路线规划
@@ -27,6 +38,20 @@ service_boundary:
 quote_basis:
   - 舒缓节奏服务口径
   - 用车和住宿按实时资源二次核验
+included:
+  - 3晚住宿建议口径
+  - 园林与古城低强度路线
+  - 休息点和医疗便利提醒
+  - 天气备选建议
+excluded:
+  - 往返大交通
+  - 单房差
+  - 私人消费
+  - 临时包车和陪同服务加项
+transport_lodging_basis:
+  - 近地铁或打车便利区域优先
+  - 酒店电梯和无障碍条件需核验
+  - 市内段优先短动线和低步行强度
 verification_items:
   - 酒店电梯与无障碍
   - 市内用车价格

@@ -225,7 +225,7 @@ RAG 主要用于补充本地旅游知识和旅行社内部业务知识，不让 
 - `data/documents/internal/risk/`：风险和合规规则。
 - `data/documents/internal/report/`：报告交付标准。
 
-项目还补了小型离线召回评估：`scripts/evaluate_rag_retrieval.py` 会对 8 条标注查询计算 Top-K recall（召回率）和 MRR（平均倒数排名）。最近复跑结果见 `docs/rag-retrieval-evaluation.md`，metadata-aware BM25（元数据感知 BM25）在 source/category recall@3 上达到 100%，比只看正文的 BM25 基线提升 6.25 个百分点。
+项目还补了小型离线召回评估：`scripts/evaluate_rag_retrieval.py` 会对 15 条标注查询计算 Top-K recall（召回率）和 MRR（平均倒数排名）。最近复跑结果见 `docs/RAG与知识库/rag-retrieval-evaluation.md`，说明见 `docs/RAG与知识库/rag-demo-evaluation-guide.md`。产品化样板支持目的地级弱匹配，例如用户只说“想去新疆”，也可召回新疆 8 天小团/包车路线候选；用户明确拒绝产品时切回自由规划。
 
 ## 9. 数据层分成三类
 
