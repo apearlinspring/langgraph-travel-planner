@@ -17,6 +17,8 @@ env:
   DASHSCOPE_API_KEY: test-key-dashscope
   LANGSMITH_API_KEY: test-key-langsmith
   LANGSMITH_TRACING: "false"
+  POSTGRES_HOST: localhost
+  POSTGRES_PORT: "5432"
   POSTGRES_DB: test_db
   POSTGRES_USER: test_user
   POSTGRES_PASSWORD: test_password
