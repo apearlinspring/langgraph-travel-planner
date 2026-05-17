@@ -3,9 +3,13 @@
 加载文档、切分、创建向量数据库
 """
 import asyncio
+import os
+import shutil
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -102,17 +106,126 @@ def _actionable_rag_error(error: Exception) -> str:
     )
 
 
+def _resolve_project_path(configured_path: str | Path) -> Path:
+    """Resolve a configured path using the same project-root rule as runtime readiness."""
+
+    path = Path(configured_path)
+    if path.is_absolute():
+        return path
+    return PROJECT_ROOT / path
+
+
+def _assert_safe_vectorstore_path(path: Path) -> None:
+    """Reject paths that are too broad to replace as a generated vector store."""
+
+    resolved = path.resolve()
+    project_root = PROJECT_ROOT.resolve()
+    unsafe_paths = {
+        resolved.anchor,
+        str(project_root),
+        str(project_root / "data"),
+        str(project_root / ".runtime"),
+    }
+    if str(resolved) in unsafe_paths or resolved.parent == resolved:
+        raise RagInitializationError(
+            f"blocked: refusing to refresh unsafe vector store path: {resolved}"
+        )
+    if len(resolved.parts) < 3:
+        raise RagInitializationError(
+            f"blocked: vector store path is too broad to refresh safely: {resolved}"
+        )
+
+
+def _new_refresh_auxiliary_path(target_dir: Path, kind: str) -> Path:
+    timestamp = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
+    suffix = f"{timestamp}-{os.getpid()}-{uuid4().hex[:8]}"
+    return target_dir.parent / f".rag-vectorstore-{kind}s" / f"{target_dir.name}-{suffix}"
+
+
+def _cleanup_refresh_build(build_dir: Path) -> None:
+    if not build_dir.exists():
+        return
+    if build_dir.parent.name != ".rag-vectorstore-builds":
+        raise RagInitializationError(
+            f"blocked: refusing to remove non-build vector store path: {build_dir}"
+        )
+    shutil.rmtree(build_dir)
+
+
+def _replace_vectorstore_directory(
+    *,
+    target_dir: Path,
+    build_dir: Path,
+    label: str,
+) -> Path | None:
+    """Replace a vector store directory with a verified build, preserving the old one."""
+
+    _assert_safe_vectorstore_path(target_dir)
+    if not build_dir.exists():
+        raise RagInitializationError(f"{label} 构建目录不存在，无法替换: {build_dir}")
+    if build_dir.parent.name != ".rag-vectorstore-builds":
+        raise RagInitializationError(
+            f"blocked: refusing to promote non-build vector store path: {build_dir}"
+        )
+    if target_dir.exists() and not target_dir.is_dir():
+        raise RagInitializationError(f"{label} 目标路径不是目录: {target_dir}")
+
+    target_dir.parent.mkdir(parents=True, exist_ok=True)
+    backup_dir: Path | None = None
+    if target_dir.exists():
+        backup_dir = _new_refresh_auxiliary_path(target_dir, "backup")
+        backup_dir.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(target_dir), str(backup_dir))
+        _log_info(f"{label} 旧向量库已备份: {backup_dir}")
+
+    try:
+        shutil.move(str(build_dir), str(target_dir))
+    except Exception:
+        if backup_dir is not None and backup_dir.exists() and not target_dir.exists():
+            shutil.move(str(backup_dir), str(target_dir))
+        raise
+
+    _log_info(f"{label} 已替换为新向量库: {target_dir}")
+    return backup_dir
+
+
+def _rollback_vectorstore_replacement(
+    *,
+    target_dir: Path,
+    backup_dir: Path | None,
+    label: str,
+) -> None:
+    """Best-effort rollback after a post-replacement readiness failure."""
+
+    if backup_dir is None or not backup_dir.exists():
+        return
+    failed_dir = _new_refresh_auxiliary_path(target_dir, "failed")
+    failed_dir.parent.mkdir(parents=True, exist_ok=True)
+    if target_dir.exists():
+        shutil.move(str(target_dir), str(failed_dir))
+        _log_error(f"{label} 新向量库已移入失败目录: {failed_dir}")
+    shutil.move(str(backup_dir), str(target_dir))
+    _log_error(f"{label} 已回滚到旧向量库: {target_dir}")
+
+
 def _build_vectorstore(
     *,
     documents: list,
     persist_directory: str,
     collection_name: str,
     label: str,
-):
+    refresh: bool = True,
+) -> Path:
     """切分文档并创建一个向量库集合。"""
     _ensure_runtime_imports()
     if not documents:
         raise RagInitializationError(f"{label} 没有可索引文档")
+
+    target_dir = _resolve_project_path(persist_directory)
+    _assert_safe_vectorstore_path(target_dir)
+    build_dir = (
+        _new_refresh_auxiliary_path(target_dir, "build") if refresh else target_dir
+    )
 
     _log_info(f"切分文档: {label}...")
     splitter = AdvancedParentDocumentSplitter()
@@ -120,16 +233,22 @@ def _build_vectorstore(
 
     _log_info(f"创建向量数据库: {label}...")
     vs_manager = VectorStoreManager(
-        persist_directory=persist_directory,
+        persist_directory=str(build_dir),
         collection_name=collection_name,
     )
-    vs_manager.create_vectorstore(child_docs)
+    try:
+        vs_manager.create_vectorstore(child_docs)
+    except Exception:
+        if refresh:
+            _cleanup_refresh_build(build_dir)
+        raise
 
     _log_info(f"{label} 初始化完成！")
     _log_info(f"   - 文档数量：{len(documents)}")
     _log_info(f"   - 父文档数量：{len(parent_docs)}")
     _log_info(f"   - 子文档数量：{len(child_docs)}")
     _log_info(f"   - 向量数据库：{vs_manager.persist_directory}")
+    return build_dir
 
 
 def _verify_vectorstore_ready(
@@ -165,6 +284,56 @@ def _verify_vectorstore_ready(
     )
 
 
+def _refresh_vectorstore(
+    *,
+    documents: list,
+    persist_directory: str,
+    collection_name: str,
+    label: str,
+    contract: dict,
+) -> None:
+    """Build, verify, replace, and post-verify one vector store."""
+
+    target_dir = _resolve_project_path(persist_directory)
+    build_dir = _build_vectorstore(
+        documents=documents,
+        persist_directory=persist_directory,
+        collection_name=collection_name,
+        label=label,
+        refresh=True,
+    )
+    try:
+        _verify_vectorstore_ready(
+            persist_directory=str(build_dir),
+            collection_name=collection_name,
+            label=label,
+            contract=contract,
+        )
+    except Exception:
+        _cleanup_refresh_build(build_dir)
+        raise
+
+    backup_dir = _replace_vectorstore_directory(
+        target_dir=target_dir,
+        build_dir=build_dir,
+        label=label,
+    )
+    try:
+        _verify_vectorstore_ready(
+            persist_directory=str(target_dir),
+            collection_name=collection_name,
+            label=label,
+            contract=contract,
+        )
+    except Exception:
+        _rollback_vectorstore_replacement(
+            target_dir=target_dir,
+            backup_dir=backup_dir,
+            label=label,
+        )
+        raise
+
+
 async def initialize_rag() -> None:
     """初始化 RAG 系统"""
 
@@ -197,26 +366,16 @@ async def initialize_rag() -> None:
     if not internal_documents:
         raise RagInitializationError("未找到内部知识库文档，请检查 data/documents/internal/")
 
-    # ========== 3. 创建公开攻略与内部知识向量库 ==========
-    _build_vectorstore(
+    # ========== 3. 安全刷新公开攻略与内部知识向量库 ==========
+    _refresh_vectorstore(
         documents=destination_documents,
-        persist_directory=settings.rag_vectorstore_path,
-        collection_name=settings.rag_collection_name,
-        label="公开攻略 RAG",
-    )
-    _verify_vectorstore_ready(
         persist_directory=settings.rag_vectorstore_path,
         collection_name=settings.rag_collection_name,
         label="公开攻略 RAG",
         contract=PUBLIC_VECTORSTORE_CONTRACT,
     )
-    _build_vectorstore(
+    _refresh_vectorstore(
         documents=internal_documents,
-        persist_directory=settings.rag_internal_vectorstore_path,
-        collection_name=settings.rag_internal_collection_name,
-        label="旅行社内部知识库 RAG",
-    )
-    _verify_vectorstore_ready(
         persist_directory=settings.rag_internal_vectorstore_path,
         collection_name=settings.rag_internal_collection_name,
         label="旅行社内部知识库 RAG",

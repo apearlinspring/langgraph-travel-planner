@@ -93,6 +93,18 @@ docker compose ps
 
 如果脚本提示 base image（基础镜像）不存在，说明服务器还没有可复用的后端镜像，需要先安排一次完整镜像构建窗口，不要删除现有数据库卷。
 
+### 5. 刷新 RAG 向量库
+
+如果本次发布涉及 `data/documents/`、RAG（检索增强生成）检索逻辑、产品化目录或 metadata（元数据）契约，镜像刷新后必须在服务器容器内重建向量库：
+
+```powershell
+ssh root@8.145.46.253 'set -eu; cd /opt/langgraph-travel-planner; docker compose exec -T backend python -m scripts.init_rag; docker compose restart backend; docker compose ps'
+```
+
+`scripts.init_rag` 会先在 `data/.rag-vectorstore-builds/` 构建新 Chroma（向量库）目录并完成 readiness（就绪检查），再把旧的 `data/vectorstore/` 和 `data/vectorstore_internal/` 移到 `data/.rag-vectorstore-backups/`，最后把新目录替换到正式路径。若替换后检查失败，会把失败目录移入 `data/.rag-vectorstore-faileds/` 并回滚旧库。
+
+这三个隐藏目录都属于生成数据，不要提交。发布确认稳定后，可以在服务器上按需清理较早的备份目录；清理前先确认目标路径位于 `/opt/langgraph-travel-planner/data/.rag-vectorstore-backups/`。
+
 ## 发布后验证
 
 ### 1. 容器与内部健康检查
@@ -154,6 +166,12 @@ ssh root@8.145.46.253 'set -eu; cd /opt/langgraph-travel-planner; docker compose
 
 ```powershell
 ssh root@8.145.46.253 'set -eu; cd /opt/langgraph-travel-planner; docker compose exec -T backend python scripts/check_runtime_readiness.py --target production --json | head -c 4000; echo'
+```
+
+若本次改动涉及 RAG 文档或产品化目录，还要执行离线召回评测：
+
+```powershell
+ssh root@8.145.46.253 'set -eu; cd /opt/langgraph-travel-planner; docker compose exec -T backend python scripts/evaluate_rag_retrieval.py --json | head -c 5000; echo'
 ```
 
 完整 9 场景 `acceptance-core` 会消耗真实 LLM（大语言模型）和外部 API（应用程序接口）预算，只有发布前需要重新证明核心验收时再运行。

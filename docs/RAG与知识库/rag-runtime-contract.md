@@ -11,6 +11,8 @@
 
 初始化入口 `scripts.init_rag`、readiness 入口 `scripts/check_runtime_readiness.py` 和运行时工具 `app/tools/rag_tools.py` 都必须读取同一组配置。运行时不应静默创建新的向量库来掩盖配置错误；缺失或不匹配时返回可诊断的空证据契约。
 
+`scripts.init_rag` 默认采用幂等刷新：先在 `data/.rag-vectorstore-builds/` 构建并校验新库，通过后再替换 `data/vectorstore/` 与 `data/vectorstore_internal/`。旧库会移动到 `data/.rag-vectorstore-backups/`；若替换后 readiness（就绪检查）失败，新库会移动到 `data/.rag-vectorstore-faileds/` 并回滚旧库。三个隐藏目录均为本地生成数据，已被 Git（版本控制）忽略。
+
 ## Metadata 要求
 
 公开与内部文档都必须带：
@@ -85,6 +87,7 @@
 .\.venv\Scripts\python -m scripts.init_rag
 .\.venv\Scripts\python scripts\check_runtime_readiness.py --target staging --json
 .\.venv\Scripts\python scripts\validate_rag_knowledge.py --json
+.\.venv\Scripts\python scripts\evaluate_rag_retrieval.py --json
 ```
 
 不要提交 `data/vectorstore`、`data/vectorstore_internal`、`.env` 或 `.runtime`。真实密钥只放在本机 `.env` 或部署密钥系统中。

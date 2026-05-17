@@ -38,6 +38,12 @@ data/vectorstore/
 **/data/vectorstore/
 data/vectorstore_internal/
 **/data/vectorstore_internal/
+data/.rag-vectorstore-builds/
+**/data/.rag-vectorstore-builds/
+data/.rag-vectorstore-backups/
+**/data/.rag-vectorstore-backups/
+data/.rag-vectorstore-faileds/
+**/data/.rag-vectorstore-faileds/
 
 # OS files
 .DS_Store
