@@ -1,5 +1,24 @@
 # RAG（检索增强生成）演示与评测指南
 
+## 2026-05-17 真实环境刷新结果
+
+本轮在 `codex/productized-rag-real-env-refresh` 分支、`origin/main@ea682ff` 基准上复跑。真实 `.env` 仅在本机用于运行；`.env`、`.runtime/`、`.venv/`、`data/vectorstore/` 和 `data/vectorstore_internal/` 均由 Git（版本控制系统）忽略，未写入本文档。
+
+执行范围只覆盖本地真实环境验证，不更新服务器服务：
+
+- `uv run python -m scripts.init_rag`：通过。公开攻略 RAG 写入 18 条 embeddings（嵌入向量），内部知识库 RAG 写入 130 条 embeddings；Chroma（向量库组件）元数据文件均生成并通过 readiness（就绪状态）检查。仅出现非阻塞 telemetry（遥测）告警。
+- `uv run python scripts\evaluate_rag_retrieval.py --json`：通过。`metadata_aware_bm25` 在 top-5 下 source/category/source_type recall（来源、类别和来源类型召回率）均为 100%，hit rate（命中率）为 100%，MRR（平均倒数排名）为 0.9500。
+- 产品化重点召回：`想去新疆` 命中 `xinjiang_private_group_8d.md` 第 1 位；`西藏 两个人 预算一万多 省心` 召回 `tibet_couple_light_custom_7d.md` 第 2 位；`西安 三天 亲子 性价比` 命中 `xian_family_light_custom.md` 第 1 位。
+- 本地后端在 `127.0.0.1:8001` 启动验证，避免误连已占用 `8000` 的其他服务。`/health/live` 返回 `alive`，`/health/ready` 返回 `ready`；MCP（模型上下文协议）服务池 6 个服务 healthy（健康），共 37 个 tools（工具）。
+- `uv run python scripts\check_runtime_readiness.py --target acceptance --check-backend --base-url http://127.0.0.1:8001 --json`：通过，`status=passed`，`readiness_status=ready`，无 blocked reasons（环境阻塞原因）。
+- `uv run python scripts\run_evaluation_scenarios.py --acceptance-smoke --base-url http://127.0.0.1:8001 --json --summary-dir .runtime\acceptance-smoke`：通过。`pricing_agency_quote_explanation` 1/1 passed（通过），Agent（智能体）综合分 100.0，工业指标平均分 94.29，`report_data`、预算、预算置信度、风险、待核验项和旅行社业务证据均闭环。
+
+运行观察：
+
+- 真实铁路上游查询出现 `get-tickets` payload failure（载荷失败）和 guarded timeout（受保护超时），系统按兜底证据继续推进，没有把失败包装成真实票价或锁定库存。
+- LangSmith（LangChain 可观测平台）上报出现 429 rate limit（速率限制），不影响本地 API（应用程序接口）链路和 acceptance-smoke（验收冒烟测试）门禁结果。
+- `.runtime/acceptance-smoke/20260517-141657-acceptance-summary.*` 和 `.runtime/evaluations/20260517-221657-pricing_agency_quote_explanation.json` 仅作为本机原始证据保留，不进入提交。
+
 ## 演示口径
 
 本项目的 RAG 不只是“查几段攻略再回答”，而是给旅行顾问流程提供可解释依据：目的地知识、成熟路线样板、报价边界、风险规则、SOP（标准作业流程）和报告交付标准。面试时建议强调三件事：
