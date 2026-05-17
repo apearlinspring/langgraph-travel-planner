@@ -215,6 +215,24 @@ def test_failed_llm_judge_does_not_override_deterministic_acceptance_gate():
             "budget_gate": {"passed": True, "violations": [], "warnings": []},
         },
         "runtime_metrics": {"turn_observability_event_count": 1},
+        "agent_metrics": {
+            "version": "agent_industrial_metrics.v1",
+            "normalized_score": 100,
+            "passed": True,
+            "summary": [],
+            "criteria": [],
+            "unsupported_claims": {
+                "unsupported_claim_rate": 0.0,
+                "unsupported_claim_count": 0,
+            },
+            "metric_values": {
+                "intent_accuracy": 1.0,
+                "tool_call_precision": 1.0,
+                "tool_call_recall": 1.0,
+                "stage_transition_accuracy": 1.0,
+                "unsupported_claim_rate": 0.0,
+            },
+        },
     }
     llm_judge = {
         "status": "failed",

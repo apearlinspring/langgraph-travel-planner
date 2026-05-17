@@ -16,6 +16,19 @@
         "real_mcp": true,
         "mcp_servers": ["weather", "search", "amap"],
         "external_apis": ["amap", "tavily"]
+      },
+      "metric_expectations": {
+        "intent": {
+          "expected": "free_planning",
+          "accepted": ["free_planning"]
+        },
+        "tools": {
+          "optional": ["query_destination_info"]
+        },
+        "unsupported_claims": {
+          "strict": true,
+          "categories": ["price", "inventory", "transport_schedule", "hotel_availability", "weather"]
+        }
       }
     },
     {
@@ -32,6 +45,19 @@
         "real_mcp": true,
         "mcp_servers": ["weather", "search", "amap"],
         "external_apis": ["amap", "tavily"]
+      },
+      "metric_expectations": {
+        "intent": {
+          "expected": "free_planning",
+          "accepted": ["free_planning"]
+        },
+        "tools": {
+          "optional": ["query_destination_info"]
+        },
+        "unsupported_claims": {
+          "strict": true,
+          "categories": ["price", "inventory", "transport_schedule", "hotel_availability", "weather"]
+        }
       }
     },
     {
@@ -64,6 +90,27 @@
         "real_mcp": true,
         "mcp_servers": ["weather", "search", "amap", "12306-mcp", "VariFlight-Aviation", "aigohotel-mcp"],
         "external_apis": ["amap", "tavily", "variflight", "aigohotel"]
+      },
+      "metric_expectations": {
+        "intent": {
+          "expected": "agency_plan",
+          "accepted": ["agency_plan"]
+        },
+        "tools": {
+          "optional": [
+            "query_destination_info",
+            "query_hotel_options",
+            "query_transport_options",
+            "search_agency_product_templates",
+            "search_agency_service_sop",
+            "search_agency_pricing_rules",
+            "search_agency_risk_playbook"
+          ]
+        },
+        "unsupported_claims": {
+          "strict": true,
+          "categories": ["price", "inventory", "transport_schedule", "hotel_availability", "weather"]
+        }
       }
     },
     {
@@ -80,6 +127,25 @@
         "real_mcp": true,
         "mcp_servers": ["weather", "search", "amap", "aigohotel-mcp"],
         "external_apis": ["amap", "tavily", "aigohotel"]
+      },
+      "metric_expectations": {
+        "intent": {
+          "expected": "agency_plan",
+          "accepted": ["agency_plan"]
+        },
+        "tools": {
+          "optional": [
+            "query_destination_info",
+            "query_hotel_options",
+            "search_agency_product_templates",
+            "search_agency_service_sop",
+            "search_agency_risk_playbook"
+          ]
+        },
+        "unsupported_claims": {
+          "strict": true,
+          "categories": ["price", "inventory", "transport_schedule", "hotel_availability", "weather"]
+        }
       }
     },
     {
@@ -96,6 +162,25 @@
         "real_mcp": true,
         "mcp_servers": ["weather", "search", "amap", "aigohotel-mcp"],
         "external_apis": ["amap", "tavily", "aigohotel"]
+      },
+      "metric_expectations": {
+        "intent": {
+          "expected": "agency_plan",
+          "accepted": ["agency_plan"]
+        },
+        "tools": {
+          "optional": [
+            "query_destination_info",
+            "query_hotel_options",
+            "search_agency_product_templates",
+            "search_agency_service_sop",
+            "search_agency_risk_playbook"
+          ]
+        },
+        "unsupported_claims": {
+          "strict": true,
+          "categories": ["price", "inventory", "transport_schedule", "hotel_availability", "weather"]
+        }
       }
     },
     {
@@ -132,6 +217,20 @@
       "runtime_budget": {
         "max_tool_call_count": 36,
         "max_first_token_seconds": 75
+      },
+      "metric_expectations": {
+        "intent": {
+          "expected": "hotel_query",
+          "accepted": ["free_planning", "hotel_query"]
+        },
+        "tools": {
+          "required": ["query_hotel_options"],
+          "optional": ["query_destination_info"]
+        },
+        "unsupported_claims": {
+          "strict": true,
+          "categories": ["price", "inventory", "hotel_availability", "weather"]
+        }
       }
     },
     {
@@ -171,6 +270,37 @@
         "max_tool_call_count": 36,
         "warning_tool_call_ratio": 0.99
       },
+      "metric_expectations": {
+        "intent": {
+          "expected": "pricing_query",
+          "accepted": ["agency_plan", "pricing_query"]
+        },
+        "tools": {
+          "optional": [
+            "query_destination_info",
+            "query_transport_options",
+            "query_hotel_options",
+            "search_agency_pricing_rules",
+            "search_agency_report_standards"
+          ]
+        },
+        "stage": {
+          "expected_transition_tools": [
+            "record_requirement_tool",
+            "select_destination_tool",
+            "select_transport_tool",
+            "select_accommodation_tool",
+            "select_food_tool",
+            "generate_itinerary_tool",
+            "summarize_budget_tool",
+            "generate_order_tool"
+          ]
+        },
+        "unsupported_claims": {
+          "strict": true,
+          "categories": ["price", "inventory", "transport_schedule", "hotel_availability"]
+        }
+      },
       "followups": [
         "目的地确认重庆，出发地成都，2026-06-20出发，3天2晚，4个大人，继续下一阶段。",
         "交通确认按高铁省心优先记录推荐方式；真实班次和价格没有锁定时写待二次核验。",
@@ -199,6 +329,24 @@
       "runtime_budget": {
         "max_first_token_seconds": 75,
         "max_tool_call_count": 36
+      },
+      "metric_expectations": {
+        "intent": {
+          "expected": "risk_query",
+          "accepted": ["agency_plan", "risk_query", "weather_query"]
+        },
+        "tools": {
+          "optional": [
+            "query_destination_info",
+            "query_hotel_options",
+            "search_agency_risk_playbook",
+            "search_agency_service_sop"
+          ]
+        },
+        "unsupported_claims": {
+          "strict": true,
+          "categories": ["price", "inventory", "transport_schedule", "hotel_availability", "weather"]
+        }
       },
       "followups": [
         "需求确认：出发地广州，目的地桂林，2026-07-10出发，4天3晚，3位成人（其中2位老人），人均预算2500-3500元；请按旅行社顾问省心方案记录需求并继续推进。",
@@ -229,6 +377,20 @@
       "runtime_budget": {
         "max_tool_call_count": 36,
         "max_first_token_seconds": 75
+      },
+      "metric_expectations": {
+        "intent": {
+          "expected": "transport_query",
+          "accepted": ["free_planning", "transport_query"]
+        },
+        "tools": {
+          "required": ["query_transport_options"],
+          "optional": ["query_destination_info"]
+        },
+        "unsupported_claims": {
+          "strict": true,
+          "categories": ["price", "inventory", "transport_schedule", "weather"]
+        }
       }
     },
     {

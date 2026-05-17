@@ -14,6 +14,7 @@ from app.evaluation.acceptance_gate import (
     build_acceptance_gate_result,
     build_error_acceptance_gate_result,
 )
+from app.evaluation.agent_metrics import evaluate_agent_metrics
 from app.evaluation.rag_quality import evaluate_rag_quality
 from app.evaluation.report_quality import evaluate_report_quality
 from app.evaluation.llm_judge import DEFAULT_LLM_JUDGE_THRESHOLD, evaluate_llm_judge
@@ -104,6 +105,7 @@ class LiveScenarioResult:
     first_token_seconds: float | None = None
     tool_call_count: int | None = None
     tool_counts: dict[str, int] | None = None
+    agent_metrics: dict[str, Any] | None = None
     evidence_closure: dict[str, Any] | None = None
     acceptance_gate: dict[str, Any] | None = None
     failure_category: str | None = None
@@ -600,6 +602,8 @@ def classify_live_failure_category(
         return "runtime_budget"
     if "runtime_quality" in failed_dimensions:
         return "runtime_budget"
+    if "agent_industrial_metrics" in failed_dimensions:
+        return "agent_industrial_metrics"
 
     closure = evidence_closure or {}
     if closure and closure.get("passed") is False:
@@ -626,6 +630,10 @@ def _failure_details_from_category(
                 "runtime_budget",
                 "runtime_quality",
             }:
+                details.extend(str(item) for item in _as_list(failure.get("findings")))
+    elif category == "agent_industrial_metrics":
+        for failure in _as_list(_as_dict(acceptance_gate).get("failures")):
+            if isinstance(failure, dict) and failure.get("dimension") == "agent_industrial_metrics":
                 details.extend(str(item) for item in _as_list(failure.get("findings")))
     elif category == "evidence_closure":
         missing = _as_list(_as_dict(evidence_closure).get("missing"))
@@ -703,6 +711,13 @@ def build_quality_summary(
         redundant_calls=tool_result["redundant_calls"],
         pass_threshold=80.0,
     ).to_dict()
+    agent_metrics_result = evaluate_agent_metrics(
+        events,
+        scenario=scenario,
+        report_data=report_data,
+        assistant_text=assistant_text,
+        pass_threshold=80.0,
+    ).to_dict()
     weighted_score = round(
         report_evaluation["normalized_score"] * 0.5
         + rag_result["normalized_score"] * 0.2
@@ -734,6 +749,7 @@ def build_quality_summary(
         "rag_quality": rag_result,
         "tool_quality": tool_result,
         "runtime_quality": runtime_result,
+        "agent_metrics": agent_metrics_result,
         "runtime_metrics": metrics.to_dict(),
         "runtime_governance": runtime_result["governance_summary"],
         "tool_policy": {
@@ -1004,6 +1020,7 @@ def run_live_scenario(
                 else None
             ),
             tool_counts=quality_summary["tool_quality"]["tool_counts"],
+            agent_metrics=quality_summary["agent_metrics"],
             evidence_closure=evidence_closure,
             acceptance_gate=acceptance_gate,
             failure_category=failure_category,

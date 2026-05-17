@@ -75,12 +75,16 @@ def test_local_stdio_servers_use_stable_runtime_dirs(monkeypatch):
     MCPClientManager.refresh_server_configs()
 
     env = MCPClientManager.SERVER_CONFIGS["weather"]["env"]
+
+    def normalized(value: str) -> str:
+        return value.replace("\\", "/")
+
     assert env["FASTMCP_HOME"].endswith(".fastmcp")
-    assert env["LOCALAPPDATA"].endswith(".runtime\\localappdata")
-    assert env["APPDATA"].endswith(".runtime\\appdata")
-    assert env["USERPROFILE"].endswith(".runtime\\userprofile")
-    assert env["TEMP"].endswith(".runtime\\tmp")
-    assert env["TMP"].endswith(".runtime\\tmp")
+    assert normalized(env["LOCALAPPDATA"]).endswith(".runtime/localappdata")
+    assert normalized(env["APPDATA"]).endswith(".runtime/appdata")
+    assert normalized(env["USERPROFILE"]).endswith(".runtime/userprofile")
+    assert normalized(env["TEMP"]).endswith(".runtime/tmp")
+    assert normalized(env["TMP"]).endswith(".runtime/tmp")
     assert env["PYTHONUTF8"] == "1"
     assert env["UV_HTTP_TIMEOUT"] == "15"
     assert MCPClientManager.SERVER_TOOL_LOAD_TIMEOUTS["aigohotel-mcp"] == 25.0
