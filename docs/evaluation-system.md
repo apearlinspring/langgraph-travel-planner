@@ -4,7 +4,7 @@
 
 评估体系先解决一个核心问题：真实对话链路跑完后，最终交付物是不是足够像一份可交付的旅游规划报告，而不只是“模型写得很长”。
 
-第一版采用确定性规则评分，不依赖额外模型，适合作为本地调试、回归测试和 CI（持续集成）的质量基线。模块 G 已把评估对象从最终报告扩展到 Agent（智能体）运行质量：同时看 RAG（检索增强生成）证据、工具调用、运行耗时和 token（令牌）近似成本。现在还提供可选 LLM-as-Judge（大模型评审）补充层，用来补足人工质感判断，但不覆盖确定性门禁结论。
+第一版采用确定性规则评分，不依赖额外模型，适合作为本地调试、回归测试和 CI（持续集成）的质量基线。模块 G 已把评估对象从最终报告扩展到 Agent（智能体）运行质量：同时看 RAG（检索增强生成）证据、工具调用、运行耗时、token（令牌）近似成本和工业指标。现在还提供可选 LLM-as-Judge（大模型评审）补充层，用来补足人工质感判断，但不覆盖确定性门禁结论。
 
 ## 第一阶段：结构化报告质量评分
 
@@ -147,7 +147,7 @@ LLM（大语言模型）创建统一走 `app/utils/llm_factory.py` 的 `build_ch
 .\.venv\Scripts\python.exe scripts\export_acceptance_evidence.py --runtime-dir .runtime --output docs\acceptance-core-report.md
 ```
 
-导出脚本会自动扫描 `.runtime` 下最新的 `acceptance_run_summary.v1` JSON（JavaScript 对象表示法）摘要，生成稳定的 9 场景状态地图，包含每个场景的状态、首 token（文本令牌）、工具调用数、证据闭环和运行预算结论。脚本只输出脱敏后的聚合字段，不读取或写入 `.env`，也不会把真实密钥、手机号、邮箱、JWT（JSON Web Token，令牌认证）或原始工具响应写进文档。
+导出脚本会自动扫描 `.runtime` 下最新的 `acceptance_run_summary.v1` JSON（JavaScript 对象表示法）摘要，生成稳定的 9 场景状态地图，包含每个场景的状态、首 token（文本令牌）、工具调用数、证据闭环、运行预算和工业指标结论。脚本只输出脱敏后的聚合字段，不读取或写入 `.env`，也不会把真实密钥、手机号、邮箱、JWT（JSON Web Token，令牌认证）或原始工具响应写进文档。
 
 缺文件或只存在 partial summary（部分摘要）时，证据包不会假装通过：
 
@@ -225,6 +225,7 @@ workflow（工作流）总是上传 `.runtime/acceptance-smoke` 作为 artifact�
 - RAG（检索增强生成）质量：不低于 80 分。
 - 工具治理质量：不低于 80 分。
 - 运行时质量：不低于 80 分，并要求运行预算门禁通过。
+- Agent（智能体）工业指标：不低于 80 分，且 unsupported claim rate（无依据断言率）必须为 0。
 - 预算置信度：必须包含置信度等级、已确认或估算项、待核验项。
 - 旅行社省心方案：至少覆盖 3 类内部证据。
 - 工具审计：必须暴露使用来源、待核验项和不支持承诺。
@@ -287,6 +288,7 @@ $env:ZHIXING_EVAL_PASSWORD="000000"
 - `summary.quality_summary.rag_quality`：证据契约、类别覆盖、模式适配、费用可追溯和安全交付评分。
 - `summary.quality_summary.tool_quality`：工具意图覆盖、禁用工具规避、同轮高成本查询重复调用、失败兜底和审计可见性评分。
 - `summary.quality_summary.runtime_quality`：是否产出 `report_data`、总耗时、首 token（词元）时间、事件计数、工具调用次数、错误事件数和 token 近似成本评分。
+- `summary.quality_summary.agent_metrics`：intent accuracy（意图准确率）、tool call precision/recall（工具调用精确率/召回率）、stage transition accuracy（阶段迁移准确率）和 unsupported claim rate（无依据断言率）。
 - `summary.quality_summary.runtime_quality.budget_gate`：确定性运行预算门禁，包含 `passed`、`violations`、`warnings` 和实际采用的预算阈值。
 - `summary.quality_summary.runtime_governance`：运行治理摘要，用于回答“慢在哪里、成本风险在哪里、工具是否过度调用”。
 - `summary.quality_summary.aggregate`：综合分，当前权重是报告 50%、RAG 20%、工具 20%、运行指标 10%。

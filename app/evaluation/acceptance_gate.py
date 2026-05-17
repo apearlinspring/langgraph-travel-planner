@@ -25,6 +25,8 @@ class AcceptanceThresholds:
     min_rag_score: float = 80.0
     min_tool_score: float = 80.0
     min_runtime_score: float = 80.0
+    min_agent_metrics_score: float = 80.0
+    max_unsupported_claim_rate: float = 0.0
     min_budget_confidence_score: float = 100.0
     min_tool_audit_score: float = 100.0
     min_internal_evidence_categories: int = 3
@@ -46,6 +48,7 @@ DIMENSION_LABELS = {
     "rag_quality": "RAG evidence quality",
     "tool_quality": "Tool governance quality",
     "runtime_quality": "Runtime metrics quality",
+    "agent_industrial_metrics": "Agent industrial metrics",
     "runtime_budget": "Runtime budget gate",
     "runtime_observability": "Production observability surface",
     "budget_confidence": "Budget confidence contract",
@@ -78,6 +81,10 @@ DIMENSION_SUGGESTIONS = {
     "runtime_quality": (
         "Inspect total elapsed time, first-token latency, error events, tool-call "
         "count, and estimated token pressure."
+    ),
+    "agent_industrial_metrics": (
+        "Inspect intent accuracy, required tool recall, stage transition order, "
+        "and unsupported dynamic claims in quality_summary.agent_metrics."
     ),
     "runtime_budget": (
         "Inspect runtime_budget violations; slow or repeated external tools usually "
@@ -142,6 +149,10 @@ def acceptance_thresholds_from_dict(
             if not isinstance(value, int) or value < 0:
                 raise ValueError(f"Acceptance threshold field {key!r} must be a non-negative integer")
             values[key] = value
+        elif key == "max_unsupported_claim_rate":
+            if not isinstance(value, (int, float)) or not 0 <= float(value) <= 1:
+                raise ValueError(f"Acceptance threshold field {key!r} must be between 0 and 1")
+            values[key] = float(value)
         elif key.startswith("require_"):
             if not isinstance(value, bool):
                 raise ValueError(f"Acceptance threshold field {key!r} must be a boolean")
@@ -394,6 +405,58 @@ def _tool_audit_dimension(
     )
 
 
+def _agent_industrial_metrics_dimension(
+    quality_summary: dict[str, Any],
+    thresholds: AcceptanceThresholds,
+) -> dict[str, Any]:
+    result = _as_dict(quality_summary.get("agent_metrics"))
+    score = result.get("normalized_score")
+    numeric_score = float(score) if isinstance(score, (int, float)) else None
+    unsupported_claims = _as_dict(result.get("unsupported_claims"))
+    claim_rate = _as_number(unsupported_claims.get("unsupported_claim_rate"))
+    unsupported_count = _as_int(unsupported_claims.get("unsupported_claim_count")) or 0
+    findings = _result_findings(result)
+    if not result:
+        findings.append("quality_summary.agent_metrics result is missing")
+    if numeric_score is None:
+        findings.append("agent_metrics.normalized_score is missing")
+    elif numeric_score < thresholds.min_agent_metrics_score:
+        findings.insert(
+            0,
+            (
+                "Agent industrial metrics score "
+                f"{numeric_score} is below threshold {thresholds.min_agent_metrics_score}"
+            ),
+        )
+    if claim_rate is None:
+        findings.append("agent_metrics.unsupported_claims.unsupported_claim_rate is missing")
+    elif claim_rate > thresholds.max_unsupported_claim_rate:
+        findings.insert(
+            0,
+            (
+                "Unsupported dynamic claim rate "
+                f"{claim_rate} is above threshold {thresholds.max_unsupported_claim_rate}"
+            ),
+        )
+    if unsupported_count > 0:
+        findings.append(f"Unsupported dynamic claim count is {unsupported_count}")
+    passed = (
+        bool(result.get("passed"))
+        and numeric_score is not None
+        and numeric_score >= thresholds.min_agent_metrics_score
+        and claim_rate is not None
+        and claim_rate <= thresholds.max_unsupported_claim_rate
+        and not findings
+    )
+    return _dimension_result(
+        key="agent_industrial_metrics",
+        score=numeric_score,
+        threshold=thresholds.min_agent_metrics_score,
+        passed=passed,
+        findings=findings[:10],
+    )
+
+
 def _llm_judge_supplement_dimension(
     result: dict[str, Any] | None,
 ) -> dict[str, Any]:
@@ -605,6 +668,10 @@ def build_acceptance_gate_result(
             "runtime_quality",
             _as_dict(quality_summary.get("runtime_quality")),
             gate_thresholds.min_runtime_score,
+        ),
+        "agent_industrial_metrics": _agent_industrial_metrics_dimension(
+            quality_summary,
+            gate_thresholds,
         ),
         "runtime_budget": _runtime_budget_dimension(quality_summary, gate_thresholds),
         "runtime_observability": _runtime_observability_dimension(
@@ -839,6 +906,93 @@ def _acceptance_evidence_totals(results: list[dict[str, Any]]) -> dict[str, Any]
     }
 
 
+def _result_agent_metrics(result: dict[str, Any]) -> dict[str, Any]:
+    metrics = _as_dict(result.get("agent_metrics"))
+    if metrics:
+        return metrics
+    quality_summary = _as_dict(result.get("quality_summary"))
+    metrics = _as_dict(quality_summary.get("agent_metrics"))
+    if metrics:
+        return metrics
+    gate = _as_dict(result.get("acceptance_gate"))
+    dimension = _as_dict(_as_dict(gate.get("dimensions")).get("agent_industrial_metrics"))
+    if dimension:
+        return {
+            "passed": dimension.get("passed") is True,
+            "normalized_score": dimension.get("score"),
+            "metric_values": {},
+            "unsupported_claims": {
+                "dynamic_claim_count": 0,
+                "unsupported_claim_count": 0,
+                "unsupported_claim_rate": 0.0,
+            },
+        }
+    return {}
+
+
+def _average_metric(values: list[float]) -> float | None:
+    return round(sum(values) / len(values), 4) if values else None
+
+
+def _acceptance_agent_metric_totals(results: list[dict[str, Any]]) -> dict[str, Any]:
+    metric_records = [
+        _result_agent_metrics(result)
+        for result in results
+        if isinstance(result, dict) and _result_agent_metrics(result)
+    ]
+    metric_values = [_as_dict(record.get("metric_values")) for record in metric_records]
+
+    def collect(key: str) -> list[float]:
+        values: list[float] = []
+        for value in metric_values:
+            number = _as_number(value.get(key))
+            if number is not None:
+                values.append(number)
+        return values
+
+    dynamic_claim_count = 0
+    unsupported_claim_count = 0
+    unsupported_by_scenario: dict[str, int] = {}
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        metrics = _result_agent_metrics(result)
+        claims = _as_dict(metrics.get("unsupported_claims"))
+        dynamic_claim_count += _as_int(claims.get("dynamic_claim_count")) or 0
+        unsupported = _as_int(claims.get("unsupported_claim_count")) or 0
+        unsupported_claim_count += unsupported
+        if unsupported:
+            unsupported_by_scenario[str(result.get("scenario_id") or "-")] = unsupported
+
+    return {
+        "version": "agent_industrial_metrics_summary.v1",
+        "result_count": len(metric_records),
+        "passed_count": sum(1 for record in metric_records if record.get("passed") is True),
+        "average_score": _average_metric(
+            [
+                float(record["normalized_score"])
+                for record in metric_records
+                if isinstance(record.get("normalized_score"), (int, float))
+            ]
+        ),
+        "averages": {
+            "intent_accuracy": _average_metric(collect("intent_accuracy")),
+            "tool_call_precision": _average_metric(collect("tool_call_precision")),
+            "tool_call_recall": _average_metric(collect("tool_call_recall")),
+            "stage_transition_accuracy": _average_metric(collect("stage_transition_accuracy")),
+            "unsupported_claim_rate": _average_metric(collect("unsupported_claim_rate")),
+        },
+        "dynamic_claim_count": dynamic_claim_count,
+        "unsupported_claim_count": unsupported_claim_count,
+        "unsupported_claim_rate": (
+            round(unsupported_claim_count / dynamic_claim_count, 4)
+            if dynamic_claim_count
+            else 0.0
+        ),
+        "unsupported_by_scenario": unsupported_by_scenario,
+    }
+
+
 def build_acceptance_run_summary(
     *,
     results: list[dict[str, Any]],
@@ -912,6 +1066,7 @@ def build_acceptance_run_summary(
     ]
     runtime_totals = _acceptance_runtime_totals(results)
     evidence_totals = _acceptance_evidence_totals(results)
+    agent_metrics_totals = _acceptance_agent_metric_totals(results)
     preflight_status = _as_dict(preflight).get("status")
     if preflight_status == "blocked":
         run_status = "blocked"
@@ -952,6 +1107,7 @@ def build_acceptance_run_summary(
         "passed": run_status == "passed",
         "average_agent_score": round(sum(scores) / len(scores), 2) if scores else None,
         "runtime_totals": runtime_totals,
+        "agent_metrics_totals": agent_metrics_totals,
         "evidence_closure": evidence_totals,
         "tool_counts": runtime_totals["tool_counts"],
         "results": results,
@@ -984,6 +1140,8 @@ def render_acceptance_markdown(summary: dict[str, Any]) -> str:
         f"- 总耗时: {_as_dict(summary.get('runtime_totals')).get('elapsed_seconds')} 秒",
         f"- 工具调用: {_as_dict(summary.get('runtime_totals')).get('tool_call_count')} 次",
         f"- 估算 token（文本令牌）: {_as_dict(summary.get('runtime_totals')).get('estimated_total_tokens')}",
+        f"- 工业指标平均分: {_as_dict(summary.get('agent_metrics_totals')).get('average_score')}",
+        f"- 无依据断言率: {_as_dict(summary.get('agent_metrics_totals')).get('unsupported_claim_rate')}",
         f"- 证据闭环: {_as_dict(_as_dict(summary.get('evidence_closure')).get('counts'))}",
         f"- 生成时间: {summary.get('created_at')}",
         f"- 后端地址: {summary.get('base_url')}",
@@ -1011,6 +1169,8 @@ def render_acceptance_markdown(summary: dict[str, Any]) -> str:
             f"- RAG（检索增强生成）质量: >= {thresholds.get('min_rag_score')}",
             f"- 工具治理质量: >= {thresholds.get('min_tool_score')}",
             f"- 运行时质量: >= {thresholds.get('min_runtime_score')}",
+            f"- 工业指标: >= {thresholds.get('min_agent_metrics_score')}",
+            f"- 无依据断言率: <= {thresholds.get('max_unsupported_claim_rate')}",
             f"- 生产观测摘要: {'required（必需）' if thresholds.get('require_turn_observability') else 'optional（可选）'}",
             f"- 预算置信度契约: >= {thresholds.get('min_budget_confidence_score')}",
             f"- 旅行社内部证据类别: >= {thresholds.get('min_internal_evidence_categories')}",
@@ -1039,8 +1199,8 @@ def render_acceptance_markdown(summary: dict[str, Any]) -> str:
             "",
             "## 场景结果",
             "",
-            "| 场景 | 状态 | Agent 分 | 报告 | RAG | 工具 | 运行时 | LLM 评审 | 快照 |",
-            "|---|---:|---:|---:|---:|---:|---:|---:|---|",
+            "| 场景 | 状态 | Agent 分 | 报告 | RAG | 工具 | 运行时 | 工业指标 | LLM 评审 | 快照 |",
+            "|---|---:|---:|---:|---:|---:|---:|---:|---:|---|",
         ]
     )
     for result in _as_list(summary.get("results")):
@@ -1063,7 +1223,25 @@ def render_acceptance_markdown(summary: dict[str, Any]) -> str:
             "| "
             f"{result.get('scenario_id')} | {result_status} | {score('agent_quality')} | "
             f"{score('report_quality')} | {score('rag_quality')} | {score('tool_quality')} | "
-            f"{score('runtime_quality')} | {llm_judge_text} | {snapshot} |"
+            f"{score('runtime_quality')} | {score('agent_industrial_metrics')} | "
+            f"{llm_judge_text} | {snapshot} |"
+        )
+
+    agent_metrics = _as_dict(summary.get("agent_metrics_totals"))
+    if agent_metrics:
+        averages = _as_dict(agent_metrics.get("averages"))
+        lines.extend(
+            [
+                "",
+                "## Agent 工业指标",
+                f"- 可判定结果: {agent_metrics.get('passed_count')} / {agent_metrics.get('result_count')} 通过",
+                f"- 平均分: {agent_metrics.get('average_score')}",
+                f"- intent accuracy（意图准确率）: {averages.get('intent_accuracy')}",
+                f"- tool call precision（工具调用精确率）: {averages.get('tool_call_precision')}",
+                f"- tool call recall（工具调用召回率）: {averages.get('tool_call_recall')}",
+                f"- stage transition accuracy（阶段迁移准确率）: {averages.get('stage_transition_accuracy')}",
+                f"- unsupported claim rate（无依据断言率）: {agent_metrics.get('unsupported_claim_rate')}",
+            ]
         )
 
     llm_judge_rows: list[str] = []

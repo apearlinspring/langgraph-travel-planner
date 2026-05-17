@@ -314,6 +314,29 @@ def _runtime_budget_status(result: dict[str, Any] | None) -> str:
     return "-"
 
 
+def _agent_metrics(result: dict[str, Any]) -> dict[str, Any]:
+    metrics = _as_dict(result.get("agent_metrics"))
+    if metrics:
+        return metrics
+    return _as_dict(_as_dict(result.get("quality_summary")).get("agent_metrics"))
+
+
+def _agent_metrics_status(result: dict[str, Any] | None) -> str:
+    if not result:
+        return STATUS_LABELS["pending"]
+    gate = _as_dict(result.get("acceptance_gate"))
+    dimension = _as_dict(_as_dict(gate.get("dimensions")).get("agent_industrial_metrics"))
+    if dimension:
+        score = dimension.get("score")
+        status = _status_label(dimension.get("status"))
+        return f"{status} ({score})" if score is not None else status
+    metrics = _agent_metrics(result)
+    if metrics:
+        score = metrics.get("normalized_score")
+        return f"{_format_bool_status(metrics.get('passed'))} ({score})"
+    return "-"
+
+
 def _evidence_closure_status(result: dict[str, Any] | None) -> str:
     if not result:
         return STATUS_LABELS["pending"]
@@ -333,8 +356,8 @@ def _scenario_table(summary: dict[str, Any]) -> list[str]:
     results = _result_by_scenario_id(summary)
     seen: set[str] = set()
     rows = [
-        "| 场景 | 模式 | 状态 | 首 token | 工具调用数 | 证据闭环 | 运行预算 |",
-        "|---|---|---:|---:|---:|---|---|",
+        "| 场景 | 模式 | 状态 | 首 token | 工具调用数 | 证据闭环 | 运行预算 | 工业指标 |",
+        "|---|---|---:|---:|---:|---|---|---|",
     ]
     for scenario in scenario_records:
         scenario_id = str(scenario.get("id") or "-")
@@ -348,7 +371,8 @@ def _scenario_table(summary: dict[str, Any]) -> list[str]:
             f"{_markdown_cell(_format_seconds(_first_token_seconds(result or {})))} | "
             f"{_markdown_cell(_format_int(_tool_call_count(result or {})))} | "
             f"{_markdown_cell(_evidence_closure_status(result))} | "
-            f"{_markdown_cell(_runtime_budget_status(result))} |"
+            f"{_markdown_cell(_runtime_budget_status(result))} | "
+            f"{_markdown_cell(_agent_metrics_status(result))} |"
         )
     for scenario_id, result in sorted(results.items()):
         if scenario_id in seen:
@@ -361,7 +385,8 @@ def _scenario_table(summary: dict[str, Any]) -> list[str]:
             f"{_markdown_cell(_format_seconds(_first_token_seconds(result)))} | "
             f"{_markdown_cell(_format_int(_tool_call_count(result)))} | "
             f"{_markdown_cell(_evidence_closure_status(result))} | "
-            f"{_markdown_cell(_runtime_budget_status(result))} |"
+            f"{_markdown_cell(_runtime_budget_status(result))} | "
+            f"{_markdown_cell(_agent_metrics_status(result))} |"
         )
     return rows
 
@@ -462,6 +487,27 @@ def _runtime_budget_lines(summary: dict[str, Any]) -> list[str]:
         f"- 估算 token（文本令牌）: {_markdown_cell(totals.get('estimated_total_tokens', '-'))}",
         f"- 工具计数: {_markdown_cell(_format_counts(_as_dict(summary.get('tool_counts') or totals.get('tool_counts'))))}",
     ]
+
+
+def _agent_metrics_lines(summary: dict[str, Any]) -> list[str]:
+    totals = _as_dict(summary.get("agent_metrics_totals"))
+    if not totals:
+        return ["- 暂无 Agent（智能体）工业指标汇总。"]
+    averages = _as_dict(totals.get("averages"))
+    lines = [
+        f"- 可判定结果: {_markdown_cell(totals.get('passed_count', 0))} / {_markdown_cell(totals.get('result_count', 0))} 通过",
+        f"- 平均分: {_markdown_cell(totals.get('average_score', '-'))}",
+        f"- intent accuracy（意图准确率）: {_markdown_cell(averages.get('intent_accuracy', '-'))}",
+        f"- tool call precision（工具调用精确率）: {_markdown_cell(averages.get('tool_call_precision', '-'))}",
+        f"- tool call recall（工具调用召回率）: {_markdown_cell(averages.get('tool_call_recall', '-'))}",
+        f"- stage transition accuracy（阶段迁移准确率）: {_markdown_cell(averages.get('stage_transition_accuracy', '-'))}",
+        f"- unsupported claim rate（无依据断言率）: {_markdown_cell(totals.get('unsupported_claim_rate', '-'))}",
+        f"- 无依据断言数: {_markdown_cell(totals.get('unsupported_claim_count', '-'))}",
+    ]
+    unsupported_by_scenario = _as_dict(totals.get("unsupported_by_scenario"))
+    if unsupported_by_scenario:
+        lines.append(f"- 无依据断言场景: {_markdown_cell(_format_counts(unsupported_by_scenario))}")
+    return lines
 
 
 def _source_label(source_path: Path | None) -> str:
@@ -565,6 +611,10 @@ def build_acceptance_evidence_markdown(
         "## 运行预算",
         "",
         *_runtime_budget_lines(summary),
+        "",
+        "## 工业指标",
+        "",
+        *_agent_metrics_lines(summary),
         "",
         "## 运行上下文",
         "",

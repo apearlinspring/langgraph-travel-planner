@@ -38,6 +38,7 @@ class EvaluationScenario:
     followups: list[str] = field(default_factory=list)
     runtime_budget: dict[str, Any] = field(default_factory=dict)
     requirements: dict[str, Any] = field(default_factory=dict)
+    metric_expectations: dict[str, Any] = field(default_factory=dict)
     manual_review: dict[str, Any] = field(default_factory=dict)
     notes: str = ""
 
@@ -173,6 +174,74 @@ def _as_optional_manual_review(
     return manual_review
 
 
+def _as_optional_metric_expectations(
+    value: Any,
+    *,
+    scenario_id: str,
+) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(f"Scenario {scenario_id!r} field 'metric_expectations' must be an object")
+
+    expectations = dict(value)
+    intent = expectations.get("intent")
+    if intent is not None:
+        if not isinstance(intent, dict):
+            raise ValueError(f"Scenario {scenario_id!r} metric_expectations.intent must be an object")
+        if "expected" in intent and not isinstance(intent["expected"], str):
+            raise ValueError(f"Scenario {scenario_id!r} metric_expectations.intent.expected must be a string")
+        if "accepted" in intent:
+            _as_optional_string_list(
+                intent["accepted"],
+                field_name="metric_expectations.intent.accepted",
+                scenario_id=scenario_id,
+            )
+
+    tools = expectations.get("tools")
+    if tools is not None:
+        if not isinstance(tools, dict):
+            raise ValueError(f"Scenario {scenario_id!r} metric_expectations.tools must be an object")
+        for field_name in ("required", "optional", "allowed", "forbidden"):
+            if field_name in tools:
+                _as_optional_string_list(
+                    tools[field_name],
+                    field_name=f"metric_expectations.tools.{field_name}",
+                    scenario_id=scenario_id,
+                )
+        if "strict" in tools and not isinstance(tools["strict"], bool):
+            raise ValueError(f"Scenario {scenario_id!r} metric_expectations.tools.strict must be a boolean")
+
+    stage = expectations.get("stage")
+    if stage is not None:
+        if not isinstance(stage, dict):
+            raise ValueError(f"Scenario {scenario_id!r} metric_expectations.stage must be an object")
+        if "expected_transition_tools" in stage:
+            _as_optional_string_list(
+                stage["expected_transition_tools"],
+                field_name="metric_expectations.stage.expected_transition_tools",
+                scenario_id=scenario_id,
+            )
+
+    unsupported_claims = expectations.get("unsupported_claims")
+    if unsupported_claims is not None:
+        if not isinstance(unsupported_claims, dict):
+            raise ValueError(
+                f"Scenario {scenario_id!r} metric_expectations.unsupported_claims must be an object"
+            )
+        if "strict" in unsupported_claims and not isinstance(unsupported_claims["strict"], bool):
+            raise ValueError(
+                f"Scenario {scenario_id!r} metric_expectations.unsupported_claims.strict must be a boolean"
+            )
+        if "categories" in unsupported_claims:
+            _as_optional_string_list(
+                unsupported_claims["categories"],
+                field_name="metric_expectations.unsupported_claims.categories",
+                scenario_id=scenario_id,
+            )
+    return expectations
+
+
 def _validate_scenario_id(payload: dict[str, Any]) -> str:
     scenario_id = payload.get("id")
     if not isinstance(scenario_id, str) or not scenario_id:
@@ -246,6 +315,10 @@ def _scenario_from_dict(payload: dict[str, Any]) -> EvaluationScenario:
         ),
         requirements=_as_optional_requirements(
             payload.get("requirements"),
+            scenario_id=scenario_id,
+        ),
+        metric_expectations=_as_optional_metric_expectations(
+            payload.get("metric_expectations"),
             scenario_id=scenario_id,
         ),
         manual_review=_as_optional_manual_review(

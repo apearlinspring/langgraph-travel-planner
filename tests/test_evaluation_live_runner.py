@@ -301,6 +301,8 @@ def test_build_quality_summary_contains_agent_scores():
 
     assert summary["version"] == "agent_quality_summary.v1"
     assert summary["aggregate"]["normalized_score"] == 100
+    assert summary["agent_metrics"]["passed"] is True
+    assert summary["agent_metrics"]["metric_values"]["unsupported_claim_rate"] == 0.0
     assert summary["rag_quality"]["passed"] is True
     assert summary["runtime_metrics"]["report_event_count"] == 1
     assert summary["runtime_quality"]["budget_gate"]["passed"] is True
@@ -469,8 +471,10 @@ def test_acceptance_gate_passes_valid_quality_summary(tmp_path: Path):
 
     assert gate["passed"] is True
     assert run_summary["passed"] is True
+    assert run_summary["agent_metrics_totals"]["result_count"] == 1
     assert run_summary["evidence_closure"]["result_count"] == 0
     assert "RAG（检索增强生成）" in markdown
+    assert "Agent 工业指标" in markdown
     assert Path(paths["json"]).exists()
     assert Path(paths["markdown"]).exists()
 

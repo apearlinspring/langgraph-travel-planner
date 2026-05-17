@@ -30,6 +30,16 @@ ED25519 SHA256:F7jf3yJ4zU5C9YIqVlsUMKbQOpjJMQkHicF1T3wt+Ac
 - PowerShell（Windows 命令行环境）远程命令统一启用 UTF-8（统一码转换格式）输出，并用单引号包裹远端命令，避免本地提前展开 `$()`。
 - 生产更新默认只做健康检查和轻量 smoke（冒烟验证）；完整 `acceptance-core`（核心验收）只在明确需要时运行。
 
+## 就绪门禁层
+
+- CI（持续集成）默认只跑不依赖真实密钥的单元测试、编译、前端和 readiness（就绪检查）脚本；真实生产更新仍由人工确认。
+- GitHub Actions（GitHub 自动化流水线）可通过 `workflow_dispatch` 手动触发 staging smoke（预生产冒烟），先跑 preflight（预检），再决定是否继续真实链路。
+- 本地开发检查：`uv run python scripts/check_runtime_readiness.py --target development --json`。
+- 本地真实依赖检查：`uv run python scripts/check_runtime_readiness.py --target local --json`。
+- 生产就绪检查：`uv run python scripts/check_runtime_readiness.py --target production --json`。
+- JSON（JavaScript 对象表示法）输出重点看 `component_readiness` 和 `repair_suggestions`，前者定位依赖状态，后者给出修复建议。
+- 数据库结构变更上线前必须先确认迁移计划；如存在 Alembic（数据库迁移工具）版本化迁移，按 runbook 明确执行 `alembic upgrade head`，不要在未备份生产数据时临时改表。
+
 ## 一键更新流程
 
 以下命令在本地仓库根目录执行。每次新对话更新服务，都从这组命令开始。
