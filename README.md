@@ -6,6 +6,7 @@
 
 - 产品定位：面向自由行规划和旅行社省心方案交付的旅行顾问 Agent（智能体）系统，不是普通攻略问答页。
 - 线上入口：最近一次一体化 Docker（容器化平台）部署使用 `https://travel.403edr.cn`，线上验证仍以 `/health/ready`、`acceptance-smoke`（验收冒烟）和 `acceptance-core`（核心验收）为准。
+- 更新服务：新对话需要直接发布线上服务时，优先执行 [docs/deployment-readiness.md](docs/deployment-readiness.md) 中的生产部署运行手册。
 - 核心证据：`docs/acceptance-core-report.md` 保留完整 9 场景核心验收证据，`docs/predeploy-runtime-acceptance.md` 只记录部署前最小 smoke，不覆盖 core 结论。
 - RAG 证据：`docs/rag-retrieval-evaluation.md` 记录 8 条小型标注查询的离线召回评估；metadata-aware BM25（元数据感知 BM25）相对正文 BM25 在 source/category recall@3 上提升 6.25 个百分点。
 - 目录卫生：`.env`、`.runtime/`、`.venv/`、`node_modules/`、`data/vectorstore*/`、本地截图和 Playwright（浏览器自动化测试框架）产物均为本地忽略项，不应进入提交或演示包。
