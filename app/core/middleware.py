@@ -356,6 +356,18 @@ PENDING_DATE_VALUES = {
     "待核实",
 }
 
+PENDING_DEPARTURE_CITY_VALUES = {
+    "",
+    "出发地",
+    "出发地待确认",
+    "出发城市",
+    "出发城市待确认",
+    "待确认",
+    "未确认",
+    "待核验",
+    "待核实",
+}
+
 
 def _to_prompt_value(value: Any) -> Any:
     """Convert nested dicts into attribute-accessible objects for str.format()."""
@@ -1183,6 +1195,22 @@ def _has_confirmed_departure_date(state_dict: dict[str, Any]) -> bool:
     return True
 
 
+def _has_confirmed_departure_city(state_dict: dict[str, Any]) -> bool:
+    requirement = state_dict.get("user_requirement") or {}
+    if not isinstance(requirement, dict):
+        return False
+
+    departure_city = str(
+        requirement.get("departure_city")
+        or state_dict.get("origin_city")
+        or state_dict.get("departure_city")
+        or ""
+    ).strip()
+    if departure_city in PENDING_DEPARTURE_CITY_VALUES:
+        return False
+    return bool(departure_city)
+
+
 def _live_query_date_gate_instruction(blocked_tools: set[str] | frozenset[str]) -> str:
     if not blocked_tools:
         return ""
@@ -1315,6 +1343,45 @@ def _state_value_ready(value: Any) -> bool:
     return value not in (None, "", [], {})
 
 
+def _coerce_expected_days(value: Any) -> int:
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int) and value > 0:
+        return value
+    if isinstance(value, str):
+        digit_match = re.search(r"\d+", value)
+        if digit_match:
+            parsed = int(digit_match.group(0))
+            return parsed if parsed > 0 else 0
+    return 0
+
+
+def _has_complete_itinerary_for_report(
+    state_dict: dict[str, Any],
+    user_requirement: dict[str, Any],
+) -> bool:
+    itinerary = state_dict.get("itinerary")
+    if not isinstance(itinerary, list) or not itinerary:
+        return False
+
+    expected_days = _coerce_expected_days(user_requirement.get("travel_days")) or len(
+        itinerary
+    )
+    if expected_days <= 0:
+        return False
+
+    day_numbers: set[int] = set()
+    for index, day in enumerate(itinerary, start=1):
+        if not isinstance(day, dict):
+            continue
+        raw_day = day.get("day_number") or day.get("day") or index
+        day_number = _coerce_expected_days(raw_day)
+        if day_number > 0:
+            day_numbers.add(day_number)
+
+    return all(day_number in day_numbers for day_number in range(1, expected_days + 1))
+
+
 def _can_generate_final_report(state_dict: dict[str, Any]) -> bool:
     user_requirement = state_dict.get("user_requirement") or {}
     if not isinstance(user_requirement, dict) or not _state_value_ready(user_requirement):
@@ -1324,15 +1391,17 @@ def _can_generate_final_report(state_dict: dict[str, Any]) -> bool:
     if not _state_value_ready(destination):
         return False
 
-    # 未确认日期会继续阻断真实交通/酒店查询，但不阻断最终报告；
-    # 报告会把日期作为待核验项，避免 acceptance 场景卡在 report_data 之前。
+    if not _has_confirmed_departure_city(state_dict):
+        return False
+    if not _has_confirmed_departure_date(state_dict):
+        return False
     if not _has_selected_transport(state_dict):
         return False
     if not _has_selected_accommodation(state_dict):
         return False
-    return _state_value_ready(state_dict.get("itinerary")) and _state_value_ready(
-        state_dict.get("budget")
-    )
+    return _has_complete_itinerary_for_report(
+        state_dict, user_requirement
+    ) and _state_value_ready(state_dict.get("budget"))
 
 
 def _has_itinerary_prerequisites(state_dict: dict[str, Any]) -> bool:
@@ -1358,6 +1427,8 @@ def _progress_tool_for_explicit_request(
     if _looks_like_final_report_request(text):
         if _can_generate_final_report(state_dict):
             return "generate_order_tool"
+        if not _has_confirmed_departure_city(state_dict) or not _has_confirmed_departure_date(state_dict):
+            return None
         if not _state_value_ready(state_dict.get("itinerary")) and _has_itinerary_prerequisites(
             state_dict
         ):
@@ -1387,6 +1458,8 @@ def _preferred_tool_for_intent(intent: TravelIntent, state_dict: dict[str, Any])
     if intent.name in {"final_report", "export_report"}:
         if _can_generate_final_report(state_dict):
             return "generate_order_tool"
+        if not _has_confirmed_departure_city(state_dict) or not _has_confirmed_departure_date(state_dict):
+            return None
         if not _state_value_ready(state_dict.get("itinerary")) and _has_itinerary_prerequisites(
             state_dict
         ):
@@ -1459,6 +1532,7 @@ def _intent_instruction(
         return (
             "本轮用户倾向旅行社省心方案或成熟产品路线。"
             " 请先匹配内部产品或成熟路线样板，给 2-3 个方向，并说明适用人群、服务边界和报价口径；"
+            " 如果出发城市或出发日期还没确认，只能先给轻量方向感，并同时追问这两个关键项，不能生成正式推荐或最终报告；"
             " 再参考服务标准和风险避坑经验，把它自然转化为方案依据；"
             " 不要暴露内部知识库、RAG 或工具名，也不要承诺真实库存、锁价或支付能力。"
         )
@@ -1468,6 +1542,7 @@ def _intent_instruction(
             "本轮用户没有拒绝产品化方向，且目的地、人群或风格可能与成熟路线样板重合。"
             " 可以先检索产品模板，并把命中内容自然表达为“成熟路线样板”“合作产品候选”或“省心路线方向”；"
             " 不要求用户条件完全匹配后才推荐，目的地级命中也可以给一个候选方向。"
+            " 但如果出发城市或出发日期缺失，只能说“可以按这个方向继续核算”，并优先请用户补齐出发城市和出发日期；"
             " 回复必须同时保留自由规划选项，避免销售感；"
             " 不要暴露内部知识库、RAG、工具名或产品编号，也不要承诺真实库存、成团、锁价或支付能力。"
         )
@@ -1844,7 +1919,7 @@ def _final_report_tool_instruction() -> str:
 
 def _final_report_not_ready_instruction() -> str:
     return (
-        "用户要求生成最终报告或 report_data，但当前还没有同时确认交通、住宿、完整行程和预算汇总。"
+        "用户要求生成最终报告或 report_data，但当前还没有同时确认出发城市、出发日期、交通、住宿、完整每日行程和预算汇总。"
         "本轮不要调用 `generate_order_tool`，也不要手写最终报告卡片；"
         "请简短说明还缺哪些关键确认，并继续推进当前阶段。"
     )

@@ -14,6 +14,7 @@ from app.api.v1 import chat
 from app.api.v1.chat import (
     _report_content_from_tool_output,
     _report_extra_info_from_tool_output,
+    _strip_assistant_thinking_content,
 )
 from app.core.approval import ApprovalGovernanceManager
 from app.core.observability import get_turn_observability_snapshot
@@ -85,6 +86,20 @@ def test_report_content_from_command_output_falls_back_to_tool_message():
     )
 
     assert _report_content_from_tool_output(output) == "工具消息报告"
+
+
+def test_strip_assistant_thinking_content_removes_complete_and_unclosed_blocks():
+    text = (
+        "公开建议。"
+        "<think>内部推理 query_transport_options 不应展示</think>"
+        "继续说明。<think>未闭合内部推理"
+    )
+
+    stripped = _strip_assistant_thinking_content(text)
+
+    assert stripped == "公开建议。继续说明。"
+    assert "<think" not in stripped
+    assert "query_transport_options" not in stripped
 
 
 @pytest.mark.asyncio
@@ -251,6 +266,54 @@ async def test_chat_stream_suppresses_duplicate_tool_call_events(monkeypatch):
     assert [event["type"] for event in events].count("tool_audit") == 2
     observability = next(event["observability"] for event in events if event["type"] == "turn_observability")
     assert observability["tool_call_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_filters_thinking_blocks_across_token_chunks(monkeypatch):
+    await reset_session_locks_for_tests()
+    saved_messages = []
+
+    async def fake_save_message(db, conversation_id, role, content, extra_info=None):
+        saved_messages.append({"role": role, "content": content, "extra_info": extra_info or {}})
+        return SimpleNamespace()
+
+    class FakeAgent:
+        async def astream_events(self, *args, **kwargs):
+            for chunk in [
+                "公开开头<thi",
+                "nk>内部推理 query_transport_options",
+                "</thi",
+                "nk>继续给用户看的内容。",
+            ]:
+                yield {
+                    "event": "on_chat_model_stream",
+                    "data": {"chunk": SimpleNamespace(content=chunk)},
+                }
+
+    async def fake_create_travel_agent():
+        return FakeAgent()
+
+    monkeypatch.setattr(chat, "save_message", fake_save_message)
+    monkeypatch.setattr(chat, "create_travel_agent", fake_create_travel_agent)
+
+    events = []
+    async for frame in chat.generate_sse_stream(
+        "conversation-thinking-filter",
+        "查一下航班",
+        db=SimpleNamespace(),
+        user=SimpleNamespace(id="user-1"),
+    ):
+        events.append(json.loads(frame.removeprefix("data: ").strip()))
+
+    token_contents = [event["content"] for event in events if event["type"] == "token"]
+    serialized = json.dumps(events, ensure_ascii=False)
+    saved_assistant = [item for item in saved_messages if item["role"] == "assistant"][-1]
+
+    assert token_contents == ["公开开头", "继续给用户看的内容。"]
+    assert saved_assistant["content"] == "公开开头继续给用户看的内容。"
+    assert "<think" not in serialized
+    assert "query_transport_options" not in serialized
+    assert "内部推理" not in saved_assistant["content"]
 
 
 @pytest.mark.asyncio

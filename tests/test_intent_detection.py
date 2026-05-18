@@ -37,7 +37,11 @@ def _ready_report_state(**overrides):
         "selected_destination": "上海",
         "selected_transport": "train",
         "selected_accommodation_types": ["star_hotel"],
-        "itinerary": [{"day_number": 1, "theme": "抵达"}],
+        "itinerary": [
+            {"day_number": 1, "theme": "抵达"},
+            {"day_number": 2, "theme": "城市游览"},
+            {"day_number": 3, "theme": "返程"},
+        ],
         "budget": {"total": 7000},
     }
     state.update(overrides)
@@ -1289,6 +1293,7 @@ async def test_middleware_opens_generate_order_tool_when_report_state_is_ready()
         current_step="budget_summarization",
         user_requirement={
             "destination": "长沙",
+            "departure_city": "西安",
             "departure_date": "2026-06-01",
             "departure_date_confirmed": True,
             "travel_days": 3,

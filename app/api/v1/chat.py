@@ -40,6 +40,82 @@ from app.utils.security import redact_sensitive_data, redact_sensitive_text
 router = APIRouter(prefix="/chat", tags=["对话"])
 
 SESSION_BUSY_MESSAGE = "当前会话正在处理上一轮消息，请稍后再试。"
+_THINK_OPEN_TAG = "<think>"
+_THINK_CLOSE_TAG = "</think>"
+
+
+def _longest_tag_prefix_suffix(text: str, tag: str) -> int:
+    lower_text = text.lower()
+    max_size = min(len(tag) - 1, len(text))
+    for size in range(max_size, 0, -1):
+        if tag.startswith(lower_text[-size:]):
+            return size
+    return 0
+
+
+class _AssistantThinkingFilter:
+    """Incrementally remove model-only <think> blocks from user-facing text."""
+
+    def __init__(self) -> None:
+        self._buffer = ""
+        self._inside_thinking = False
+
+    def feed(self, value: str) -> str:
+        self._buffer += str(value or "")
+        chunks: list[str] = []
+
+        while self._buffer:
+            buffer_lower = self._buffer.lower()
+            if self._inside_thinking:
+                close_index = buffer_lower.find(_THINK_CLOSE_TAG)
+                if close_index >= 0:
+                    self._buffer = self._buffer[
+                        close_index + len(_THINK_CLOSE_TAG):
+                    ]
+                    self._inside_thinking = False
+                    continue
+
+                keep_size = _longest_tag_prefix_suffix(
+                    self._buffer,
+                    _THINK_CLOSE_TAG,
+                )
+                self._buffer = self._buffer[-keep_size:] if keep_size else ""
+                break
+
+            open_index = buffer_lower.find(_THINK_OPEN_TAG)
+            if open_index >= 0:
+                chunks.append(self._buffer[:open_index])
+                self._buffer = self._buffer[open_index + len(_THINK_OPEN_TAG):]
+                self._inside_thinking = True
+                continue
+
+            keep_size = _longest_tag_prefix_suffix(self._buffer, _THINK_OPEN_TAG)
+            if keep_size:
+                chunks.append(self._buffer[:-keep_size])
+                self._buffer = self._buffer[-keep_size:]
+            else:
+                chunks.append(self._buffer)
+                self._buffer = ""
+            break
+
+        return "".join(chunks)
+
+    def finish(self) -> str:
+        if self._inside_thinking:
+            self._buffer = ""
+            self._inside_thinking = False
+            return ""
+        if self._buffer and _THINK_OPEN_TAG.startswith(self._buffer.lower()):
+            self._buffer = ""
+            return ""
+        remainder = self._buffer
+        self._buffer = ""
+        return remainder
+
+
+def _strip_assistant_thinking_content(text: str) -> str:
+    thinking_filter = _AssistantThinkingFilter()
+    return thinking_filter.feed(text) + thinking_filter.finish()
 
 
 async def save_message(
@@ -323,6 +399,25 @@ async def generate_sse_stream(
     fallback_assistant_message = ""
     session_lock = None
     final_report_emitted = False
+    thinking_filter = _AssistantThinkingFilter()
+
+    def record_assistant_token(token: str) -> dict:
+        nonlocal assistant_message, first_token_elapsed
+        assistant_message += token
+        turn_observation.record_token(token)
+        if first_token_elapsed is None:
+            first_token_elapsed = time.perf_counter() - request_started_at
+            app_logger.info(
+                "SSE first token emitted: "
+                f"turn_id={turn_observation.turn_id}, "
+                f"conversation_id={conversation_id}, user_id={user.id}, "
+                f"elapsed_seconds={first_token_elapsed:.2f}"
+            )
+        return {
+            "type": "token",
+            "turn_id": turn_observation.turn_id,
+            "content": token,
+        }
 
     try:
         try:
@@ -395,22 +490,9 @@ async def generate_sse_stream(
             if kind == "on_chat_model_stream":
                 chunk = event.get("data", {}).get("chunk")
                 if chunk and hasattr(chunk, "content") and chunk.content:
-                    token = redact_sensitive_text(chunk.content)
-                    assistant_message += token
-                    turn_observation.record_token(token)
-                    if first_token_elapsed is None:
-                        first_token_elapsed = time.perf_counter() - request_started_at
-                        app_logger.info(
-                            "SSE first token emitted: "
-                            f"turn_id={turn_observation.turn_id}, "
-                            f"conversation_id={conversation_id}, user_id={user.id}, "
-                            f"elapsed_seconds={first_token_elapsed:.2f}"
-                        )
-                    yield sse({
-                        "type": "token",
-                        "turn_id": turn_observation.turn_id,
-                        "content": token,
-                    })
+                    token = thinking_filter.feed(redact_sensitive_text(chunk.content))
+                    if token:
+                        yield sse(record_assistant_token(token))
 
             # 或者捕获工具调用信息
             elif kind == "on_tool_start":
@@ -545,8 +627,17 @@ async def generate_sse_stream(
             await asyncio.sleep(0)
 
         # 5. 保存 AI 回复
+        tail_token = thinking_filter.finish()
+        if tail_token:
+            yield sse(record_assistant_token(tail_token))
         if not assistant_message.strip() and fallback_assistant_message:
-            assistant_message = fallback_assistant_message
+            assistant_message = _strip_assistant_thinking_content(
+                fallback_assistant_message
+            )
+        else:
+            assistant_message = _strip_assistant_thinking_content(
+                assistant_message
+            )
         if tool_audit_events:
             assistant_extra_info["tool_audit_events"] = tool_audit_events
             audit_persistence = await _persist_tool_audit_events_safely(
@@ -604,8 +695,17 @@ async def generate_sse_stream(
                 f"elapsed_seconds={total_elapsed:.2f}, assistant_chars={len(assistant_message)}"
             )
             turn_observation.mark_fallback("transient_stream_disconnect")
+            tail_token = thinking_filter.finish()
+            if tail_token:
+                yield sse(record_assistant_token(tail_token))
             if not assistant_message.strip() and fallback_assistant_message:
-                assistant_message = fallback_assistant_message
+                assistant_message = _strip_assistant_thinking_content(
+                    fallback_assistant_message
+                )
+            else:
+                assistant_message = _strip_assistant_thinking_content(
+                    assistant_message
+                )
             if not assistant_message.strip():
                 assistant_message = (
                     "本轮模型流式连接中断，已保留当前规划状态；"

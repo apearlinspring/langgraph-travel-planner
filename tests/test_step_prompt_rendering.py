@@ -500,7 +500,21 @@ async def test_stage_record_confirmation_forces_state_tool(
             "food_planning",
             "请直接生成最终旅行规划报告和 report_data。",
             {
-                "itinerary": [{"day_number": 1, "activities": ["夫子庙"]}],
+                "user_requirement": {
+                    "destination": "南京",
+                    "departure_city": "北京",
+                    "departure_date": "2026-06-01",
+                    "departure_date_confirmed": True,
+                    "travel_days": 3,
+                    "adult_count": 2,
+                    "children_count": 0,
+                    "budget_min": 1500,
+                },
+                "itinerary": [
+                    {"day_number": 1, "activities": ["夫子庙"]},
+                    {"day_number": 2, "activities": ["南京博物院"]},
+                    {"day_number": 3, "activities": ["玄武湖"]},
+                ],
                 "budget": {"total": 5000},
             },
             "generate_order_tool",
@@ -1500,6 +1514,7 @@ async def test_agency_plan_query_uses_product_templates_before_plan_card():
         assert captured["tool_choice"] is None
         assert "search_agency_product_templates" in captured["system_prompt"]
     assert "给 2-3 个方向" in captured["system_prompt"]
+    assert "出发城市或出发日期" in captured["system_prompt"]
     assert "不要直接生成最终报告或 report_data" in captured["system_prompt"]
 
 
@@ -1571,6 +1586,7 @@ async def test_order_generation_final_report_request_forces_report_tool():
         "current_step": "order_generation",
         "user_requirement": {
             "destination": "重庆",
+            "departure_city": "西安",
             "departure_date": "2026-06-01",
             "departure_date_confirmed": True,
             "travel_days": 3,
@@ -1582,7 +1598,11 @@ async def test_order_generation_final_report_request_forces_report_tool():
         "selected_transport": "train",
         "selected_accommodation_types": ["star_hotel"],
         "budget": {"total": 8000},
-        "itinerary": [{"day_number": 1, "activities": ["解放碑"]}],
+        "itinerary": [
+            {"day_number": 1, "activities": ["解放碑"]},
+            {"day_number": 2, "activities": ["洪崖洞"]},
+            {"day_number": 3, "activities": ["磁器口"]},
+        ],
     }
 
     async def handler(request):
@@ -1609,9 +1629,8 @@ async def test_order_generation_final_report_request_forces_report_tool():
 
 
 @pytest.mark.asyncio
-async def test_order_generation_final_report_allows_pending_date_with_verification():
+async def test_order_generation_final_report_blocks_pending_date_until_confirmed():
     captured = {}
-    compatibility = get_model_compatibility()
     middleware = StepConfigMiddleware(
         {
             "order_generation": {
@@ -1625,6 +1644,7 @@ async def test_order_generation_final_report_allows_pending_date_with_verificati
         "current_step": "order_generation",
         "user_requirement": {
             "destination": "南京",
+            "departure_city": "北京",
             "departure_date": "日期待确认",
             "departure_date_confirmed": False,
             "travel_days": 3,
@@ -1636,7 +1656,11 @@ async def test_order_generation_final_report_allows_pending_date_with_verificati
         "selected_transport": "train",
         "selected_accommodation_types": ["star_hotel"],
         "budget": {"total": 5000},
-        "itinerary": [{"day_number": 1, "activities": ["夫子庙"]}],
+        "itinerary": [
+            {"day_number": 1, "activities": ["夫子庙"]},
+            {"day_number": 2, "activities": ["南京博物院"]},
+            {"day_number": 3, "activities": ["玄武湖"]},
+        ],
     }
 
     async def handler(request):
@@ -1653,12 +1677,10 @@ async def test_order_generation_final_report_allows_pending_date_with_verificati
         handler,
     )
 
-    assert captured["tools"] == ["generate_order_tool"]
-    if compatibility.supports_forced_tool_choice:
-        assert captured["tool_choice"] == "generate_order_tool"
-    else:
-        assert captured["tool_choice"] is None
-        assert "只能调用 `generate_order_tool`" in captured["system_prompt"]
+    assert "generate_order_tool" not in captured["tools"]
+    assert captured["tool_choice"] != "generate_order_tool"
+    assert "出发城市、出发日期" in captured["system_prompt"]
+    assert "不要调用 `generate_order_tool`" in captured["system_prompt"]
 
 
 @pytest.mark.asyncio

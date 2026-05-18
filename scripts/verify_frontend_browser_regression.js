@@ -89,6 +89,52 @@ function responseJson(payload, status = 200) {
 
 async function installNetworkStubs(context) {
   await context.route("https://cdn.bootcdn.net/**", async (route) => {
+    const url = route.request().url();
+    if (url.endsWith("/leaflet.js")) {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/javascript; charset=utf-8",
+        body: `
+          (() => {
+            const makeLayer = () => ({
+              addTo(map) { map?._layers?.add(this); return this; },
+              bindPopup() { return this; },
+              openPopup() { return this; },
+              on() { return this; },
+              setStyle() { return this; },
+              setOpacity() { return this; },
+            });
+            window.L = {
+              map(node) {
+                node.classList.add("leaflet-container");
+                return {
+                  _layers: new Set(),
+                  hasLayer(layer) { return this._layers.has(layer); },
+                  removeLayer(layer) { this._layers.delete(layer); return this; },
+                  fitBounds() { return this; },
+                  flyToBounds() { return this; },
+                  flyTo() { return this; },
+                  setView() { return this; },
+                  getZoom() { return 10; },
+                  invalidateSize() { return this; },
+                };
+              },
+              tileLayer() { return makeLayer(); },
+              marker() { return makeLayer(); },
+              circleMarker() { return makeLayer(); },
+              polyline() { return makeLayer(); },
+              divIcon(options) { return options || {}; },
+              latLngBounds(points) {
+                return {
+                  isValid() { return Array.isArray(points) && points.length > 0; },
+                };
+              },
+            };
+          })();
+        `,
+      });
+      return;
+    }
     await route.fulfill({
       status: 200,
       contentType: "text/css; charset=utf-8",
@@ -359,7 +405,8 @@ async function checkReportSurface(page) {
   await expectVisible(page, ".travel-report-card", "report card");
   await expectVisible(page, '[data-report-action="export"]', "export report button");
   await expectVisible(page, '[data-report-action="map"]', "map preview entry");
-  await expectVisible(page, ".travel-report-route-digest", "route digest");
+  await expectVisible(page, ".travel-report-map .journey-live-map-shell", "route map");
+  await expectVisible(page, ".travel-report-map .journey-live-map", "live map canvas");
   await expectVisible(page, ".travel-report-card.budget", "budget card");
   await expectVisible(page, ".travel-report-card.warning", "risk card");
   await expectVisible(page, ".travel-report-card.confidence", "budget confidence card");
@@ -403,9 +450,9 @@ async function checkReportSurface(page) {
   );
   await expectContainsText(
     page,
-    ".travel-report-route-digest",
-    ["景点地图", "成都东站", "都江堰景区", "商业街区"],
-    "route digest"
+    ".travel-report-map",
+    ["路线预览", "成都东站", "路线地图", "地图工具", "放大"],
+    "route map"
   );
   const cardCount = await page.locator(".travel-report-card").count();
   if (cardCount < 5) {
@@ -418,7 +465,7 @@ async function checkMapPreviewEntry(page) {
   await page
     .locator("#toast.show", { hasText: "已定位到路线地图" })
     .waitFor({ state: "visible", timeout: 5000 });
-  await expectVisible(page, ".travel-report-route-digest", "map digest after map action");
+  await expectVisible(page, ".travel-report-map .journey-live-map-shell", "map after map action");
 }
 
 async function checkReportExport(page, viewport) {
@@ -443,7 +490,7 @@ async function checkReportExport(page, viewport) {
     "待核验清单",
     "人工确认边界",
     "不代表真实支付",
-    "景点地图",
+    "路线预览",
   ];
   const missing = requiredFragments.filter((fragment) => !html.includes(fragment));
   if (missing.length) {
@@ -551,7 +598,7 @@ async function checkLayoutHealth(page, viewport) {
       ".travel-report-card.handoff",
       ".travel-report-card.governance",
       ".travel-report-actions",
-      ".travel-report-route-digest",
+      ".travel-report-map .journey-live-map-shell",
     ];
     return selectors.map((selector) => {
       const element = document.querySelector(selector);

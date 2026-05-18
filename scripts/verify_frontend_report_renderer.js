@@ -86,7 +86,8 @@ for (const [mode, reportData] of fixtures) {
       "不承诺真实库存",
       "人工确认边界",
       "不代表真实支付",
-      "路线联动",
+      "路线预览",
+      "轻量地图预览",
       "分日路线",
       "商业街区",
       "服务/预留",
@@ -151,6 +152,10 @@ assertIncludes(
     "主要景点",
     "热闹商业街",
     "美食小吃",
+    'data-map-action="toggle-tools"',
+    'data-map-action="toggle-sidebar"',
+    "journey-map-tools-collapsed",
+    "journey-map-sidebar-collapsed",
   ],
   "feedback-polish"
 );
@@ -162,6 +167,82 @@ if (/class="travel-card transport"[\s\S]{0,420}地图定位/.test(feedbackHtml))
 }
 if (/(^|>)-(<|$)/.test(feedbackHtml) || feedbackHtml.includes("<br>-<br>")) {
   throw new Error("feedback-polish should remove standalone dash separators.");
+}
+
+const mixedBudgetHtml = context.renderAssistantText(`
+### 行程概览
+西藏 7 天路线先按拉萨适应 + 林芝舒缓方向整理。
+
+### 预算边界
+下面先按当前信息做估算，正式出发前再核验。
+| 项目 | 预算区间 | 说明 |
+| --- | --- | --- |
+| 当地交通 | 1500-2000元 | 包车和市内接送 |
+| 住宿 | 2500-3000元 | 6晚舒适酒店 |
+| 合计 | 5800-7600元 | 不含大交通 |
+`);
+assertIncludes(
+  mixedBudgetHtml,
+  ["travel-budget-layout", "当前估算", "当地交通", "5800-7600元"],
+  "mixed-budget-table"
+);
+if (mixedBudgetHtml.includes("| 项目 |") || mixedBudgetHtml.includes("| --- |")) {
+  throw new Error("mixed-budget-table should render Markdown tables visually.");
+}
+
+const decisionHtml = context.renderAssistantText(`
+### 想跟你确认一下
+这条“拉萨适应 + 林芝舒缓”的路线方向你觉得合适吗？还是你想看看其他备选？
+
+### 预算参考
+| 项目 | 费用 |
+| --- | --- |
+| 住宿 | 2500元 |
+| 合计 | 4500元 |
+`);
+assertIncludes(decisionHtml, ['class="travel-card next', "想跟你确认一下"], "decision-card");
+
+const placeholderReportData = JSON.parse(JSON.stringify(fixtures[0][1]));
+placeholderReportData.itinerary = [
+  {
+    day_number: 1,
+    title: "待补齐当天安排",
+    time_blocks: ["这一天还没有出现在当前报告数据里，需要继续补齐玩法、餐饮和动线。"],
+    missing: true,
+  },
+];
+const placeholderHtml = context.renderAssistantText("", {
+  reportData: placeholderReportData,
+});
+assertIncludes(placeholderHtml, ["正式每日行程尚未生成"], "placeholder-report-days");
+if (
+  placeholderHtml.includes("待补齐当天安排") ||
+  placeholderHtml.includes("这一天还没有出现在当前报告")
+) {
+  throw new Error("placeholder-report-days should not expose incomplete day placeholders.");
+}
+
+const thinkingHtml = context.renderAssistantText(
+  "公开建议。<think>内部推理 query_transport_options</think>继续说明。"
+);
+assertIncludes(thinkingHtml, ["公开建议", "继续说明"], "thinking-filter");
+if (
+  thinkingHtml.includes("<think") ||
+  thinkingHtml.includes("内部推理") ||
+  thinkingHtml.includes("query_transport_options")
+) {
+  throw new Error("thinking-filter should hide model-only reasoning content.");
+}
+
+const thinkingFilter = context.createAssistantThinkingFilter();
+const streamVisible =
+  thinkingFilter.feed("公开<thi") +
+  thinkingFilter.feed("nk>隐藏工具计划") +
+  thinkingFilter.feed("</thi") +
+  thinkingFilter.feed("nk>继续") +
+  thinkingFilter.finish();
+if (streamVisible !== "公开继续") {
+  throw new Error(`thinking stream filter output mismatch: ${streamVisible}`);
 }
 
 console.log("frontend-report-renderer-ok");
