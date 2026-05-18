@@ -22,6 +22,44 @@
 
 产品形态可以理解为：一个可持续对话、分阶段确认需求、查询真实候选、生成结构化旅行报告的“知行”旅行顾问。
 
+## 当前主线快照
+
+新 Agent（智能体）接手时，先以 `origin/main` 当前状态为准，不要沿用旧对话里的过期 review findings（评审发现）。截至最近一次更新：
+
+- 主线提交：`9b1ebad Fix demo report gates and map usability`。
+- 线上入口：`https://travel.403edr.cn/`，已按生产 runbook（运行手册）更新到服务器。
+- 服务器目录：`/opt/langgraph-travel-planner`；生产部署唯一入口是 `docs/部署与运行/deployment-readiness.md`。
+- 最近部署后验证：根页面、`/docs`、`/health/live`、`/health/ready` 均返回 200，`/health/ready` 为 `ready`，环境为 `production`。
+- 最近本地回归：`uv run python -m pytest -q` 为 `518 passed, 24 deselected, 1 warning`；警告来自 `jieba/pkg_resources` 三方依赖弃用提示。
+- 最近前端验证：`node --check frontend\app.js`、`node scripts\verify_frontend_report_renderer.js`、`node scripts\verify_frontend_browser_regression.js` 均通过。
+- 真实敏感文件边界：`.env`、`.env.production`、`.runtime/`、`.venv/`、`data/vectorstore/`、`data/vectorstore_internal/` 只应保持 ignored（忽略）状态，不要提交或写入文档。
+
+最近几轮重点改动：
+
+- 产品化 RAG：用户没有明确拒绝产品/跟团/省心方案时，允许按目的地、风格或人群弱匹配成熟路线样板；回复必须标注示例价、待核验、不锁价，并保留自由行选择。
+- 最终报告门禁：生成正式报告前必须至少确认出发城市、出发日期、交通、住宿、完整每日行程和预算；缺项时只给路线方向和待补信息，不能伪装成最终报告。
+- 思考内容过滤：后端 SSE（服务器发送事件）和保存消息前会清理 `<think>...</think>`；前端历史渲染和流式渲染也有兜底清理。
+- 前端演示修复：地图侧栏可折叠/放大，浅色文字对比度已增强，Markdown（标记文本）表格会渲染成可读表格，结构化报告不会再渲染“待补齐当天安排”占位日。
+- 评估增强：acceptance-core（核心验收）仍是主证据；agent_metrics（智能体工业指标）只增强质量解释，不能替代结构化 `report_data` 证据闭环。
+
+## 新 Agent 快速接手流程
+
+1. 先执行：
+
+   ```powershell
+   [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+   $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+   chcp 65001 | Out-Null
+   git fetch origin --prune
+   git status --short --branch
+   git worktree list
+   ```
+
+2. 如果要改代码，从最新 `origin/main` 建 `codex/...` 分支或工作树；不要在旧分支上继续猜。
+3. 先读 `docs/README.md`，再按任务进入对应专题。面试演示看 `docs/前端与演示/demo-script.md` 和 `docs/前端与演示/project-demo-pack.md`；RAG 演示看 `docs/RAG与知识库/rag-demo-evaluation-guide.md`。
+4. 改主链路时优先定位 `app/core/middleware.py`、`app/agents/handoffs/step_config.py`、`app/tools/state_transition.py`、`app/api/v1/chat.py` 和 `frontend/app.js`。
+5. 提交前至少按改动范围运行对应回归；涉及前端报告或地图时，必须运行两个前端验证脚本。
+
 ## 技术栈与关键依赖
 
 - Python 版本：`>=3.12`。
@@ -141,6 +179,8 @@
 - 在跨阶段核验场景临时开放交通或酒店真实查询工具。
 - 对 Qwen3 系列模型做兼容：如果模型不支持强制 `tool_choice`，就改为用提示词强引导工具调用。
 - 防止同一轮重复调用酒店或交通查询工具。
+- 把最终报告请求挡在必要信息之后：未确认出发城市、出发日期、交通、住宿、完整每日行程或预算时，不允许进入 `generate_order_tool`。
+- 控制产品化 RAG 的“软推荐”边界：用户未拒绝时可以给成熟路线样板，用户明确自由行/自己订/不要产品时应切回自由规划。
 
 ## 聊天 API 与前端流式协议
 
@@ -165,6 +205,8 @@ SSE 事件类型主要包括：
 - `report_data`：结构化旅行报告数据。
 - `done`：本轮完成。
 - `error`：异常。
+
+注意：任何 `<think>...</think>` 都属于模型内部推理，不应展示给用户，也不应保存到助手消息。后端已经在流式 token 和最终助手文本两层清理，前端还有历史消息和异常流式片段的兜底清理；修改聊天链路时必须保留这条边界。
 
 ## 状态迁移工具
 
@@ -255,6 +297,13 @@ RAG 管道在 `app/rag/pipeline.py`，流程是：
 
 内部 RAG 工具由 `app/tools/rag_tools.py` 暴露。用户未明确拒绝产品/跟团/省心方案时，Agent 可以按目的地、风格或人群弱匹配成熟路线样板；自由行或明确拒绝场景下，中间件会移除部分旅行社内部工具，避免硬推省心方案。路线样板只作为 `demo_catalog` 演示资料，不承诺真实库存、成团或锁价。
 
+产品化 RAG 维护原则：
+
+- 产品文档在 `data/documents/internal/products/`，字段应保留 `product_id`、`source_kind: demo_catalog`、`inventory_status: demo_only`、`external_product_ref: null`、适合人群、价格口径、包含/不含、每日行程骨架、交通住宿安排、待核验项和 `persona_tags`。
+- 产品弱匹配不要求用户一次说全目的地、天数、预算和交通方式；目的地或风格明显相关时即可作为候选路线方向。
+- 面向用户不要说 RAG、内部知识库、工具名或真实库存；只说“成熟路线样板”“合作产品候选”“省心路线方向”。
+- 如果缺出发城市或出发日期，先轻量追问并说明报价和大交通待核验，不要输出正式报价、合同口径或最终报告。
+
 ## 数据层
 
 业务表由 SQLAlchemy 模型提供：
@@ -304,6 +353,14 @@ LangGraph 还使用两类持久化：
 
 地图预览 API 在 `app/api/v1/maps.py`，通过高德 MCP 的 `maps_geo` 做地理编码，并带有短期预览缓存和地理编码缓存。
 
+前端演示体验的当前边界：
+
+- 地图卡片应优先展示可交互地图；侧栏过大时必须可折叠，且保留放大查看入口。
+- 报告中的每日行程不能凭空补“待补齐当天安排”占位卡；数据不足时显示空状态或追问。
+- Markdown 表格要渲染成视觉表格，不能以管道文本大段堆在聊天气泡里。
+- 关键确认问题应作为醒目的下一步卡片，而不是埋在普通正文中。
+- 前端只做展示兜底，业务门禁仍以后端状态和 `report_data` 契约为准。
+
 ## 评估体系
 
 项目已经有第一版确定性报告质量评估，重点看最终 `report_data` 是否像可交付旅行报告，而不只是文本很长。
@@ -313,6 +370,9 @@ LangGraph 还使用两类持久化：
 - `app/evaluation/report_quality.py`：100 分规则评分。
 - `app/evaluation/scenarios.py`：固定评估场景加载与校验。
 - `app/evaluation/live_runner.py`：真实后端链路跑批。
+- `app/evaluation/agent_metrics.py`：轻量 Agent 工业指标，覆盖 intent accuracy（意图准确率）、tool call precision/recall（工具调用精确率/召回率）、stage transition accuracy（阶段迁移准确率）和 unsupported claim rate（无依据断言率）。
+- `app/evaluation/acceptance_gate.py`：验收门禁汇总，报告结构和关键证据仍优先于解释性指标。
+- `app/evaluation/runtime_metrics.py`：运行时预算、超时和降级分类。
 - `app/evaluation/rag_retrieval.py`：RAG 小型召回评测，覆盖目的地、产品、SOP、报价、风险和报告依据。
 - `data/evaluation/report_quality_scenarios.json`：场景目录。
 - `data/evaluation/rag_retrieval_scenarios.json`：RAG 召回标注集，包含产品化弱匹配样例。
@@ -336,6 +396,7 @@ LangGraph 还使用两类持久化：
 .\.venv\Scripts\python scripts\evaluate_report_snapshot.py --list-scenarios
 .\.venv\Scripts\python scripts\run_evaluation_scenarios.py --scenario agency_couple_relaxed --dry-run
 .\.venv\Scripts\python scripts\run_evaluation_scenarios.py --scenario agency_couple_relaxed --base-url http://127.0.0.1:8000
+.\.venv\Scripts\python scripts\evaluate_rag_retrieval.py --json
 ```
 
 默认评估账号是 `test / 000000`，也可以用 `ZHIXING_EVAL_USERNAME` 和 `ZHIXING_EVAL_PASSWORD` 覆盖。
@@ -359,20 +420,23 @@ LangGraph 还使用两类持久化：
 常用命令：
 
 ```powershell
-.\.venv\Scripts\python -m compileall app tests
+.\.venv\Scripts\python -m compileall app tests scripts
+node --check frontend\app.js
+node scripts\verify_frontend_report_renderer.js
+node scripts\verify_frontend_browser_regression.js
 .\.venv\Scripts\python -m pytest -q
 .\.venv\Scripts\python -m pytest --collect-only -q
 .\.venv\Scripts\python -m pytest --integration-only --collect-only -q
 .\.venv\Scripts\python -m pytest --run-integration -q
 ```
 
-本文件生成时，`pytest --collect-only -q` 的实际结果是：
+最近一次主线默认回归结果是：
 
 ```text
-134/158 tests collected (24 deselected)
+518 passed, 24 deselected, 1 warning
 ```
 
-README 中可能保留历史测试数量；新增测试后优先以实际 `pytest --collect-only -q` 输出为准。
+测试数量会随功能增加变化；新增测试后优先以实际 `pytest -q` 和 `pytest --collect-only -q` 输出为准。README 中可能保留历史测试数量，不要用旧数量判断当前是否回归。
 
 ## 环境变量
 
@@ -402,11 +466,16 @@ README 中可能保留历史测试数量；新增测试后优先以实际 `pytes
 - `deploy/Caddyfile`
 - `deploy/update-runtime-image.sh`
 
+线上更新只按 `docs/部署与运行/deployment-readiness.md` 执行。当前生产服务使用 `git archive` 生成发布包上传到 `8.145.46.253`，服务器端会先备份旧代码，再运行 `deploy/update-runtime-image.sh` 刷新运行时镜像和 `caddy`。不要通过手工复制 `.env`、向量库或本地 `.runtime` 来发布。
+
 ## 修改代码时的高风险点
 
 - 改工作流阶段时，必须同步状态、阶段配置、状态迁移工具和维护性测试。
-- 改聊天流式输出时，必须确认前端 `processSseBuffer`、`sendMessage` 和 `report_data` 渲染仍能消费对应事件。
+- 改聊天流式输出时，必须确认前端 `processSseBuffer`、`sendMessage` 和 `report_data` 渲染仍能消费对应事件，并且 `<think>` 内部推理不会泄漏到用户消息或历史消息。
 - 改最终报告结构时，必须同步 `report_quality.py` 评分契约和前端报告渲染逻辑。
+- 改最终报告门禁时，必须同步 `app/core/middleware.py`、`app/agents/handoffs/step_config.py`、`tests/test_intent_detection.py` 和 `tests/test_step_prompt_rendering.py`。
+- 改产品化 RAG 时，必须同步 `data/documents/internal/products/`、`data/evaluation/rag_retrieval_scenarios.json`、`docs/RAG与知识库/rag-demo-evaluation-guide.md` 和 RAG 召回评测。
+- 改前端地图或报告卡片时，必须跑 `node scripts\verify_frontend_report_renderer.js` 和 `node scripts\verify_frontend_browser_regression.js`。
 - 改酒店或交通查询时，必须保留“真实查询失败不编造”的原则。
 - 改 MCP 启动逻辑时，必须保留服务级降级能力，避免可选服务阻塞核心启动。
 - 改 Qwen 模型或 profile 时，优先更新 `.env` 和 `app/config.py`，并通过 `app/utils/llm_factory.py` 统一入口。
@@ -428,6 +497,9 @@ README 中可能保留历史测试数量；新增测试后优先以实际 `pytes
 11. `app/mcp_core/client.py`
 12. `app/rag/pipeline.py`
 13. `frontend/app.js`
-14. `app/evaluation/report_quality.py`
+14. `frontend/styles.css`
+15. `app/evaluation/report_quality.py`
+16. `app/evaluation/agent_metrics.py`
+17. `docs/README.md`
 
 按这个顺序能先看懂主链路，再看懂外部能力、前端展示和质量门禁。
