@@ -21,6 +21,7 @@
 - 面试演示：`前端与演示/demo-script.md`
 - RAG 演示解释：`RAG与知识库/rag-demo-evaluation-guide.md`
 - RAG 召回结果：`RAG与知识库/rag-retrieval-evaluation.md`
+- 景点票价与预约供应商接入：`RAG与知识库/scenic-ticket-supplier-integration.md`
 - 线上更新：`部署与运行/deployment-readiness.md`
 - 核心验收证据：`评估与验收/acceptance-core-report.md`
 

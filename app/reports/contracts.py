@@ -20,6 +20,18 @@ REPORT_SECTIONS: tuple[dict[str, str], ...] = (
 
 REPORT_SECTION_IDS = tuple(section["id"] for section in REPORT_SECTIONS)
 REQUIRED_REPORT_SECTION_IDS = set(REPORT_SECTION_IDS)
+CUSTOMER_REPORT_SECTION_IDS = (
+    "overview",
+    "transport_accommodation",
+    "itinerary",
+    "map_routes",
+    "agency_context",
+    "product_quote",
+    "budget",
+    "risk",
+    "adjustments",
+)
+ADVISOR_REPORT_SECTION_IDS = REPORT_SECTION_IDS
 
 REQUIRED_REPORT_TOP_LEVEL_KEYS = {
     "version",

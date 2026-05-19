@@ -63,6 +63,13 @@ function assertIncludes(html, fragments, label) {
   }
 }
 
+function assertExcludes(html, fragments, label) {
+  const leaked = fragments.filter((fragment) => html.includes(fragment));
+  if (leaked.length) {
+    throw new Error(`${label} leaked fragments: ${leaked.join(", ")}`);
+  }
+}
+
 const context = createRenderContext();
 
 const fixtures = [
@@ -80,23 +87,22 @@ for (const [mode, reportData] of fixtures) {
       'data-report-source="structured"',
       mode === "agency_plan" ? "旅行社顾问方案" : "自由规划",
       "脱敏演示",
-      "预算置信度",
-      "待核验清单",
       "风险提醒",
-      "不承诺真实库存",
-      "人工确认边界",
-      "不代表真实支付",
       "路线预览",
       "轻量地图预览",
       "分日路线",
       "商业街区",
       "服务/预留",
       "travel-report-budget-table",
-      "顾问核验与下一步",
       "查看路线地图",
       "导出报告",
     ],
     mode
+  );
+  assertExcludes(
+    html,
+    ["预算置信度", "交付清单", "顾问核验与下一步", "治理边界", "人工确认边界", "不承诺真实库存"],
+    `${mode}-customer-view`
   );
   if (html.includes("人均参考") || html.includes("预算粗估（每人）")) {
     throw new Error(`${mode} should not default to per-person budget copy.`);
@@ -321,7 +327,7 @@ assertIncludes(
     "推荐点",
     "data-journey-edit-action",
     "可调顺序，地图即时刷新",
-    "距离/时长待核验",
+    "路程时间行前确认",
     "地图路段距离和时长以高德实时路线为准",
   ],
   "visual-journey-workbench"

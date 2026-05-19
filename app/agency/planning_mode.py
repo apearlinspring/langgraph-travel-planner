@@ -211,7 +211,15 @@ def infer_planning_mode(
 ) -> PlanningMode:
     """Infer free-planning vs agency-plan mode without creating sales promises."""
 
-    explicit_mode = state.get("planning_mode") if state else None
+    explicit_mode = None
+    if state:
+        active_workflow = state.get("active_workflow")
+        if active_workflow == "agency_plan":
+            explicit_mode = active_workflow
+        elif active_workflow == "free_planning" and bool(state.get("planning_mode_confirmed")):
+            explicit_mode = active_workflow
+        else:
+            explicit_mode = state.get("planning_mode")
     if explicit_mode in {"free_planning", "agency_plan"}:
         return explicit_mode
 

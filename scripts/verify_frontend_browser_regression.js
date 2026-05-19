@@ -332,7 +332,7 @@ async function checkMainSurface(page, viewport) {
   await expectContainsText(
     page,
     "#readinessSummary",
-    ["可用能力", "外部服务", "人工确认边界"],
+    ["工作流", "外部服务", "人工确认边界"],
     `${viewport.name} readiness human copy`
   );
   await page.locator("#governanceDetails").evaluate((node) => {
@@ -379,7 +379,7 @@ async function checkMainSurface(page, viewport) {
   await expectContainsText(
     page,
     "#governanceConsole",
-    ["不会真实下单", "未来接入真实支付、短信通知或客户资料导出", "查询结果"],
+    ["行程进度台", "当前进展", "已调用服务", "服务摘要"],
     `${viewport.name} governance explanation copy`
   );
   await expectContainsText(
@@ -409,9 +409,6 @@ async function checkReportSurface(page) {
   await expectVisible(page, ".travel-report-map .journey-live-map", "live map canvas");
   await expectVisible(page, ".travel-report-card.budget", "budget card");
   await expectVisible(page, ".travel-report-card.warning", "risk card");
-  await expectVisible(page, ".travel-report-card.confidence", "budget confidence card");
-  await expectVisible(page, ".travel-report-card.handoff", "handoff verification card");
-  await expectVisible(page, ".travel-report-card.governance", "governance card");
   await expectContainsText(
     page,
     '[data-report-source="structured"]',
@@ -421,32 +418,14 @@ async function checkReportSurface(page) {
   await expectContainsText(
     page,
     ".travel-report-card.budget",
-    ["交通", "住宿", "服务/预留", "规则估算", "待核验"],
+    ["交通", "住宿", "服务/预留", "依据"],
     "budget card"
   );
   await expectContainsText(
     page,
     ".travel-report-card.warning",
-    ["风险提醒", "顾问待核验", "出发前 24-48 小时"],
+    ["风险提醒", "重要提醒", "出发前 24-48 小时"],
     "risk card"
-  );
-  await expectContainsText(
-    page,
-    ".travel-report-card.confidence",
-    ["预算置信度", "已确认 / 可追溯", "规则估算", "待核验"],
-    "budget confidence card"
-  );
-  await expectContainsText(
-    page,
-    ".travel-report-card.handoff",
-    ["待核验清单", "不支持承诺", "酒店入住政策"],
-    "handoff verification card"
-  );
-  await expectContainsText(
-    page,
-    ".travel-report-card.governance",
-    ["人工确认边界", "不代表真实支付", "不生成支付链接"],
-    "governance card"
   );
   await expectContainsText(
     page,
@@ -454,10 +433,28 @@ async function checkReportSurface(page) {
     ["路线预览", "成都东站", "路线地图", "地图工具", "放大"],
     "route map"
   );
+  const mapText = (await page.locator(".travel-report-map").textContent()) || "";
+  ["点位连线", "天气待查", "真实点位", "距离/时长待核验"].forEach((internalLabel) => {
+    if (mapText.includes(internalLabel)) {
+      throw new Error(`Route map leaked internal label: ${internalLabel}`);
+    }
+  });
   const cardCount = await page.locator(".travel-report-card").count();
   if (cardCount < 5) {
     throw new Error(`Expected at least 5 report cards, found ${cardCount}.`);
   }
+  const defaultHiddenCards = await page
+    .locator(".travel-report-card.confidence, .travel-report-card.handoff, .travel-report-card.governance")
+    .count();
+  if (defaultHiddenCards !== 0) {
+    throw new Error("Default customer report should hide confidence, handoff, and governance cards.");
+  }
+  const reportText = (await page.locator('[data-report-source="structured"]').textContent()) || "";
+  ["预算置信度", "交付清单", "治理边界", "人工确认边界"].forEach((internalLabel) => {
+    if (reportText.includes(internalLabel)) {
+      throw new Error(`Default customer report leaked internal label: ${internalLabel}`);
+    }
+  });
 }
 
 async function checkMapPreviewEntry(page) {
@@ -486,10 +483,8 @@ async function checkReportExport(page, viewport) {
     "知行 ZhiXing 旅游报告",
     'data-report-source="structured"',
     "北京到成都 4 日顾问方案（脱敏演示）",
-    "预算置信度",
-    "待核验清单",
-    "人工确认边界",
-    "不代表真实支付",
+    "预算明细与依据",
+    "重要提醒",
     "路线预览",
   ];
   const missing = requiredFragments.filter((fragment) => !html.includes(fragment));
@@ -499,6 +494,11 @@ async function checkReportExport(page, viewport) {
   if (/<button[\s>]/i.test(html)) {
     throw new Error(`${viewport.name} export should not keep interactive buttons.`);
   }
+  ["预算置信度", "交付清单", "治理边界", "人工确认边界"].forEach((internalLabel) => {
+    if (html.includes(internalLabel)) {
+      throw new Error(`${viewport.name} export leaked internal label: ${internalLabel}`);
+    }
+  });
   if (
     !html.includes(".message.assistant .message-text .travel-report") &&
     !html.includes("styles.css")

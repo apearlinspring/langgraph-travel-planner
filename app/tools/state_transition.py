@@ -1,9 +1,10 @@
 """
 State transition tools for the travel-planning workflow.
 """
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from math import ceil
 import re
+import time
 from typing import Any, Optional
 from uuid import uuid4
 
@@ -72,6 +73,11 @@ from app.reports.route_builder import (
     is_pending_route_point,
     route_points_have_specific_visual_node,
 )
+from app.tools.scenic_ticket_provider import (
+    SCENIC_TICKET_COLLECTION_DATE,
+    find_scenic_ticket_candidates,
+)
+from app.utils.date_normalization import normalize_travel_date
 from app.utils.logger import app_logger
 
 
@@ -207,6 +213,7 @@ PENDING_REQUIREMENT_VALUES = {
 PENDING_DEPARTURE_DATE = "日期待确认"
 DEFAULT_BUDGET_MIN_PER_PERSON = 1500.0
 DEFAULT_BUDGET_MAX_PER_PERSON = 3500.0
+SCENIC_PRICE_COLLECTION_DATE = SCENIC_TICKET_COLLECTION_DATE
 
 TRANSPORT_BASE_COST_PER_PERSON = {
     "flight": 800,
@@ -626,7 +633,7 @@ def _duplicate_state_update(
     fields_to_compare = {
         key: value
         for key, value in state_update.items()
-        if key not in {"messages", "current_step"}
+        if key not in {"messages", "current_step", "confirmation_history"}
     }
     if not fields_to_compare:
         return False
@@ -668,6 +675,7 @@ def _planning_mode_state_update(
 ) -> dict:
     update = {
         "planning_mode": planning_mode,
+        "active_workflow": planning_mode,
         "planning_mode_reason": planning_mode_reason,
         "planning_mode_confirmed": planning_mode_confirmed,
     }
@@ -676,10 +684,122 @@ def _planning_mode_state_update(
         update["user_requirement"] = {
             **requirement,
             "planning_mode": planning_mode,
+            "active_workflow": planning_mode,
             "planning_mode_reason": planning_mode_reason,
             "planning_mode_confirmed": planning_mode_confirmed,
         }
     return update
+
+
+def _state_confirmed_facts(state: TravelState | dict[str, Any] | None) -> dict[str, Any]:
+    facts = (state or {}).get("confirmed_facts") if isinstance(state, dict) else {}
+    return dict(facts) if isinstance(facts, dict) else {}
+
+
+def _iso_date_or_none(value: Any) -> date | None:
+    try:
+        return datetime.strptime(str(value or "").strip(), "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+def _confirmation_history_with_entries(
+    state: TravelState | dict[str, Any] | None,
+    entries: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    existing = list((state or {}).get("confirmation_history") or []) if isinstance(state, dict) else []
+    merged: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for item in [*existing, *entries]:
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("key") or "")
+        value = str(item.get("value") or "")
+        if not key or (key, value) in seen:
+            continue
+        seen.add((key, value))
+        merged.append(item)
+    return merged[-40:]
+
+
+def _confirmed_fact_entries(
+    facts: dict[str, Any],
+    *,
+    source: str,
+) -> list[dict[str, Any]]:
+    labels = {
+        "departure_city": "出发城市",
+        "destination": "目的地",
+        "departure_date": "出发日期",
+        "travel_days": "行程天数",
+        "return_date": "行程结束日期",
+        "check_in_date": "入住日期",
+        "check_out_date": "退房日期",
+        "adult_count": "成人数",
+        "children_count": "儿童数",
+        "budget_min": "预算下限",
+        "budget_max": "预算上限",
+        "active_workflow": "规划工作流",
+    }
+    now = time.time()
+    return [
+        {
+            "key": key,
+            "value": value,
+            "label": labels.get(key, key),
+            "confirmed_at": now,
+            "source": source,
+        }
+        for key, value in facts.items()
+        if value not in (None, "", [], {})
+    ]
+
+
+def _build_confirmed_facts(
+    *,
+    state: TravelState | dict[str, Any] | None,
+    requirement: dict[str, Any],
+    planning_mode: str,
+) -> dict[str, Any]:
+    facts = _state_confirmed_facts(state)
+    for key in (
+        "departure_city",
+        "destination",
+        "travel_days",
+        "adult_count",
+        "children_count",
+        "budget_min",
+        "budget_max",
+    ):
+        value = requirement.get(key)
+        if value not in (None, "", [], {}):
+            facts[key] = value
+
+    departure_date = requirement.get("departure_date")
+    if requirement.get("departure_date_confirmed") and not _is_pending_requirement_value(departure_date):
+        parsed = _iso_date_or_none(departure_date)
+        if parsed:
+            travel_days = int(requirement.get("travel_days") or 1)
+            end_date = parsed + timedelta(days=max(travel_days - 1, 0))
+            facts["departure_date"] = parsed.isoformat()
+            facts["return_date"] = end_date.isoformat()
+            facts["check_in_date"] = parsed.isoformat()
+            facts["check_out_date"] = end_date.isoformat()
+    facts["active_workflow"] = planning_mode
+    return facts
+
+
+def _matched_product_summary(requirement: dict[str, Any], state: TravelState | dict[str, Any] | None) -> dict[str, Any]:
+    product = build_light_product(requirement, state)
+    return {
+        "code": product.get("code"),
+        "name": product.get("name"),
+        "product_type": product.get("product_type"),
+        "duration_label": product.get("duration_label"),
+        "positioning": product.get("positioning"),
+        "service_nodes": list(product.get("service_nodes") or []),
+        "non_commitments": list(product.get("non_commitments") or []),
+    }
 
 
 def _set_planning_mode_command(
@@ -758,6 +878,72 @@ def record_evidence_bundle_tool(
         "证据包已记录，后续方案会优先引用这些依据。",
         runtime,
         evidence_bundle=evidence_bundle,
+    )
+
+
+def _scenic_price_candidates(
+    destination: Any,
+    scenic_names: Any = None,
+) -> tuple[str, list[dict[str, Any]], dict[str, Any]]:
+    return find_scenic_ticket_candidates(destination, scenic_names)
+
+
+@tool
+def scenic_price_lookup_tool(
+    destination: Any = "",
+    scenic_names: Any = None,
+    runtime: ToolRuntime[None, TravelState] = None,
+) -> Command:
+    """Return first-version scenic ticket evidence from curated public reference data."""
+
+    state = _runtime_state(runtime)
+    if not destination:
+        destination = (
+            state.get("selected_destination")
+            or (state.get("user_requirement") or {}).get("destination")
+            or ""
+        )
+    destination_name, items, catalog = _scenic_price_candidates(destination, scenic_names)
+    collected_at = str(catalog.get("collected_at") or SCENIC_PRICE_COLLECTION_DATE)
+    if not items:
+        payload = {
+            "destination": destination_name,
+            "collected_at": collected_at,
+            "provider": catalog.get("provider") or "curated_rag_ticket_catalog",
+            "provider_status": catalog.get("provider_status") or "reference_only",
+            "supplier_candidates": catalog.get("supplier_candidates") or [],
+            "catalog_source": catalog.get("source"),
+            "items": [],
+            "disclaimer": "第一版景点价格库尚未覆盖该目的地；门票、预约、开放时间和优惠政策需出发前二次核验，不锁价。",
+        }
+        return _command_with_message(
+            f"{destination_name} 的景点价格库暂未覆盖；门票和预约请以官方渠道二次核验。",
+            runtime,
+            scenic_price_evidence=payload,
+        )
+
+    payload = {
+        "destination": destination_name,
+        "collected_at": collected_at,
+        "provider": catalog.get("provider") or "curated_rag_ticket_catalog",
+        "provider_status": catalog.get("provider_status") or "reference_only",
+        "supplier_candidates": catalog.get("supplier_candidates") or [],
+        "catalog_source": catalog.get("source"),
+        "items": items,
+        "disclaimer": "以上为公开资料整理的样例参考价，不代表实时库存、优惠政策、预约成功或锁价；不锁价，正式出发前必须以官方购票页/景区公告二次核验。",
+    }
+    lines = [
+        f"{destination_name} 景点门票参考（采集日期：{collected_at}）",
+        "当前来自可审计票价知识目录；价格不是实时价，不锁价；预约、开放时间、优惠政策需出发前二次核验。",
+    ]
+    for item in items:
+        lines.append(
+            f"- {item['name']}：{item['price_label']}；预约/开放：{item['reservation_note']} {item['open_note']}；来源：{item['source']} {item['source_url']}"
+        )
+    return _command_with_message(
+        "\n".join(lines),
+        runtime,
+        scenic_price_evidence=payload,
     )
 
 
@@ -896,6 +1082,11 @@ def _parse_requirement_date_text(value: Any) -> str | None:
     except ValueError:
         pass
 
+    try:
+        return normalize_travel_date(normalized, today=date.today())
+    except ValueError:
+        pass
+
     match = re.fullmatch(r"(\d{1,2})月(\d{1,2})日?", normalized)
     if not match:
         return None
@@ -921,6 +1112,7 @@ def _human_text_has_date_hint(text: str) -> bool:
         r"\d{4}/\d{1,2}/\d{1,2}",
         r"\d{4}年\d{1,2}月\d{1,2}日",
         r"\d{1,2}月\d{1,2}日?",
+        r"(周|星期|礼拜)[一二三四五六日天]",
         r"(今天|明天|后天|大后天|这周|本周|下周|下下周|周末|下个月|春节|五一|端午|中秋|国庆|暑假|寒假|元旦|清明|劳动节)",
     )
     return any(re.search(pattern, text or "") for pattern in patterns)
@@ -1224,13 +1416,42 @@ def _estimate_attractions_cost(
     itinerary: list[dict],
     travel_days: int,
     total_people: int,
+    scenic_price_evidence: dict[str, Any] | None = None,
 ) -> tuple[float, str]:
+    text = _itinerary_text(itinerary)
+    scenic_items = (
+        scenic_price_evidence.get("items")
+        if isinstance(scenic_price_evidence, dict)
+        else []
+    )
+    if isinstance(scenic_items, list) and scenic_items:
+        total = 0.0
+        paid_items = []
+        seen_names = set()
+        for item in scenic_items:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "").strip()
+            if not name or name in seen_names or name not in text:
+                continue
+            seen_names.add(name)
+            price = item.get("adult_price")
+            if isinstance(price, (int, float)) and price > 0:
+                total += price * total_people
+                paid_items.append(f"{name} {price:g} 元/人")
+        if paid_items:
+            collected_at = scenic_price_evidence.get("collected_at") or SCENIC_PRICE_COLLECTION_DATE
+            return (
+                total,
+                "景点/体验按景点价格参考库估算："
+                f"{'、'.join(paid_items)}；采集日期 {collected_at}，不锁价，出发前需二次核验。",
+            )
+
     destination_pois = _get_destination_pois(destination_context)
     if not destination_pois:
         fallback = 200 * travel_days * total_people
         return fallback, "景点缺少结构化 POI 费用，按 200 元/人/天兜底估算。"
 
-    text = _itinerary_text(itinerary)
     paid_items = []
     total = 0.0
     seen_names = set()
@@ -1409,6 +1630,7 @@ def _ensure_budget_quality_contract(
             itinerary,
             travel_days,
             total_people,
+            state.get("scenic_price_evidence"),
         )
         normalized["attractions"] = attractions_cost
 
@@ -2192,6 +2414,12 @@ def _state_planning_mode(state: TravelState | None) -> str | None:
     if not state:
         return None
 
+    state_mode = _normalize_planning_mode(state.get("active_workflow"))
+    if state_mode == "agency_plan":
+        return state_mode
+    if state_mode == "free_planning" and bool(state.get("planning_mode_confirmed")):
+        return state_mode
+
     state_mode = _normalize_planning_mode(state.get("planning_mode"))
     if state_mode:
         return state_mode
@@ -2486,13 +2714,19 @@ def record_requirement_tool(
 ) -> Command:
     """Persist the confirmed requirement summary and move to destination selection."""
 
+    runtime_state = _runtime_state(runtime)
+    existing_confirmed_facts = _state_confirmed_facts(runtime_state)
     assumption_notes: list[str] = []
     departure_city = _normalize_requirement_text(departure_city)
+    if _is_pending_requirement_value(departure_city) and existing_confirmed_facts.get("departure_city"):
+        departure_city = str(existing_confirmed_facts["departure_city"])
     if _is_pending_requirement_value(departure_city):
         departure_city = "出发地待确认"
         assumption_notes.append("出发地未明确，暂按出发地待确认处理")
 
     destination = _normalize_requirement_text(destination)
+    if _is_pending_requirement_value(destination) and existing_confirmed_facts.get("destination"):
+        destination = str(existing_confirmed_facts["destination"])
     if _is_pending_requirement_value(destination):
         destination = None
 
@@ -2502,8 +2736,14 @@ def record_requirement_tool(
     planning_mode_reason = _normalize_requirement_text(planning_mode_reason)
     planning_mode_confirmed = _coerce_bool(planning_mode_confirmed, default=True)
 
+    departure_date_input = departure_date
+    if (
+        _is_pending_requirement_value(_normalize_requirement_text(departure_date_input))
+        and existing_confirmed_facts.get("departure_date")
+    ):
+        departure_date_input = existing_confirmed_facts["departure_date"]
     departure_date, date_assumed, departure_date_confirmed = _normalize_requirement_date(
-        departure_date,
+        departure_date_input,
         runtime,
     )
     if date_assumed:
@@ -2511,6 +2751,8 @@ def record_requirement_tool(
             "出发日期未明确，日期待确认；真实交通、酒店和票务查询需等用户明确或确认日期后再执行"
         )
 
+    if _is_pending_requirement_value(travel_days) and existing_confirmed_facts.get("travel_days"):
+        travel_days = existing_confirmed_facts["travel_days"]
     travel_days, days_assumed = _coerce_positive_int(travel_days, default=1)
     if days_assumed:
         assumption_notes.append("行程天数未明确，暂按 1 天估算")
@@ -2667,6 +2909,21 @@ def record_requirement_tool(
         planning_mode_reason=normalized_reason,
         planning_mode_confirmed=planning_mode_confirmed,
     )
+    confirmed_facts = _build_confirmed_facts(
+        state=runtime_state,
+        requirement=requirement,
+        planning_mode=normalized_planning_mode,
+    )
+    confirmation_source = _runtime_recent_human_text(runtime) or "record_requirement_tool"
+    confirmation_history = _confirmation_history_with_entries(
+        runtime_state,
+        _confirmed_fact_entries(confirmed_facts, source=confirmation_source),
+    )
+    matched_product = (
+        _matched_product_summary(requirement, runtime_state)
+        if normalized_planning_mode == "agency_plan"
+        else None
+    )
 
     summary_lines = [
         "需求已记录：",
@@ -2690,14 +2947,19 @@ def record_requirement_tool(
     state_update = {
         "user_requirement": requirement,
         "planning_mode": normalized_planning_mode,
+        "active_workflow": normalized_planning_mode,
         "planning_mode_reason": normalized_reason,
         "planning_mode_confirmed": planning_mode_confirmed,
         "departure_date_confirmed": departure_date_confirmed,
+        "confirmed_facts": confirmed_facts,
+        "confirmation_history": confirmation_history,
         "current_step": "destination_recommendation",
         "pending_initial_request_text": "",
         "pending_initial_planning_mode": None,
         "pending_initial_planning_mode_reason": "",
     }
+    if matched_product:
+        state_update["matched_product"] = matched_product
     duplicate_command = _duplicate_state_command(
         "record_requirement_tool",
         state_update,
@@ -3239,6 +3501,7 @@ def summarize_budget_tool(
         itinerary,
         travel_days,
         total_people,
+        state.get("scenic_price_evidence"),
     )
     misc_cost = 100 * travel_days * total_people
     total_cost = (

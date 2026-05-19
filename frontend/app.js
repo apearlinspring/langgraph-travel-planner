@@ -1174,7 +1174,7 @@
           }
         });
 
-        const baseOpacity = isOverview ? 1 : activeMode === "solo" ? 0.14 : 0.32;
+        const baseOpacity = isOverview ? 1 : activeMode === "solo" ? 0 : 0.32;
         entry.markers.forEach((marker) => setJourneyLayerOpacity(marker, baseOpacity));
         if (entry.routeLine?.setStyle) {
           entry.routeLine.setStyle({
@@ -1210,9 +1210,9 @@
         const metaValue = entry.shell?.querySelector(".journey-live-map-meta-value");
         if (metaValue) {
           metaValue.textContent = isOverview
-            ? `已定位 ${entry.points.length} 个真实点位`
+            ? `已定位 ${entry.points.length} 个路线地点`
             : `${selectedLayer?.label || "当日"}已切换为${
-                activeMode === "solo" ? "单独显示" : "突出显示"
+                activeMode === "solo" ? "单日路线" : "重点路线"
               }`;
         }
         renderJourneyDayInsight(entry);
@@ -1325,8 +1325,8 @@
           ?.replaceChildren(
             document.createTextNode(
               entry.engine === "amap"
-                ? `高德地图已定位 ${entry.points.length} 个点位`
-                : `已定位 ${entry.points.length} 个真实点位`
+                ? `高德地图已定位 ${entry.points.length} 个地点`
+                : `已定位 ${entry.points.length} 个路线地点`
             )
           );
         applyJourneyDayView(entry);
@@ -2057,14 +2057,45 @@
         const shell = button.closest(".journey-live-map-shell");
         const sourceMap = shell?.querySelector(".journey-live-map[data-map-payload]");
         const modal = document.getElementById("journeyMapModal");
+        const modalShell = document.getElementById("journeyMapModalShell");
+        const modalDays = document.getElementById("journeyMapModalDays");
         if (!shell || !sourceMap || !modal) return;
         const payload = sourceMap.dataset.mapPayload || "";
         const title = shell.dataset.mapTitle || "路线地图";
+        const dayPlans = parseMapPayload(shell.dataset.dayPlans || "") || [];
         const modalTitle = modal.querySelector(".journey-map-modal-title");
         const modalMap = modal.querySelector(".journey-live-map-modal-canvas");
         if (!modalTitle || !modalMap) return;
         modalTitle.textContent = title;
+        if (modalShell) {
+          modalShell.dataset.mapTitle = title;
+          modalShell.dataset.dayPlans = shell.dataset.dayPlans || "[]";
+          modalShell.dataset.routeStops = shell.dataset.routeStops || "[]";
+          modalShell.dataset.activeDay = "all";
+          modalShell.dataset.dayMode = "solo";
+        }
+        if (modalDays) {
+          modalDays.innerHTML = `
+            <button class="journey-map-day-btn active" type="button" data-map-day="all" aria-pressed="true" title="查看全程总览">
+              <span>总览</span><small>全程</small>
+            </button>
+            ${dayPlans
+              .map(
+                (day, index) => `
+                  <button class="journey-map-day-btn" type="button" data-map-day="${escapeHtml(
+                    day.key || `day-${index + 1}`
+                  )}" aria-pressed="false" title="${escapeHtml(day.label || `Day ${index + 1}`)}">
+                    <span>${escapeHtml(day.label || `Day ${index + 1}`)}</span>
+                    <small>单日</small>
+                  </button>
+                `
+              )
+              .join("")}
+          `;
+        }
         modalMap.dataset.mapPayload = payload;
+        modalMap.dataset.dayPlans = shell.dataset.dayPlans || "[]";
+        modalMap.dataset.routeStops = shell.dataset.routeStops || "[]";
         modalMap.dataset.mapReady = "";
         modalMap.innerHTML =
           '<div class="journey-live-map-state loading">正在准备大图地图…</div>';
@@ -2309,8 +2340,8 @@
         if (!segments.length) {
           return {
             tone: "pending",
-            label: "点位连线",
-            detail: "距离/时长待核验",
+            label: "路线参考",
+            detail: "路程时间行前确认",
           };
         }
         const metricReadyCount = segments.filter((segment) => {
@@ -2341,13 +2372,13 @@
           return {
             tone: "pending",
             label: verifiedCount ? "部分路线已回填" : "路线已估算",
-            detail: `${verifiedCount} 段高德核验，${estimatedCount} 段坐标估算，${missingCount} 段待核验`,
+            detail: `${verifiedCount} 段已核验，${estimatedCount} 段参考估算，${missingCount} 段行前确认`,
           };
         }
         return {
           tone: "pending",
-          label: "路线待核验",
-          detail: `${segments.length} 段距离/时长待高德确认`,
+          label: "路线参考",
+          detail: `${segments.length} 段路程时间行前确认`,
         };
       }
 
@@ -2358,8 +2389,8 @@
         if (!summary) {
           return {
             tone: "pending",
-            label: city ? `${city}天气待查` : "天气待查",
-            detail: "出发前二次核验",
+            label: city ? `${city}天气提示` : "天气提示",
+            detail: "出发前确认",
           };
         }
         return {
@@ -2447,7 +2478,7 @@
               routeNeedsCheck && (verifiedRouteCount || estimatedRouteCount)
                 ? `${verifiedRouteCount} 段核验 · ${estimatedRouteCount} 段估算`
                 : routeNeedsCheck
-                ? "距离/时长待核验"
+                ? "路程时间行前确认"
                 : "已返回路段",
             tone: routeNeedsCheck ? "pending" : "ready",
           },
@@ -3197,10 +3228,22 @@
           ...degraded.map((item) => `${item}需复查`),
           ...(data.startup_complete === false ? ["服务仍在启动中"] : []),
         ];
+        const turn = state.governance?.turnObservability || {};
+        const currentStage =
+          state.governance?.turnObservability?.stepLabel ||
+          getStatusLabel(turn.step || "requirement_collection");
+        const planningMode =
+          state.governance?.turnObservability?.planningModeLabel ||
+          getStatusLabel(turn.planning_mode || "pending_confirmation");
+        const calledServices = Number(turn.toolCallCount || turn.tool_call_count || 0);
         return [
-          `<strong>${escapeHtml(getReadinessStatusCopy(status))}</strong>`,
-          `<span>可用能力：${escapeHtml(
-            available.length ? available.join("、") : "正在确认"
+          `<strong>${escapeHtml(currentStage)}</strong>`,
+          `<span>工作流：${escapeHtml(planningMode)}</span>`,
+          `<span>长期偏好：${escapeHtml(
+            available.includes("长期偏好") ? "已接入，可用于后续建议" : "登录后逐步沉淀"
+          )}</span>`,
+          `<span>已调用服务：${escapeHtml(
+            calledServices ? `${calledServices} 次服务调用，本轮结果见明细` : "本轮暂未调用外部服务"
           )}</span>`,
           `<span>外部服务：${escapeHtml(
             mcpStatus === "ready"
@@ -3485,6 +3528,7 @@
           degradationLabel: getStatusLabel(degradationStatus),
           estimatedTotalTokens: Number(observability.estimated_total_tokens || 0),
         };
+        renderReadinessPanel();
         renderTurnObservability();
       }
 
@@ -5777,12 +5821,7 @@
                     </div>
                     ${
                       hasDayView
-                        ? `
-                            <div class="journey-map-floating-modes">
-                              <button class="journey-map-day-mode-btn active" type="button" data-map-day-mode="solo" aria-pressed="true" title="只看当前这一天的路线和景点">单日</button>
-                              <button class="journey-map-day-mode-btn" type="button" data-map-day-mode="fade" aria-pressed="false" title="突出当前这一天，其他天自动变淡">对比</button>
-                            </div>
-                          `
+                        ? ""
                         : ""
                     }
                     <div class="journey-map-floating-actions">
@@ -5801,8 +5840,8 @@
                   </div>
                   <div class="journey-live-map-footer">
                     <div class="journey-live-map-meta">
-                      <span class="journey-live-map-meta-label">地图状态</span>
-                      <span class="journey-live-map-meta-value">正在准备真实点位…</span>
+                      <span class="journey-live-map-meta-label">路线状态</span>
+                      <span class="journey-live-map-meta-value">正在准备路线地点…</span>
                     </div>
                     <div class="journey-map-focus-rail">
                       ${validRouteStops
@@ -7194,7 +7233,6 @@
                 <tr>
                   <th>类别</th>
                   <th>金额</th>
-                  <th>置信度</th>
                   <th>依据</th>
                 </tr>
               </thead>
@@ -7208,7 +7246,6 @@
                           ${escapeHtml(item.label || "预算项")}
                         </th>
                         <td>${escapeHtml(formatReportDataMoney(item.amount) || "待核验")}</td>
-                        <td>${escapeHtml(item.confidence || "待核验")}</td>
                         <td>${escapeHtml(item.basis || "出发前需要二次核验")}</td>
                       </tr>
                     `
@@ -7395,6 +7432,8 @@
       function renderTravelReportFromData(reportData, options = {}) {
         if (!isStructuredTravelReportData(reportData)) return null;
 
+        const viewMode = options.view || reportData.default_view || "customer";
+        const showAdvisorSections = viewMode === "advisor" || viewMode === "debug";
         const overview = reportData.overview || {};
         const budget = reportData.budget || {};
         const viewModel = buildReportDataViewModel(reportData);
@@ -7495,26 +7534,12 @@
                 body: renderReportDataBudgetItems(budget),
               })}
               ${renderReportDataCard({
-                tone: "confidence",
-                icon: "fa-gauge-high",
-                label: "预算核验",
-                title: "置信度与价格边界",
-                body: renderReportDataBudgetConfidence(viewModel),
-              })}
-              ${renderReportDataCard({
                 tone: "warning",
                 icon: "fa-triangle-exclamation",
                 label: "风险提醒",
-                title: "待核验与风险",
+                title: "重要提醒",
                 body: `
                   ${renderReportDataList(reportData.risks, "风险提醒待补充")}
-                  ${renderReportDataInsightGroup({
-                    title: "顾问待核验",
-                    items: viewModel.handoff.pendingChecks,
-                    emptyText: "暂无额外待核验项。",
-                    icon: "fa-clipboard-list",
-                    tone: "verification",
-                  })}
                 `,
               })}
               ${renderReportDataCard({
@@ -7533,20 +7558,33 @@
                   ...viewModel.agency.highlights,
                 ]),
               })}
-              ${renderReportDataCard({
-                tone: "handoff",
-                icon: "fa-list-check",
-                label: "交付清单",
-                title: "顾问核验与下一步",
-                body: renderReportDataHandoffPanel(viewModel),
-              })}
-              ${renderReportDataCard({
-                tone: "governance",
-                icon: "fa-shield-halved",
-                label: "治理边界",
-                title: "人工确认与不可承诺项",
-                body: renderReportDataGovernancePanel(viewModel),
-              })}
+              ${
+                showAdvisorSections
+                  ? `
+                    ${renderReportDataCard({
+                      tone: "confidence",
+                      icon: "fa-gauge-high",
+                      label: "预算核验",
+                      title: "置信度与价格边界",
+                      body: renderReportDataBudgetConfidence(viewModel),
+                    })}
+                    ${renderReportDataCard({
+                      tone: "handoff",
+                      icon: "fa-list-check",
+                      label: "交付清单",
+                      title: "顾问核验与下一步",
+                      body: renderReportDataHandoffPanel(viewModel),
+                    })}
+                    ${renderReportDataCard({
+                      tone: "governance",
+                      icon: "fa-shield-halved",
+                      label: "治理边界",
+                      title: "人工确认与不可承诺项",
+                      body: renderReportDataGovernancePanel(viewModel),
+                    })}
+                  `
+                  : ""
+              }
             </div>
             ${mapDigest ? `<div class="travel-report-map">${mapDigest}</div>` : ""}
           </div>

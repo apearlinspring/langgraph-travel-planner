@@ -25,6 +25,7 @@ from app.tools.state_transition import (
     go_back_to_step,
     record_evidence_bundle_tool,
     record_requirement_tool,
+    scenic_price_lookup_tool,
     select_accommodation_tool,
     select_food_tool,
     select_transport_tool,
@@ -201,8 +202,8 @@ async def test_step_config_covers_all_planning_steps(monkeypatch):
     assert "{budget_summary}" in config["order_generation"]["prompt"]
     assert "每日行程”里的当天地图路线摘要保持一致" in config["order_generation"]["prompt"]
     assert "report_data" in config["order_generation"]["prompt"]
-    assert "预算置信度与待核验项" in config["order_generation"]["prompt"]
-    assert "已确认/可追溯价格" in config["order_generation"]["prompt"]
+    assert "预算置信度详情" in config["order_generation"]["prompt"]
+    assert "结构化 report_data 内部证据" in config["order_generation"]["prompt"]
     assert "酒店 MCP 或交通 API 失败" in config["order_generation"]["prompt"]
     assert "以工具返回的 report 作为最终报告正文" in config["order_generation"]["prompt"]
     assert "不要输出" in config["order_generation"]["prompt"]
@@ -303,6 +304,7 @@ def test_planning_mode_tools_persist_mode_reason_and_confirmation():
     state.update(command.update)
 
     assert command.update["planning_mode"] == "free_planning"
+    assert command.update["active_workflow"] == "free_planning"
     assert command.update["planning_mode_confirmed"] is False
     assert "自由规划" in command.update["messages"][0].content
 
@@ -315,6 +317,7 @@ def test_planning_mode_tools_persist_mode_reason_and_confirmation():
     )
 
     assert command.update["planning_mode"] == "agency_plan"
+    assert command.update["active_workflow"] == "agency_plan"
     assert command.update["planning_mode_confirmed"] is True
     assert command.update["planning_mode_reason"] == "用户改为希望省心安排"
 
@@ -332,6 +335,51 @@ def test_record_evidence_bundle_tool_persists_structured_bundle():
     )
 
     assert command.update["evidence_bundle"]["pricing"][0]["source"] == "pricing_rules"
+
+
+def test_scenic_price_lookup_persists_ticket_evidence_with_sources():
+    state = create_initial_state(user_id="user-1", session_id="session-1")
+    state["selected_destination"] = "杭州"
+
+    command = scenic_price_lookup_tool.invoke(
+        {
+            "destination": "杭州",
+            "scenic_names": ["灵隐飞来峰", "西溪湿地"],
+            "runtime": _build_runtime(state),
+        }
+    )
+
+    evidence = command.update["scenic_price_evidence"]
+    assert evidence["destination"] == "杭州"
+    assert evidence["collected_at"] == "2026-05-19"
+    assert evidence["provider"] == "curated_rag_ticket_catalog"
+    assert evidence["provider_status"] == "reference_only"
+    assert evidence["catalog_source"].endswith("scenic_ticket_reference.md")
+    assert evidence["supplier_candidates"]
+    assert {item["name"] for item in evidence["items"]} == {"灵隐飞来峰", "西溪湿地"}
+    assert all(item["source_url"].startswith("https://") for item in evidence["items"])
+    assert "不锁价" in evidence["disclaimer"]
+
+
+def test_xian_to_hangzhou_product_sample_has_realistic_price_boundaries():
+    product_path = (
+        PROJECT_ROOT
+        / "data"
+        / "documents"
+        / "internal"
+        / "products"
+        / "xian_to_hangzhou_5d_agency_sample.md"
+    )
+    content = product_path.read_text(encoding="utf-8")
+
+    assert "ZX-PROD-XIAN-HANGZHOU-5D-5000" in content
+    assert "西安" in content and "杭州" in content
+    assert "5天4晚" in content
+    assert "5000 元/人" in content
+    assert "采集日期 2026-05-19" in content
+    assert "https://www.12306.cn/" in content
+    assert "https://westlake.hangzhou.gov.cn/" in content
+    assert "待核验" in content and "不锁价" in content
 
 
 def test_record_requirement_persists_planning_mode():
@@ -354,10 +402,68 @@ def test_record_requirement_persists_planning_mode():
     )
 
     assert command.update["planning_mode"] == "agency_plan"
+    assert command.update["active_workflow"] == "agency_plan"
+    assert command.update["matched_product"]["name"]
     assert command.update["planning_mode_confirmed"] is True
     assert command.update["user_requirement"]["planning_mode"] == "agency_plan"
     assert command.update["user_requirement"]["planning_mode_reason"]
     assert "规划模式：旅行社顾问方案" in command.update["messages"][0].content
+
+
+def test_record_requirement_confirms_relative_date_once_and_reuses_it(monkeypatch):
+    class FixedDate(state_transition_module.date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 5, 19)
+
+    monkeypatch.setattr(state_transition_module, "date", FixedDate)
+    state = create_initial_state(user_id="user-1", session_id="session-1")
+    state["messages"] = [
+        HumanMessage(content="下周三从西安去杭州5天，每人5000，想要旅行社省心方案。")
+    ]
+
+    command = record_requirement_tool.invoke(
+        {
+            "departure_city": "西安",
+            "destination": "杭州",
+            "departure_date": "下周三",
+            "travel_days": 5,
+            "adult_count": 2,
+            "children_count": 0,
+            "budget_min": 4500.0,
+            "budget_max": 5500.0,
+            "travel_styles": ["culture", "food"],
+            "special_needs": "旅行社省心方案",
+            "runtime": _build_runtime(state),
+        }
+    )
+    state.update(command.update)
+
+    assert command.update["user_requirement"]["departure_date"] == "2026-05-27"
+    assert command.update["confirmed_facts"]["departure_date"] == "2026-05-27"
+    assert command.update["confirmed_facts"]["check_in_date"] == "2026-05-27"
+    assert command.update["confirmed_facts"]["check_out_date"] == "2026-05-31"
+    assert any(item["key"] == "departure_date" for item in command.update["confirmation_history"])
+
+    repeated = record_requirement_tool.invoke(
+        {
+            "departure_city": "西安",
+            "destination": "杭州",
+            "departure_date": "日期待确认",
+            "travel_days": "待确认",
+            "adult_count": 2,
+            "children_count": 0,
+            "budget_min": 4500.0,
+            "budget_max": 5500.0,
+            "travel_styles": ["culture"],
+            "special_needs": "继续按刚才确认的日期查交通住宿",
+            "runtime": _build_runtime(state),
+        }
+    )
+
+    assert repeated.update["user_requirement"]["departure_date"] == "2026-05-27"
+    assert repeated.update["confirmed_facts"]["check_out_date"] == "2026-05-31"
+    assert repeated.update["departure_date_confirmed"] is True
 
 
 def test_record_requirement_uses_recent_user_agency_signal_when_tool_args_are_plain():
@@ -838,13 +944,12 @@ def test_itinerary_budget_and_order_report_use_selected_real_options():
     assert "预算明细" in order_command.update["report"]
     assert "预算匹配" in order_command.update["report"]
     assert "费用依据" in order_command.update["report"]
-    assert "预算置信度与待核验项" in order_command.update["report"]
-    assert "已确认/可追溯价格" in order_command.update["report"]
-    assert "估算项" in order_command.update["report"]
     assert "天气与风险提醒" in order_command.update["report"]
+    assert "出发前确认" in order_command.update["report"]
     assert "后续可调整" in order_command.update["report"]
-    assert "顾问交付清单" in order_command.update["report"]
-    assert "顾问核验清单" in order_command.update["report"]
+    assert "预算置信度与待核验项" not in order_command.update["report"]
+    assert "顾问交付清单" not in order_command.update["report"]
+    assert "顾问核验清单" not in order_command.update["report"]
     assert "Day 1" in order_command.update["report"]
     assert "Day 1：" in order_command.update["report"]
     assert "上午/" in order_command.update["report"]
@@ -870,6 +975,10 @@ def test_itinerary_budget_and_order_report_use_selected_real_options():
     assert report_data["evidence_bundle"]["source_type"] == "structured_state"
     assert report_data["tool_audit_summary"]["readiness"] == "可交付，预订前需核验"
     assert report_data["tool_audit_summary"]["pending_checks"]
+    assert "budget_confidence" in report_data["advisor_sections"]
+    assert "tool_audit_summary" in report_data["advisor_sections"]
+    assert "budget_confidence" not in report_data["customer_sections"]
+    assert "tool_audit_summary" not in report_data["customer_sections"]
     assert any(
         section["id"] == "tool_audit_summary"
         for section in report_data["sections"]
@@ -1064,7 +1173,9 @@ def test_final_report_pads_four_day_trip_and_exports_route_bound_data():
     assert "天气风险" in report
     assert "方案依据" in report
     assert "费用依据" in report
-    assert "预算置信度" in report
+    assert "出发前确认" in report
+    assert "预算置信度" not in report
+    assert "budget_confidence" in report_data["advisor_sections"]
     assert len(report_data["itinerary"]) == 4
     assert len(report_data["map_routes"]) == 4
     assert report_data["agency_context"]["mode"] == "free_planning"
@@ -1416,14 +1527,11 @@ def test_final_report_keeps_budget_confidence_contract_when_prices_are_missing()
     report = order_command.update["report"]
     report_data = order_command.update["report_data"]
 
-    assert "预算置信度与待核验项" in report
-    assert "已确认/可追溯价格" in report
-    assert "估算项" in report
-    assert "待核验项" in report
-    assert "兜底估算" in report
-    assert "交通 API 未提供具体票价" in report
-    assert "酒店 MCP 未提供可追溯价格" in report
-    assert "顾问交付清单" in report
+    assert "出发前确认" in report
+    assert "预算置信度与待核验项" not in report
+    assert "已确认/可追溯价格" not in report
+    assert "估算项" not in report
+    assert "顾问交付清单" not in report
     for day_number in range(1, 5):
         assert f"Day {day_number}" in report
 

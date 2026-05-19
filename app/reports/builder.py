@@ -13,7 +13,12 @@ from app.agency.pricing_rules import (
 )
 from app.agency.product_rules import build_agency_context, build_light_product
 from app.agency.risk_rules import build_report_risk_lines
-from app.reports.contracts import REPORT_VERSION, report_sections
+from app.reports.contracts import (
+    ADVISOR_REPORT_SECTION_IDS,
+    CUSTOMER_REPORT_SECTION_IDS,
+    REPORT_VERSION,
+    report_sections,
+)
 from app.reports.render_markdown import render_report_markdown
 from app.reports.route_builder import build_route_map, normalize_report_route_alignment
 from app.reports.validators import ReportValidationResult, validate_report_data
@@ -418,4 +423,6 @@ def build_travel_report_data(
         "evidence_bundle": evidence_bundle,
         "tool_audit_summary": tool_audit_summary,
         "sections": _sections_with_product_quote(),
+        "customer_sections": list(CUSTOMER_REPORT_SECTION_IDS),
+        "advisor_sections": list(ADVISOR_REPORT_SECTION_IDS),
     }
