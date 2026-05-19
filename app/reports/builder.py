@@ -79,6 +79,11 @@ def format_report_duration(requirement: dict[str, Any]) -> str:
 def format_report_route_label(state: dict[str, Any], requirement: dict[str, Any]) -> str:
     departure_city = requirement.get("departure_city") or "出发地待确认"
     destination = state.get("selected_destination") or requirement.get("destination") or "目的地待确认"
+    journey_plan = state.get("journey_plan") if isinstance(state.get("journey_plan"), dict) else {}
+    overview = journey_plan.get("overview") if isinstance(journey_plan.get("overview"), dict) else {}
+    journey_route_label = str(overview.get("route_label") or "").strip()
+    if journey_route_label:
+        return f"{departure_city} → {destination}｜{journey_route_label}"
     return f"{departure_city} → {destination}"
 
 

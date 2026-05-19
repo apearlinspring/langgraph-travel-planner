@@ -47,6 +47,7 @@ from app.core.workflow import (
     STEP_LABELS as WORKFLOW_STEP_LABELS,
     STEP_STATE_FIELDS as WORKFLOW_STEP_STATE_FIELDS,
 )
+from app.journey.visual_planner import JOURNEY_PLAN_VERSION, validate_journey_plan
 from app.reports import (
     build_report_bundle,
     build_report_evidence_bundle,
@@ -2006,6 +2007,158 @@ def _ensure_itinerary_day_count(
     )
 
 
+def _valid_journey_plan_from_state(state: TravelState) -> dict:
+    journey_plan = state.get("journey_plan")
+    if not isinstance(journey_plan, dict):
+        return {}
+    if journey_plan.get("version") != JOURNEY_PLAN_VERSION:
+        return {}
+    ok, _findings = validate_journey_plan(journey_plan)
+    return journey_plan if ok else {}
+
+
+def _journey_plan_destination(journey_plan: dict) -> str:
+    overview = journey_plan.get("overview") or {}
+    return str(overview.get("destination") or "").strip()
+
+
+def _journey_day_pois(day: dict) -> list[dict]:
+    pois = [dict(poi) for poi in day.get("pois") or [] if isinstance(poi, dict)]
+    return sorted(
+        pois,
+        key=lambda poi: (
+            int(poi.get("order") or poi.get("sequence") or 999),
+            str(poi.get("id") or poi.get("name") or ""),
+        ),
+    )
+
+
+def _journey_poi_names(pois: list[dict]) -> list[str]:
+    return dedupe_route_points(
+        [str(poi.get("name") or "").strip() for poi in pois],
+        max_items=8,
+    )
+
+
+def _format_journey_poi_activity(poi: dict) -> str:
+    name = str(poi.get("name") or "待核验地点").strip()
+    description = str(poi.get("description") or "").strip()
+    if description:
+        return f"{name}：{description}"
+    return name
+
+
+def _format_journey_poi_time_block(poi: dict) -> str:
+    time_text = str(poi.get("suggested_time") or "时间待定").strip()
+    name = str(poi.get("name") or "待核验地点").strip()
+    description = str(poi.get("description") or "").strip()
+    cost = str(poi.get("estimated_cost") or "").strip()
+    reservation = str(poi.get("reservation_note") or "").strip()
+    suffixes = []
+    if cost and cost != "待核验":
+        suffixes.append(f"费用参考：{cost}")
+    if reservation:
+        suffixes.append(reservation)
+    suffix = f"（{'；'.join(suffixes)}）" if suffixes else ""
+    body = f"{name}｜{description}" if description else name
+    return f"{time_text}：{body}{suffix}"
+
+
+def _build_itinerary_from_journey_plan(
+    journey_plan: dict,
+    state: TravelState,
+    requirement: dict,
+    *,
+    selected_transport_option: dict,
+    selected_accommodation: dict,
+    selected_food_types: list[str],
+) -> list[dict]:
+    """Convert the saved map-first journey draft into the formal itinerary state."""
+
+    overview = journey_plan.get("overview") or {}
+    destination = (
+        state.get("selected_destination")
+        or requirement.get("destination")
+        or overview.get("destination")
+        or "目的地"
+    )
+    transport_summary = _format_transport_option(selected_transport_option)
+    accommodation_summary = _format_accommodation_option(selected_accommodation)
+    food_summary = "、".join(FOOD_LABELS.get(item, item) for item in selected_food_types)
+    pending_checks = [
+        str(item)
+        for item in journey_plan.get("pending_checks") or []
+        if str(item).strip()
+    ]
+    strategy_summary = str(
+        (journey_plan.get("route_strategy") or {}).get("summary")
+        or overview.get("summary")
+        or "按已保存可视化路线草案执行"
+    )
+    itinerary: list[dict] = []
+    days = [
+        dict(day)
+        for day in journey_plan.get("days") or []
+        if isinstance(day, dict) and day.get("pois")
+    ]
+    days.sort(key=lambda day: int(day.get("day_number") or len(itinerary) + 1))
+
+    for index, day in enumerate(days, start=1):
+        day_number = int(day.get("day_number") or index)
+        pois = _journey_day_pois(day)
+        poi_names = _journey_poi_names(pois)
+        city = str(day.get("city") or destination).strip()
+        title = str(day.get("title") or f"{city}经典动线").strip()
+        weather = day.get("weather") if isinstance(day.get("weather"), dict) else {}
+        accommodation = (
+            selected_accommodation.get("name")
+            or selected_accommodation.get("location")
+            or f"{city}交通便利区域住宿"
+        )
+        time_blocks = [_format_journey_poi_time_block(poi) for poi in pois]
+        if food_summary:
+            time_blocks.append(f"餐饮安排：结合 {food_summary}，优先贴合当天路线顺序就近安排。")
+        if weather.get("summary"):
+            time_blocks.append(f"天气/Plan B：{weather['summary']}")
+
+        route_note_parts = [
+            str(day.get("route_note") or "").strip(),
+            "本日顺序来自已保存的可视化旅程草案，保留用户在地图工作台里的编辑结果。",
+        ]
+        if strategy_summary:
+            route_note_parts.append(f"整体路线逻辑：{strategy_summary}")
+
+        day_plan = {
+            "day_number": day_number,
+            "date": day.get("date") or "",
+            "theme": title,
+            "activities": [_format_journey_poi_activity(poi) for poi in pois],
+            "route_points": poi_names,
+            "time_blocks": time_blocks,
+            "meals": [
+                "早餐：以酒店/周边省心用餐为主",
+                "午餐：贴合上午景点顺路安排，避免额外跨区。",
+                "晚餐：结合已确认餐饮偏好，优先选择当天落脚区域。",
+            ],
+            "accommodation": accommodation,
+            "transport_note": (
+                transport_summary
+                if day_number == 1
+                else "当天交通按地图草案点位顺序串联；具体距离、时长和路况以高德实时路线二次核验。"
+            ),
+            "plan_b": weather.get("summary")
+            or "如遇天气、排队或体力变化，优先减少远途点并保留休息时间。",
+            "route_note": " ".join(part for part in route_note_parts if part),
+            "risk_notes": [
+                "该日由可视化旅程草案转为正式行程，交通距离、门票、预约和开放时间仍需出发前二次核验。",
+                *pending_checks[:2],
+            ],
+        }
+        itinerary.append(_enrich_itinerary_day_for_report(day_plan, state, requirement))
+
+    return itinerary
+
+
 def _format_report_risk_lines(
     itinerary: list[dict],
     budget: dict,
@@ -2855,6 +3008,10 @@ def generate_itinerary_tool(
     selected_accommodation_types = _infer_selected_accommodation_types_for_state(state)
     if selected_accommodation_types and not state.get("selected_accommodation_types"):
         state["selected_accommodation_types"] = selected_accommodation_types
+    journey_plan = _valid_journey_plan_from_state(state)
+    journey_destination = _journey_plan_destination(journey_plan)
+    if journey_destination and not state.get("selected_destination"):
+        state["selected_destination"] = journey_destination
     required_fields = [
         "user_requirement",
         "selected_destination",
@@ -2882,6 +3039,30 @@ def generate_itinerary_tool(
     food_summary = "、".join(FOOD_LABELS.get(item, item) for item in selected_food_types)
     travel_styles = "、".join(requirement.get("travel_styles") or [])
     travel_days = requirement["travel_days"]
+    if journey_plan:
+        itinerary = _build_itinerary_from_journey_plan(
+            journey_plan,
+            state,
+            requirement,
+            selected_transport_option=selected_transport_option,
+            selected_accommodation=selected_accommodation,
+            selected_food_types=selected_food_types,
+        )
+        itinerary = _ensure_itinerary_day_count(itinerary, state, requirement)
+        overview = journey_plan.get("overview") or {}
+        return _command_with_message(
+            (
+                f"已按可视化旅程草案记录 {travel_days} 天正式行程。"
+                f"路线逻辑：{overview.get('route_label') or overview.get('summary') or '按地图草案顺序执行'}。"
+            ),
+            runtime,
+            itinerary=itinerary,
+            journey_plan=journey_plan,
+            selected_destination=destination,
+            selected_food_types=selected_food_types,
+            selected_accommodation_types=selected_accommodation_types,
+            current_step="budget_summarization",
+        )
     itinerary = []
     for day in range(1, travel_days + 1):
         if day == 1:

@@ -31,6 +31,7 @@ from app.tools.mcp_tools import get_hotel_followup_tools, get_weather_tools, get
 from app.tools.memory_tools import update_travel_style_tool, update_dietary_restriction_tool, \
     update_food_preference_tool, add_travel_record_tool, update_accommodation_preference_tool
 from app.tools.rag_tools import get_internal_rag_tools
+from app.tools.visual_journey import generate_visual_journey_tool
 from app.core.workflow import PLANNING_STEPS
 from app.utils.logger import app_logger
 
@@ -98,6 +99,11 @@ async def get_step_config():
 - 如果用户没有给日期，不能自行生成“5月22日/今天+若干天”这类真实查询日期；记录需求时只能写“日期待确认”，或在非真实查询的估算说明里写“暂按某日期待核验估算”。
 - 真实交通、酒店、票务查询必须等用户明确或确认日期后再做。
 
+【可视化旅程草案】
+- 如果用户已经有明确目的地，且本轮说“几天经典线/路线图/地图路线/先排路线/可视化行程/下周三7天经典线”这类需求，可以调用 generate_visual_journey_tool 先生成旅程地图草案。
+- 这个草案只用于先看路线和每日景点，不等于最终报告、订单、报价、真实交通或酒店预订；缺少出发城市、真实交通、酒店或预算时必须保留待核验边界。
+- 调用时尽量传 destination、date_text、days、style_query；如果上下文已有目的地但用户只说“下周三，7天，经典线吧”，也可以留空 destination，让工具从状态里读取。
+
 【确认与记录（关键）】
 当你认为信息已经齐全时，你必须先做一次“需求确认”，格式建议：
 - 出发地：
@@ -126,6 +132,7 @@ async def get_step_config():
                 set_planning_mode_tool,
                 confirm_planning_mode_tool,
                 record_evidence_bundle_tool,
+                generate_visual_journey_tool,
                 query_destination_info,
                 *date_tools,
                 *internal_rag_tools,
@@ -172,6 +179,7 @@ async def get_step_config():
 - 对旅行社方案，要自然落到轻量产品能力表达：适合人群、产品形态、服务节点、交付标准和不承诺项；不要把它说成已成团、已占位或已锁价。
 - 如果出发城市或出发日期还没确认，只能先给“可参考的成熟路线方向”，并一次性追问出发城市和大致出发日期；不要把产品样板包装成正式推荐、报价或最终报告。
 - 在目的地/产品框架阶段，只能给 2-3 个成熟路线方向、适用人群、服务边界和报价口径；不要生成最终 report_data 或最终报告卡片。
+- 如果用户明确要“先看几天经典线/路线图/地图上看每天怎么走/圆周旅迹那种可视化路线”，优先调用 generate_visual_journey_tool 生成旅程草案。该工具只生成 journey_plan，不生成最终 report_data，不绕过交通、住宿、预算和最终报告门禁。
 
 ========================
 情况一：用户已指定明确目的地
@@ -237,6 +245,7 @@ async def get_step_config():
             "tools": [
                 select_destination_tool,
                 go_back_to_requirement,
+                generate_visual_journey_tool,
                 query_destination_info,
                 *search_tools,
                 *internal_rag_tools,

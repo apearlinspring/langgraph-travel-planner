@@ -6,6 +6,7 @@ import asyncio
 import time
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from langchain_core.messages import HumanMessage, AIMessage, AIMessageChunk
@@ -34,6 +35,7 @@ from app.tools.result_validation import (
     evidence_type_for_tool_name,
     validate_tool_output_for_audit,
 )
+from app.journey.visual_planner import JOURNEY_PLAN_VERSION, validate_journey_plan
 from app.utils.logger import app_logger
 from app.utils.security import redact_sensitive_data, redact_sensitive_text
 
@@ -111,6 +113,13 @@ class _AssistantThinkingFilter:
         remainder = self._buffer
         self._buffer = ""
         return remainder
+
+
+class JourneyDraftUpdate(BaseModel):
+    """Persist a user-adjusted journey draft without bypassing report gates."""
+
+    journey_data: dict = Field(default_factory=dict)
+    source: str = "frontend_editor"
 
 
 def _strip_assistant_thinking_content(text: str) -> str:
@@ -201,6 +210,135 @@ def _report_extra_info_from_tool_output(output) -> dict:
     return extra_info
 
 
+def _journey_extra_info_from_tool_output(output) -> dict:
+    """Build persisted message metadata from generate_visual_journey_tool output."""
+    update = _extract_command_update(output)
+    journey_plan = update.get("journey_plan")
+    if not isinstance(journey_plan, dict):
+        return {}
+    extra_info = {
+        "message_type": "journey_plan",
+        "journey_data": redact_sensitive_data(journey_plan),
+    }
+    planning_trace = update.get("planning_trace")
+    if isinstance(planning_trace, list):
+        extra_info["planning_trace"] = redact_sensitive_data(planning_trace)
+    return extra_info
+
+
+def _validated_journey_data(value) -> dict:
+    if not isinstance(value, dict) or value.get("version") != JOURNEY_PLAN_VERSION:
+        return {}
+    ok, _findings = validate_journey_plan(value)
+    if not ok:
+        return {}
+    return redact_sensitive_data(value)
+
+
+def _latest_journey_data_from_conversation_extra(extra_info: dict | None) -> dict:
+    """Return the latest valid journey draft stored on a conversation."""
+
+    if not isinstance(extra_info, dict):
+        return {}
+    return _validated_journey_data(extra_info.get("latest_journey_data"))
+
+
+async def _load_latest_journey_data_for_turn(
+    db: AsyncSession,
+    *,
+    conversation_id: str,
+    user_id,
+) -> dict:
+    """Load a saved visual journey draft for the next agent turn."""
+
+    if not callable(getattr(db, "execute", None)):
+        return {}
+    result = await db.execute(
+        select(Conversation)
+        .where(Conversation.id == conversation_id)
+        .where(Conversation.user_id == user_id)
+    )
+    conversation = result.scalar_one_or_none()
+    if not conversation:
+        return {}
+
+    from_conversation = _latest_journey_data_from_conversation_extra(
+        conversation.extra_info
+    )
+    if from_conversation:
+        return from_conversation
+
+    message_result = await db.execute(
+        select(Message)
+        .where(Message.conversation_id == conversation_id)
+        .where(Message.role == "assistant")
+        .order_by(Message.created_at.desc())
+        .limit(20)
+    )
+    for message in message_result.scalars().all():
+        extra_info = message.extra_info if isinstance(message.extra_info, dict) else {}
+        from_message = _validated_journey_data(extra_info.get("journey_data"))
+        if from_message:
+            return from_message
+    return {}
+
+
+async def _persist_latest_journey_data_on_conversation(
+    db: AsyncSession,
+    *,
+    conversation_id: str,
+    user_id,
+    journey_data: dict,
+    planning_trace: list[dict] | None = None,
+    source: str = "generate_visual_journey_tool",
+) -> None:
+    """Keep conversation.extra_info aligned with the latest journey draft."""
+
+    if not callable(getattr(db, "execute", None)):
+        return
+    safe_journey_data = _validated_journey_data(journey_data)
+    if not safe_journey_data:
+        return
+    result = await db.execute(
+        select(Conversation)
+        .where(Conversation.id == conversation_id)
+        .where(Conversation.user_id == user_id)
+    )
+    conversation = result.scalar_one_or_none()
+    if not conversation:
+        return
+    extra_info = dict(conversation.extra_info or {})
+    extra_info["latest_journey_data"] = safe_journey_data
+    extra_info["latest_journey_saved_at"] = int(time.time())
+    extra_info["latest_journey_source"] = redact_sensitive_text(source)
+    if isinstance(planning_trace, list):
+        extra_info["latest_planning_trace"] = redact_sensitive_data(planning_trace)
+    conversation.extra_info = extra_info
+    db.add(conversation)
+    await db.commit()
+
+
+def _merge_journey_draft_extra_info(
+    existing_extra_info: dict | None,
+    journey_data: dict,
+    *,
+    source: str = "frontend_editor",
+) -> dict:
+    extra_info = dict(existing_extra_info or {})
+    extra_info["message_type"] = "journey_plan"
+    extra_info["journey_data"] = redact_sensitive_data(journey_data)
+    extra_info["journey_editor"] = {
+        "source": redact_sensitive_text(source or "frontend_editor"),
+        "saved_at": int(time.time()),
+    }
+    return extra_info
+
+
+def _message_has_journey_data(message: Message) -> bool:
+    extra_info = message.extra_info if isinstance(message.extra_info, dict) else {}
+    return isinstance(extra_info.get("journey_data"), dict)
+
+
 def _report_content_from_tool_output(output) -> str:
     """Extract a user-visible report string from generate_order_tool output."""
     update = _extract_command_update(output)
@@ -214,6 +352,24 @@ def _report_content_from_tool_output(output) -> str:
             content = getattr(message, "content", None)
             if isinstance(content, str) and content.strip():
                 return redact_sensitive_text(content)
+    return ""
+
+
+def _journey_content_from_tool_output(output) -> str:
+    """Extract a user-visible journey summary from generate_visual_journey_tool."""
+    update = _extract_command_update(output)
+    messages = update.get("messages")
+    if isinstance(messages, list):
+        for message in messages:
+            content = getattr(message, "content", None)
+            if isinstance(content, str) and content.strip():
+                return redact_sensitive_text(content)
+    journey_plan = update.get("journey_plan")
+    if isinstance(journey_plan, dict):
+        overview = journey_plan.get("overview") or {}
+        title = overview.get("title") or "可视化旅程草案"
+        summary = overview.get("summary") or "已生成地图工作台。"
+        return redact_sensitive_text(f"{title}已生成。{summary}")
     return ""
 
 
@@ -472,6 +628,17 @@ async def generate_sse_stream(
             "session_id": conversation_id,
             "turn_id": turn_observation.turn_id,
         }
+        latest_journey_data = await _load_latest_journey_data_for_turn(
+            db,
+            conversation_id=conversation_id,
+            user_id=user.id,
+        )
+        if latest_journey_data:
+            input_data["journey_plan"] = latest_journey_data
+            app_logger.info(
+                "Injected latest visual journey draft into agent state: "
+                f"conversation_id={conversation_id}, user_id={user.id}"
+            )
 
         # 4. 使用 astream_events 获取更细粒度的流式输出
         async for event in agent.astream_events(
@@ -532,10 +699,41 @@ async def generate_sse_stream(
                 input_summary = tool_input_by_run.pop(run_id, {})
                 tool_name_by_run.pop(run_id, None)
                 tool_output = event.get("data", {}).get("output")
+                state_update = _extract_command_update(tool_output)
                 _update_observation_from_state_update(
                     turn_observation,
-                    _extract_command_update(tool_output),
+                    state_update,
                 )
+                journey_extra_info = _journey_extra_info_from_tool_output(tool_output)
+                if journey_extra_info:
+                    if not fallback_assistant_message:
+                        fallback_assistant_message = _journey_content_from_tool_output(
+                            tool_output
+                        )
+                    assistant_extra_info.update(journey_extra_info)
+                    planning_trace = journey_extra_info.get("planning_trace")
+                    if isinstance(planning_trace, list):
+                        for trace_item in planning_trace:
+                            if isinstance(trace_item, dict):
+                                yield sse(
+                                    {
+                                        "type": "planning_trace",
+                                        "turn_id": turn_observation.turn_id,
+                                        **trace_item,
+                                    }
+                                )
+                    yield sse(
+                        {
+                            "type": "journey_data",
+                            "turn_id": turn_observation.turn_id,
+                            "journey_data": journey_extra_info["journey_data"],
+                            "planning_trace": journey_extra_info.get("planning_trace", []),
+                        }
+                    )
+                    app_logger.info(
+                        "Captured visual journey metadata from tool output: "
+                        f"conversation_id={conversation_id}, user_id={user.id}"
+                    )
                 if tool_name == "generate_order_tool":
                     report_extra_info = _report_extra_info_from_tool_output(
                         tool_output
@@ -660,6 +858,15 @@ async def generate_sse_stream(
                 assistant_message,
                 extra_info=assistant_extra_info,
             )
+        if isinstance(assistant_extra_info.get("journey_data"), dict):
+            await _persist_latest_journey_data_on_conversation(
+                db,
+                conversation_id=conversation_id,
+                user_id=user.id,
+                journey_data=assistant_extra_info["journey_data"],
+                planning_trace=assistant_extra_info.get("planning_trace"),
+                source="generate_visual_journey_tool",
+            )
 
         total_elapsed = time.perf_counter() - request_started_at
         app_logger.info(
@@ -740,6 +947,15 @@ async def generate_sse_stream(
                     "assistant",
                     assistant_message,
                     extra_info=assistant_extra_info,
+                )
+            if isinstance(assistant_extra_info.get("journey_data"), dict):
+                await _persist_latest_journey_data_on_conversation(
+                    db,
+                    conversation_id=conversation_id,
+                    user_id=user.id,
+                    journey_data=assistant_extra_info["journey_data"],
+                    planning_trace=assistant_extra_info.get("planning_trace"),
+                    source="generate_visual_journey_tool",
                 )
             yield sse(turn_observation.to_sse_event())
             yield sse(_turn_done_payload(turn_observation))
@@ -846,3 +1062,84 @@ async def get_chat_history(
         "conversation": redact_sensitive_data(conversation.to_dict()),
         "messages": redact_sensitive_data([m.to_dict() for m in messages]),
     }
+
+
+@router.patch("/journey/{conversation_id}")
+async def save_journey_draft(
+        conversation_id: str,
+        data: JourneyDraftUpdate,
+        user: User = Depends(get_current_user),
+        db: AsyncSession = Depends(get_db)
+):
+    """Save the latest user-edited journey draft into conversation history."""
+
+    conversation_result = await db.execute(
+        select(Conversation)
+        .where(Conversation.id == conversation_id)
+        .where(Conversation.user_id == user.id)
+    )
+    conversation = conversation_result.scalar_one_or_none()
+    if not conversation:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="会话不存在",
+        )
+
+    journey_data = data.journey_data
+    if not isinstance(journey_data, dict) or journey_data.get("version") != JOURNEY_PLAN_VERSION:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="journey_data 必须是 journey_plan.v1 草案",
+        )
+    ok, findings = validate_journey_plan(journey_data)
+    if not ok:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"message": "journey_data 校验失败", "findings": findings},
+        )
+
+    message_result = await db.execute(
+        select(Message)
+        .where(Message.conversation_id == conversation_id)
+        .where(Message.role == "assistant")
+        .order_by(Message.created_at.desc())
+        .limit(20)
+    )
+    assistant_messages = list(message_result.scalars().all())
+    target_message = next(
+        (message for message in assistant_messages if _message_has_journey_data(message)),
+        assistant_messages[0] if assistant_messages else None,
+    )
+    if not target_message:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="当前会话暂无可保存的旅程草案消息",
+        )
+
+    target_message.extra_info = _merge_journey_draft_extra_info(
+        target_message.extra_info,
+        journey_data,
+        source=data.source,
+    )
+    conversation_extra = dict(conversation.extra_info or {})
+    conversation_extra["latest_journey_data"] = redact_sensitive_data(journey_data)
+    conversation_extra["latest_journey_saved_at"] = int(time.time())
+    conversation.extra_info = conversation_extra
+
+    db.add(target_message)
+    db.add(conversation)
+    await db.commit()
+    await db.refresh(target_message)
+
+    app_logger.info(
+        "Saved edited journey draft: "
+        f"conversation_id={conversation_id}, user_id={user.id}, message_id={target_message.id}"
+    )
+    return redact_sensitive_data(
+        {
+            "status": "saved",
+            "message_id": str(target_message.id),
+            "journey_data": target_message.extra_info.get("journey_data"),
+            "saved_at": target_message.extra_info.get("journey_editor", {}).get("saved_at"),
+        }
+    )

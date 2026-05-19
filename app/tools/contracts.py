@@ -204,6 +204,13 @@ TOOL_GOVERNANCE_EXCEPTIONS: dict[str, ToolGovernanceRecord] = {
         reason="基于已确认状态生成本地行程草案；地图和真实查询工具另行审计。",
         test_protection="tests/test_report_quality_evaluation.py",
     ),
+    "generate_visual_journey_tool": ToolGovernanceRecord(
+        tool_name="generate_visual_journey_tool",
+        coverage="exception",
+        category="state_transition",
+        reason="只生成可视化旅程草案和待核验项，不生成订单、锁价、支付或真实预订。",
+        test_protection="tests/test_visual_journey_planner.py",
+    ),
     "summarize_budget_tool": ToolGovernanceRecord(
         tool_name="summarize_budget_tool",
         coverage="exception",

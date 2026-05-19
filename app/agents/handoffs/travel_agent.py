@@ -37,6 +37,7 @@ from app.tools.state_transition import (
     summarize_budget_tool,
 )
 from app.tools.transport_query import query_transport_options
+from app.tools.visual_journey import generate_visual_journey_tool
 from app.utils.llm_factory import build_chat_model
 from app.utils.logger import app_logger
 
@@ -130,6 +131,7 @@ async def create_travel_agent(*, force_refresh: bool = False):
             select_accommodation_tool,
             select_food_tool,
             generate_itinerary_tool,
+            generate_visual_journey_tool,
             summarize_budget_tool,
             generate_order_tool,
             *ALL_ROLLBACK_TOOLS,

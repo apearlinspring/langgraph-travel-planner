@@ -9,8 +9,22 @@
 - 产品与报价规则：`agency_product`、`quote_policy` 继续保留估算报价、不锁价、不承诺库存的边界。
 - 预算明细：按交通、住宿、餐饮、景点/体验、服务/预留、其他六类表格展示；不会默认展示“每人/人均”，除非未来结构明确声明金额口径为人均。
 - 每日行程与 `map_routes`、可选 `route_map.days` 的路线草图联动；`route_map.days` 会保留 Day 编号、路线点、景点/体验/商业街区/美食等类型标签和简短说明。
-- Day 级补齐：当前端发现结构化数据里有 Day 2/Day 3 但缺 Day 1 或末日时，会按总天数补出“待补齐当天安排”卡片，避免导出件漏天。
+- Day 级补齐边界：前端不再渲染“待补齐当天安排”这类占位日；结构化数据缺日时展示空状态或追问，避免把未规划内容伪装成正式安排。
 - 人工确认边界：`tool_audit_summary.approval` 或 `evidence_bundle.approval_governance` 会渲染为“人工确认与不可承诺项”，明确订单号或报告导出不代表真实支付、真实预订、真实锁价或履约成功。
+
+## 圆周旅迹级旅程工作台
+
+在最终报告前，前端可以消费 `journey_plan.v1` 草案和 `planning_trace`（规划过程轨迹）：
+
+- `planning_trace` 渲染为可折叠“规划过程”，展示搜索公开攻略、收集地点、查天气、计算路线和编排每日行程等可审计进度；它不是模型内部推理。
+- `journey_plan.v1` 渲染为可视化旅程工作台：路线地图、分日 Tab、POI（兴趣点/地点）详情、待核验项和后续交通/酒店/预算衔接提示。
+- 地图预览 API（应用程序接口）会优先返回 `amap-js`（高德地图 JavaScript SDK，软件开发工具包）提供者；未配置公开浏览器 Key 时，前端继续使用 Leaflet（交互地图前端库）/ OSM（OpenStreetMap，开放街图）降级。
+- 地图层支持总览/单日切换、多日彩色路线、路线标签密度控制、推荐点开关、数字标记点击回跳当天 POI、推荐点详情卡，以及把推荐点加入或替换到当天行程的草稿编辑。
+- 任意目的地会先生成可地理编码的通用种子点；高德地点搜索命中后可以把种子点替换为真实 POI 名称，并同步路线段起终点名称。
+- `.env.example` 只放 `AMAP_WEB_JS_KEY` 占位符；真实 Web Key 放本地或部署环境变量，不写入仓库。
+- 旅程草案不等于最终报告，不绕过出发城市、出发日期、交通、住宿、完整每日行程和预算门禁。
+
+当前第一阶段不包含圆周旅迹式多人协作、打卡社区、完整攻略导入和分享页。这些功能需要独立的用户关系、内容审核、分享权限和导入解析链路，建议放到后续产品化阶段。
 
 导出的 HTML（超文本标记语言）报告会克隆当前结构化报告节点，因此会保留这些章节；导出时会移除按钮、地图切换控件等交互元素。地图定位入口只保留在整份报告、住宿周边、景点路线和分日路线等适合地图的位置，交通卡和预算卡不显示地图按钮。
 
@@ -38,17 +52,19 @@ $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 chcp 65001 | Out-Null
 node --check frontend\app.js
 node scripts\verify_frontend_report_renderer.js
+node scripts\verify_frontend_visual_journey_browser.js
 ```
 
 浏览器验证建议：
 
 - 轻量静态回归继续运行 `node scripts\verify_frontend_report_renderer.js`，用于确认 `renderAssistantText` 对结构化 `report_data` 的 HTML 输出仍包含关键章节。
-- 也可以使用统一的 npm（Node.js 包管理器，Node.js 是 JavaScript 运行时）入口：`npm run verify:frontend-renderer`、`npm run verify:frontend-browser`，或一次性运行 `npm run verify:frontend`。
+- 旅程工作台浏览器回归运行 `node scripts\verify_frontend_visual_journey_browser.js`，覆盖桌面和移动视口下的可视化旅程、地图推荐点、POI 详情、路线标签密度、地点替换和移动端地图截图。
+- 也可以使用统一的 npm（Node.js 包管理器，Node.js 是 JavaScript 运行时）入口：`npm run verify:frontend-renderer`、`npm run verify:frontend-visual-journey`、`npm run verify:frontend-browser`，或一次性运行 `npm run verify:frontend`。
 - 轻量静态回归和真实浏览器 E2E（端到端）回归都读取 `tests/fixtures/report_data/` 下的脱敏 fixture（固定测试数据），不依赖真实 `.env`、真实用户、真实订单、真实支付或真实外部库存。
 - 真实浏览器 E2E 回归运行 `node scripts\verify_frontend_browser_regression.js`。脚本使用 Playwright（浏览器自动化测试框架）启动 Chromium（谷歌开源浏览器内核）无头浏览器，分别覆盖 `1440x1000` 桌面视口和 `390x900` 移动视口。
 - 浏览器脚本会加载真实 `frontend/zhixing.html`，模拟 ready check（就绪检查）成功、会话列表和人工确认数据，验证登录入口、主界面、治理台人话说明、工具审计展示语义、运行摘要、报告卡片、预算、风险、待核验清单、地图预览入口和报告导出。导出校验会读取浏览器下载的 HTML，确认结构化报告章节被保留，并确认导出件不保留交互按钮。
 - 脚本会收集 console error（控制台错误）和页面异常；如果缺少 Playwright 或 Chromium，会明确输出安装命令。本地默认标记为 skip（跳过），`CI=true` 或 `ZHIXING_FRONTEND_BROWSER_STRICT=1` 时会失败退出，避免关键门禁被静默跳过。
-- 截图产物输出到 `.runtime/`，当前包括 `frontend-browser-regression-desktop.png`、`frontend-browser-regression-desktop-report.png`、`frontend-browser-regression-mobile.png`、`frontend-browser-regression-mobile-report.png` 和 `frontend-browser-regression-mobile-governance.png`，属于本地临时验证文件，不纳入提交。
+- 截图产物输出到 `.runtime/`，当前包括 `frontend-browser-regression-desktop.png`、`frontend-browser-regression-desktop-report.png`、`frontend-browser-regression-mobile.png`、`frontend-browser-regression-mobile-report.png`、`frontend-browser-regression-mobile-governance.png`、`frontend-visual-journey-desktop.png`、`frontend-visual-journey-mobile.png` 和 `frontend-visual-journey-mobile-map.png`，属于本地临时验证文件，不纳入提交。
 
 首次运行前如果本机没有依赖，可执行：
 

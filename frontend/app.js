@@ -78,6 +78,9 @@
 
       const isMobileViewport = () => window.innerWidth <= 900;
       let journeyMapAssetsPromise = null;
+      let journeyAmapAssetsPromise = null;
+      let journeyMapConfigPromise = null;
+      let journeyMapRuntimeConfig = null;
       const journeyMapInstances = new WeakMap();
       const journeyMapPreviewCache = new Map();
       const DEFAULT_CONVERSATION_TITLE = "新行程";
@@ -145,6 +148,59 @@
         return journeyMapAssetsPromise;
       }
 
+      function getFallbackJourneyMapConfig() {
+        return {
+          preferred_provider: "leaflet-osm",
+          amap_web_js_key: "",
+          amap_web_js_key_configured: false,
+          fallback_provider: "leaflet-osm",
+        };
+      }
+
+      async function fetchJourneyMapConfig() {
+        if (journeyMapRuntimeConfig) return journeyMapRuntimeConfig;
+        if (!journeyMapConfigPromise) {
+          journeyMapConfigPromise = (async () => {
+            try {
+              const response = await fetch(`${getApiBase()}/api/v1/maps/config`, {
+                headers: state.token ? { Authorization: `Bearer ${state.token}` } : {},
+              });
+              if (!response.ok) throw new Error(`map-config-${response.status}`);
+              const data = await response.json();
+              journeyMapRuntimeConfig = {
+                ...getFallbackJourneyMapConfig(),
+                ...(data || {}),
+              };
+            } catch (error) {
+              journeyMapRuntimeConfig = getFallbackJourneyMapConfig();
+            }
+            return journeyMapRuntimeConfig;
+          })().finally(() => {
+            journeyMapConfigPromise = null;
+          });
+        }
+        return journeyMapConfigPromise;
+      }
+
+      async function loadAmapJourneyMapAssets(webKey = "") {
+        const key = String(webKey || "").trim();
+        if (!key) return null;
+        if (window.AMap) return window.AMap;
+        if (!journeyAmapAssetsPromise) {
+          journeyAmapAssetsPromise = loadScriptOnce(
+            `https://webapi.amap.com/maps?v=2.0&key=${encodeURIComponent(
+              key
+            )}&plugin=AMap.Scale,AMap.ToolBar`
+          )
+            .then(() => window.AMap || null)
+            .catch((error) => {
+              journeyAmapAssetsPromise = null;
+              throw error;
+            });
+        }
+        return journeyAmapAssetsPromise;
+      }
+
       async function fetchJourneyMapPreview(payload) {
         const cacheKey = JSON.stringify(payload || {});
         const cached = journeyMapPreviewCache.get(cacheKey);
@@ -192,12 +248,51 @@
       function moveJourneyMapToBounds(map, bounds, options = {}) {
         if (!map || !bounds?.isValid?.()) return false;
         const { padding = [26, 26], animate = false } = options;
+        if (bounds.engine === "amap") {
+          const overlays = (bounds.overlays || [])
+            .map((item) => item?.overlay || item)
+            .filter(Boolean);
+          if (!overlays.length || typeof map.setFitView !== "function") return false;
+          map.setFitView(overlays, false, [
+            padding[1] || 26,
+            padding[0] || 26,
+            padding[1] || 26,
+            padding[0] || 26,
+          ]);
+          return true;
+        }
         if (animate && typeof map.flyToBounds === "function") {
           map.flyToBounds(bounds, { padding, duration: 0.65, easeLinearity: 0.25 });
         } else {
           map.fitBounds(bounds, { padding });
         }
         return true;
+      }
+
+      function getAmapPosition(point) {
+        return [Number(point.lng), Number(point.lat)];
+      }
+
+      function buildAmapBoundsFromLayers(layers = []) {
+        const overlays = layers
+          .map((item) => item?.overlay || item)
+          .filter(Boolean);
+        return {
+          engine: "amap",
+          overlays,
+          isValid() {
+            return overlays.length > 0;
+          },
+        };
+      }
+
+      function shouldUseAmapJourneyMap(preview, mapConfig) {
+        const webKey = String(mapConfig?.amap_web_js_key || "").trim();
+        if (!webKey) return false;
+        return (
+          preview?.provider === "amap-js" ||
+          mapConfig?.preferred_provider === "amap-js"
+        );
       }
 
       function fitJourneyMapState(entry, mode = "all") {
@@ -300,6 +395,44 @@
         return [...new Set(matched)];
       }
 
+      function activateJourneyBottomStop(shell, dayKey = "", stopIndex = 0, options = {}) {
+        if (!shell || !dayKey) return null;
+        const normalizedIndex = Number.isFinite(Number(stopIndex)) ? Number(stopIndex) : 0;
+        const targetMeta = `${dayKey}:${normalizedIndex}`;
+        shell
+          .querySelectorAll(".journey-map-stage-stop.active")
+          .forEach((item) => item.classList.remove("active"));
+        shell
+          .querySelectorAll(".journey-map-bottom-stop.active")
+          .forEach((item) => item.classList.remove("active"));
+        shell
+          .querySelectorAll("[data-journey-day-card].active")
+          .forEach((item) => item.classList.remove("active"));
+
+        const stopButton = [...shell.querySelectorAll(".journey-map-stage-stop[data-map-day-stop]")]
+          .find((button) => button.dataset.mapDayStop === targetMeta);
+        if (!stopButton) return null;
+        stopButton.classList.add("active");
+        const stopRow = stopButton.closest(".journey-map-bottom-stop");
+        stopRow?.classList.add("active");
+        const dayCard = stopButton.closest("[data-journey-day-card]");
+        dayCard?.classList.add("active");
+
+        const drawer = shell.querySelector(".journey-map-bottom-drawer");
+        if (drawer?.classList.contains("is-collapsed") && options.expandDrawer !== false) {
+          drawer.classList.remove("is-collapsed");
+          syncJourneyMapToggleLabels(shell);
+        }
+        if (options.scroll !== false) {
+          (stopRow || stopButton).scrollIntoView({
+            behavior: "smooth",
+            block: "nearest",
+            inline: "center",
+          });
+        }
+        return stopButton;
+      }
+
       function focusJourneyDayStop(entry, dayKey = "all", stopIndex = 0) {
         if (!entry?.map) return;
         const selectedLayer = entry.dayLayers?.find((layer) => layer.key === dayKey);
@@ -314,10 +447,475 @@
         if (entry.activeDayKey !== dayKey) {
           setJourneyMapDaySelection(entry, dayKey);
         }
+        activateJourneyBottomStop(entry.shell, dayKey, stopIndex);
         entry.map.flyTo([point.lat, point.lng], Math.max(entry.map.getZoom(), 12), {
           duration: 0.7,
         });
         marker.openPopup?.();
+        showJourneyPoiSheet(entry, dayKey, stopIndex);
+      }
+
+      function hideJourneyPoiSheet(shell) {
+        const sheet = shell?.querySelector(".journey-poi-bottom-sheet");
+        if (!sheet) return;
+        sheet.hidden = true;
+        sheet.classList.remove("show");
+      }
+
+      function getPoiVerificationText(stop = {}, point = {}) {
+        if (stop?.map_verified || /amap/i.test(String(stop?.verification_status || ""))) {
+          return "高德地点已核验";
+        }
+        if (stop?.coordinate_estimated || /estimated/i.test(String(stop?.verification_status || ""))) {
+          return "估算落点 · 待核验";
+        }
+        if (point?.address || stop?.lng || stop?.lat) {
+          return "地图坐标已返回";
+        }
+        return "地图点位待核验";
+      }
+
+      function getPoiVerificationTone(text = "") {
+        if (/高德|已核验|已返回/.test(String(text || ""))) return "ready";
+        if (/估算|待/.test(String(text || ""))) return "pending";
+        return "";
+      }
+
+      function normalizeJourneyPoiAsStop(poi = {}, fallback = {}) {
+        return {
+          id: poi.id || "",
+          name: poi.name || "",
+          city: poi.city || fallback.city || "",
+          type: poi.type || fallback.type || "attraction",
+          type_label: poi.type_label || poi.type || fallback.type_label || "地点",
+          time_range: poi.suggested_time || poi.time_range || fallback.time_range || "",
+          description: poi.description || "",
+          duration_minutes: poi.duration_minutes || fallback.duration_minutes || "",
+          estimated_cost: poi.estimated_cost || "待核验",
+          reservation_note:
+            poi.reservation_note || "开放、预约、票价和道路情况出发前二次核验。",
+          verification_status: poi.verification_status || "",
+          verification_note: poi.verification_note || "",
+          map_verified: Boolean(poi.map_verified),
+          coordinate_estimated: Boolean(poi.coordinate_estimated),
+          address: poi.address || "",
+          amap_type: poi.amap_type || "",
+          amap_source_name: poi.amap_source_name || "",
+          tags: Array.isArray(poi.tags) ? poi.tags : [],
+          image_url: poi.image_url || "",
+          map_query: poi.map_query || [poi.city, poi.name].filter(Boolean).join(" "),
+          lng: typeof poi.lng === "number" ? poi.lng : null,
+          lat: typeof poi.lat === "number" ? poi.lat : null,
+        };
+      }
+
+      function getJourneyReplacementCandidates(workbench, dayPlans, dayKey, stopIndex) {
+        const original = parseMapPayload(workbench?.dataset.journeyData || "") || {};
+        const allPois = [
+          ...(Array.isArray(original.alternative_pois) ? original.alternative_pois : []),
+          ...(Array.isArray(original.pois) ? original.pois : []),
+        ].filter(Boolean);
+        const day = (dayPlans || []).find((item) => item.key === dayKey);
+        const current = day?.stops?.[stopIndex];
+        if (!current || !allPois.length) return [];
+        const activeIds = new Set(
+          (dayPlans || []).flatMap((item) =>
+            (item.stops || []).map((stop) => stop.id).filter(Boolean)
+          )
+        );
+        const currentName = normalizeJourneyMatchText(current.name || "");
+        const currentCity = normalizeJourneyMatchText(current.city || day?.city || "");
+        const currentType = normalizeJourneyMatchText(current.type_label || current.type || "");
+        return allPois
+          .filter((poi) => {
+            const poiName = normalizeJourneyMatchText(poi.name || "");
+            if (!poiName || poiName === currentName) return false;
+            if (poi.id && activeIds.has(poi.id)) return false;
+            return true;
+          })
+          .map((poi) => {
+            const city = normalizeJourneyMatchText(poi.city || "");
+            const type = normalizeJourneyMatchText(poi.type_label || poi.type || "");
+            const score =
+              (city && currentCity && city === currentCity ? 4 : 0) +
+              (type && currentType && type === currentType ? 3 : 0) +
+              (poi.map_verified ? 2 : 0) +
+              (poi.coordinate_estimated ? 1 : 0);
+            return { poi, score };
+          })
+          .sort((left, right) => right.score - left.score)
+          .map((item) => item.poi);
+      }
+
+      function getJourneyPoiPool(workbench) {
+        const original = parseMapPayload(workbench?.dataset.journeyData || "") || {};
+        return [
+          ...(Array.isArray(original.alternative_pois) ? original.alternative_pois : []),
+          ...(Array.isArray(original.pois) ? original.pois : []),
+        ].filter((poi) => poi && typeof poi === "object");
+      }
+
+      function resolveJourneyRecommendationPoi(workbench, point = {}) {
+        const targetName = normalizeJourneyMatchText(point.name || point.label || "");
+        const matched = getJourneyPoiPool(workbench).find((poi) => {
+          const poiName = normalizeJourneyMatchText(poi.name || "");
+          return (
+            poiName &&
+            targetName &&
+            (poiName === targetName || poiName.includes(targetName) || targetName.includes(poiName))
+          );
+        });
+        const fallback = {
+          name: point.name || point.label || "推荐点",
+          city: point.address || "",
+          type_label: point.kind === "recommendation" ? "推荐点" : "看点",
+          description: point.address || "推荐点详情待补充。",
+          map_query: [point.address, point.name || point.label].filter(Boolean).join(" "),
+          lng: typeof point.lng === "number" ? point.lng : null,
+          lat: typeof point.lat === "number" ? point.lat : null,
+          verification_status: "map_preview_point",
+          reservation_note: "开放、预约、票价和道路情况出发前二次核验。",
+        };
+        return normalizeJourneyPoiAsStop(matched || fallback, fallback);
+      }
+
+      function getJourneyRecommendationTargetDay(entry) {
+        const activeDayKey = entry?.activeDayKey && entry.activeDayKey !== "all"
+          ? entry.activeDayKey
+          : "";
+        return (
+          entry?.dayPlans?.find((day) => day.key === activeDayKey) ||
+          entry?.dayPlans?.[0] ||
+          null
+        );
+      }
+
+      function resetJourneyPoiSheetActions(sheet) {
+        const replaceButton = sheet?.querySelector("[data-poi-sheet-action='replace'], [data-poi-sheet-action='add-recommendation']");
+        const verifyButton = sheet?.querySelector("[data-poi-sheet-action='verify']");
+        const keepButton = sheet?.querySelector("[data-poi-sheet-action='keep'], [data-poi-sheet-action='replace-recommendation']");
+        if (replaceButton) {
+          replaceButton.dataset.poiSheetAction = "replace";
+          replaceButton.dataset.replacementPoiId = "";
+          replaceButton.textContent = "替换这个点";
+        }
+        if (verifyButton) {
+          verifyButton.dataset.poiSheetAction = "verify";
+          verifyButton.textContent = "核验门票交通";
+        }
+        if (keepButton) {
+          keepButton.dataset.poiSheetAction = "keep";
+          keepButton.textContent = "保留继续规划";
+        }
+      }
+
+      function showJourneyPoiSheet(entry, dayKey = "all", stopIndex = 0) {
+        const sheet = entry?.shell?.querySelector(".journey-poi-bottom-sheet");
+        if (!sheet) return;
+        resetJourneyPoiSheetActions(sheet);
+        sheet.dataset.poiMode = "stop";
+        delete sheet.dataset.recommendationPoi;
+        delete sheet.dataset.recommendationDayKey;
+        const dayPlan = entry.dayPlans?.find((day) => day.key === dayKey);
+        const stop = dayPlan?.stops?.[stopIndex];
+        const point = entry.dayLayers?.find((layer) => layer.key === dayKey)?.points?.[stopIndex];
+        if (!stop && !point) return;
+
+        const title = stop?.name || point?.name || "地点详情";
+        const meta = [
+          dayPlan?.label,
+          stop?.type_label || stop?.type,
+          stop?.time_range,
+        ].filter(Boolean);
+        const durationText = stop?.duration_minutes
+          ? `建议停留 ${stop.duration_minutes} 分钟`
+          : "停留时间待核验";
+        const addressText = stop?.address || point?.address || stop?.map_query || "";
+        const verificationText = getPoiVerificationText(stop, point);
+        const typeText = stop?.amap_type || stop?.type_label || stop?.type || "";
+        const proofItems = [
+          { label: verificationText, tone: getPoiVerificationTone(verificationText) },
+          { label: addressText, tone: "" },
+          { label: typeText, tone: "" },
+          ...(Array.isArray(stop?.tags)
+            ? stop.tags.slice(0, 2).map((tag) => ({ label: tag, tone: "" }))
+            : []),
+        ].filter(Boolean);
+        sheet.dataset.poiTitle = title;
+        sheet.dataset.poiDayLabel = dayPlan?.label || "";
+        sheet.dataset.poiDayKey = dayKey;
+        sheet.dataset.poiStopIndex = String(stopIndex);
+        const workbench = sheet.closest(".visual-journey-workbench");
+        const replacement = getJourneyReplacementCandidates(
+          workbench,
+          entry.dayPlans || [],
+          dayKey,
+          stopIndex
+        )[0];
+        const replaceButton = sheet.querySelector("[data-poi-sheet-action='replace']");
+        if (replaceButton) {
+          replaceButton.dataset.replacementPoiId = replacement?.id || "";
+          replaceButton.textContent = replacement?.name
+            ? `替换为${replacement.name}`
+            : "寻找替换点";
+        }
+        const media = sheet.querySelector(".journey-poi-bottom-media");
+        const imageUrl = String(stop?.image_url || "").trim();
+        if (media) {
+          media.classList.toggle("has-image", /^https?:\/\//i.test(imageUrl));
+          media.style.backgroundImage = /^https?:\/\//i.test(imageUrl)
+            ? `url("${imageUrl.replace(/"/g, "%22")}")`
+            : "";
+          media.querySelector("span")?.replaceChildren(
+            document.createTextNode(getVisualPoiInitial(title))
+          );
+        }
+        sheet.querySelector("[data-poi-sheet-title]")?.replaceChildren(
+          document.createTextNode(title)
+        );
+        sheet.querySelector("[data-poi-sheet-meta]")?.replaceChildren(
+          document.createTextNode(meta.join(" · ") || "地点信息待核验")
+        );
+        sheet.querySelector("[data-poi-sheet-desc]")?.replaceChildren(
+          document.createTextNode(stop?.description || point?.address || "地点介绍待补充。")
+        );
+        sheet.querySelector("[data-poi-sheet-duration]")?.replaceChildren(
+          document.createTextNode(durationText)
+        );
+        sheet.querySelector("[data-poi-sheet-cost]")?.replaceChildren(
+          document.createTextNode(stop?.estimated_cost || "费用待核验")
+        );
+        sheet.querySelector("[data-poi-sheet-note]")?.replaceChildren(
+          document.createTextNode(
+            stop?.verification_note ||
+              stop?.reservation_note ||
+              "开放、预约、票价和道路情况出发前二次核验。"
+          )
+        );
+        const proof = sheet.querySelector("[data-poi-sheet-proof]");
+        if (proof) {
+          proof.innerHTML = proofItems
+            .slice(0, 5)
+            .filter((item) => item.label)
+            .map(
+              (item) =>
+                `<span class="${escapeHtml(item.tone || "")}">${escapeHtml(
+                  item.label
+                )}</span>`
+            )
+            .join("");
+        }
+        sheet.hidden = false;
+        requestAnimationFrame(() => sheet.classList.add("show"));
+      }
+
+      function showJourneyRecommendationSheet(entry, point = {}) {
+        const sheet = entry?.shell?.querySelector(".journey-poi-bottom-sheet");
+        if (!sheet) return;
+        resetJourneyPoiSheetActions(sheet);
+        const workbench = sheet.closest(".visual-journey-workbench");
+        const candidate = resolveJourneyRecommendationPoi(workbench, point);
+        const targetDay = getJourneyRecommendationTargetDay(entry);
+        if (!candidate || !targetDay) return;
+
+        const title = candidate.name || point.name || "推荐点";
+        const targetLabel = targetDay.label || targetDay.title || "当天";
+        const addressText = candidate.address || point.address || candidate.map_query || "";
+        const verificationText = getPoiVerificationText(candidate, point);
+        const proofItems = [
+          { label: "地图推荐点", tone: "ready" },
+          { label: verificationText, tone: getPoiVerificationTone(verificationText) },
+          { label: addressText, tone: "" },
+          { label: candidate.type_label || candidate.type || "", tone: "" },
+          ...(Array.isArray(candidate.tags)
+            ? candidate.tags.slice(0, 2).map((tag) => ({ label: tag, tone: "" }))
+            : []),
+        ].filter(Boolean);
+
+        sheet.dataset.poiMode = "recommendation";
+        sheet.dataset.poiTitle = title;
+        sheet.dataset.poiDayLabel = targetLabel;
+        sheet.dataset.poiDayKey = "";
+        sheet.dataset.poiStopIndex = "-1";
+        sheet.dataset.recommendationDayKey = targetDay.key || "";
+        sheet.dataset.recommendationPoi = serializeMapPayload(candidate);
+
+        const addButton = sheet.querySelector("[data-poi-sheet-action='replace']");
+        if (addButton) {
+          addButton.dataset.poiSheetAction = "add-recommendation";
+          addButton.textContent = `加入${targetLabel}`;
+        }
+        const replaceButton = sheet.querySelector("[data-poi-sheet-action='keep']");
+        if (replaceButton) {
+          replaceButton.dataset.poiSheetAction = "replace-recommendation";
+          replaceButton.textContent = "替换当天首点";
+        }
+
+        const media = sheet.querySelector(".journey-poi-bottom-media");
+        const imageUrl = String(candidate.image_url || "").trim();
+        if (media) {
+          media.classList.toggle("has-image", /^https?:\/\//i.test(imageUrl));
+          media.style.backgroundImage = /^https?:\/\//i.test(imageUrl)
+            ? `url("${imageUrl.replace(/"/g, "%22")}")`
+            : "";
+          media.querySelector("span")?.replaceChildren(
+            document.createTextNode(getVisualPoiInitial(title))
+          );
+        }
+        sheet.querySelector("[data-poi-sheet-title]")?.replaceChildren(
+          document.createTextNode(title)
+        );
+        sheet.querySelector("[data-poi-sheet-meta]")?.replaceChildren(
+          document.createTextNode([targetLabel, candidate.type_label || candidate.type, candidate.time_range].filter(Boolean).join(" · ") || "推荐点待核验")
+        );
+        sheet.querySelector("[data-poi-sheet-desc]")?.replaceChildren(
+          document.createTextNode(candidate.description || point.address || "推荐点详情待补充。")
+        );
+        sheet.querySelector("[data-poi-sheet-duration]")?.replaceChildren(
+          document.createTextNode(
+            candidate.duration_minutes
+              ? `建议停留 ${candidate.duration_minutes} 分钟`
+              : "停留时间待核验"
+          )
+        );
+        sheet.querySelector("[data-poi-sheet-cost]")?.replaceChildren(
+          document.createTextNode(candidate.estimated_cost || "费用待核验")
+        );
+        sheet.querySelector("[data-poi-sheet-note]")?.replaceChildren(
+          document.createTextNode(
+            candidate.verification_note ||
+              candidate.reservation_note ||
+              "开放、预约、票价和道路情况出发前二次核验。"
+          )
+        );
+        const proof = sheet.querySelector("[data-poi-sheet-proof]");
+        if (proof) {
+          proof.innerHTML = proofItems
+            .slice(0, 5)
+            .filter((item) => item.label)
+            .map(
+              (item) =>
+                `<span class="${escapeHtml(item.tone || "")}">${escapeHtml(item.label)}</span>`
+            )
+            .join("");
+        }
+        sheet.hidden = false;
+        requestAnimationFrame(() => sheet.classList.add("show"));
+      }
+
+      function replaceJourneyPoiFromSheet(sheet, button) {
+        const shell = sheet?.closest(".journey-live-map-shell");
+        const workbench = sheet?.closest(".visual-journey-workbench");
+        const dayKey = sheet?.dataset?.poiDayKey || "";
+        const stopIndex = Number(sheet?.dataset?.poiStopIndex || "-1");
+        if (!shell || !workbench || !dayKey || !Number.isInteger(stopIndex)) return false;
+        const dayPlans = cloneJourneyDayPlans(shell).map(normalizeJourneyDayPlanStops);
+        const day = dayPlans.find((item) => item.key === dayKey);
+        if (!day || !Array.isArray(day.stops) || !day.stops[stopIndex]) return false;
+        const candidates = getJourneyReplacementCandidates(workbench, dayPlans, dayKey, stopIndex);
+        const candidateId = button?.dataset?.replacementPoiId || "";
+        const candidate =
+          candidates.find((poi) => poi.id && poi.id === candidateId) || candidates[0];
+        if (!candidate) return false;
+        const previousName = day.stops[stopIndex].name || "当前地点";
+        day.stops[stopIndex] = normalizeJourneyPoiAsStop(candidate, day.stops[stopIndex]);
+        const normalizedDayPlans = dayPlans.map(normalizeJourneyDayPlanStops);
+        updateVisualJourneyPoiCards(workbench, normalizedDayPlans);
+        refreshJourneyMapAfterEdit(shell, normalizedDayPlans);
+        saveEditedJourneyDraft(workbench, normalizedDayPlans);
+        showToast(`已将 ${previousName} 替换为 ${candidate.name}`);
+        return true;
+      }
+
+      function applyJourneyRecommendationFromSheet(sheet, options = {}) {
+        const shell = sheet?.closest(".journey-live-map-shell");
+        const workbench = sheet?.closest(".visual-journey-workbench");
+        const dayKey = sheet?.dataset?.recommendationDayKey || "";
+        const candidate = parseMapPayload(sheet?.dataset?.recommendationPoi || "");
+        if (!shell || !workbench || !dayKey || !candidate?.name) return false;
+
+        const dayPlans = cloneJourneyDayPlans(shell).map(normalizeJourneyDayPlanStops);
+        const day = dayPlans.find((item) => item.key === dayKey);
+        if (!day || !Array.isArray(day.stops)) return false;
+
+        const normalizedCandidate = normalizeJourneyPoiAsStop(candidate, {
+          city: day.city || "",
+        });
+        const duplicateIndex = day.stops.findIndex(
+          (stop) =>
+            (normalizedCandidate.id && stop.id === normalizedCandidate.id) ||
+            normalizeJourneyMatchText(stop.name || "") ===
+              normalizeJourneyMatchText(normalizedCandidate.name || "")
+        );
+        if (duplicateIndex >= 0) {
+          focusJourneyDayStop(
+            journeyMapInstances.get(shell.querySelector(".journey-live-map[data-map-payload]")),
+            dayKey,
+            duplicateIndex
+          );
+          showToast(`${normalizedCandidate.name} 已在当天路线中`);
+          return true;
+        }
+
+        const activeMeta = parseJourneyStopMeta(
+          shell.querySelector(".journey-map-bottom-stop.active .journey-map-stage-stop")?.dataset
+            ?.mapDayStop || ""
+        );
+        const activeIndex =
+          activeMeta?.dayKey === dayKey && Number.isInteger(activeMeta.stopIndex)
+            ? activeMeta.stopIndex
+            : -1;
+
+        if (options.replace) {
+          const replaceIndex = activeIndex >= 0 ? activeIndex : 0;
+          if (!day.stops[replaceIndex]) return false;
+          const previousName = day.stops[replaceIndex].name || "当天首点";
+          day.stops[replaceIndex] = normalizedCandidate;
+          showToast(`已将 ${previousName} 替换为 ${normalizedCandidate.name}`);
+        } else {
+          const insertIndex = activeIndex >= 0 ? activeIndex + 1 : day.stops.length;
+          day.stops.splice(insertIndex, 0, normalizedCandidate);
+          showToast(`已把 ${normalizedCandidate.name} 加入 ${day.label || "当天"}`);
+        }
+
+        const normalizedDayPlans = dayPlans.map(normalizeJourneyDayPlanStops);
+        updateVisualJourneyPoiCards(workbench, normalizedDayPlans);
+        refreshJourneyMapAfterEdit(shell, normalizedDayPlans);
+        saveEditedJourneyDraft(workbench, normalizedDayPlans);
+        return true;
+      }
+
+      function handleJourneyPoiSheetAction(button) {
+        const action = button?.dataset?.poiSheetAction || "";
+        const sheet = button?.closest(".journey-poi-bottom-sheet");
+        const title = sheet?.dataset?.poiTitle || "这个地点";
+        const dayLabel = sheet?.dataset?.poiDayLabel || "当天";
+        if (action === "replace" && replaceJourneyPoiFromSheet(sheet, button)) {
+          return;
+        }
+        if (
+          action === "add-recommendation" &&
+          applyJourneyRecommendationFromSheet(sheet, { replace: false })
+        ) {
+          return;
+        }
+        if (
+          action === "replace-recommendation" &&
+          applyJourneyRecommendationFromSheet(sheet, { replace: true })
+        ) {
+          return;
+        }
+        const prompts = {
+          replace: `把${dayLabel}的「${title}」替换成同片区、更适合当前节奏的备选地点，并同步刷新地图路线。`,
+          "add-recommendation": `把推荐点「${title}」加入${dayLabel}，并同步刷新地图路线。`,
+          "replace-recommendation": `用推荐点「${title}」替换${dayLabel}当前不合适的地点，并同步刷新地图路线。`,
+          verify: `继续核验「${title}」的开放时间、门票/预约，以及它和前后地点之间的交通距离与时长。`,
+          keep: `我想保留「${title}」，请基于当前可视化旅程继续补交通、酒店、预算和最终报告所需信息。`,
+        };
+        const prompt = prompts[action];
+        if (!prompt) return;
+        appendToComposer(prompt, "replace");
+        setRuntimeStatus("已把地点调整请求填入输入框", "online");
       }
 
       function renderJourneyDayInsight(entry) {
@@ -413,7 +1011,18 @@
       }
 
       function setJourneyMapStyle(entry, style = "standard") {
-        if (!entry?.map || !entry?.baseLayers) return;
+        if (!entry?.map) return;
+        if (entry.engine === "amap") {
+          const amapStyles = {
+            standard: "amap://styles/normal",
+            terrain: "amap://styles/fresh",
+            calm: "amap://styles/whitesmoke",
+          };
+          entry.map.setMapStyle?.(amapStyles[style] || amapStyles.standard);
+          entry.activeLayerKey = style;
+          return;
+        }
+        if (!entry.baseLayers) return;
         const nextLayer = entry.baseLayers[style] || entry.baseLayers.standard;
         if (!nextLayer || entry.activeLayerKey === style) return;
         Object.values(entry.baseLayers).forEach((layer) => {
@@ -427,12 +1036,31 @@
 
       function buildJourneyMapIcon(L, kind = "highlight") {
         const kindClass = `kind-${kind}`;
-        const symbol = kind === "highlight" ? "★" : "●";
+        const symbol = kind === "highlight" ? "★" : kind === "recommendation" ? "+" : "●";
         return L.divIcon({
           className: `journey-live-marker ${kindClass}`,
           html: `<span>${symbol}</span>`,
           iconSize: [22, 22],
           iconAnchor: [11, 11],
+        });
+      }
+
+      function buildJourneyDayMapIcon(
+        L,
+        text = "1",
+        color = "",
+        dayKey = "",
+        stopIndex = 0
+      ) {
+        const safeColor = escapeHtml(color || "#18b6a4");
+        const mapStopAttr = dayKey
+          ? ` data-map-day-stop="${escapeHtml(`${dayKey}:${stopIndex}`)}"`
+          : "";
+        return L.divIcon({
+          className: "journey-live-marker kind-day leaflet-journey-day-marker",
+          html: `<span${mapStopAttr} style="background:${safeColor};box-shadow:0 0 0 2px ${safeColor}">${escapeHtml(text)}</span>`,
+          iconSize: [28, 28],
+          iconAnchor: [14, 14],
         });
       }
 
@@ -449,10 +1077,29 @@
         return JOURNEY_DAY_COLORS[index % JOURNEY_DAY_COLORS.length];
       }
 
+      function isJourneyRecommendationPoint(point = {}) {
+        return point.kind === "highlight" || point.kind === "recommendation";
+      }
+
+      function getJourneyRecommendationMarkers(entry) {
+        return [
+          ...(entry?.markersByKind?.highlight || []),
+          ...(entry?.markersByKind?.recommendation || []),
+        ];
+      }
+
       function setJourneyLayerOpacity(layer, opacity) {
         if (!layer) return;
         if (typeof layer.setOpacity === "function") {
           layer.setOpacity(opacity);
+          return;
+        }
+        if (typeof layer.setOptions === "function") {
+          layer.setOptions({
+            opacity,
+            strokeOpacity: opacity,
+            fillOpacity: Math.max(Math.min(opacity, 1), 0) * 0.45,
+          });
           return;
         }
         if (typeof layer.setStyle === "function") {
@@ -461,6 +1108,21 @@
             fillOpacity: Math.max(Math.min(opacity, 1), 0) * 0.45,
           });
         }
+      }
+
+      function getJourneySegmentLabelViewOpacity({
+        isOverview = true,
+        isSelected = false,
+        activeMode = "solo",
+        labelIndex = 0,
+      } = {}) {
+        if (isOverview) {
+          return labelIndex === 0 ? 0.95 : 0;
+        }
+        if (activeMode === "solo") {
+          return isSelected ? 0.98 : 0;
+        }
+        return isSelected ? 0.98 : 0;
       }
 
       function updateJourneyDayButtons(shell, activeDay = "all", activeMode = "solo") {
@@ -494,6 +1156,16 @@
               ? (isSelected ? 0.96 : 0)
               : (isSelected ? 0.98 : 0.18);
           layer.markers.forEach((marker) => setJourneyLayerOpacity(marker, opacity));
+          (layer.segmentLabels || []).forEach((label, labelIndex) => {
+            const labelOpacity = getJourneySegmentLabelViewOpacity({
+              isOverview,
+              isSelected,
+              activeMode,
+              labelIndex,
+            });
+            setJourneyLayerOpacity(label, labelOpacity);
+          });
+          setJourneyLayerOpacity(layer.dayBadge, opacity);
           setJourneyLayerOpacity(layer.polyline, opacity);
           if (typeof layer.polyline?.setStyle === "function") {
             layer.polyline.setStyle({
@@ -510,7 +1182,7 @@
             weight: isOverview ? 4 : 3,
           });
         }
-        entry.markersByKind?.highlight?.forEach((marker, index) => {
+        getJourneyRecommendationMarkers(entry).forEach((marker, index) => {
           const opacity = isOverview
             ? 0.95
             : selectedHighlightIndexes.size
@@ -524,6 +1196,11 @@
                 : 0.38;
           setJourneyLayerOpacity(marker, opacity);
         });
+        if (entry.recommendationsVisible === false) {
+          getJourneyRecommendationMarkers(entry).forEach((marker) =>
+            setJourneyLayerOpacity(marker, 0)
+          );
+        }
 
         const selectedLayer = entry.dayLayers.find((layer) => layer.key === activeDayKey);
         if (entry.shell) {
@@ -540,6 +1217,19 @@
         }
         renderJourneyDayInsight(entry);
         updateJourneyDayButtons(entry.shell, activeDayKey, activeMode);
+        syncJourneyRecommendationButtons(entry);
+      }
+
+      function syncJourneyRecommendationButtons(entry) {
+        const visible = entry?.recommendationsVisible !== false;
+        const count = getJourneyRecommendationMarkers(entry).length;
+        entry?.shell
+          ?.querySelectorAll('[data-map-action="recommendations"]')
+          .forEach((button) => {
+            button.classList.toggle("active", visible);
+            button.setAttribute("aria-pressed", String(visible));
+            button.textContent = visible ? "隐藏推荐点" : count ? `推荐点 ${count}` : "推荐点";
+          });
       }
 
       function setJourneyMapDaySelection(entry, dayKey = "all") {
@@ -550,10 +1240,17 @@
         entry.activeDayKey = dayKey || "all";
         applyJourneyDayView(entry);
         if (dayKey === "all") {
+          entry.shell
+            ?.querySelectorAll(".journey-map-stage-stop.active, .journey-map-bottom-stop.active, [data-journey-day-card].active")
+            .forEach((item) => item.classList.remove("active"));
           fitJourneyMapState(entry, "all");
           return;
         }
         const selectedLayer = entry.dayLayers?.find((layer) => layer.key === dayKey);
+        activateJourneyBottomStop(entry.shell, dayKey, 0, {
+          expandDrawer: false,
+          scroll: false,
+        });
         if (selectedLayer?.bounds?.isValid()) {
           moveJourneyMapToBounds(entry.map, selectedLayer.bounds, {
             padding: [30, 30],
@@ -567,6 +1264,513 @@
         if (!entry) return;
         entry.dayDisplayMode = mode === "fade" ? "fade" : "solo";
         applyJourneyDayView(entry);
+      }
+
+      function toggleJourneyRecommendations(entry) {
+        if (!entry) return;
+        entry.recommendationsVisible = entry.recommendationsVisible === false;
+        applyJourneyDayView(entry);
+      }
+
+      function registerJourneyMapEntry(node, entry) {
+        const shell = entry.shell;
+        const availableDayKeys = new Set(
+          (entry.dayLayers || []).map((layer) => layer.key)
+        );
+        shell?.querySelectorAll(".journey-map-day-btn").forEach((button) => {
+          const key = button.dataset.mapDay || "all";
+          const enabled = key === "all" || availableDayKeys.has(key);
+          button.disabled = !enabled;
+          button.classList.toggle("disabled", !enabled);
+          button.hidden = key !== "all" && !enabled;
+        });
+        const dayModes = shell?.querySelector(".journey-map-floating-modes");
+        if (dayModes) {
+          dayModes.hidden = availableDayKeys.size <= 1;
+        }
+        const enabledFocusTargets = new Set([
+          ...Object.keys(entry.pointsByKind || {}),
+          ...(entry.recommendationPoints?.length ? ["highlights"] : []),
+          ...(entry.routePoints?.length >= 2 ? ["route"] : []),
+        ]);
+        shell?.querySelectorAll(".journey-map-focus-btn").forEach((button) => {
+          const focusTarget = button.dataset.mapFocus || "";
+          const enabled =
+            !focusTarget ||
+            enabledFocusTargets.has(focusTarget) ||
+            /^highlight:\d+$/.test(focusTarget);
+          button.disabled = !enabled;
+          button.classList.toggle("disabled", !enabled);
+          button.hidden = !enabled;
+        });
+        shell?.querySelectorAll(".journey-map-action-btn").forEach((button) => {
+          const action = button.dataset.mapAction || "";
+          const enabled =
+            action === "expand" ||
+            action === "toggle-tools" ||
+            action === "toggle-sidebar" ||
+            action === "toggle-bottom-drawer" ||
+            (action === "recommendations" && entry.recommendationPoints?.length > 0) ||
+            (action === "route" && entry.routePoints?.length >= 2) ||
+            (action === "highlights" && entry.recommendationPoints?.length > 0);
+          button.disabled = !enabled;
+          button.classList.toggle("disabled", !enabled);
+          button.hidden = !enabled;
+        });
+        syncJourneyMapToggleLabels(shell);
+        journeyMapInstances.set(node, entry);
+        node
+          .closest(".journey-live-map-shell")
+          ?.querySelector(".journey-live-map-meta-value")
+          ?.replaceChildren(
+            document.createTextNode(
+              entry.engine === "amap"
+                ? `高德地图已定位 ${entry.points.length} 个点位`
+                : `已定位 ${entry.points.length} 个真实点位`
+            )
+          );
+        applyJourneyDayView(entry);
+        node.dataset.mapReady = "1";
+        node.dataset.mapProvider = entry.engine || "leaflet";
+        setTimeout(() => {
+          if (typeof entry.map?.invalidateSize === "function") {
+            entry.map.invalidateSize();
+          } else {
+            entry.map?.resize?.();
+          }
+        }, 80);
+      }
+
+      function buildAmapMarkerContent(kind = "highlight", text = "●", color = "") {
+        const node = document.createElement("div");
+        node.className = `journey-live-marker amap-journey-marker kind-${kind}`;
+        node.innerHTML = `<span>${escapeHtml(text)}</span>`;
+        if (color) {
+          node.style.borderColor = color;
+          node.style.color = color;
+        }
+        return node;
+      }
+
+      function getJourneySegmentLabel(segment = {}) {
+        const distance = String(segment.distance_text || "").trim();
+        const duration = String(segment.duration_text || "").trim();
+        if (!distance && !duration) return "";
+        if (distance && duration && !/待/.test(`${distance}${duration}`)) {
+          return `${distance} · ${duration}`;
+        }
+        if (/待/.test(`${distance}${duration}`)) {
+          return "路线待核验";
+        }
+        return distance || duration;
+      }
+
+      function getJourneyShortDayLabel(day = {}, index = 0) {
+        const raw = String(day.label || day.date || "").trim();
+        const dateMatch = raw.match(/(\d{1,2})[-/.月](\d{1,2})/);
+        if (dateMatch) return `${dateMatch[1].padStart(2, "0")}.${dateMatch[2].padStart(2, "0")}`;
+        const dayMatch = raw.match(/Day\s*(\d+)/i);
+        if (dayMatch) return `D${dayMatch[1]}`;
+        if (raw && raw.length <= 7) return raw;
+        return `D${index + 1}`;
+      }
+
+      function getJourneySegmentLabelParts(segment = {}, day = {}, dayIndex = 0) {
+        const metric = getJourneySegmentLabel(segment);
+        if (!metric) return null;
+        return {
+          day: getJourneyShortDayLabel(day, dayIndex),
+          metric,
+        };
+      }
+
+      function getJourneySegmentLabelTone(segment = {}) {
+        const statusText = [
+          segment.confidence,
+          segment.source,
+          segment.verification_note,
+          segment.distance_text,
+          segment.duration_text,
+        ]
+          .filter(Boolean)
+          .join(" ");
+        if (/amap_driving|高德/i.test(statusText) && !/待/.test(statusText)) {
+          return "verified";
+        }
+        if (/estimated|估算/i.test(statusText)) {
+          return "estimated";
+        }
+        return "pending";
+      }
+
+      function getJourneySegmentLabelOffset(segmentIndex = 0, dayIndex = 0) {
+        const offsets = [
+          { x: 0, y: -18 },
+          { x: 32, y: -38 },
+          { x: -30, y: -4 },
+          { x: 50, y: -54 },
+          { x: -48, y: 8 },
+          { x: 16, y: 14 },
+          { x: -18, y: -44 },
+        ];
+        const index =
+          Math.abs(Number(segmentIndex) || 0) + Math.abs(Number(dayIndex) || 0) * 2;
+        return offsets[index % offsets.length];
+      }
+
+      function getJourneyMidpoint(left, right) {
+        if (!left || !right) return null;
+        const lng = (Number(left.lng) + Number(right.lng)) / 2;
+        const lat = (Number(left.lat) + Number(right.lat)) / 2;
+        if (!Number.isFinite(lng) || !Number.isFinite(lat)) return null;
+        return { lng, lat };
+      }
+
+      function wrapAmapLayer(overlay, options = {}) {
+        const { contentNode = null, infoWindow = null, map = null, point = null } = options;
+        return {
+          __journeyMapEngine: "amap",
+          overlay,
+          setOpacity(opacity) {
+            if (typeof overlay?.setOpacity === "function") {
+              overlay.setOpacity(opacity);
+            }
+            if (contentNode?.style) {
+              contentNode.style.opacity = String(opacity);
+            }
+            if (typeof overlay?.setOptions === "function") {
+              overlay.setOptions({
+                strokeOpacity: opacity,
+                fillOpacity: Math.max(Math.min(opacity, 1), 0) * 0.45,
+              });
+            }
+          },
+          setStyle(style = {}) {
+            if (typeof overlay?.setOptions !== "function") return;
+            overlay.setOptions({
+              strokeOpacity: style.opacity,
+              fillOpacity:
+                typeof style.fillOpacity === "number" ? style.fillOpacity : undefined,
+              strokeWeight: style.weight,
+              strokeColor: style.color,
+            });
+          },
+          openPopup() {
+            if (infoWindow && map && point) {
+              infoWindow.open(map, getAmapPosition(point));
+            }
+          },
+        };
+      }
+
+      function createAmapJourneyMarker(AMap, map, point, options = {}) {
+        const kind = options.kind || point.kind || "highlight";
+        const contentNode = buildAmapMarkerContent(
+          kind,
+          options.text || (kind === "highlight" ? "★" : "●"),
+          options.color || ""
+        );
+        if (options.dayKey) {
+          contentNode.dataset.mapDayStop = `${options.dayKey}:${options.stopIndex || 0}`;
+        }
+        const marker = new AMap.Marker({
+          position: getAmapPosition(point),
+          content: contentNode,
+          offset: new AMap.Pixel(-11, -11),
+          zIndex: options.zIndex || 100,
+        });
+        marker.setMap(map);
+        const infoWindow = new AMap.InfoWindow({
+          offset: new AMap.Pixel(0, -18),
+          content: `
+            <div class="amap-journey-popup">
+              <strong>${escapeHtml(point.label || options.label || "地点")}</strong>
+              <span>${escapeHtml(point.address || point.name || "")}</span>
+            </div>
+          `,
+        });
+        marker.on?.("click", () => {
+          infoWindow.open(map, marker.getPosition());
+          options.onClick?.();
+        });
+        return wrapAmapLayer(marker, { contentNode, infoWindow, map, point });
+      }
+
+      function createAmapJourneyPolyline(AMap, map, points, options = {}) {
+        const path = (points || [])
+          .map((point) => getAmapPosition(point))
+          .filter(([lng, lat]) => Number.isFinite(lng) && Number.isFinite(lat));
+        if (path.length < 2) return null;
+        const polyline = new AMap.Polyline({
+          path,
+          strokeColor: options.color || "#16b8aa",
+          strokeWeight: options.weight || 5,
+          strokeOpacity: options.opacity ?? 0.9,
+          strokeStyle: options.dashed ? "dashed" : "solid",
+          lineJoin: "round",
+          lineCap: "round",
+          zIndex: options.zIndex || 80,
+        });
+        polyline.setMap(map);
+        return wrapAmapLayer(polyline);
+      }
+
+      function createAmapJourneySegmentLabel(
+        AMap,
+        map,
+        left,
+        right,
+        segment,
+        color,
+        segmentIndex = 0,
+        day = {},
+        dayIndex = 0
+      ) {
+        const labelParts = getJourneySegmentLabelParts(segment, day, dayIndex);
+        const midpoint = getJourneyMidpoint(left, right);
+        if (!labelParts || !midpoint) return null;
+        const tone = getJourneySegmentLabelTone(segment);
+        const offset = getJourneySegmentLabelOffset(segmentIndex, dayIndex);
+        const contentNode = document.createElement("div");
+        contentNode.className = `amap-journey-segment-label ${tone}`;
+        contentNode.innerHTML = `<strong>${escapeHtml(labelParts.day)}</strong><span>${escapeHtml(labelParts.metric)}</span>`;
+        contentNode.title =
+          segment?.verification_note ||
+          (tone === "verified" ? "高德路线已核验" : "距离/时长待二次核验");
+        contentNode.style.borderColor = color;
+        const marker = new AMap.Marker({
+          position: [midpoint.lng, midpoint.lat],
+          content: contentNode,
+          offset: new AMap.Pixel(-58 + offset.x, offset.y),
+          zIndex: 160,
+        });
+        marker.setMap(map);
+        return wrapAmapLayer(marker, { contentNode });
+      }
+
+      function getJourneyDayBadgeLabel(day = {}, index = 0) {
+        const label = String(day.label || "").trim();
+        if (label && !/^day\s*\d+$/i.test(label)) return label;
+        return `Day ${index + 1}`;
+      }
+
+      function createAmapJourneyDayBadge(AMap, map, point, day, color, index = 0) {
+        if (!point) return null;
+        const contentNode = document.createElement("div");
+        contentNode.className = "amap-journey-day-badge";
+        contentNode.style.borderColor = color;
+        contentNode.innerHTML = `
+          <strong>${escapeHtml(getJourneyDayBadgeLabel(day, index))}</strong>
+          <span>${escapeHtml((day.points || []).length ? `${(day.points || []).length}站` : "路线")}</span>
+        `;
+        const badgeOffsets = [
+          [-18, -58],
+          [16, -70],
+          [-66, -42],
+          [24, -34],
+          [-54, -72],
+        ];
+        const [offsetX, offsetY] = badgeOffsets[Math.abs(Number(index) || 0) % badgeOffsets.length];
+        const marker = new AMap.Marker({
+          position: getAmapPosition(point),
+          content: contentNode,
+          offset: new AMap.Pixel(offsetX, offsetY),
+          zIndex: 170,
+        });
+        marker.setMap(map);
+        return wrapAmapLayer(marker, { contentNode });
+      }
+
+      async function renderAmapJourneyMap(node, payload, preview, mapConfig) {
+        const AMap = await loadAmapJourneyMapAssets(mapConfig?.amap_web_js_key);
+        if (!AMap) throw new Error("amap-sdk-unavailable");
+        const points = Array.isArray(preview?.points) ? preview.points : [];
+        if (!points.length) throw new Error("map-preview-empty");
+
+        node.innerHTML = "";
+        node.classList.add("journey-live-map--amap");
+        const map = new AMap.Map(node, {
+          zoom: 8,
+          viewMode: "2D",
+          resizeEnable: true,
+          mapStyle: "amap://styles/normal",
+        });
+        map.invalidateSize = () => map.resize?.();
+        map.flyTo = ([lat, lng], zoom = 11) => {
+          map.setZoomAndCenter(zoom, [lng, lat]);
+          return map;
+        };
+        if (AMap.Scale) map.addControl(new AMap.Scale());
+        if (AMap.ToolBar) {
+          map.addControl(
+            new AMap.ToolBar({
+              position: { right: "12px", top: "12px" },
+            })
+          );
+        }
+
+        const orderedKinds = ["origin", "destination", "stay"];
+        const routePoints = points
+          .filter((point) => orderedKinds.includes(point.kind))
+          .sort((a, b) => orderedKinds.indexOf(a.kind) - orderedKinds.indexOf(b.kind));
+        const highlightPoints = points.filter((point) => point.kind === "highlight");
+        const recommendationPoints = points.filter(isJourneyRecommendationPoint);
+        const pointsByKind = Object.fromEntries(
+          routePoints.map((point) => [point.kind, point])
+        );
+        const markersByKind = {};
+        const shell = node.closest(".journey-live-map-shell");
+        let entry = null;
+
+        const markers = points.map((point) => {
+          const highlightIndex =
+            point.kind === "highlight" ? markersByKind.highlight?.length || 0 : 0;
+          const marker = createAmapJourneyMarker(AMap, map, point, {
+            kind: point.kind,
+            text: point.kind === "highlight" ? "★" : point.kind === "recommendation" ? "+" : "●",
+            onClick:
+              point.kind === "recommendation"
+                ? () => {
+                    if (entry) showJourneyRecommendationSheet(entry, point);
+                  }
+                : point.kind === "highlight"
+                ? () => {
+                    activateJourneyHighlightCard(shell, highlightIndex);
+                  }
+                : null,
+          });
+          if (!markersByKind[point.kind]) markersByKind[point.kind] = [];
+          markersByKind[point.kind].push(marker);
+          return marker;
+        });
+
+        const routeLine =
+          routePoints.length >= 2
+            ? createAmapJourneyPolyline(AMap, map, routePoints, {
+                color: "#d6a56c",
+                weight: 5,
+                dashed: true,
+                zIndex: 70,
+              })
+            : null;
+
+        const dayLayers = (Array.isArray(preview?.days) ? preview.days : [])
+          .map((day, index) => {
+            const dayPoints = Array.isArray(day?.points) ? day.points : [];
+            if (!dayPoints.length) return null;
+            const color = getJourneyDayColor(index);
+            const dayMarkers = dayPoints.map((point, pointIndex) =>
+              createAmapJourneyMarker(AMap, map, point, {
+                kind: "day",
+                text: String(pointIndex + 1),
+                color,
+                zIndex: 130 + index,
+                label: day.label || `Day ${index + 1}`,
+                dayKey: day.key || `day-${index + 1}`,
+                stopIndex: pointIndex,
+                onClick: () => {
+                  if (entry) {
+                    focusJourneyDayStop(entry, day.key || `day-${index + 1}`, pointIndex);
+                  }
+                },
+              })
+            );
+            const polyline = createAmapJourneyPolyline(AMap, map, dayPoints, {
+              color,
+              weight: 5,
+              zIndex: 90 + index,
+            });
+            const dayBadge = createAmapJourneyDayBadge(
+              AMap,
+              map,
+              dayPoints[0],
+              day,
+              color,
+              index
+            );
+            const segmentLabels = (Array.isArray(day?.segments) ? day.segments : [])
+              .map((segment, segmentIndex) =>
+                createAmapJourneySegmentLabel(
+                  AMap,
+                  map,
+                  dayPoints[segmentIndex],
+                  dayPoints[segmentIndex + 1],
+                  segment,
+                  color,
+                  segmentIndex,
+                  day,
+                  index
+                )
+              )
+              .filter(Boolean);
+            return {
+              key: day.key || `day-${index + 1}`,
+              label: day.label || `Day ${index + 1}`,
+              points: dayPoints,
+              markers: dayMarkers,
+              dayBadge,
+              segmentLabels,
+              polyline,
+              bounds: buildAmapBoundsFromLayers([...dayMarkers, dayBadge, polyline, ...segmentLabels].filter(Boolean)),
+            };
+          })
+          .filter(Boolean);
+
+        const allBounds = buildAmapBoundsFromLayers([
+          ...markers,
+          routeLine,
+          ...dayLayers.flatMap((layer) => [...layer.markers, layer.dayBadge, layer.polyline, ...(layer.segmentLabels || [])]),
+        ].filter(Boolean));
+        const dayBounds = buildAmapBoundsFromLayers(
+          dayLayers.flatMap((layer) => [...layer.markers, layer.dayBadge, layer.polyline, ...(layer.segmentLabels || [])]).filter(Boolean)
+        );
+        const routeBounds = buildAmapBoundsFromLayers([
+          ...orderedKinds.flatMap((kind) => markersByKind[kind] || []),
+          routeLine,
+        ].filter(Boolean));
+        const highlightBounds = buildAmapBoundsFromLayers([
+          ...(markersByKind.highlight || []),
+          ...(markersByKind.recommendation || []),
+        ]);
+        if (points.length === 1) {
+          map.setZoomAndCenter(11, getAmapPosition(points[0]));
+        } else {
+          fitJourneyMapState(
+            {
+              map,
+              allBounds: dayBounds?.isValid() ? dayBounds : allBounds,
+              routeBounds,
+              highlightBounds,
+            },
+            "all"
+          );
+        }
+
+        entry = {
+          engine: "amap",
+          map,
+          baseLayers: null,
+          activeLayerKey: "standard",
+          shell,
+          points,
+          pointsByKind,
+          markersByKind,
+          routePoints,
+          highlightPoints,
+          recommendationPoints,
+          markers,
+          routeLine,
+          dayLayers,
+          dayPlans: parseMapPayload(shell?.dataset.dayPlans || "") || [],
+          routeStops: parseMapPayload(shell?.dataset.routeStops || "") || [],
+          activeDayKey: "all",
+          dayDisplayMode: "solo",
+          recommendationsVisible: false,
+          allBounds: dayBounds?.isValid() ? dayBounds : allBounds,
+          routeBounds,
+          highlightBounds,
+        };
+        registerJourneyMapEntry(node, entry);
       }
 
       async function hydrateJourneyMap(node) {
@@ -584,16 +1788,29 @@
         node.innerHTML = '<div class="journey-live-map-state loading">正在定位这段旅程的关键地点…</div>';
 
         try {
-          const [L, preview] = await Promise.all([
-            loadJourneyMapAssets(),
-            fetchJourneyMapPreview(payload),
-          ]);
+          const preview = await fetchJourneyMapPreview(payload);
           const points = Array.isArray(preview?.points) ? preview.points : [];
           if (!points.length) {
             throw new Error("map-preview-empty");
           }
 
+          const mapConfig =
+            preview?.provider === "amap-js"
+              ? await fetchJourneyMapConfig()
+              : getFallbackJourneyMapConfig();
+          if (shouldUseAmapJourneyMap(preview, mapConfig)) {
+            try {
+              await renderAmapJourneyMap(node, payload, preview, mapConfig);
+              return;
+            } catch (amapError) {
+              node.classList.remove("journey-live-map--amap");
+              console.warn("AMap journey map failed, falling back to Leaflet", amapError);
+            }
+          }
+
+          const L = await loadJourneyMapAssets();
           node.innerHTML = "";
+          node.classList.remove("journey-live-map--amap");
           const map = L.map(node, {
             zoomControl: true,
             scrollWheelZoom: false,
@@ -623,11 +1840,13 @@
             .filter((point) => orderedKinds.includes(point.kind))
             .sort((a, b) => orderedKinds.indexOf(a.kind) - orderedKinds.indexOf(b.kind));
           const highlightPoints = points.filter((point) => point.kind === "highlight");
+          const recommendationPoints = points.filter(isJourneyRecommendationPoint);
           const pointsByKind = Object.fromEntries(
             routePoints.map((point) => [point.kind, point])
           );
           const markersByKind = {};
           const shell = node.closest(".journey-live-map-shell");
+          let entry = null;
 
           const latLngs = [];
           const markers = [];
@@ -644,6 +1863,10 @@
               const highlightIndex = markersByKind.highlight?.length || 0;
               marker.on("click", () => {
                 activateJourneyHighlightCard(shell, highlightIndex);
+              });
+            } else if (point.kind === "recommendation") {
+              marker.on("click", () => {
+                if (entry) showJourneyRecommendationSheet(entry, point);
               });
             }
             latLngs.push([point.lat, point.lng]);
@@ -668,19 +1891,31 @@
               const dayPoints = Array.isArray(day?.points) ? day.points : [];
               if (!dayPoints.length) return null;
               const color = getJourneyDayColor(index);
-              const markers = dayPoints.map((point) => {
-                const marker = L.circleMarker([point.lat, point.lng], {
-                  radius: 7,
-                  color,
-                  weight: 2,
-                  fillColor: color,
-                  fillOpacity: 0.42,
+              const markers = dayPoints.map((point, pointIndex) => {
+                const dayKey = day.key || `day-${index + 1}`;
+                const marker = L.marker([point.lat, point.lng], {
+                  icon: buildJourneyDayMapIcon(
+                    L,
+                    String(pointIndex + 1),
+                    color,
+                    dayKey,
+                    pointIndex
+                  ),
                 }).addTo(map);
+                const markerElement = marker.getElement?.() || marker._icon || marker._element;
+                if (markerElement?.dataset) {
+                  markerElement.dataset.mapDayStop = `${dayKey}:${pointIndex}`;
+                }
                 marker.bindPopup(
                   `<strong>${escapeHtml(day.label || `Day ${index + 1}`)}</strong><br>${escapeHtml(
                     point.address || point.name
                   )}`
                 );
+                marker.on("click", () => {
+                  if (entry) {
+                    focusJourneyDayStop(entry, dayKey, pointIndex);
+                  }
+                });
                 return marker;
               });
               const dayLatLngs = dayPoints.map((point) => [point.lat, point.lng]);
@@ -692,11 +1927,56 @@
                       opacity: 0.92,
                     }).addTo(map)
                   : null;
+              const firstPoint = dayPoints[0];
+              const dayBadge = firstPoint
+                ? L.marker([firstPoint.lat, firstPoint.lng], {
+                    icon: L.divIcon({
+                      className: "leaflet-journey-day-badge",
+                      html: `<span style="border-color:${escapeHtml(color)}"><strong>${escapeHtml(
+                        getJourneyDayBadgeLabel(day, index)
+                      )}</strong><small>${escapeHtml(dayPoints.length ? `${dayPoints.length}站` : "路线")}</small></span>`,
+                      iconSize: [118, 42],
+                      iconAnchor: [
+                        [18, -18, 66, -24, 54][Math.abs(index) % 5],
+                        [52, 64, 42, 34, 70][Math.abs(index) % 5],
+                      ],
+                    }),
+                    interactive: false,
+                  }).addTo(map)
+                : null;
+              const segmentLabels = (Array.isArray(day?.segments) ? day.segments : [])
+                .map((segment, segmentIndex) => {
+                  const midpoint = getJourneyMidpoint(
+                    dayPoints[segmentIndex],
+                    dayPoints[segmentIndex + 1]
+                  );
+                  const labelParts = getJourneySegmentLabelParts(segment, day, index);
+                  if (!midpoint || !labelParts) return null;
+                  const tone = getJourneySegmentLabelTone(segment);
+                  const offset = getJourneySegmentLabelOffset(segmentIndex, index);
+                  return L.marker([midpoint.lat, midpoint.lng], {
+                    icon: L.divIcon({
+                      className: "leaflet-journey-segment-label",
+                      html: `<span class="${escapeHtml(tone)}" style="border-color:${escapeHtml(color)}" title="${escapeHtml(
+                        segment?.verification_note ||
+                          (tone === "verified" ? "高德路线已核验" : "距离/时长待二次核验")
+                      )}"><strong>${escapeHtml(labelParts.day)}</strong><small>${escapeHtml(
+                        labelParts.metric
+                      )}</small></span>`,
+                      iconSize: [160, 40],
+                      iconAnchor: [80 - offset.x, 20 - offset.y],
+                    }),
+                    interactive: false,
+                  }).addTo(map);
+                })
+                .filter(Boolean);
               return {
                 key: day.key || `day-${index + 1}`,
                 label: day.label || `Day ${index + 1}`,
                 points: dayPoints,
                 markers,
+                dayBadge,
+                segmentLabels,
                 polyline,
                 bounds: buildBoundsFromPoints(L, dayPoints),
               };
@@ -705,17 +1985,26 @@
 
           const allBounds = buildBoundsFromPoints(L, points);
           const routeBounds = buildBoundsFromPoints(L, routePoints);
-          const highlightBounds = buildBoundsFromPoints(L, highlightPoints);
+          const highlightBounds = buildBoundsFromPoints(L, recommendationPoints);
+          const dayBounds = buildBoundsFromPoints(
+            L,
+            dayLayers.flatMap((layer) => layer.points || [])
+          );
           if (latLngs.length === 1) {
             map.setView(latLngs[0], 11);
           } else {
             fitJourneyMapState(
-              { map, allBounds, routeBounds, highlightBounds },
+              {
+                map,
+                allBounds: dayBounds?.isValid() ? dayBounds : allBounds,
+                routeBounds,
+                highlightBounds,
+              },
               "all"
             );
           }
 
-          const entry = {
+          entry = {
             map,
             baseLayers,
             activeLayerKey: "standard",
@@ -725,6 +2014,7 @@
             markersByKind,
             routePoints,
             highlightPoints,
+            recommendationPoints,
             markers,
             routeLine,
             dayLayers,
@@ -732,58 +2022,12 @@
             routeStops: parseMapPayload(shell?.dataset.routeStops || "") || [],
             activeDayKey: "all",
             dayDisplayMode: "solo",
-            allBounds,
+            recommendationsVisible: false,
+            allBounds: dayBounds?.isValid() ? dayBounds : allBounds,
             routeBounds,
             highlightBounds,
           };
-          const availableDayKeys = new Set(dayLayers.map((layer) => layer.key));
-          shell?.querySelectorAll(".journey-map-day-btn").forEach((button) => {
-            const key = button.dataset.mapDay || "all";
-            const enabled = key === "all" || availableDayKeys.has(key);
-            button.disabled = !enabled;
-            button.classList.toggle("disabled", !enabled);
-            button.hidden = key !== "all" && !enabled;
-          });
-          const dayModes = shell?.querySelector(".journey-map-floating-modes");
-          if (dayModes) {
-            dayModes.hidden = availableDayKeys.size <= 1;
-          }
-          const enabledFocusTargets = new Set([
-            ...Object.keys(pointsByKind),
-            ...(highlightPoints.length ? ["highlights"] : []),
-            ...(routePoints.length >= 2 ? ["route"] : []),
-          ]);
-          shell?.querySelectorAll(".journey-map-focus-btn").forEach((button) => {
-            const focusTarget = button.dataset.mapFocus || "";
-            const enabled =
-              !focusTarget ||
-              enabledFocusTargets.has(focusTarget) ||
-              /^highlight:\d+$/.test(focusTarget);
-            button.disabled = !enabled;
-            button.classList.toggle("disabled", !enabled);
-            button.hidden = !enabled;
-          });
-          shell?.querySelectorAll(".journey-map-action-btn").forEach((button) => {
-            const action = button.dataset.mapAction || "";
-            const enabled =
-              action === "expand" ||
-              action === "toggle-tools" ||
-              action === "toggle-sidebar" ||
-              (action === "route" && routePoints.length >= 2) ||
-              (action === "highlights" && highlightPoints.length > 0);
-            button.disabled = !enabled;
-            button.classList.toggle("disabled", !enabled);
-            button.hidden = !enabled;
-          });
-          syncJourneyMapToggleLabels(shell);
-          journeyMapInstances.set(node, entry);
-          node
-            .closest(".journey-live-map-shell")
-            ?.querySelector(".journey-live-map-meta-value")
-            ?.replaceChildren(document.createTextNode(`已定位 ${points.length} 个真实点位`));
-          applyJourneyDayView(entry);
-          node.dataset.mapReady = "1";
-          setTimeout(() => map.invalidateSize(), 80);
+          registerJourneyMapEntry(node, entry);
         } catch (error) {
           node.dataset.mapReady = "error";
           node.innerHTML =
@@ -851,6 +2095,16 @@
             button.title = sidebarCollapsed ? "展开路线说明" : "收起路线说明";
             button.setAttribute("aria-expanded", String(!sidebarCollapsed));
           });
+
+        const bottomDrawer = shell.querySelector(".journey-map-bottom-drawer");
+        const drawerCollapsed = bottomDrawer?.classList.contains("is-collapsed");
+        shell
+          .querySelectorAll('[data-map-action="toggle-bottom-drawer"]')
+          .forEach((button) => {
+            button.textContent = drawerCollapsed ? "展开" : "收起";
+            button.title = drawerCollapsed ? "展开分日路线" : "收起分日路线";
+            button.setAttribute("aria-expanded", String(!drawerCollapsed));
+          });
       }
 
       function handleJourneyMapAction(button) {
@@ -870,6 +2124,15 @@
           setTimeout(() => entry?.map?.invalidateSize(), 80);
           return;
         }
+        if (action === "toggle-bottom-drawer") {
+          const drawer = shell?.querySelector(".journey-map-bottom-drawer");
+          drawer?.classList.toggle("is-collapsed");
+          syncJourneyMapToggleLabels(shell);
+          const mapNode = shell?.querySelector(".journey-live-map[data-map-payload]");
+          const entry = mapNode ? journeyMapInstances.get(mapNode) : null;
+          setTimeout(() => entry?.map?.invalidateSize(), 80);
+          return;
+        }
         if (action === "expand") {
           openJourneyMapModalFromButton(button);
           return;
@@ -878,6 +2141,14 @@
         const node = shell?.querySelector(".journey-live-map[data-map-payload]");
         if (!node) return;
         const entry = journeyMapInstances.get(node);
+        if (action === "recommendations") {
+          toggleJourneyRecommendations(entry);
+          return;
+        }
+        if (action === "highlights") {
+          entry.recommendationsVisible = true;
+          applyJourneyDayView(entry);
+        }
         fitJourneyMapState(entry, action === "highlights" ? "highlights" : "route");
 
         shell.querySelectorAll(".journey-map-action-btn").forEach((btn) => {
@@ -950,14 +2221,11 @@
         const node = shell?.querySelector(".journey-live-map[data-map-payload]");
         if (!node) return;
         const entry = journeyMapInstances.get(node);
-        shell
-          ?.querySelectorAll(".journey-map-stage-stop.active")
-          .forEach((item) => item.classList.remove("active"));
-        button.classList.add("active");
 
         if (stopMeta.includes(":")) {
           const [dayKey, stopIndexText] = stopMeta.split(":");
           const stopIndex = Number(stopIndexText);
+          activateJourneyBottomStop(shell, dayKey, Number.isNaN(stopIndex) ? 0 : stopIndex);
           focusJourneyDayStop(entry, dayKey, Number.isNaN(stopIndex) ? 0 : stopIndex);
           return;
         }
@@ -992,6 +2260,551 @@
         if (!node) return;
         const entry = journeyMapInstances.get(node);
         setJourneyMapDaySelection(entry, dayKey);
+      }
+
+      function getVisualJourneyMapEntry(control) {
+        const workbench = control.closest(".visual-journey-workbench");
+        const node = workbench?.querySelector(".journey-live-map[data-map-payload]");
+        if (!node) return null;
+        return journeyMapInstances.get(node) || null;
+      }
+
+      function getJourneyMapShellFromControl(control) {
+        return (
+          control.closest(".journey-live-map-shell") ||
+          control.closest(".visual-journey-workbench")?.querySelector(".journey-live-map-shell")
+        );
+      }
+
+      function parseJourneyStopMeta(value = "") {
+        if (!String(value || "").includes(":")) return null;
+        const [dayKey, stopIndexText] = String(value).split(":");
+        const stopIndex = Number(stopIndexText);
+        if (!dayKey || Number.isNaN(stopIndex)) return null;
+        return { dayKey, stopIndex };
+      }
+
+      function cloneJourneyDayPlans(shell) {
+        return JSON.parse(
+          JSON.stringify(parseMapPayload(shell?.dataset.dayPlans || "") || [])
+        );
+      }
+
+      function normalizeJourneyDayPlanStops(dayPlan) {
+        const stops = Array.isArray(dayPlan.stops)
+          ? dayPlan.stops
+          : (dayPlan.waypoints || []).map((name) => ({ name }));
+        const waypoints = stops
+          .map((stop) => cleanJourneyLocationValue(stop?.name || ""))
+          .filter(Boolean);
+        return {
+          ...dayPlan,
+          stops,
+          waypoints,
+        };
+      }
+
+      function getJourneyDayRouteStatus(day = {}) {
+        const segments = Array.isArray(day.segments) ? day.segments : [];
+        if (!segments.length) {
+          return {
+            tone: "pending",
+            label: "点位连线",
+            detail: "距离/时长待核验",
+          };
+        }
+        const metricReadyCount = segments.filter((segment) => {
+          const metricText = [segment.distance_text, segment.duration_text]
+            .filter(Boolean)
+            .join(" ");
+          return metricText && !/待|needs|unknown/i.test(metricText);
+        }).length;
+        const verifiedCount = segments.filter(
+          (segment) => String(segment.confidence || "") === "amap_driving"
+        ).length;
+        const estimatedCount = segments.filter((segment) =>
+          /estimated|估算/i.test(
+            [segment.confidence, segment.source, segment.verification_note]
+              .filter(Boolean)
+              .join(" ")
+          )
+        ).length;
+        const missingCount = Math.max(segments.length - metricReadyCount, 0);
+        if (verifiedCount === segments.length) {
+          return {
+            tone: "ready",
+            label: "路线已核验",
+            detail: `${segments.length} 段路程已返回高德距离/时长`,
+          };
+        }
+        if (verifiedCount || estimatedCount || metricReadyCount) {
+          return {
+            tone: "pending",
+            label: verifiedCount ? "部分路线已回填" : "路线已估算",
+            detail: `${verifiedCount} 段高德核验，${estimatedCount} 段坐标估算，${missingCount} 段待核验`,
+          };
+        }
+        return {
+          tone: "pending",
+          label: "路线待核验",
+          detail: `${segments.length} 段距离/时长待高德确认`,
+        };
+      }
+
+      function getJourneyDayWeatherStatus(day = {}) {
+        const weather = day.weather && typeof day.weather === "object" ? day.weather : {};
+        const summary = String(weather.summary || "").trim();
+        const city = String(weather.city || day.city || "").trim();
+        if (!summary) {
+          return {
+            tone: "pending",
+            label: city ? `${city}天气待查` : "天气待查",
+            detail: "出发前二次核验",
+          };
+        }
+        return {
+          tone: /待|needs/i.test(String(weather.confidence || summary))
+            ? "pending"
+            : "ready",
+          label: city ? `${city}天气` : "天气",
+          detail: summary,
+        };
+      }
+
+      function renderJourneyDayStatusChips(day = {}) {
+        const routeStatus = getJourneyDayRouteStatus(day);
+        const weatherStatus = getJourneyDayWeatherStatus(day);
+        const poiCount = Array.isArray(day.pois)
+          ? day.pois.length
+          : Array.isArray(day.stops)
+          ? day.stops.length
+          : Array.isArray(day.waypoints)
+          ? day.waypoints.length
+          : 0;
+        return `
+          <span class="journey-day-status-chips">
+            <span class="journey-status-chip ready">
+              <i class="fa-solid fa-location-dot"></i> ${poiCount || 0} 个地点
+            </span>
+            <span class="journey-status-chip ${escapeHtml(routeStatus.tone)}">
+              <i class="fa-solid fa-route"></i> ${escapeHtml(routeStatus.label)}
+            </span>
+            <span class="journey-status-chip ${escapeHtml(weatherStatus.tone)}" title="${escapeHtml(
+              weatherStatus.detail
+            )}">
+              <i class="fa-solid fa-cloud-sun"></i> ${escapeHtml(weatherStatus.label)}
+            </span>
+          </span>
+        `;
+      }
+
+      function buildVisualJourneyStats(journeyData = {}) {
+        const days = Array.isArray(journeyData.days) ? journeyData.days : [];
+        const pois = Array.isArray(journeyData.pois) ? journeyData.pois : [];
+        const segments = Array.isArray(journeyData.segments) ? journeyData.segments : [];
+        const pendingChecks = Array.isArray(journeyData.pending_checks)
+          ? journeyData.pending_checks
+          : [];
+        const routeNeedsCheck =
+          !segments.length ||
+          segments.some((segment) =>
+            /待|needs|fallback|unknown|estimated|估算/i.test(
+              [segment.confidence, segment.distance_text, segment.duration_text]
+                .filter(Boolean)
+                .join(" ")
+            )
+          );
+        const verifiedRouteCount = segments.filter(
+          (segment) => String(segment.confidence || "") === "amap_driving"
+        ).length;
+        const estimatedRouteCount = segments.filter((segment) =>
+          /estimated|估算/i.test(
+            [segment.confidence, segment.source, segment.verification_note]
+              .filter(Boolean)
+              .join(" ")
+          )
+        ).length;
+        const cityCount = new Set(
+          pois.map((poi) => String(poi.city || "").trim()).filter(Boolean)
+        ).size;
+        return [
+          {
+            icon: "fa-calendar-days",
+            label: "天数",
+            value: `${days.length || journeyData.overview?.duration_days || 0} 天`,
+            tone: "ready",
+          },
+          {
+            icon: "fa-map-pin",
+            label: "地点",
+            value: `${pois.length} 个${cityCount ? ` · ${cityCount} 城` : ""}`,
+            tone: "ready",
+          },
+          {
+            icon: "fa-route",
+            label: "路线",
+            value:
+              routeNeedsCheck && (verifiedRouteCount || estimatedRouteCount)
+                ? `${verifiedRouteCount} 段核验 · ${estimatedRouteCount} 段估算`
+                : routeNeedsCheck
+                ? "距离/时长待核验"
+                : "已返回路段",
+            tone: routeNeedsCheck ? "pending" : "ready",
+          },
+          {
+            icon: "fa-clipboard-check",
+            label: "待核验",
+            value: `${pendingChecks.length || 0} 项`,
+            tone: pendingChecks.length ? "pending" : "ready",
+          },
+        ];
+      }
+
+      function renderVisualJourneyStats(journeyData = {}) {
+        return `
+          <div class="visual-journey-stats">
+            ${buildVisualJourneyStats(journeyData)
+              .map(
+                (item) => `
+                  <div class="visual-journey-stat ${escapeHtml(item.tone)}">
+                    <span><i class="fa-solid ${escapeHtml(item.icon)}"></i> ${escapeHtml(
+                  item.label
+                )}</span>
+                    <strong>${escapeHtml(item.value)}</strong>
+                  </div>
+                `
+              )
+              .join("")}
+          </div>
+        `;
+      }
+
+      function getVisualPoiInitial(name = "") {
+        const normalized = String(name || "").trim();
+        return normalized ? normalized.slice(0, 1) : "点";
+      }
+
+      function renderVisualPoiMedia(poi = {}, index = 0, compact = false) {
+        const imageUrl = String(poi.image_url || "").trim();
+        if (/^https?:\/\//i.test(imageUrl)) {
+          return `
+            <figure class="visual-poi-media${compact ? " compact" : ""}">
+              <img src="${escapeHtml(imageUrl)}" alt="${escapeHtml(poi.name || "地点图片")}" loading="lazy">
+            </figure>
+          `;
+        }
+        const palette = [
+          "lake",
+          "temple",
+          "mountain",
+          "city",
+          "forest",
+          "street",
+        ][index % 6];
+        return `
+          <figure class="visual-poi-media visual-poi-media--fallback ${palette}${
+            compact ? " compact" : ""
+          }">
+            <span>${escapeHtml(getVisualPoiInitial(poi.name))}</span>
+          </figure>
+        `;
+      }
+
+      function getVisualPoiVerificationBadge(poi = {}) {
+        const statusText = String(poi.verification_status || "").trim();
+        if (poi.map_verified || /amap/i.test(statusText)) {
+          return { tone: "ready", label: "高德核验" };
+        }
+        if (poi.coordinate_estimated || /estimated/i.test(statusText)) {
+          return { tone: "pending", label: "估算落点" };
+        }
+        if (typeof poi.lng === "number" && typeof poi.lat === "number") {
+          return { tone: "ready", label: "坐标可用" };
+        }
+        return { tone: "pending", label: "待核验" };
+      }
+
+      function destroyJourneyMapEntry(node) {
+        const entry = node ? journeyMapInstances.get(node) : null;
+        try {
+          entry?.map?.destroy?.();
+          entry?.map?.remove?.();
+        } catch (error) {
+          // 地图实例销毁失败时继续重建，避免一次异常卡住编辑体验。
+        }
+        if (node) journeyMapInstances.delete(node);
+      }
+
+      function renderJourneyBottomDrawerDays(dayPlans = []) {
+        return dayPlans
+          .map(
+            (day, dayIndex) => `
+              <article data-journey-day-card="${escapeHtml(day.key || `day-${dayIndex + 1}`)}">
+                <button
+                  class="journey-map-day-btn"
+                  type="button"
+                  data-map-day="${escapeHtml(day.key)}"
+                  aria-pressed="false"
+                >
+                  <span>${escapeHtml(day.label || `Day ${dayIndex + 1}`)}</span>
+                  <small>${escapeHtml(day.title || day.note || "当天路线")}</small>
+                </button>
+                ${renderJourneyDayStatusChips(day)}
+                <div>
+                  ${(day.waypoints || [])
+                    .slice(0, 6)
+                    .map(
+                      (waypoint, waypointIndex) => `
+                        <div class="journey-map-bottom-stop">
+                          <button
+                            class="journey-map-stage-stop journey-map-stage-stop--inline"
+                            type="button"
+                            data-map-day-stop="${escapeHtml(day.key)}:${waypointIndex}"
+                          >
+                            <span>${waypointIndex + 1}</span>
+                            <strong>${escapeHtml(waypoint)}</strong>
+                          </button>
+                          <div class="journey-map-stop-edit-actions">
+                            <button
+                              type="button"
+                              data-journey-edit-action="up"
+                              data-map-day-stop="${escapeHtml(day.key)}:${waypointIndex}"
+                              title="上移这个地点"
+                              ${waypointIndex === 0 ? "disabled" : ""}
+                            >↑</button>
+                            <button
+                              type="button"
+                              data-journey-edit-action="down"
+                              data-map-day-stop="${escapeHtml(day.key)}:${waypointIndex}"
+                              title="下移这个地点"
+                              ${waypointIndex >= (day.waypoints || []).length - 1 ? "disabled" : ""}
+                            >↓</button>
+                            <button
+                              type="button"
+                              data-journey-edit-action="delete"
+                              data-map-day-stop="${escapeHtml(day.key)}:${waypointIndex}"
+                              title="删除这个地点"
+                            >×</button>
+                          </div>
+                        </div>
+                      `
+                    )
+                    .join("")}
+                </div>
+              </article>
+            `
+          )
+          .join("");
+      }
+
+      function refreshJourneyMapAfterEdit(shell, dayPlans) {
+        const mapNode = shell?.querySelector(".journey-live-map[data-map-payload]");
+        if (!shell || !mapNode) return;
+        const normalizedDayPlans = dayPlans.map(normalizeJourneyDayPlanStops);
+        const payload = parseMapPayload(mapNode.dataset.mapPayload || "") || {};
+        payload.days = normalizedDayPlans.map((day) => ({
+          key: day.key,
+          label: day.label,
+          waypoints: day.waypoints,
+          stops: day.stops || [],
+          segments: buildEditedJourneySegments(day.dayNumber || 1, day.stops || []),
+        }));
+        shell.dataset.dayPlans = serializeMapPayload(normalizedDayPlans);
+        mapNode.dataset.mapPayload = serializeMapPayload(payload);
+        const drawerDays = shell.querySelector(".journey-map-bottom-days");
+        if (drawerDays) {
+          drawerDays.innerHTML = renderJourneyBottomDrawerDays(normalizedDayPlans);
+        }
+        destroyJourneyMapEntry(mapNode);
+        mapNode.dataset.mapReady = "";
+        mapNode.innerHTML =
+          '<div class="journey-live-map-state loading">正在按新顺序刷新路线…</div>';
+        hideJourneyPoiSheet(shell);
+        hydrateJourneyMap(mapNode);
+      }
+
+      function updateVisualJourneyPoiCards(workbench, dayPlans) {
+        if (!workbench) return;
+        const activeIds = new Set(
+          dayPlans.flatMap((day) => (day.stops || []).map((stop) => stop.id).filter(Boolean))
+        );
+        if (!activeIds.size) return;
+        workbench.querySelectorAll(".visual-poi-card[data-poi-id]").forEach((card) => {
+          const poiId = card.dataset.poiId || "";
+          const visible = !poiId || activeIds.has(poiId);
+          card.hidden = !visible;
+          const stopRef = dayPlans
+            .flatMap((day) =>
+              (day.stops || []).map((stop, index) => ({
+                dayKey: day.key,
+                index,
+                id: stop.id,
+              }))
+            )
+            .find((item) => item.id === poiId);
+          if (stopRef) {
+            card
+              .querySelectorAll("[data-map-day-stop]")
+              .forEach((button) => {
+                button.dataset.mapDayStop = `${stopRef.dayKey}:${stopRef.index}`;
+              });
+          }
+        });
+      }
+
+      function buildEditedJourneySegments(dayNumber, pois = []) {
+        const segments = [];
+        for (let index = 0; index < Math.max(pois.length - 1, 0); index += 1) {
+          const left = pois[index];
+          const right = pois[index + 1];
+          segments.push({
+            id: `d${dayNumber}-s${index + 1}`,
+            day_number: dayNumber,
+            from_poi_id: left.id || "",
+            to_poi_id: right.id || "",
+            from_name: left.name || "",
+            to_name: right.name || "",
+            mode: "driving",
+            distance_text: "待高德路线核验",
+            duration_text: "待高德路线核验",
+            confidence: "needs_live_route",
+          });
+        }
+        return segments;
+      }
+
+      function buildJourneyDataFromEditedPlans(workbench, dayPlans) {
+        const original = parseMapPayload(workbench?.dataset.journeyData || "") || {};
+        if (original.version !== "journey_plan.v1") return null;
+        const normalizedPlans = dayPlans.map(normalizeJourneyDayPlanStops);
+        const days = (Array.isArray(original.days) ? original.days : []).map((day) => {
+          const planKey = `visual-day-${day.day_number || 1}`;
+          const plan = normalizedPlans.find((item) => item.key === planKey);
+          if (!plan) return day;
+          const pois = (plan.stops || []).map((stop, index) => ({
+            ...normalizeJourneyPoiAsStop(stop, { city: day.city || "" }),
+            id: stop.id || `d${day.day_number || 1}-p${index + 1}`,
+            day_number: day.day_number || plan.dayNumber || 1,
+            order: index + 1,
+            suggested_time: stop.time_range || stop.suggested_time || "",
+          }));
+          return {
+            ...day,
+            summary: pois.map((poi) => poi.name).filter(Boolean).join(" · "),
+            pois,
+            segments: buildEditedJourneySegments(day.day_number || plan.dayNumber || 1, pois),
+          };
+        });
+        const activePois = days.flatMap((day) => day.pois || []);
+        const activeIds = new Set(activePois.map((poi) => poi.id).filter(Boolean));
+        const originalPois = Array.isArray(original.pois) ? original.pois : [];
+        const inactiveOriginalPois = originalPois.filter(
+          (poi) => !poi.id || !activeIds.has(poi.id)
+        );
+        const pois = [...activePois, ...inactiveOriginalPois];
+        const segments = days.flatMap((day) => day.segments || []);
+        return {
+          ...original,
+          days,
+          pois,
+          segments,
+          source_summary: {
+            ...(original.source_summary || {}),
+            edited_by_user: true,
+          },
+        };
+      }
+
+      async function saveEditedJourneyDraft(workbench, dayPlans) {
+        if (!state.token || !state.currentConversationId || !workbench) return;
+        const journeyData = buildJourneyDataFromEditedPlans(workbench, dayPlans);
+        if (!journeyData) return;
+        workbench.dataset.journeyData = serializeMapPayload(journeyData);
+        try {
+          const response = await fetch(
+            `${getApiBase()}/api/v1/chat/journey/${state.currentConversationId}`,
+            {
+              method: "PATCH",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${state.token}`,
+              },
+              body: JSON.stringify({
+                journey_data: journeyData,
+                source: "frontend_visual_editor",
+              }),
+            }
+          );
+          if (!response.ok) throw new Error(`journey-save-${response.status}`);
+          showToast("路线草案已保存");
+        } catch (error) {
+          console.error(error);
+          showToast("路线已本地更新，保存到会话失败", true);
+        }
+      }
+
+      function handleJourneyEditAction(button) {
+        if (button.disabled) return;
+        const action = button.dataset.journeyEditAction || "";
+        const meta = parseJourneyStopMeta(button.dataset.mapDayStop || "");
+        const shell = getJourneyMapShellFromControl(button);
+        if (!action || !meta || !shell) return;
+        const dayPlans = cloneJourneyDayPlans(shell).map(normalizeJourneyDayPlanStops);
+        const day = dayPlans.find((item) => item.key === meta.dayKey);
+        if (!day || !Array.isArray(day.stops)) return;
+        const index = meta.stopIndex;
+        if (index < 0 || index >= day.stops.length) return;
+
+        if (action === "delete") {
+          if (day.stops.length <= 1) {
+            showToast("当天至少保留一个地点", true);
+            return;
+          }
+          day.stops.splice(index, 1);
+        } else if (action === "up" && index > 0) {
+          [day.stops[index - 1], day.stops[index]] = [day.stops[index], day.stops[index - 1]];
+        } else if (action === "down" && index < day.stops.length - 1) {
+          [day.stops[index], day.stops[index + 1]] = [day.stops[index + 1], day.stops[index]];
+        } else {
+          return;
+        }
+        const normalizedDayPlans = dayPlans.map(normalizeJourneyDayPlanStops);
+        updateVisualJourneyPoiCards(
+          button.closest(".visual-journey-workbench"),
+          normalizedDayPlans
+        );
+        refreshJourneyMapAfterEdit(shell, normalizedDayPlans);
+        saveEditedJourneyDraft(
+          button.closest(".visual-journey-workbench"),
+          normalizedDayPlans
+        );
+        showToast("已更新当天路线顺序");
+      }
+
+      function handleVisualJourneyDayFocus(button) {
+        const dayKey = button.dataset.mapDayFocus || "all";
+        const entry = getVisualJourneyMapEntry(button);
+        if (!entry) return;
+        setJourneyMapDaySelection(entry, dayKey);
+        button
+          .closest(".visual-journey-workbench")
+          ?.querySelector(".journey-live-map-shell")
+          ?.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+
+      function handleVisualJourneyPoiFocus(button) {
+        const stopMeta = button.dataset.mapDayStop || "";
+        const entry = getVisualJourneyMapEntry(button);
+        if (!entry) return;
+        if (stopMeta.includes(":")) {
+          const [dayKey, stopIndexText] = stopMeta.split(":");
+          const stopIndex = Number(stopIndexText);
+          focusJourneyDayStop(entry, dayKey, Number.isNaN(stopIndex) ? 0 : stopIndex);
+        }
+        button
+          .closest(".visual-journey-workbench")
+          ?.querySelector(".journey-live-map-shell")
+          ?.scrollIntoView({ behavior: "smooth", block: "center" });
       }
 
       function showIntroOverlay() {
@@ -3852,9 +5665,13 @@
           destination: cityPair?.destination || routeStops[1]?.value || "",
           stay: routeStops[3]?.disabled ? "" : routeStops[3]?.value || "",
           highlights: mapHighlightQueries,
+          recommendations: previewState.recommendations || [],
           days: dayPlans.map((day) => ({
+            key: day.key,
             label: day.label,
             waypoints: day.waypoints,
+            stops: day.stops || [],
+            segments: day.segments || [],
           })),
         });
         const summaryChips = [
@@ -3866,8 +5683,11 @@
           },
         ];
 
+        const isImmersive = previewState.mapExperience === "immersive";
         return `
-          <section class="journey-map-studio">
+          <section class="journey-map-studio${
+            isImmersive ? " journey-map-studio--immersive" : ""
+          }">
             <div class="journey-map-studio-brief">
               ${summaryChips
                 .map(
@@ -3883,7 +5703,9 @@
                 .join("")}
             </div>
             <div
-              class="journey-live-map-shell journey-live-map-shell--studio journey-map-tools-collapsed journey-map-sidebar-collapsed${
+              class="journey-live-map-shell journey-live-map-shell--studio${
+                isImmersive ? " journey-live-map-shell--immersive" : ""
+              } journey-map-tools-collapsed journey-map-sidebar-collapsed${
                 hasDayView ? "" : " journey-live-map-shell--overview-only"
               }"
               data-map-title="${escapeHtml(atlasTitle)}"
@@ -3905,6 +5727,12 @@
               </div>
               <div class="journey-live-map-shell-body journey-live-map-shell-body--studio">
                 <div class="journey-map-stage">
+                  <div class="journey-map-title-pill">
+                    <strong>${escapeHtml(atlasTitle)}</strong>
+                    <span>${escapeHtml(
+                      hasDayView ? `${dayPlans.length} 天路线` : "路线总览"
+                    )}</span>
+                  </div>
                   <div class="journey-map-floating-panel">
                     <div class="journey-map-floating-actions journey-map-floating-summary">
                       <button class="journey-map-action-btn secondary" type="button" data-map-action="toggle-tools" aria-expanded="false" title="展开地图工具">地图工具</button>
@@ -3960,6 +5788,7 @@
                     <div class="journey-map-floating-actions">
                       <button class="journey-map-action-btn active" type="button" data-map-action="route" aria-pressed="true" title="聚焦路线主线">路线</button>
                       <button class="journey-map-action-btn" type="button" data-map-action="highlights" aria-pressed="false" title="聚焦沿途景点">景点</button>
+                      <button class="journey-map-action-btn" type="button" data-map-action="recommendations" aria-pressed="false" title="显示或隐藏地图推荐点">推荐点</button>
                     </div>
                     <div class="journey-map-floating-actions journey-live-map-styles">
                       <button class="journey-map-style-btn active" type="button" data-map-style="standard" aria-pressed="true" title="标准底图">标准</button>
@@ -3992,6 +5821,63 @@
                           ? '<button class="journey-map-focus-btn" type="button" data-map-focus="highlights">聚焦看点</button>'
                           : ""
                       }
+                    </div>
+                  </div>
+                  ${
+                    hasDayView
+                      ? `
+                          <div class="journey-map-bottom-drawer">
+                            <span class="journey-map-bottom-handle"></span>
+                            <div class="journey-map-bottom-head">
+                              <div>
+                                <strong>分日路线</strong>
+                                <small>可调顺序，地图即时刷新</small>
+                              </div>
+                              <button
+                                class="journey-map-bottom-toggle journey-map-action-btn secondary"
+                                type="button"
+                                data-map-action="toggle-bottom-drawer"
+                                aria-expanded="true"
+                                title="收起分日路线"
+                              >
+                                收起
+                              </button>
+                            </div>
+                            <div class="journey-map-bottom-days">
+                              ${renderJourneyBottomDrawerDays(dayPlans)}
+                            </div>
+                          </div>
+                        `
+                      : ""
+                  }
+                  <div class="journey-poi-bottom-sheet" hidden>
+                    <span class="journey-poi-bottom-handle"></span>
+                    <button
+                      class="journey-poi-bottom-close"
+                      type="button"
+                      data-poi-sheet-close="true"
+                      title="收起地点详情"
+                    >
+                      ×
+                    </button>
+                    <figure class="journey-poi-bottom-media">
+                      <span>点</span>
+                    </figure>
+                    <div class="journey-poi-bottom-content">
+                      <small data-poi-sheet-meta>地点信息待核验</small>
+                      <strong data-poi-sheet-title>地点详情</strong>
+                      <p data-poi-sheet-desc>地点介绍待补充。</p>
+                      <div class="journey-poi-bottom-meta">
+                        <span data-poi-sheet-duration>停留时间待核验</span>
+                        <span data-poi-sheet-cost>费用待核验</span>
+                      </div>
+                      <div class="journey-poi-bottom-proof" data-poi-sheet-proof></div>
+                      <em data-poi-sheet-note>开放、预约、票价和道路情况出发前二次核验。</em>
+                      <div class="journey-poi-bottom-actions">
+                        <button type="button" data-poi-sheet-action="replace">替换这个点</button>
+                        <button type="button" data-poi-sheet-action="verify">核验门票交通</button>
+                        <button type="button" data-poi-sheet-action="keep">保留继续规划</button>
+                      </div>
                     </div>
                   </div>
                   <button class="journey-map-sidebar-open journey-map-action-btn secondary" type="button" data-map-action="toggle-sidebar" aria-expanded="false" title="展开路线说明">展开路线说明</button>
@@ -4236,15 +6122,20 @@
           previewMetrics
         );
 
+        const isImmersive = previewState.mapExperience === "immersive";
         return `
-          <section class="journey-preview-board">
+          <section class="journey-preview-board${
+            isImmersive ? " journey-preview-board--immersive" : ""
+          }">
             <div class="journey-preview-head">
               <div class="journey-preview-title">
                 <strong>路线预览</strong>
                 <span>下面这块会跟着规划一起长成分日路线图：先看主线，再切具体哪一天，沿途景点也会同步标出来。</span>
               </div>
               <div class="journey-preview-badge">
-                <i class="fa-solid fa-map-location-dot"></i> 轻量地图预览
+                <i class="fa-solid fa-map-location-dot"></i> ${
+                  isImmersive ? "沉浸地图" : "轻量地图预览"
+                }
               </div>
             </div>
             ${atlasHtml}
@@ -4767,6 +6658,33 @@
           options.extraInfo?.report_data ||
           options.extra_info?.report_data ||
           null
+        );
+      }
+
+      function getJourneyDataFromOptions(options = {}) {
+        return (
+          options.journeyData ||
+          options.extraInfo?.journey_data ||
+          options.extra_info?.journey_data ||
+          null
+        );
+      }
+
+      function getPlanningTraceFromOptions(options = {}) {
+        const trace =
+          options.planningTrace ||
+          options.extraInfo?.planning_trace ||
+          options.extra_info?.planning_trace ||
+          [];
+        return Array.isArray(trace) ? trace : [];
+      }
+
+      function isVisualJourneyData(journeyData) {
+        return (
+          journeyData &&
+          typeof journeyData === "object" &&
+          journeyData.version === "journey_plan.v1" &&
+          Array.isArray(journeyData.days)
         );
       }
 
@@ -6350,12 +8268,328 @@
         `;
       }
 
+      function buildVisualJourneyPreviewState(journeyData = {}) {
+        if (!isVisualJourneyData(journeyData)) return { shouldRender: false };
+        const overview = journeyData.overview || {};
+        const days = Array.isArray(journeyData.days) ? journeyData.days : [];
+        const allPois = Array.isArray(journeyData.pois) ? journeyData.pois : [];
+        const alternativePois = Array.isArray(journeyData.alternative_pois)
+          ? journeyData.alternative_pois
+          : [];
+        const dayPlans = days
+          .map((day, index) => {
+            const pois = Array.isArray(day.pois) ? day.pois : [];
+            const waypoints = pois
+              .map((poi) => cleanJourneyLocationValue(poi.name || ""))
+              .filter(Boolean);
+            if (!waypoints.length) return null;
+            return {
+              key: `visual-day-${day.day_number || index + 1}`,
+              dayNumber: day.day_number || index + 1,
+              label: day.date
+                ? `${String(day.date).slice(5)} ${day.weekday || ""}`.trim()
+                : `Day ${day.day_number || index + 1}`,
+              title: day.title || `Day ${day.day_number || index + 1}`,
+              waypoints,
+              stops: pois.map((poi) => ({
+                id: poi.id || "",
+                name: poi.name || "",
+                city: poi.city || "",
+                type: poi.type || "attraction",
+                type_label: poi.type_label || poi.type || "地点",
+                time_range: poi.suggested_time || "",
+                description: poi.description || "",
+                duration_minutes: poi.duration_minutes || "",
+                estimated_cost: poi.estimated_cost || "",
+                reservation_note: poi.reservation_note || "",
+                verification_status: poi.verification_status || "",
+                verification_note: poi.verification_note || "",
+                map_verified: Boolean(poi.map_verified),
+                coordinate_estimated: Boolean(poi.coordinate_estimated),
+                address: poi.address || "",
+                amap_type: poi.amap_type || "",
+                amap_source_name: poi.amap_source_name || "",
+                tags: Array.isArray(poi.tags) ? poi.tags : [],
+                image_url: poi.image_url || "",
+                map_query: poi.map_query || "",
+                lng: typeof poi.lng === "number" ? poi.lng : null,
+                lat: typeof poi.lat === "number" ? poi.lat : null,
+              })),
+              highlights: waypoints.slice(0, 3),
+              note: day.summary || waypoints.join(" → "),
+              city: day.city || "",
+              weather: day.weather || null,
+              segments: Array.isArray(day.segments) ? day.segments : [],
+              routeStatus: getJourneyDayRouteStatus(day),
+              weatherStatus: getJourneyDayWeatherStatus(day),
+            };
+          })
+          .filter(Boolean);
+        if (!dayPlans.length) return { shouldRender: false };
+        const destination = overview.destination || dayPlans[0]?.waypoints?.[0] || "";
+        const recommendations = alternativePois
+          .map((poi) => normalizeJourneyPoiAsStop(poi, { city: destination }))
+          .filter((poi) => cleanJourneyLocationValue(poi.name || ""))
+          .slice(0, 8);
+        const origin = overview.route_label?.includes("进")
+          ? overview.route_label.split("进")[0]
+          : "";
+        return {
+          combinedText: [
+            overview.title,
+            overview.summary,
+            allPois.map((poi) => poi.name).join(" "),
+            recommendations.map((poi) => poi.name).join(" "),
+          ]
+            .filter(Boolean)
+            .join(" "),
+          cityPair: {
+            origin: origin || dayPlans[0]?.waypoints?.[0] || "",
+            destination,
+          },
+          destinationSection: {
+            tone: "overview",
+            title: overview.title || `${destination}旅程草案`,
+            rawLines: [
+              overview.summary,
+              overview.date_range ? `日期：${overview.date_range}` : "",
+              overview.route_label ? `路线：${overview.route_label}` : "",
+            ].filter(Boolean),
+          },
+          transportSection: {
+            tone: "transport",
+            title: "交通待后续核验",
+            rawLines: ["大交通、城际交通和实时路况会在后续继续核验。"],
+          },
+          staySection: {
+            tone: "stay",
+            title: "住宿待后续核验",
+            rawLines: ["住宿区域和真实酒店候选会在旅程草案确认后继续补齐。"],
+          },
+          budgetSection: {
+            tone: "budget",
+            title: "预算待核验",
+            rawLines: [],
+          },
+          highlights: allPois.map((poi) => poi.name).filter(Boolean).slice(0, 6),
+          highlightCards: buildJourneyHighlightCards(
+            allPois.map((poi) => poi.name).filter(Boolean).slice(0, 6)
+          ),
+          recommendations,
+          rhythm: days.map((day) => day.summary || day.title || "").filter(Boolean).slice(0, 3),
+          dayPlans,
+          mapExperience: "immersive",
+          shouldRender: true,
+        };
+      }
+
+      function renderPlanningTrace(trace = []) {
+        const items = (Array.isArray(trace) ? trace : []).filter(Boolean);
+        if (!items.length) return "";
+        return `
+          <details class="planning-trace-panel" open>
+            <summary>
+              <span>规划过程</span>
+              <strong>${items.length} 步完成</strong>
+            </summary>
+            <div class="planning-trace-list">
+              ${items
+                .map((item) => {
+                  const status = item.status || "completed";
+                  return `
+                    <div class="planning-trace-item ${escapeHtml(status)}">
+                      <span class="planning-trace-icon">${
+                        status === "completed" ? "✓" : "·"
+                      }</span>
+                      <div>
+                        <strong>${escapeHtml(item.title || item.phase || "规划步骤")}</strong>
+                        <p>${escapeHtml(item.detail || "")}</p>
+                        <small>${[
+                          item.city,
+                          item.date_range,
+                          item.count ? `${item.count} 项` : "",
+                        ]
+                          .filter(Boolean)
+                          .map(escapeHtml)
+                          .join(" · ")}</small>
+                      </div>
+                    </div>
+                  `;
+                })
+                .join("")}
+            </div>
+          </details>
+        `;
+      }
+
+      function renderVisualPoiDetails(pois = []) {
+        if (!pois.length) return "";
+        return `
+          <div class="visual-poi-grid">
+            ${pois
+              .slice(0, 14)
+              .map((poi, index) => {
+                const verification = getVisualPoiVerificationBadge(poi);
+                const evidenceItems = [
+                  verification.label,
+                  poi.address || poi.map_query,
+                  poi.amap_type,
+                ].filter(Boolean);
+                return `
+                  <details class="visual-poi-card" data-poi-id="${escapeHtml(poi.id || "")}"${
+                  index === 0 ? " open" : ""
+                }>
+                    <summary>
+                      <span>${index + 1}</span>
+                      <div>
+                        <strong>${escapeHtml(poi.name || "地点待确认")}</strong>
+                        <small>${escapeHtml(
+                          [poi.city, poi.type_label || poi.type, poi.suggested_time]
+                            .filter(Boolean)
+                            .join(" · ")
+                        )}</small>
+                      </div>
+                    </summary>
+                    ${renderVisualPoiMedia(poi, index)}
+                    <div class="visual-poi-evidence">
+                      ${evidenceItems
+                        .slice(0, 3)
+                        .map(
+                          (item, itemIndex) =>
+                            `<span class="${itemIndex === 0 ? escapeHtml(verification.tone) : ""}">${escapeHtml(
+                              item
+                            )}</span>`
+                        )
+                        .join("")}
+                    </div>
+                    <p>${escapeHtml(poi.description || "地点介绍待补充。")}</p>
+                    <div class="visual-poi-meta">
+                      <span>停留 ${escapeHtml(String(poi.duration_minutes || "待核验"))} 分钟</span>
+                      <span>${escapeHtml(poi.estimated_cost || "费用待核验")}</span>
+                      ${
+                        Array.isArray(poi.tags) && poi.tags.length
+                          ? `<span>${escapeHtml(poi.tags.slice(0, 2).join(" · "))}</span>`
+                          : ""
+                      }
+                    </div>
+                    <div class="visual-poi-actions">
+                      <button
+                        class="visual-poi-focus-btn"
+                        type="button"
+                        data-map-day-stop="visual-day-${escapeHtml(
+                          String(poi.day_number || 1)
+                        )}:${escapeHtml(String(Math.max(Number(poi.order || 1) - 1, 0)))}"
+                      >
+                        地图定位
+                      </button>
+                      <button
+                        type="button"
+                        data-journey-edit-action="up"
+                        data-map-day-stop="visual-day-${escapeHtml(
+                          String(poi.day_number || 1)
+                        )}:${escapeHtml(String(Math.max(Number(poi.order || 1) - 1, 0)))}"
+                      >
+                        上移
+                      </button>
+                      <button
+                        type="button"
+                        data-journey-edit-action="down"
+                        data-map-day-stop="visual-day-${escapeHtml(
+                          String(poi.day_number || 1)
+                        )}:${escapeHtml(String(Math.max(Number(poi.order || 1) - 1, 0)))}"
+                      >
+                        下移
+                      </button>
+                      <button
+                        type="button"
+                        data-journey-edit-action="delete"
+                        data-map-day-stop="visual-day-${escapeHtml(
+                          String(poi.day_number || 1)
+                        )}:${escapeHtml(String(Math.max(Number(poi.order || 1) - 1, 0)))}"
+                      >
+                        删除
+                      </button>
+                      <button type="button" disabled>打卡</button>
+                    </div>
+                    <em>${escapeHtml(
+                      poi.reservation_note || "开放、预约和票价出发前二次核验。"
+                    )}</em>
+                  </details>
+                `;
+              })
+              .join("")}
+          </div>
+        `;
+      }
+
+      function renderVisualJourneyWorkbench(journeyData, options = {}) {
+        if (!isVisualJourneyData(journeyData)) return "";
+        const overview = journeyData.overview || {};
+        const days = Array.isArray(journeyData.days) ? journeyData.days : [];
+        const pois = Array.isArray(journeyData.pois) ? journeyData.pois : [];
+        const previewState = buildVisualJourneyPreviewState(journeyData);
+        const atlas = previewState.shouldRender ? renderJourneyPreview(previewState) : "";
+        return `
+          <section
+            class="visual-journey-workbench"
+            data-journey-data="${serializeMapPayload(journeyData)}"
+          >
+            <div class="visual-journey-head">
+              <div>
+                <span>可视化旅程草案</span>
+                <strong>${escapeHtml(overview.title || "经典路线")}</strong>
+                <p>${escapeHtml(overview.summary || "先生成地图路线，再继续核验交通、酒店和预算。")}</p>
+              </div>
+              <div class="visual-journey-badges">
+                <span>${escapeHtml(overview.date_range || "日期待确认")}</span>
+                <span>${escapeHtml(String(overview.duration_days || days.length || "多"))} 天</span>
+                <span>${escapeHtml(overview.route_label || "路线待核验")}</span>
+              </div>
+            </div>
+            ${renderVisualJourneyStats(journeyData)}
+            ${renderPlanningTrace(getPlanningTraceFromOptions(options))}
+            ${atlas}
+            <div class="visual-day-strip">
+              ${days
+                .map(
+                  (day) => `
+                    <article>
+                      <button
+                        class="visual-day-focus-btn"
+                        type="button"
+                        data-map-day-focus="visual-day-${escapeHtml(String(day.day_number || 1))}"
+                      >
+                      <span>${escapeHtml(day.date ? String(day.date).slice(5) : `Day ${day.day_number}`)}</span>
+                      <strong>${escapeHtml(day.title || day.summary || "当天安排")}</strong>
+                      <p>${escapeHtml(day.summary || "")}</p>
+                      ${renderJourneyDayStatusChips(day)}
+                      </button>
+                    </article>
+                  `
+                )
+                .join("")}
+            </div>
+            ${renderVisualPoiDetails(pois)}
+            <div class="visual-journey-pending">
+              ${(journeyData.pending_checks || [])
+                .map((item) => `<span>${escapeHtml(item)}</span>`)
+                .join("")}
+            </div>
+          </section>
+        `;
+      }
+
       function renderAssistantText(text, options = {}) {
         const structuredReport = renderTravelReportFromData(
           getReportDataFromOptions(options),
           options
         );
         if (structuredReport) return structuredReport;
+
+        const journeyData = getJourneyDataFromOptions(options);
+        if (isVisualJourneyData(journeyData)) {
+          return renderVisualJourneyWorkbench(journeyData, options);
+        }
 
         if (!text) return "";
         const blocks = splitAssistantBlocks(text);
@@ -6464,9 +8698,41 @@
             return;
           }
 
-          const stageStopBtn = event.target.closest(".journey-map-stage-stop");
+          const visualDayFocusBtn = event.target.closest(".visual-day-focus-btn");
+          if (visualDayFocusBtn) {
+            handleVisualJourneyDayFocus(visualDayFocusBtn);
+            return;
+          }
+
+          const visualPoiFocusBtn = event.target.closest(".visual-poi-focus-btn");
+          if (visualPoiFocusBtn) {
+            handleVisualJourneyPoiFocus(visualPoiFocusBtn);
+            return;
+          }
+
+          const journeyEditBtn = event.target.closest("[data-journey-edit-action]");
+          if (journeyEditBtn) {
+            handleJourneyEditAction(journeyEditBtn);
+            return;
+          }
+
+          const stageStopBtn = event.target.closest(
+            ".journey-map-stage-stop, .journey-live-marker[data-map-day-stop], .journey-live-marker [data-map-day-stop]"
+          );
           if (stageStopBtn) {
             handleJourneyMapStageStop(stageStopBtn);
+            return;
+          }
+
+          const poiSheetCloseBtn = event.target.closest("[data-poi-sheet-close='true']");
+          if (poiSheetCloseBtn) {
+            hideJourneyPoiSheet(poiSheetCloseBtn.closest(".journey-live-map-shell"));
+            return;
+          }
+
+          const poiSheetActionBtn = event.target.closest("[data-poi-sheet-action]");
+          if (poiSheetActionBtn) {
+            handleJourneyPoiSheetAction(poiSheetActionBtn);
             return;
           }
 
@@ -7276,6 +9542,8 @@
         let streamingMessageId = "";
         let streamingFullText = "";
         let streamingReportData = null;
+        let streamingJourneyData = null;
+        let streamingPlanningTrace = [];
         const streamingThinkingFilter = createAssistantThinkingFilter();
         const slowHintTimer = setTimeout(() => {
           reachedSlowStage = true;
@@ -7326,6 +9594,8 @@
                     suppressJourneyPreview: true,
                     pinToTop: true,
                     reportData: streamingReportData,
+                    journeyData: streamingJourneyData,
+                    planningTrace: streamingPlanningTrace,
                   }
                 );
                 return;
@@ -7335,6 +9605,8 @@
                 suppressJourneyPreview: true,
                 pinToTop: true,
                 reportData: streamingReportData,
+                journeyData: streamingJourneyData,
+                planningTrace: streamingPlanningTrace,
               });
             };
             const applyChunk = (chunk) => {
@@ -7346,6 +9618,27 @@
             const applyStreamEvent = (event) => {
               if (event?.type === "report_data" && event.report_data) {
                 streamingReportData = event.report_data;
+              }
+              if (event?.type === "planning_trace") {
+                streamingPlanningTrace = [
+                  ...streamingPlanningTrace,
+                  {
+                    phase: event.phase,
+                    status: event.status,
+                    title: event.title,
+                    detail: event.detail,
+                    count: event.count,
+                    city: event.city,
+                    date_range: event.date_range,
+                    evidence_type: event.evidence_type,
+                  },
+                ].filter((item) => item.title || item.detail);
+              }
+              if (event?.type === "journey_data" && event.journey_data) {
+                streamingJourneyData = event.journey_data;
+                if (Array.isArray(event.planning_trace)) {
+                  streamingPlanningTrace = event.planning_trace;
+                }
               }
               if (event?.type === "tool_audit") {
                 rememberToolAuditEvent(event);
@@ -7379,11 +9672,15 @@
                 loadingId,
                 streamingReportData
                   ? "结构化旅游规划报告已整理完成。"
+                  : streamingJourneyData
+                  ? "可视化旅程草案已整理完成。"
                   : "这次没有拿到可展示的内容，你可以再试一次，或者换个问法继续。",
                 {
                   suppressJourneyPreview: false,
                   pinToTop: true,
                   reportData: streamingReportData,
+                  journeyData: streamingJourneyData,
+                  planningTrace: streamingPlanningTrace,
                 }
               );
             } else {
@@ -7391,6 +9688,8 @@
                 suppressJourneyPreview: false,
                 pinToTop: true,
                 reportData: streamingReportData,
+                journeyData: streamingJourneyData,
+                planningTrace: streamingPlanningTrace,
               });
             }
             setRuntimeStatus("行程建议已整理", "online");
@@ -7424,6 +9723,8 @@
                 suppressJourneyPreview: true,
                 pinToTop: true,
                 reportData: streamingReportData,
+                journeyData: streamingJourneyData,
+                planningTrace: streamingPlanningTrace,
               }
             );
           } else {
@@ -7616,4 +9917,3 @@
         div.textContent = text;
         return div.innerHTML.replace(/\n/g, "<br>");
       }
-

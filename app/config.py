@@ -674,6 +674,7 @@ class Settings(BaseSettings):
 
     # ============== MCP 服务配置 ==============
     amap_api_key: str = Field(default="", alias="AMAP_API_KEY")
+    amap_web_js_key: str = Field(default="", alias="AMAP_WEB_JS_KEY")
     tavily_api_key: str = Field(default="", alias="TAVILY_API_KEY")
     variflight_api_key: str = Field(default="", alias="VARIFLIGHT_API_KEY")
     aigohotel_api_key: str = Field(default="", alias="AIGOHOTEL_API_KEY")
