@@ -3,12 +3,13 @@
 """
 import json
 import asyncio
+import re
 import time
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import func, select
 from langchain_core.messages import HumanMessage, AIMessage, AIMessageChunk
 from app.models.base import get_db
 from app.models.user import User
@@ -22,6 +23,7 @@ from app.core.observability import (
     TurnObservation,
     public_tool_audit_event,
 )
+from app.core.intent import resolve_planning_mode
 from app.core.session_lock import SessionLockBusy, acquire_session_lock
 from app.core.approval import ApprovalGovernanceManager
 from app.tools.audit import (
@@ -44,6 +46,15 @@ router = APIRouter(prefix="/chat", tags=["对话"])
 SESSION_BUSY_MESSAGE = "当前会话正在处理上一轮消息，请稍后再试。"
 _THINK_OPEN_TAG = "<think>"
 _THINK_CLOSE_TAG = "</think>"
+_FAST_MODE_SPLIT_QUESTION = "您想要现成省心方案，还是个性化旅游规划？"
+
+_FAST_DESTINATION_COPY = {
+    "杭州": "杭州很适合慢逛和尝鲜，四天左右刚好能把西湖周边和老城区的烟火气走舒服。",
+    "西藏": "西藏很适合看雪山、湖泊和高原风景，时间安排稳一点会更舒服。",
+    "云南": "云南很适合慢节奏看山水、古城和烟火气，五天左右可以先抓一条清爽主线。",
+    "成都": "成都很适合美食、人文和轻松节奏，几天时间就能玩得很有层次。",
+    "西安": "西安很适合人文、美食和博物馆路线，几天时间可以把经典体验排得很扎实。",
+}
 
 
 def _longest_tag_prefix_suffix(text: str, tag: str) -> int:
@@ -125,6 +136,73 @@ class JourneyDraftUpdate(BaseModel):
 def _strip_assistant_thinking_content(text: str) -> str:
     thinking_filter = _AssistantThinkingFilter()
     return thinking_filter.feed(text) + thinking_filter.finish()
+
+
+def _extract_fast_mode_destination(text: str) -> str:
+    normalized = " ".join(str(text or "").split())
+    if not normalized:
+        return ""
+    for destination in _FAST_DESTINATION_COPY:
+        if destination in normalized:
+            return destination
+    patterns = (
+        r"(?:想去|去|到|目的地是|目的地[:：]?)\s*([一-龥]{2,8})(?:玩|旅游|旅行|游|，|,|。|$)",
+        r"([一-龥]{2,8})(?:玩|旅游|旅行|游)",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, normalized)
+        if match:
+            candidate = match.group(1).strip(" ，。,.")
+            if candidate and candidate not in {"我们", "两个", "左右", "预算", "每人"}:
+                return candidate
+    return ""
+
+
+def _build_fast_mode_split_message(user_message: str) -> str:
+    destination = _extract_fast_mode_destination(user_message)
+    if destination in _FAST_DESTINATION_COPY:
+        lead = _FAST_DESTINATION_COPY[destination]
+    elif destination:
+        lead = f"{destination}是个很值得好好安排的目的地，先把方案类型定下来，后面路线会更贴合。"
+    else:
+        lead = "这次旅行信息已经有了一个不错的雏形，先把方案类型定下来，后面安排会更贴合。"
+    return f"{lead}{_FAST_MODE_SPLIT_QUESTION}"
+
+
+async def _conversation_role_counts(
+    db: AsyncSession,
+    conversation_id: str,
+) -> dict[str, int]:
+    if not callable(getattr(db, "execute", None)):
+        return {}
+    result = await db.execute(
+        select(Message.role, func.count(Message.id))
+        .where(Message.conversation_id == conversation_id)
+        .group_by(Message.role)
+    )
+    return {str(role): int(count) for role, count in result.all()}
+
+
+async def _should_use_fast_mode_split(
+    db: AsyncSession,
+    conversation_id: str,
+    user_message: str,
+) -> bool:
+    decision = resolve_planning_mode(
+        user_message,
+        state={"current_step": "requirement_collection"},
+    )
+    if not decision.needs_confirmation:
+        return False
+    try:
+        counts = await _conversation_role_counts(db, conversation_id)
+    except Exception as exc:
+        app_logger.info(
+            "Fast mode split skipped because message history count failed: "
+            f"conversation_id={conversation_id}, error={exc.__class__.__name__}"
+        )
+        return False
+    return counts.get("user", 0) == 1 and counts.get("assistant", 0) == 0
 
 
 async def save_message(
@@ -616,6 +694,36 @@ async def generate_sse_stream(
         )
         # 1. 保存用户消息
         await save_message(db, conversation_id, "user", user_message)
+
+        if await _should_use_fast_mode_split(db, conversation_id, user_message):
+            assistant_message = _build_fast_mode_split_message(user_message)
+            turn_observation.update_context(
+                current_step="requirement_collection",
+                planning_mode="pending_confirmation",
+                planning_mode_source="fast_mode_split",
+            )
+            yield sse(record_assistant_token(assistant_message))
+            observability_snapshot = turn_observation.finish("completed")
+            assistant_extra_info["observability"] = observability_snapshot
+            assistant_extra_info["fast_mode_split"] = {
+                "needs_confirmation": True,
+                "question": _FAST_MODE_SPLIT_QUESTION,
+            }
+            await save_message(
+                db,
+                conversation_id,
+                "assistant",
+                assistant_message,
+                extra_info=assistant_extra_info,
+            )
+            app_logger.info(
+                "SSE fast planning-mode split completed without creating travel agent: "
+                f"turn_id={turn_observation.turn_id}, conversation_id={conversation_id}, "
+                f"user_id={user.id}"
+            )
+            yield sse(turn_observation.to_sse_event())
+            yield sse(_turn_done_payload(turn_observation))
+            return
 
         # 2. 创建 agent
         agent = await create_travel_agent()

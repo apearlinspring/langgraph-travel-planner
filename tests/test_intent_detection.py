@@ -224,6 +224,55 @@ def test_destination_with_chinese_people_count_without_mode_asks_for_two_plannin
     assert "个性化旅游规划" in decision.reason
 
 
+def test_ready_made_plan_phrase_maps_to_agency_plan():
+    decision = resolve_planning_mode(
+        "现成的方案吧",
+        state={"current_step": "requirement_collection"},
+    )
+
+    assert decision.mode == "agency_plan"
+    assert decision.confirmed is True
+
+
+@pytest.mark.asyncio
+async def test_middleware_forces_mode_confirmation_when_user_selects_agency_plan(monkeypatch):
+    monkeypatch.setattr(
+        "app.core.middleware.get_model_compatibility",
+        lambda **_: ModelCompatibility(supports_forced_tool_choice=True),
+    )
+    captured = {}
+    middleware = StepConfigMiddleware(
+        {
+            "requirement_collection": {
+                "prompt": "collect",
+                "tools": [
+                    "record_requirement_tool",
+                    "set_planning_mode_tool",
+                    "confirm_planning_mode_tool",
+                    "search_agency_product_templates",
+                ],
+                "requires": [],
+            },
+        }
+    )
+    state = {"current_step": "requirement_collection"}
+
+    async def handler(request):
+        captured["tools"] = request.tools
+        captured["tool_choice"] = getattr(request, "tool_choice", None)
+        captured["system_prompt"] = getattr(request, "system_prompt", "")
+        return "ok"
+
+    await middleware.awrap_model_call(
+        DummyRequest(state, [HumanMessage(content="现成的方案吧")]),
+        handler,
+    )
+
+    assert captured["tools"] == ["confirm_planning_mode_tool"]
+    assert captured["tool_choice"] == "confirm_planning_mode_tool"
+    assert "mode 参数传 agency_plan" in captured["system_prompt"]
+
+
 def test_personalized_travel_planning_phrase_maps_to_free_planning():
     intent = detect_travel_intent(
         "我想要个性化旅游规划，不要现成旅行社产品。",

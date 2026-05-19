@@ -4,6 +4,7 @@ Map preview APIs for frontend route visualization.
 from __future__ import annotations
 
 import json
+import asyncio
 import math
 import re
 import time
@@ -89,6 +90,9 @@ class MapPreviewResponse(BaseModel):
 PREVIEW_CACHE_TTL_SECONDS = 60 * 10
 GEOCODE_CACHE_TTL_SECONDS = 60 * 60 * 12
 GEOCODE_FAILURE_TTL_SECONDS = 60 * 15
+MAP_TOOL_LOAD_TIMEOUT_SECONDS = 3.0
+MAP_GEOCODE_TIMEOUT_SECONDS = 2.5
+MAP_DIRECTION_TIMEOUT_SECONDS = 2.5
 
 _preview_cache: dict[str, tuple[float, MapPreviewResponse]] = {}
 _geocode_cache: dict[str, tuple[float, MapPoint | None]] = {}
@@ -138,8 +142,14 @@ def _build_day_key(label: str, index: int) -> str:
 
 
 async def _get_amap_tool(name: str):
-    manager = await get_mcp_client(servers=["amap"])
-    tools = await manager.get_tools(servers=["amap"])
+    manager = await asyncio.wait_for(
+        get_mcp_client(servers=["amap"]),
+        timeout=MAP_TOOL_LOAD_TIMEOUT_SECONDS,
+    )
+    tools = await asyncio.wait_for(
+        manager.get_tools(servers=["amap"]),
+        timeout=MAP_TOOL_LOAD_TIMEOUT_SECONDS,
+    )
     for tool_item in tools:
         if tool_item.name == name:
             return tool_item
@@ -260,7 +270,10 @@ async def _resolve_point(
         payload["city"] = city
 
     try:
-        result = await tool.ainvoke(payload)
+        result = await asyncio.wait_for(
+            tool.ainvoke(payload),
+            timeout=MAP_GEOCODE_TIMEOUT_SECONDS,
+        )
         data = _parse_json_text(result)
         candidates = data.get("results") or []
         if not candidates:
@@ -325,11 +338,14 @@ async def _resolve_segment(
 ) -> MapRouteSegment:
     if direction_tool is not None:
         try:
-            result = await direction_tool.ainvoke(
-                {
-                    "origin": f"{left.lng},{left.lat}",
-                    "destination": f"{right.lng},{right.lat}",
-                }
+            result = await asyncio.wait_for(
+                direction_tool.ainvoke(
+                    {
+                        "origin": f"{left.lng},{left.lat}",
+                        "destination": f"{right.lng},{right.lat}",
+                    }
+                ),
+                timeout=MAP_DIRECTION_TIMEOUT_SECONDS,
             )
             data = _parse_json_text(result)
             paths = data.get("paths") or []

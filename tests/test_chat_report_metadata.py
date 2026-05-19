@@ -88,6 +88,49 @@ def test_report_content_from_command_output_falls_back_to_tool_message():
     assert _report_content_from_tool_output(output) == "工具消息报告"
 
 
+@pytest.mark.asyncio
+async def test_chat_stream_fast_mode_split_skips_full_agent(monkeypatch):
+    await reset_session_locks_for_tests()
+    saved_messages = []
+
+    async def fake_save_message(db, conversation_id, role, content, extra_info=None):
+        saved_messages.append(
+            {
+                "role": role,
+                "content": content,
+                "extra_info": extra_info or {},
+            }
+        )
+        return SimpleNamespace()
+
+    async def fake_role_counts(db, conversation_id):
+        return {"user": 1, "assistant": 0}
+
+    async def fake_create_travel_agent():
+        raise AssertionError("fast mode split should not create the full travel agent")
+
+    monkeypatch.setattr(chat, "save_message", fake_save_message)
+    monkeypatch.setattr(chat, "_conversation_role_counts", fake_role_counts)
+    monkeypatch.setattr(chat, "create_travel_agent", fake_create_travel_agent)
+
+    events = []
+    async for frame in chat.generate_sse_stream(
+        "conversation-fast-split",
+        "我想去杭州，两个人，四天左右，人均预算3500，请你帮我规划一下",
+        db=SimpleNamespace(),
+        user=SimpleNamespace(id="user-1"),
+    ):
+        events.append(json.loads(frame.removeprefix("data: ").strip()))
+
+    assert [event["type"] for event in events] == ["token", "turn_observability", "done"]
+    assert "杭州" in events[0]["content"]
+    assert "您想要现成省心方案，还是个性化旅游规划" in events[0]["content"]
+    assert saved_messages[0]["role"] == "user"
+    assert saved_messages[1]["role"] == "assistant"
+    assert saved_messages[1]["extra_info"]["fast_mode_split"]["needs_confirmation"] is True
+    assert events[1]["observability"]["planning_mode"] == "pending_confirmation"
+
+
 def test_strip_assistant_thinking_content_removes_complete_and_unclosed_blocks():
     text = (
         "公开建议。"

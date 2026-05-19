@@ -212,16 +212,24 @@
           return cached.promise;
         }
         const requestPromise = (async () => {
-          const response = await fetch(`${getApiBase()}/api/v1/maps/preview`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              ...(state.token ? { Authorization: `Bearer ${state.token}` } : {}),
-            },
-            body: JSON.stringify(payload),
-          });
-          if (!response.ok) {
-            throw new Error(`map-preview-${response.status}`);
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 12000);
+          let response;
+          try {
+            response = await fetch(`${getApiBase()}/api/v1/maps/preview`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                ...(state.token ? { Authorization: `Bearer ${state.token}` } : {}),
+              },
+              body: JSON.stringify(payload),
+              signal: controller.signal,
+            });
+            if (!response.ok) {
+              throw new Error(`map-preview-${response.status}`);
+            }
+          } finally {
+            clearTimeout(timeoutId);
           }
           const data = await response.json();
           journeyMapPreviewCache.set(cacheKey, {
@@ -1785,7 +1793,7 @@
         }
 
         node.dataset.mapReady = "loading";
-        node.innerHTML = '<div class="journey-live-map-state loading">正在定位这段旅程的关键地点…</div>';
+        node.innerHTML = '<div class="journey-live-map-state loading">正在定位行程路线的关键地点…</div>';
 
         try {
           const preview = await fetchJourneyMapPreview(payload);
@@ -2031,7 +2039,7 @@
         } catch (error) {
           node.dataset.mapReady = "error";
           node.innerHTML =
-            '<div class="journey-live-map-state error">暂时还没把这段路线定位到真实地图上，后面我会继续补强。</div>';
+            '<div class="journey-live-map-state error">暂时没能定位到路线地图，请先查看文字方案。</div>';
         }
       }
 
@@ -5704,7 +5712,7 @@
         if (!isJourneyPlaceholderValue(destination)) {
           return destination;
         }
-        return "这段旅程";
+        return "行程路线";
       }
 
       function renderJourneyAtlas(previewState, previewStops, previewMetrics) {
@@ -5731,6 +5739,12 @@
         const validRouteStops = routeStops.filter((item) => !item.disabled);
         const atlasTitle = buildJourneyAtlasTitle(previewState, previewStops);
         const hasDayView = dayPlans.length >= 1;
+        const hasLiveMapPayload =
+          hasDayView ||
+          mapHighlightQueries.length >= 2 ||
+          (previewState.recommendations || []).some(
+            (item) => item && Number.isFinite(Number(item.lng)) && Number.isFinite(Number(item.lat))
+          );
         const mapPayload = serializeMapPayload({
           origin: cityPair?.origin || routeStops[0]?.value || "",
           destination: cityPair?.destination || routeStops[1]?.value || "",
@@ -5862,13 +5876,23 @@
                       <button class="journey-map-style-btn" type="button" data-map-style="calm" aria-pressed="false" title="更轻的清爽底图">清爽</button>
                     </div>
                   </div>
+                  ${
+                    hasLiveMapPayload
+                      ? `
                   <div class="journey-live-map" data-map-payload="${mapPayload}">
                     <div class="journey-live-map-state loading">正在准备地图…</div>
-                  </div>
+                  </div>`
+                      : `
+                  <div class="journey-live-map journey-live-map--static">
+                    <div class="journey-live-map-state">行程路线会在每日安排明确后显示地图。</div>
+                  </div>`
+                  }
                   <div class="journey-live-map-footer">
                     <div class="journey-live-map-meta">
                       <span class="journey-live-map-meta-label">路线状态</span>
-                      <span class="journey-live-map-meta-value">正在准备路线地点…</span>
+                      <span class="journey-live-map-meta-value">${
+                        hasLiveMapPayload ? "定位路线中" : "待补充具体点位"
+                      }</span>
                     </div>
                     <div class="journey-map-focus-rail">
                       ${validRouteStops

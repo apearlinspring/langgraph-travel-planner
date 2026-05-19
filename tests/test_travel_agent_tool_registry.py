@@ -18,10 +18,10 @@ async def test_create_travel_agent_registers_accommodation_tools(monkeypatch):
     recorded = {}
 
     async def fake_get_all_mcp_tools():
-        return []
+        raise AssertionError("default travel agent creation should not preload raw MCP tools")
 
     async def fake_get_hotel_followup_tools():
-        return []
+        raise AssertionError("default travel agent creation should not preload hotel follow-up MCP tools")
 
     async def fake_create_step_config_middleware():
         return object()
@@ -106,7 +106,7 @@ async def test_create_travel_agent_tool_registry_has_governance_coverage(monkeyp
     monkeypatch.setattr(travel_agent_module, "create_agent", fake_create_agent)
     monkeypatch.setattr(travel_agent_module, "get_llm", lambda: object())
 
-    await travel_agent_module.create_travel_agent()
+    await travel_agent_module.create_travel_agent(include_raw_mcp_tools=True)
 
     missing = [
         item["tool_name"]

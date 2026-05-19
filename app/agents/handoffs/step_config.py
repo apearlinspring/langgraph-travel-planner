@@ -45,16 +45,10 @@ async def get_step_config():
         包含所有步骤配置的字典
     """
 
-    # ========== 按需加载工具 ==========
-    try:
-        hotel_followup_tools = await get_hotel_followup_tools()
-        search_tools = await get_search_tools()
-        date_tools = await get_date_tools()
-    except Exception as e:
-        app_logger.warning(f"MCP tools unavailable while building step config: {e}")
-        hotel_followup_tools = []
-        search_tools = []
-        date_tools = []
+    # 不在阶段配置构建时预加载 MCP 工具；真实查询由高层工具按需唤起。
+    hotel_followup_tools = []
+    search_tools = []
+    date_tools = []
     internal_rag_tools = get_internal_rag_tools()
 
     step_config = {
@@ -106,7 +100,9 @@ async def get_step_config():
 - 调用时尽量传 destination、date_text、days、style_query；如果上下文已有目的地但用户只说“下周三，7天，经典线吧”，也可以留空 destination，让工具从状态里读取。
 
 【确认与记录（关键）】
-当你认为信息已经齐全时，你必须先做一次“需求确认”，格式建议：
+当你认为信息已经齐全时，先区分两种规划方式：
+- 省心方案：只核对“目的地、天数、人数、预算”这几个基础需求；如果这些已具备，优先记录需求并给成熟路线样板/产品化方案，不要再问“我理解得对吗”，也不要逐项追问交通方式或酒店偏好。
+- 个性化旅游规划：可以做一次轻量需求确认，格式建议：
 - 出发地：
 - 目的地(如果用户有提到)：
 - 日期：
@@ -116,8 +112,8 @@ async def get_step_config():
 - 风格关键词：
 - 特殊需求/雷点：
 
-然后问一句：“我理解得对吗？还有没有‘必须要做’或‘坚决不想要’的点？”
-只有在用户明确确认无误后，才能调用 record_requirement_tool 进行记录。
+如果用户已经明确说“省心方案/现成方案/成熟产品/不用我操心”，不要把流程拉回自由行填表；基础需求足够时直接推进为成熟方案候选，缺少关键基础需求时一次只追问 1 个最影响方案的问题。
+个性化旅游规划只有在用户明确确认无误后，才能调用 record_requirement_tool 进行记录。
 
 【业务化模式判断】
 - 如果用户说“省心一点/你们旅行社帮我安排/按旅行社方案/不要我操心/适合亲子或团建”等，先记录为旅行社顾问方案倾向：后续方案需要更强调成熟路线、服务标准、预算依据和风险避坑。
@@ -134,10 +130,6 @@ async def get_step_config():
                 set_planning_mode_tool,
                 confirm_planning_mode_tool,
                 record_evidence_bundle_tool,
-                generate_visual_journey_tool,
-                query_destination_info,
-                *date_tools,
-                *internal_rag_tools,
                 # 记忆工具
                 update_travel_style_tool,
                 update_dietary_restriction_tool,

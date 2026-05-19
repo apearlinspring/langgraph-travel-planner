@@ -86,24 +86,47 @@ def _with_recursion_limit(agent):
     return agent
 
 
-async def create_travel_agent(*, force_refresh: bool = False):
+async def create_travel_agent(
+    *,
+    force_refresh: bool = False,
+    include_raw_mcp_tools: bool = False,
+):
     """Build the main travel planning agent."""
     global _travel_agent, _travel_agent_mcp_signature
 
-    if _travel_agent is not None and not force_refresh:
+    requested_signature = None if include_raw_mcp_tools else "raw-mcp-disabled"
+    if (
+        requested_signature is not None
+        and _travel_agent is not None
+        and not force_refresh
+        and _travel_agent_mcp_signature == requested_signature
+    ):
         return _travel_agent
 
     async with _travel_agent_lock:
-        if _travel_agent is not None and not force_refresh:
+        if (
+            requested_signature is not None
+            and _travel_agent is not None
+            and not force_refresh
+            and _travel_agent_mcp_signature == requested_signature
+        ):
             return _travel_agent
 
-        all_mcp_tools = await get_all_mcp_tools()
-        hotel_followup_tools = await get_hotel_followup_tools()
+        if include_raw_mcp_tools:
+            all_mcp_tools = await get_all_mcp_tools()
+            hotel_followup_tools = await get_hotel_followup_tools()
+        else:
+            all_mcp_tools = []
+            hotel_followup_tools = []
         internal_rag_tools = get_internal_rag_tools()
-        current_signature = _build_tool_signature(
-            all_mcp_tools,
-            hotel_followup_tools,
-            internal_rag_tools,
+        current_signature = (
+            _build_tool_signature(
+                all_mcp_tools,
+                hotel_followup_tools,
+                internal_rag_tools,
+            )
+            if include_raw_mcp_tools
+            else "raw-mcp-disabled"
         )
 
         if (
@@ -114,7 +137,7 @@ async def create_travel_agent(*, force_refresh: bool = False):
             return _travel_agent
 
         app_logger.info(
-            f"Creating travel agent with {len(all_mcp_tools)} MCP tools "
+            f"Creating travel agent with {len(all_mcp_tools)} raw MCP tools "
             f"(signature={current_signature})"
         )
 

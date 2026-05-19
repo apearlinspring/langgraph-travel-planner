@@ -446,7 +446,7 @@ async function checkReportSurface(page) {
     "route map"
   );
   const mapText = (await page.locator(".travel-report-map").textContent()) || "";
-  ["点位连线", "天气待查", "真实点位", "距离/时长待核验", "这轮先", "Day 结构", "自动切"].forEach((internalLabel) => {
+  ["点位连线", "天气待查", "真实点位", "距离/时长待核验", "这轮先", "Day 结构", "自动切", "这段旅程"].forEach((internalLabel) => {
     if (mapText.includes(internalLabel)) {
       throw new Error(`Route map leaked internal label: ${internalLabel}`);
     }

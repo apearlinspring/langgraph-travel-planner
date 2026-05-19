@@ -1294,9 +1294,43 @@ def _agency_plan_workflow_instruction(state_dict: dict[str, Any]) -> str:
     return (
         "【旅行社方案工作流已锁定】\n"
         f"当前按“{product_name}”的省心方案交付思路推进，active_workflow=agency_plan。"
-        "不要漂回自由行逐项追问交通方式、酒店偏好或自行订购方式；"
+        "流程固定为：确认基础需求 → 给成熟路线样板 → 等用户评价 → 满意后生成报告；"
+        "用户不满意时记录修改意见并出修订版。不要漂回自由行逐项追问交通方式、酒店偏好或自行订购方式；"
         "应直接给产品化交通口径、住宿商圈/档次、景点门票参考、餐饮安排、服务节点和不承诺边界。"
+        "不要空说“对一下关键信息”；如果要核对，必须列出已经识别到的目的地、天数、人数、预算和待补项。"
         "只有用户明确说“自由行/自己订/不要旅行社/不需要旅行社产品”时，才切回 free_planning。"
+    )
+
+
+def _should_force_planning_mode_confirmation(
+    decision: PlanningModeDecision,
+    state_dict: dict[str, Any],
+    current_step: str,
+) -> bool:
+    if current_step != "requirement_collection":
+        return False
+    if decision.mode not in {"agency_plan", "free_planning"}:
+        return False
+    if not decision.confirmed or decision.source != "latest_user":
+        return False
+    state_mode = (
+        state_dict.get("active_workflow")
+        or state_dict.get("planning_mode")
+        or (state_dict.get("user_requirement") or {}).get("planning_mode")
+    )
+    state_confirmed = bool(
+        state_dict.get("planning_mode_confirmed")
+        or (state_dict.get("user_requirement") or {}).get("planning_mode_confirmed")
+    )
+    return not (state_mode == decision.mode and state_confirmed)
+
+
+def _confirm_planning_mode_instruction(mode: str) -> str:
+    label = "省心方案" if mode == "agency_plan" else "个性化旅游规划"
+    return (
+        f"用户本轮已经选择“{label}”。本轮必须先调用 confirm_planning_mode_tool，"
+        f"mode 参数传 {mode}，reason 写“用户明确选择{label}”。"
+        "工具返回后再用一句自然话确认已按该方案类型推进，不要继续显示待确认。"
     )
 
 
@@ -2558,6 +2592,25 @@ class StepConfigMiddleware(AgentMiddleware):
         )
         middleware_forced_tool = None
         latest_tool_result_names = _latest_tool_result_names(request)
+        if _should_force_planning_mode_confirmation(
+            planning_mode,
+            state_dict,
+            current_step,
+        ):
+            confirm_tool = _find_tool_by_name(self._step_config, "confirm_planning_mode_tool")
+            if confirm_tool is not None:
+                override_kwargs["tools"] = [confirm_tool]
+                available_tool_names = _tool_names(override_kwargs["tools"])
+                middleware_forced_tool = "confirm_planning_mode_tool"
+                intent_preferred_tool = None
+                override_kwargs["system_prompt"] = (
+                    f"{override_kwargs['system_prompt']}\n\n"
+                    f"{_confirm_planning_mode_instruction(planning_mode.mode)}"
+                )
+                app_logger.info(
+                    "用户已选择规划模式：本轮强制写入模式状态: "
+                    f"mode={planning_mode.mode}"
+                )
         if (
             current_step == "destination_recommendation"
             and "record_requirement_tool" in latest_tool_result_names
