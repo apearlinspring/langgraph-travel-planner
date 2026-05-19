@@ -200,6 +200,17 @@ def test_complete_first_turn_without_mode_asks_for_two_planning_choices():
     assert "个性化旅游规划" in decision.reason
 
 
+def test_compact_route_first_turn_without_mode_asks_for_two_planning_choices():
+    decision = resolve_planning_mode(
+        "西安到西藏，下周一，7天，2人，每人5000",
+        state={"current_step": "requirement_collection"},
+    )
+
+    assert decision.mode is None
+    assert decision.needs_confirmation is True
+    assert decision.confirmed is False
+
+
 def test_personalized_travel_planning_phrase_maps_to_free_planning():
     intent = detect_travel_intent(
         "我想要个性化旅游规划，不要现成旅行社产品。",
@@ -508,11 +519,10 @@ async def test_middleware_asks_to_confirm_ambiguous_planning_mode():
         handler,
     )
 
-    assert "confirm_planning_mode_tool" in captured["tools"]
-    assert "record_requirement_tool" not in captured["tools"]
-    assert "search_agency_product_templates" not in captured["tools"]
+    assert captured["tools"] == []
     assert "规划模式表达不够明确" in captured["system_prompt"]
     assert "您想要现成省心方案，还是个性化旅游规划" in captured["system_prompt"]
+    assert "不要整理已知信息" in captured["system_prompt"]
 
 
 @pytest.mark.asyncio
@@ -543,21 +553,15 @@ async def test_middleware_asks_mode_for_complete_first_turn_without_mode():
         DummyRequest(
             state,
             [
-                HumanMessage(
-                    content=(
-                        "我想从西安出发去西藏，出发时间大概是下周一，"
-                        "行程预计7天，同行人数是2人，预算希望控制在每人5000。"
-                    )
-                )
+                HumanMessage(content="西安到西藏，下周一，7天，2人，每人5000")
             ],
         ),
         handler,
     )
 
-    assert "confirm_planning_mode_tool" in captured["tools"]
-    assert "record_requirement_tool" not in captured["tools"]
-    assert "search_agency_product_templates" not in captured["tools"]
+    assert captured["tools"] == []
     assert "您想要现成省心方案，还是个性化旅游规划" in captured["system_prompt"]
+    assert "不要整理已知信息" in captured["system_prompt"]
 
 
 @pytest.mark.asyncio
@@ -605,8 +609,7 @@ async def test_middleware_does_not_record_requirement_before_mode_confirmation(m
         handler,
     )
 
-    assert "confirm_planning_mode_tool" in captured["tools"]
-    assert "record_requirement_tool" not in captured["tools"]
+    assert captured["tools"] == []
     assert captured["tool_choice"] is None
     assert "规划模式表达不够明确" in captured["system_prompt"]
 

@@ -338,17 +338,23 @@ async function checkMainSurface(page, viewport) {
   await expectVisible(page, ".chat-input-area", `${viewport.name} chat input area`);
   await expectVisible(page, "#governanceConsole", `${viewport.name} governance console`);
   await expectVisible(page, ".governance-section.readiness", `${viewport.name} ready check area`);
+  await expectContainsText(
+    page,
+    "#readinessTitle",
+    ["当前阶段"],
+    `${viewport.name} readiness title`
+  );
   await expectText(page, "#readinessSummary", "ready check summary", 20);
   await expectContainsText(
     page,
     "#readinessSummary",
-    ["当前阶段", "方案类型", "已确认信息", "已使用服务", "重要提醒"],
+    ["方案类型", "已确认信息", "已使用服务", "重要提醒"],
     `${viewport.name} readiness human copy`
   );
   await expectNotContainsText(
     page,
     "#readinessSummary",
-    ["工作流", "这里只放", "人工确认边界"],
+    ["当前阶段", "工作流", "这里只放", "人工确认边界"],
     `${viewport.name} readiness internal copy`
   );
   if (!(await page.locator("#governanceDetails").isHidden())) {

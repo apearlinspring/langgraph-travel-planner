@@ -3229,15 +3229,11 @@
           ...(data.startup_complete === false ? ["服务仍在启动中"] : []),
         ];
         const turn = state.governance?.turnObservability || {};
-        const currentStage =
-          state.governance?.turnObservability?.stepLabel ||
-          getStatusLabel(turn.step || "requirement_collection");
         const planningMode =
           state.governance?.turnObservability?.planningModeLabel ||
           getStatusLabel(turn.planning_mode || "pending_confirmation");
         const calledServices = Number(turn.toolCallCount || turn.tool_call_count || 0);
         return [
-          `<strong>当前阶段：${escapeHtml(currentStage)}</strong>`,
           `<span>方案类型：${escapeHtml(planningMode)}</span>`,
           `<span>已确认信息：${escapeHtml(
             turn.step ? "正在随对话更新" : "待你补充出发地、时间、人数和预算"
@@ -3268,14 +3264,27 @@
         ];
       }
 
+      function readinessCurrentStageLabel() {
+        const turn = state.governance?.turnObservability || {};
+        return (
+          state.governance?.turnObservability?.stepLabel ||
+          getStatusLabel(turn.step || "requirement_collection")
+        );
+      }
+
       function renderReadinessPanel(payload = null) {
         const data = payload || state.readiness.payload || {};
         const status = data.status || state.readiness.status || "checking";
         const statusPill = document.getElementById("readinessStatusPill");
+        const title = document.getElementById("readinessTitle");
         const summary = document.getElementById("readinessSummary");
         const grid = document.getElementById("readinessServiceGrid");
 
         setPillStatus(statusPill, status, getStatusLabel(status));
+
+        if (title) {
+          title.textContent = `当前阶段：${readinessCurrentStageLabel()}`;
+        }
 
         if (summary) {
           summary.innerHTML = readinessSummaryLines(data, status).join("");

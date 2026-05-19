@@ -336,10 +336,51 @@ def _keyword_score(text: str, keywords: tuple[str, ...]) -> int:
     return sum(1 for keyword in keywords if keyword and keyword in text)
 
 
+_ROUTE_TIME_WORDS = (
+    "今天",
+    "明天",
+    "后天",
+    "大后天",
+    "周一",
+    "周二",
+    "周三",
+    "周四",
+    "周五",
+    "周六",
+    "周日",
+    "星期一",
+    "星期二",
+    "星期三",
+    "星期四",
+    "星期五",
+    "星期六",
+    "星期日",
+    "下周",
+    "这周",
+    "本周",
+)
+
+
+def _has_compact_route_pair_hint(text: str) -> bool:
+    for match in re.finditer(
+        r"([\u4e00-\u9fff]{2,12})(?:出发)?(?:去|到|飞往)([\u4e00-\u9fff]{2,16})",
+        text,
+    ):
+        origin, destination = match.group(1), match.group(2)
+        segment = f"{origin}{destination}"
+        if any(word in segment for word in _ROUTE_TIME_WORDS):
+            continue
+        if any(word in segment for word in ("预算", "每人", "每位", "人数", "天数", "行程")):
+            continue
+        return True
+    return False
+
+
 def _has_route_requirement_hint(text: str) -> bool:
     return bool(
         re.search(r"从.{1,12}(出发)?(去|到|飞|开车去|坐车去).{1,16}", text)
         or re.search(r".{1,12}(去|到).{1,16}(玩|旅行|旅游|出差|团建)", text)
+        or _has_compact_route_pair_hint(text)
     )
 
 
