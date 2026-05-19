@@ -307,10 +307,10 @@
             <div class="planner-panel-head">
               <div class="planner-panel-head-copy">
                 <div class="planner-panel-title">
-                  <i class="fa-solid fa-list-check"></i> 可选辅助栏
+                  <i class="fa-solid fa-list-check"></i> 行程摘要 / 待补信息
                 </div>
                 <div class="planner-panel-tip">
-                  这是加速整理需求的辅助区，不填也可以直接聊天；补几项信息通常会更快进入推荐。
+                  先把已知信息放在这里，也可以直接聊天；我会把缺口收束成下一步确认。
                 </div>
               </div>
               <button
@@ -484,7 +484,7 @@
             <div class="planner-mode-note">
               <div>
                 <strong>两种规划方式</strong>
-                <span>简洁攻略适合快速参考，完整规划会继续补齐交通、住宿、预算和最终报告。</span>
+                <span>省心方案会优先匹配成熟路线，个性化旅游规划会按你的偏好逐步细化。</span>
               </div>
             </div>
             <div class="planner-actions">
@@ -493,9 +493,9 @@
                   class="planner-btn primary"
                   type="button"
                   data-planner-control="true"
-                  onclick="composePlannerDraft('brief')"
+                  onclick="composePlannerDraft('agency')"
                 >
-                  整理简洁攻略
+                  省心方案
                 </button>
                 <button
                   class="planner-btn primary outline"
@@ -503,7 +503,7 @@
                   data-planner-control="true"
                   onclick="composePlannerDraft('personalized')"
                 >
-                  整理完整规划
+                  个性化旅游规划
                 </button>
                 <button
                   class="planner-btn secondary"
@@ -529,12 +529,12 @@
                   data-planner-control="true"
                   onclick="resetPlannerDraft()"
                 >
-                  清空辅助栏
+                  清空摘要
                 </button>
               </div>
             </div>
             <div class="planner-summary" id="plannerSummary">
-              不想填辅助栏也没关系，直接在下面描述需求也能开始；走完整段流程后，我会帮你整理成专属旅游规划。
+              可以先选一种规划方式；如果你只写旅行需求，我会先帮你确认要省心方案还是个性化旅游规划。
             </div>
             </div>
           </div>
@@ -572,8 +572,8 @@
             class="governance-icon-btn"
             id="governanceRefreshBtn"
             type="button"
-            aria-label="刷新治理台"
-            title="刷新治理台"
+            aria-label="刷新进度台"
+            title="刷新进度台"
             onclick="refreshGovernanceConsole()"
           >
             <i class="fa-solid fa-rotate-right"></i>
@@ -590,16 +590,13 @@
               检查中
             </span>
           </div>
-          <p class="governance-section-note">
-            这里只放用户需要知道的进度、已确认信息、长期偏好、已调用服务和人工确认边界。
-          </p>
           <div class="readiness-summary" id="readinessSummary">
             正在整理行程进度。
           </div>
           <div class="readiness-service-grid" id="readinessServiceGrid"></div>
         </section>
 
-        <details class="governance-details" id="governanceDetails">
+        <details class="governance-details" id="governanceDetails" hidden>
           <summary>
             <span>顾问/调试明细</span>
             <i class="fa-solid fa-chevron-down"></i>

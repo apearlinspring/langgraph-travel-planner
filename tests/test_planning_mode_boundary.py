@@ -252,7 +252,7 @@ def test_explicit_free_signal_overrides_overeager_agency_tool_argument():
 
     assert command.update["planning_mode"] == "free_planning"
     assert command.update["user_requirement"]["planning_mode"] == "free_planning"
-    assert "自由规划" in command.update["messages"][0].content
+    assert "个性化旅游规划" in command.update["messages"][0].content
 
 
 def test_confirmed_minimum_requirement_uses_pending_assumptions():

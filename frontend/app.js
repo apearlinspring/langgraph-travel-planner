@@ -3115,15 +3115,15 @@
           itinerary_generation: "行程生成",
           budget_summarization: "预算汇总",
           order_generation: "报告生成",
-          free_planning: "自由规划",
-          agency_plan: "旅行社顾问方案",
+          free_planning: "个性化旅游规划",
+          agency_plan: "省心方案",
           unknown: "待确认",
         };
         return labels[status] || status || "待确认";
       }
 
       function getReadinessStatusCopy(status = "") {
-        if (status === "ready") return "对话、报告、工具审计和人工确认边界都可演示。";
+        if (status === "ready") return "对话、报告和行程进度都可演示。";
         if (status === "degraded") return "核心规划可继续，部分外部查询可能需要稍后复查。";
         if (status === "not_ready") return "关键能力尚未就绪，暂不开放登录、聊天或确认动作。";
         if (status === "error") return "暂时无法连接服务，需要稍后重试。";
@@ -3148,7 +3148,7 @@
         store: "长期偏好",
         mcp: "外部查询",
         session_lock: "会话保护",
-        approval_governance: "人工确认边界",
+        approval_governance: "下单保护",
         postgres: "业务数据",
         redis: "会话保护",
       };
@@ -3201,7 +3201,7 @@
           },
           {
             key: "human_boundary",
-            label: "人工确认边界",
+            label: "下单保护",
             status: protectionStatus,
             description: "当前只记录边界，不会真实支付或下单",
           },
@@ -3237,13 +3237,16 @@
           getStatusLabel(turn.planning_mode || "pending_confirmation");
         const calledServices = Number(turn.toolCallCount || turn.tool_call_count || 0);
         return [
-          `<strong>${escapeHtml(currentStage)}</strong>`,
-          `<span>工作流：${escapeHtml(planningMode)}</span>`,
+          `<strong>当前阶段：${escapeHtml(currentStage)}</strong>`,
+          `<span>方案类型：${escapeHtml(planningMode)}</span>`,
+          `<span>已确认信息：${escapeHtml(
+            turn.step ? "正在随对话更新" : "待你补充出发地、时间、人数和预算"
+          )}</span>`,
           `<span>长期偏好：${escapeHtml(
             available.includes("长期偏好") ? "已接入，可用于后续建议" : "登录后逐步沉淀"
           )}</span>`,
-          `<span>已调用服务：${escapeHtml(
-            calledServices ? `${calledServices} 次服务调用，本轮结果见明细` : "本轮暂未调用外部服务"
+          `<span>已使用服务：${escapeHtml(
+            calledServices ? `${calledServices} 次查询或整理` : "本轮暂未使用外部查询"
           )}</span>`,
           `<span>外部服务：${escapeHtml(
             mcpStatus === "ready"
@@ -3254,12 +3257,12 @@
                   ? "暂不可用，可先生成草案"
                   : "正在检测"
           )}</span>`,
-          `<span>人工确认边界：${escapeHtml(
+          `<span>重要提醒：${escapeHtml(
             approvalReady
               ? approval.persistent
-                ? "确认记录可追溯；当前不触发真实支付、短信或下单"
-                : "边界说明可展示；确认记录能力仍需复查"
-              : "确认能力暂未就绪；不会执行真实支付、短信或下单"
+                ? "当前不会自动支付、发短信或下单"
+                : "当前不会自动支付、发短信或下单"
+              : "当前不会自动支付、发短信或下单"
           )}</span>`,
           `<span>待关注：${escapeHtml(attention.length ? attention.join("、") : "无")}</span>`,
         ];
@@ -3291,6 +3294,7 @@
             )
             .join("");
         }
+        syncGovernanceDebugVisibility();
       }
 
       function getCurrentUserRole() {
@@ -3300,6 +3304,20 @@
           state.user?.profile?.role ||
           "user"
         );
+      }
+
+      function canShowAdvisorDebug() {
+        return ["advisor", "approver", "admin", "debug"].includes(getCurrentUserRole());
+      }
+
+      function syncGovernanceDebugVisibility() {
+        const details = document.getElementById("governanceDetails");
+        if (!details) return;
+        const visible = canShowAdvisorDebug();
+        details.hidden = !visible;
+        if (!visible) {
+          details.open = false;
+        }
       }
 
       function canRequestAllApprovals() {
@@ -3810,7 +3828,7 @@
           }
           state.governance.selectedApprovalId ||=
             state.governance.approvals[0]?.approval_id || null;
-          if (!silent) showToast("治理台已刷新");
+          if (!silent) showToast("进度台已刷新");
         } catch (error) {
           state.governance.approvals = [];
           state.governance.selectedApprovalId = null;
@@ -4217,7 +4235,7 @@
               "服务尚未就绪，请等待后端核心依赖完成初始化";
           } else if (state.serviceStatus === "degraded") {
             composerHint.textContent =
-              "部分能力降级，可继续使用核心链路并留意治理台提示";
+              "部分能力降级，可继续使用核心规划并留意右侧进度提示";
           } else if (state.serviceStatus === "checking") {
             composerHint.textContent =
               "正在检测服务状态，确认就绪后会自动开放发送和新建会话";
@@ -4323,7 +4341,7 @@
 
       function applySuggestion(text) {
         appendToComposer(text, "replace");
-        updatePlannerSummary("这组需求已经填入输入框，可以直接发送；辅助栏只是加速整理需求，不是必填。");
+        updatePlannerSummary("这组需求已经填入输入框，可以直接发送；我会先确认你想要省心方案还是个性化旅游规划。");
         setRuntimeStatus("需求已填入，可以直接发送", "online");
       }
 
@@ -4378,7 +4396,7 @@
         document.getElementById("plannerStay").value = picked.stay;
         document.getElementById("plannerStyle").value = picked.style;
         persistPlannerDraft();
-        updatePlannerSummary("模板已填入，可以整理简洁攻略，也可以走更完整的规划流程。");
+        updatePlannerSummary("模板已填入，可以选择省心方案，也可以选择个性化旅游规划。");
       }
 
       function readPlannerFields() {
@@ -4431,20 +4449,20 @@
         ];
 
         const modeInstruction =
-          mode === "brief"
-            ? "。请按“简洁版旅行攻略”来做：不需要详细比较交通方式，也不用查询具体可订酒店；请直接按 Day 1 / Day 2 的形式给出每天怎么玩、住哪个区域或什么类型住宿、吃什么、节奏提醒和预算粗估，风格像清爽的小红书旅行帖子。如果缺少目的地或天数这类关键信息，再只追问必要问题。"
-            : "。请按“个性化完整规划”来做：先判断需求是否完整；如果已经足够，请继续完成目的地、交通、住宿、预算、每日路线，并在最后整理成专属于我的个性化旅游规划报告。交通和住宿可以结合可用工具做真实查询与对比。";
+          mode === "agency"
+            ? "。请按“现成省心方案”来做：优先匹配成熟路线样板，直接给交通、住宿商圈、门票参考、餐饮和服务边界；价格只按参考价和待核验口径说明，不承诺实时锁价。"
+            : "。请按“个性化旅游规划”来做：先判断需求是否完整；如果已经足够，请继续完成目的地、交通、住宿、预算、每日路线，并在最后整理成专属于我的个性化旅游规划报告。交通和住宿可以结合可用工具做真实查询与对比。";
         parts.push(modeInstruction);
 
         const draft = parts.join("");
         appendToComposer(draft, "replace");
         updatePlannerSummary(
-          mode === "brief"
-            ? "简洁攻略草稿已放进输入框：适合快速得到每天怎么玩、住哪片区、吃什么。"
-            : "完整规划草稿已放进输入框：会继续补齐交通、住宿、预算和最终报告。"
+          mode === "agency"
+            ? "省心方案草稿已放进输入框：会优先匹配成熟路线，并说明价格待核验边界。"
+            : "个性化旅游规划草稿已放进输入框：会继续补齐交通、住宿、预算和最终报告。"
         );
         setRuntimeStatus(
-          mode === "brief" ? "简洁攻略草稿已整理" : "完整规划草稿已整理",
+          mode === "agency" ? "省心方案草稿已整理" : "个性化规划草稿已整理",
           "online"
         );
       }
@@ -4472,8 +4490,8 @@
         updatePlannerAssistStrip();
         updatePlannerSummary(
           silent
-            ? "这是加速整理需求的辅助区，不填也可以直接聊天；补几项信息通常会更快进入推荐。"
-            : "辅助栏已清空。你可以重新填写，也可以完全跳过，直接在下面自由输入。"
+            ? "可以先选一种规划方式；如果你只写旅行需求，我会先帮你确认要省心方案还是个性化旅游规划。"
+            : "行程摘要已清空。你可以重新填写，也可以直接在下面描述需求。"
         );
       }
 
@@ -5765,7 +5783,7 @@
                   <span>${
                     hasDayView
                       ? "直接在地图里切换总览和每天的路线，沿途景点会同步高亮。"
-                      : "这轮先稳住主线；等回复里出现更完整的 Day 结构后，这里会自动切到分日模式。"
+                      : "当前显示路线总览。"
                   }</span>
                 </div>
               </div>
@@ -5935,8 +5953,8 @@
                       <strong>${escapeHtml(atlasTitle)}</strong>
                       <p>${
                         hasDayView
-                          ? "先切换到某一天看当天路线，再根据沿途景点继续细化玩法、交通和落脚点。"
-                          : "这轮先稳定出发地、目的地与落脚点；一旦回复里给出完整日程，地图会自动补成分日路线。"
+                          ? "切换到某一天看当天路线，再根据沿途景点继续细化玩法、交通和落脚点。"
+                          : "当前显示路线总览，已识别的地点会先汇总在这里。"
                       }</p>
                     </div>
                   </div>
@@ -5949,7 +5967,7 @@
                               <strong class="journey-map-day-insight-title">当前查看总览路线</strong>
                             </div>
                             <p class="journey-map-day-insight-copy">
-                              先把整段主线看清楚，后面再切到 Day 1 / Day 2 看每天怎么走。
+                              先看整段路线，再切换到某一天查看当天怎么走。
                             </p>
                             <ul class="journey-map-day-insight-points">
                               ${validRouteStops
@@ -5972,7 +5990,7 @@
                               <strong>总览模式</strong>
                             </div>
                             <p class="journey-map-day-insight-copy">
-                              这轮先把出发地、目的地、交通和落脚区域稳住；等回复里给出具体的 Day 结构后，这里会自动切成按天查看。
+                              当前显示整段路线总览。
                             </p>
                           </div>
                         `
@@ -6169,7 +6187,7 @@
             <div class="journey-preview-head">
               <div class="journey-preview-title">
                 <strong>路线预览</strong>
-                <span>下面这块会跟着规划一起长成分日路线图：先看主线，再切具体哪一天，沿途景点也会同步标出来。</span>
+                <span>先看整段路线，也可以切换到具体某一天，沿途景点会同步高亮。</span>
               </div>
               <div class="journey-preview-badge">
                 <i class="fa-solid fa-map-location-dot"></i> ${
@@ -6996,23 +7014,23 @@
         if (mode === "agency_plan") {
           return {
             mode,
-            label: "旅行社顾问方案",
-            shortLabel: "顾问方案",
+            label: "省心方案",
+            shortLabel: "省心方案",
             icon: "fa-user-tie",
             tone: "agency",
             copy:
-              "按顾问交付视角组织服务节点、成熟路线、费用依据和出发前核验项。",
+              "按成熟路线、服务节点、费用依据和出发前核验项组织。",
           };
         }
         if (mode === "free_planning") {
           return {
             mode,
-            label: "自由规划",
-            shortLabel: "自由规划",
+            label: "个性化旅游规划",
+            shortLabel: "个性化规划",
             icon: "fa-route",
             tone: "free",
             copy:
-              "按自己预订、灵活调整的方式呈现路线、预算依据和风险提醒。",
+              "按你的偏好呈现路线、预算依据和风险提醒。",
           };
         }
         return {
@@ -7201,7 +7219,7 @@
           <div class="travel-report-governance">
             <div class="travel-report-governance-status">
               <div>
-                <span>人工确认状态</span>
+                <span>确认状态</span>
                 <strong>${escapeHtml(statusText)}</strong>
               </div>
               <div>
@@ -7214,7 +7232,7 @@
               </div>
             </div>
             <div class="travel-report-governance-boundary">
-              <strong>人工确认边界</strong>
+              <strong>确认边界</strong>
               <p>${escapeHtml(approval.boundary)}</p>
               ${renderReportDataList(unsupported, "暂无额外不可承诺项。")}
             </div>
@@ -8237,16 +8255,6 @@
         return `
           <div class="travel-plan">
             ${
-              summaryHtml
-                ? `<div class="travel-summary">
-                    <div class="travel-summary-label">
-                      <i class="fa-solid fa-compass-drafting"></i> 行程摘要
-                    </div>
-                    <div class="travel-summary-copy">${summaryHtml}</div>
-                  </div>`
-                : ""
-            }
-            ${
               shouldRenderTravelCards
                 ? `
                     <div class="travel-grid">
@@ -8302,6 +8310,16 @@
                 : ""
             }
             ${journeyPreviewHtml}
+            ${
+              summaryHtml
+                ? `<div class="travel-summary">
+                    <div class="travel-summary-label">
+                      <i class="fa-solid fa-compass-drafting"></i> 行程摘要
+                    </div>
+                    <div class="travel-summary-copy">${summaryHtml}</div>
+                  </div>`
+                : ""
+            }
           </div>
         `;
       }
@@ -8423,7 +8441,7 @@
 
       function renderPlanningTrace(trace = []) {
         const items = (Array.isArray(trace) ? trace : []).filter(Boolean);
-        if (!items.length) return "";
+        if (!items.length || !canShowAdvisorDebug()) return "";
         return `
           <details class="planning-trace-panel" open>
             <summary>

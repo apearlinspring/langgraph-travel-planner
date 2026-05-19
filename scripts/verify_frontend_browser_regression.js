@@ -191,7 +191,7 @@ async function installNetworkStubs(context) {
               approval_id: "browser-regression-approval",
               action: "generate_order_id",
               label: "生成报告订单号",
-              reason: "验证治理台人工确认记录渲染。",
+              reason: "验证进度台确认记录渲染。",
               status: "none",
               requires_approval: false,
               created_at: 1778508000,
@@ -278,10 +278,20 @@ async function expectText(page, selector, label, minLength = 2) {
 async function expectContainsText(page, selector, fragments, label) {
   const locator = page.locator(selector).first();
   await locator.waitFor({ state: "visible", timeout: 5000 });
-  const text = (await locator.textContent()) || "";
+  const text = (await locator.evaluate((node) => node.innerText || node.textContent || "")) || "";
   const missing = fragments.filter((fragment) => !text.includes(fragment));
   if (missing.length) {
     throw new Error(`${label} missing text: ${missing.join(", ")}`);
+  }
+}
+
+async function expectNotContainsText(page, selector, fragments, label) {
+  const locator = page.locator(selector).first();
+  await locator.waitFor({ state: "visible", timeout: 5000 });
+  const text = (await locator.evaluate((node) => node.innerText || node.textContent || "")) || "";
+  const leaked = fragments.filter((fragment) => text.includes(fragment));
+  if (leaked.length) {
+    throw new Error(`${label} leaked text: ${leaked.join(", ")}`);
   }
 }
 
@@ -303,7 +313,7 @@ async function seedLoggedInState(page) {
       JSON.stringify({
         id: "browser-regression-user",
         username: "browser-regression",
-        role: "admin",
+        role: "user",
       })
     );
   });
@@ -332,12 +342,18 @@ async function checkMainSurface(page, viewport) {
   await expectContainsText(
     page,
     "#readinessSummary",
-    ["工作流", "外部服务", "人工确认边界"],
+    ["当前阶段", "方案类型", "已确认信息", "已使用服务", "重要提醒"],
     `${viewport.name} readiness human copy`
   );
-  await page.locator("#governanceDetails").evaluate((node) => {
-    node.open = true;
-  });
+  await expectNotContainsText(
+    page,
+    "#readinessSummary",
+    ["工作流", "这里只放", "人工确认边界"],
+    `${viewport.name} readiness internal copy`
+  );
+  if (!(await page.locator("#governanceDetails").isHidden())) {
+    throw new Error(`${viewport.name} advisor/debug details should be hidden for normal users.`);
+  }
   await page.evaluate(() => {
     window.rememberToolAuditEvent?.({
       tool: "query_transport_options",
@@ -379,25 +395,15 @@ async function checkMainSurface(page, viewport) {
   await expectContainsText(
     page,
     "#governanceConsole",
-    ["行程进度台", "当前进展", "已调用服务", "服务摘要"],
+    ["行程进度台", "当前进展", "方案类型", "已使用服务"],
     `${viewport.name} governance explanation copy`
   );
-  await expectContainsText(
+  await expectNotContainsText(
     page,
-    "#toolAuditList",
-    ["交通查询", "未查到合适结果", "不是系统崩溃", "住宿查询", "参数不足"],
-    `${viewport.name} tool audit semantic copy`
+    "#governanceConsole",
+    ["工作流", "这里只放", "人工确认边界", "工具审计"],
+    `${viewport.name} governance internal copy`
   );
-  await expectContainsText(
-    page,
-    "#turnObservabilityGrid",
-    ["交通规划", "旅行社顾问方案", "追踪码"],
-    `${viewport.name} turn observability labels`
-  );
-  const observabilityText = (await page.locator("#turnObservabilityGrid").textContent()) || "";
-  if (observabilityText.includes("unknown")) {
-    throw new Error(`${viewport.name} turn observability should not render unknown.`);
-  }
 }
 
 async function checkReportSurface(page) {
@@ -412,7 +418,7 @@ async function checkReportSurface(page) {
   await expectContainsText(
     page,
     '[data-report-source="structured"]',
-    ["脱敏演示", "旅行社顾问方案", "导出报告", "查看路线地图"],
+    ["脱敏演示", "省心方案", "导出报告", "查看路线地图"],
     "structured report shell"
   );
   await expectContainsText(
@@ -434,7 +440,7 @@ async function checkReportSurface(page) {
     "route map"
   );
   const mapText = (await page.locator(".travel-report-map").textContent()) || "";
-  ["点位连线", "天气待查", "真实点位", "距离/时长待核验"].forEach((internalLabel) => {
+  ["点位连线", "天气待查", "真实点位", "距离/时长待核验", "这轮先", "Day 结构", "自动切"].forEach((internalLabel) => {
     if (mapText.includes(internalLabel)) {
       throw new Error(`Route map leaked internal label: ${internalLabel}`);
     }

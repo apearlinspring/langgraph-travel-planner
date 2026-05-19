@@ -187,6 +187,36 @@ def test_resolve_planning_mode_marks_ambiguous_mode_for_confirmation():
     assert decision.confirmed is False
 
 
+def test_complete_first_turn_without_mode_asks_for_two_planning_choices():
+    decision = resolve_planning_mode(
+        "我想从西安出发去西藏，出发时间大概是下周一，行程预计7天，同行人数是2人，预算希望控制在每人5000",
+        state={"current_step": "requirement_collection"},
+    )
+
+    assert decision.mode is None
+    assert decision.needs_confirmation is True
+    assert decision.confirmed is False
+    assert "省心方案" in decision.reason
+    assert "个性化旅游规划" in decision.reason
+
+
+def test_personalized_travel_planning_phrase_maps_to_free_planning():
+    intent = detect_travel_intent(
+        "我想要个性化旅游规划，不要现成旅行社产品。",
+        current_step="requirement_collection",
+    )
+    decision = resolve_planning_mode(
+        "我想要个性化旅游规划，不要现成旅行社产品。",
+        state={},
+        intent=intent,
+    )
+
+    assert intent.name == "free_planning_query"
+    assert intent.planning_mode == "free_planning"
+    assert decision.mode == "free_planning"
+    assert decision.confirmed is True
+
+
 def test_resolve_planning_mode_uses_persisted_state_when_latest_text_is_neutral():
     decision = resolve_planning_mode(
         "那继续安排下一步。",
@@ -482,6 +512,52 @@ async def test_middleware_asks_to_confirm_ambiguous_planning_mode():
     assert "record_requirement_tool" not in captured["tools"]
     assert "search_agency_product_templates" not in captured["tools"]
     assert "规划模式表达不够明确" in captured["system_prompt"]
+    assert "您想要现成省心方案，还是个性化旅游规划" in captured["system_prompt"]
+
+
+@pytest.mark.asyncio
+async def test_middleware_asks_mode_for_complete_first_turn_without_mode():
+    captured = {}
+    middleware = StepConfigMiddleware(
+        {
+            "requirement_collection": {
+                "prompt": "collect",
+                "tools": [
+                    "record_requirement_tool",
+                    "set_planning_mode_tool",
+                    "confirm_planning_mode_tool",
+                    "search_agency_product_templates",
+                ],
+                "requires": [],
+            },
+        }
+    )
+    state = {"current_step": "requirement_collection"}
+
+    async def handler(request):
+        captured["tools"] = request.tools
+        captured["system_prompt"] = getattr(request, "system_prompt", "")
+        return "ok"
+
+    await middleware.awrap_model_call(
+        DummyRequest(
+            state,
+            [
+                HumanMessage(
+                    content=(
+                        "我想从西安出发去西藏，出发时间大概是下周一，"
+                        "行程预计7天，同行人数是2人，预算希望控制在每人5000。"
+                    )
+                )
+            ],
+        ),
+        handler,
+    )
+
+    assert "confirm_planning_mode_tool" in captured["tools"]
+    assert "record_requirement_tool" not in captured["tools"]
+    assert "search_agency_product_templates" not in captured["tools"]
+    assert "您想要现成省心方案，还是个性化旅游规划" in captured["system_prompt"]
 
 
 @pytest.mark.asyncio

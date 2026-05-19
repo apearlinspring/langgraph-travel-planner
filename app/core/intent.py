@@ -133,7 +133,6 @@ _FINAL_REPORT_KEYWORDS = (
     "生成报告",
     "最终方案",
     "完整方案",
-    "个性化旅游规划",
     "行程定稿",
     "定稿",
     "不用再问",
@@ -232,6 +231,8 @@ _PRODUCT_SOFT_MATCH_BLOCKERS = (
 _FREE_PLANNING_KEYWORDS = (
     "自由行",
     "自由规划",
+    "个性化旅游规划",
+    "个性化规划",
     "自助游",
     "自己出去玩",
     "自己玩",
@@ -335,6 +336,53 @@ def _keyword_score(text: str, keywords: tuple[str, ...]) -> int:
     return sum(1 for keyword in keywords if keyword and keyword in text)
 
 
+def _has_route_requirement_hint(text: str) -> bool:
+    return bool(
+        re.search(r"从.{1,12}(出发)?(去|到|飞|开车去|坐车去).{1,16}", text)
+        or re.search(r".{1,12}(去|到).{1,16}(玩|旅行|旅游|出差|团建)", text)
+    )
+
+
+def _has_date_or_duration_hint(text: str) -> bool:
+    date_hint = bool(
+        re.search(r"\d{4}[-/年]\d{1,2}[-/月]\d{1,2}", text)
+        or re.search(r"\d{1,2}\s*月\s*\d{0,2}\s*(日|号)?", text)
+        or re.search(r"(今天|明天|后天|大后天|本周|这周|下周|周末|端午|五一|国庆|春节|暑假|寒假)", text)
+    )
+    duration_hint = bool(re.search(r"\d+\s*天(?:\s*\d+\s*晚)?", text))
+    return date_hint or duration_hint
+
+
+def _has_people_hint(text: str) -> bool:
+    return bool(
+        re.search(r"\d+\s*(人|位|个成人|成人|大人|大|小)", text)
+        or re.search(r"(\d+\s*大\s*\d+\s*小|一家[三四五六]口|父母|老人|孩子)", text)
+    )
+
+
+def _has_budget_requirement_hint(text: str) -> bool:
+    return bool(
+        re.search(r"(预算|人均|每人|每位|总预算).{0,12}\d+", text)
+        or re.search(r"\d+\s*(元|块|千|万)", text)
+    )
+
+
+def _needs_first_turn_mode_confirmation(text: str) -> bool:
+    normalized = (text or "").strip()
+    if not normalized:
+        return False
+    if has_explicit_agency_signal(normalized) or has_explicit_free_signal(normalized):
+        return False
+    if _keyword_score(normalized, _AGENCY_PLAN_KEYWORDS + _FREE_PLANNING_KEYWORDS):
+        return False
+    return (
+        _has_route_requirement_hint(normalized)
+        and _has_date_or_duration_hint(normalized)
+        and _has_people_hint(normalized)
+        and _has_budget_requirement_hint(normalized)
+    )
+
+
 def _state_planning_mode(state: dict[str, Any] | None) -> TravelPlanningMode | None:
     if not state:
         return None
@@ -432,6 +480,14 @@ def _detect_planning_mode_from_text(text: str) -> PlanningModeDecision:
         agency_score += 3
 
     if agency_score == 0 and free_score == 0:
+        if _needs_first_turn_mode_confirmation(normalized):
+            return PlanningModeDecision(
+                confidence=0.68,
+                source="latest_user",
+                reason="用户已给出较完整旅行需求，但尚未选择省心方案或个性化旅游规划",
+                confirmed=False,
+                needs_confirmation=True,
+            )
         return PlanningModeDecision()
 
     if explicit_free and agency_plan_score == 0 and agency_quote_service_score > 0:

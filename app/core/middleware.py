@@ -1726,7 +1726,7 @@ def _planning_mode_instruction(decision: PlanningModeDecision) -> str:
     if decision.needs_confirmation:
         return (
             "本轮用户的规划模式表达不够明确。"
-            " 请先用一句话确认：用户更希望按自由行攻略自己决策，还是按旅行社顾问方案省心安排；"
+            " 请只用一句话确认：您想要现成省心方案，还是个性化旅游规划？"
             " 在确认前不要默认切到旅行社方案，也不要主动使用内部产品模板做推销式表达。"
         )
 
@@ -2012,6 +2012,8 @@ def _should_defer_initial_slow_tools(request: ModelRequest, text: str) -> bool:
     """Keep the first visible response ahead of slow external lookups."""
 
     if not _is_first_user_turn_without_assistant_text(request):
+        return False
+    if resolve_planning_mode(text, state=getattr(request, "state", {}) or {}).needs_confirmation:
         return False
     if _should_prioritize_requirement_record(text):
         return False
@@ -2325,9 +2327,13 @@ class StepConfigMiddleware(AgentMiddleware):
             )
 
         if planning_mode.mode == "free_planning" or planning_mode.needs_confirmation:
-            allowed_internal_tools = INTENT_INTERNAL_TOOL_ALLOWLIST.get(
-                travel_intent.name,
-                frozenset(),
+            allowed_internal_tools = (
+                frozenset()
+                if planning_mode.needs_confirmation
+                else INTENT_INTERNAL_TOOL_ALLOWLIST.get(
+                    travel_intent.name,
+                    frozenset(),
+                )
             )
             excluded_internal_tools = AGENCY_INTERNAL_TOOL_NAMES - allowed_internal_tools
             filtered_tools = _exclude_tools_by_name(override_kwargs["tools"], excluded_internal_tools)
@@ -2450,10 +2456,7 @@ class StepConfigMiddleware(AgentMiddleware):
             if defer_initial_slow_tools
             else _preferred_tool_for_intent(travel_intent, state_dict)
         )
-        if (
-            planning_mode.needs_confirmation
-            and intent_preferred_tool == "record_requirement_tool"
-        ):
+        if planning_mode.needs_confirmation:
             intent_preferred_tool = None
         if intent_preferred_tool and intent_preferred_tool not in available_tool_names:
             extra_tool = _find_tool_by_name(self._step_config, intent_preferred_tool)
