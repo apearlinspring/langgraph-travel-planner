@@ -1726,7 +1726,8 @@ def _planning_mode_instruction(decision: PlanningModeDecision) -> str:
     if decision.needs_confirmation:
         return (
             "本轮用户的规划模式表达不够明确。"
-            " 请只用一句话确认：您想要现成省心方案，还是个性化旅游规划？"
+            " 请只输出这一句话：您想要现成省心方案，还是个性化旅游规划？"
+            " 不要整理已知信息，不要给路线方向，不要补充预算、住宿、景点或地图建议。"
             " 在确认前不要默认切到旅行社方案，也不要主动使用内部产品模板做推销式表达。"
         )
 
@@ -2343,15 +2344,11 @@ class StepConfigMiddleware(AgentMiddleware):
                     "自由规划或待确认模式：本轮移除不相关旅行社内部 RAG 工具"
                 )
         if planning_mode.needs_confirmation:
-            filtered_tools = _exclude_tools_by_name(
-                override_kwargs["tools"],
-                {"record_requirement_tool"},
+            if override_kwargs["tools"]:
+                override_kwargs["tools"] = []
+            app_logger.info(
+                "规划模式待确认：本轮不开放工具，优先只确认省心方案或个性化旅游规划"
             )
-            if len(filtered_tools) != len(override_kwargs["tools"]):
-                override_kwargs["tools"] = filtered_tools
-                app_logger.info(
-                    "规划模式待确认：本轮暂缓记录需求，优先确认自由规划或旅行社顾问方案"
-                )
 
         if defer_initial_slow_tools:
             state["pending_initial_request_text"] = active_human_text
@@ -2366,7 +2363,9 @@ class StepConfigMiddleware(AgentMiddleware):
             )
 
         cross_step_tool_names = (
-            [] if defer_initial_slow_tools else _cross_step_verification_tools(latest_human_text)
+            []
+            if defer_initial_slow_tools or planning_mode.needs_confirmation
+            else _cross_step_verification_tools(latest_human_text)
         )
         date_blocked_cross_step_tools = set()
         date_guard_audit_tools: set[str] = set()
@@ -2522,6 +2521,12 @@ class StepConfigMiddleware(AgentMiddleware):
                     "最终报告意图：本轮工具列表已收窄为结构化报告工具: "
                     f"{sorted(available_tool_names)}"
                 )
+
+        if planning_mode.needs_confirmation and override_kwargs["tools"]:
+            override_kwargs["tools"] = []
+            available_tool_names = set()
+            middleware_forced_tool = None
+            app_logger.info("规划模式待确认：清空后续临时开放工具")
 
         recent_tool_names = _recent_tool_names_since_latest_human(request)
         repeat_instruction = _tool_repeat_instruction(current_step, recent_tool_names)
