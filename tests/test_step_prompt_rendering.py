@@ -1092,6 +1092,7 @@ async def test_requirement_collection_confirms_mode_before_recording_complete_co
     assert captured["tools"] == []
     assert "您想要现成省心方案，还是个性化旅游规划" in captured["system_prompt"]
     assert "不要整理已知信息" in captured["system_prompt"]
+    assert "先用一句自然" in captured["system_prompt"]
 
 
 @pytest.mark.asyncio

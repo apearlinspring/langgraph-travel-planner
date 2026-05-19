@@ -397,7 +397,11 @@ def _has_date_or_duration_hint(text: str) -> bool:
 def _has_people_hint(text: str) -> bool:
     return bool(
         re.search(r"\d+\s*(人|位|个成人|成人|大人|大|小)", text)
-        or re.search(r"(\d+\s*大\s*\d+\s*小|一家[三四五六]口|父母|老人|孩子)", text)
+        or re.search(r"[一二两俩三四五六七八九十]+\s*(个人|人|位|个成人|成人|大人|大|小)", text)
+        or re.search(
+            r"(\d+\s*大\s*\d+\s*小|[一二两三四五六七八九十]+\s*大\s*[一二两三四五六七八九十]+\s*小|一家[三四五六]口|父母|老人|孩子)",
+            text,
+        )
     )
 
 
@@ -416,12 +420,16 @@ def _needs_first_turn_mode_confirmation(text: str) -> bool:
         return False
     if _keyword_score(normalized, _AGENCY_PLAN_KEYWORDS + _FREE_PLANNING_KEYWORDS):
         return False
-    return (
-        _has_route_requirement_hint(normalized)
-        and _has_date_or_duration_hint(normalized)
-        and _has_people_hint(normalized)
-        and _has_budget_requirement_hint(normalized)
+    travel_detail_score = sum(
+        1
+        for has_hint in (
+            _has_date_or_duration_hint(normalized),
+            _has_people_hint(normalized),
+            _has_budget_requirement_hint(normalized),
+        )
+        if has_hint
     )
+    return _has_route_requirement_hint(normalized) and travel_detail_score >= 2
 
 
 def _state_planning_mode(state: dict[str, Any] | None) -> TravelPlanningMode | None:
@@ -525,7 +533,7 @@ def _detect_planning_mode_from_text(text: str) -> PlanningModeDecision:
             return PlanningModeDecision(
                 confidence=0.68,
                 source="latest_user",
-                reason="用户已给出较完整旅行需求，但尚未选择省心方案或个性化旅游规划",
+                reason="用户已给出旅行目的和关键约束，但尚未选择省心方案或个性化旅游规划",
                 confirmed=False,
                 needs_confirmation=True,
             )
