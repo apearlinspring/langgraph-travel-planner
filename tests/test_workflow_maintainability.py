@@ -306,11 +306,11 @@ def test_planning_mode_tools_persist_mode_reason_and_confirmation():
     assert command.update["planning_mode"] == "free_planning"
     assert command.update["active_workflow"] == "free_planning"
     assert command.update["planning_mode_confirmed"] is False
-    assert "自由规划" in command.update["messages"][0].content
+    assert "个性化旅游规划" in command.update["messages"][0].content
 
     command = confirm_planning_mode_tool.invoke(
         {
-            "mode": "旅行社顾问方案",
+            "mode": "省心方案",
             "reason": "用户改为希望省心安排",
             "runtime": _build_runtime(state),
         }
@@ -463,7 +463,7 @@ def test_record_requirement_persists_planning_mode():
     assert command.update["planning_mode_confirmed"] is True
     assert command.update["user_requirement"]["planning_mode"] == "agency_plan"
     assert command.update["user_requirement"]["planning_mode_reason"]
-    assert "规划模式：旅行社顾问方案" in command.update["messages"][0].content
+    assert "规划模式：省心方案" in command.update["messages"][0].content
 
 
 def test_record_requirement_confirms_relative_date_once_and_reuses_it(monkeypatch):

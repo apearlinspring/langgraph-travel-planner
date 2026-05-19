@@ -913,7 +913,7 @@ async function seedLoggedInState(page) {
       JSON.stringify({
         id: "visual-journey-browser-user",
         username: "visual-journey-browser",
-        role: "admin",
+        role: "user",
       })
     );
   });
@@ -943,6 +943,16 @@ async function expectContainsText(page, selector, fragments, label) {
   const missing = fragments.filter((fragment) => !text.includes(fragment));
   if (missing.length) {
     throw new Error(`${label} missing text: ${missing.join(", ")}`);
+  }
+}
+
+async function expectNotContainsText(page, selector, fragments, label) {
+  const locator = page.locator(selector).first();
+  await locator.waitFor({ state: "visible", timeout: 6000 });
+  const text = (await locator.evaluate((node) => node.innerText || node.textContent || "")) || "";
+  const leaked = fragments.filter((fragment) => text.includes(fragment));
+  if (leaked.length) {
+    throw new Error(`${label} leaked text: ${leaked.join(", ")}`);
   }
 }
 
@@ -1079,8 +1089,14 @@ async function checkVisualJourneySurface(page, viewport) {
   await expectContainsText(
     page,
     "#chatMessages",
-    ["规划过程", "杭州4天经典慢游", "正在搜索小红书和全网公开信息", "西湖", "良渚"],
+    ["杭州4天经典慢游", "西湖", "良渚"],
     `${viewport.name} visual journey copy`
+  );
+  await expectNotContainsText(
+    page,
+    "#chatMessages",
+    ["规划过程", "正在搜索小红书和全网公开信息"],
+    `${viewport.name} visual journey internal copy`
   );
   await expectContainsText(
     page,

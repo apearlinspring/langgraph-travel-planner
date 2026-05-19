@@ -170,14 +170,16 @@ FOOD_ALIASES = {
 }
 
 PLANNING_MODE_LABELS = {
-    "free_planning": "自由规划",
-    "agency_plan": "旅行社顾问方案",
+    "free_planning": "个性化旅游规划",
+    "agency_plan": "省心方案",
 }
 
 PLANNING_MODE_ALIASES = {
     "free_planning": "free_planning",
     "free": "free_planning",
     "自由规划": "free_planning",
+    "个性化旅游规划": "free_planning",
+    "个性化规划": "free_planning",
     "自由行": "free_planning",
     "自助游": "free_planning",
     "自己订": "free_planning",
@@ -814,7 +816,7 @@ def _set_planning_mode_command(
     normalized_mode = _normalize_planning_mode(mode)
     if not normalized_mode:
         return _command_with_message(
-            "规划模式只能是 free_planning（自由规划）或 agency_plan（旅行社顾问方案）。",
+            "规划模式只能是 free_planning（个性化旅游规划）或 agency_plan（省心方案）。",
             runtime,
         )
 

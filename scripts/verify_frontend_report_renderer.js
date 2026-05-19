@@ -85,7 +85,7 @@ for (const [mode, reportData] of fixtures) {
     html,
     [
       'data-report-source="structured"',
-      mode === "agency_plan" ? "旅行社顾问方案" : "自由规划",
+      mode === "agency_plan" ? "省心方案" : "个性化旅游规划",
       "脱敏演示",
       "风险提醒",
       "路线预览",
@@ -300,7 +300,6 @@ assertIncludes(
   [
     "visual-journey-workbench",
     "data-journey-data",
-    "规划过程",
     "西藏7天经典之旅",
     "visual-journey-stats",
     "路线预览",
@@ -332,6 +331,7 @@ assertIncludes(
   ],
   "visual-journey-workbench"
 );
+assertExcludes(visualJourneyHtml, ["规划过程"], "visual-journey-customer-view");
 assertIncludes(appScript, ["/api/v1/chat/journey/"], "journey-draft-save-api");
 assertIncludes(
   appScript,

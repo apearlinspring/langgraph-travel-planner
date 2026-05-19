@@ -617,6 +617,7 @@ async def test_step_middleware_forces_direct_transport_query():
     }
 
     async def handler(request):
+        captured["tools"] = getattr(request, "tools", [])
         captured["tool_choice"] = getattr(request, "tool_choice", None)
         captured["system_prompt"] = getattr(request, "system_prompt", "")
         return "ok"
@@ -752,6 +753,7 @@ async def test_step_middleware_does_not_force_transport_query_on_selection_turn(
     }
 
     async def handler(request):
+        captured["tools"] = getattr(request, "tools", [])
         captured["tool_choice"] = getattr(request, "tool_choice", None)
         captured["system_prompt"] = getattr(request, "system_prompt", "")
         return "ok"
@@ -1054,14 +1056,17 @@ async def test_requirement_collection_uses_injected_date_for_relative_date():
 
 
 @pytest.mark.asyncio
-async def test_requirement_collection_prioritizes_record_when_user_already_provided_core_info():
+async def test_requirement_collection_confirms_mode_before_recording_complete_core_info():
     captured = {}
-    compatibility = get_model_compatibility()
     middleware = StepConfigMiddleware(
         {
             "requirement_collection": {
                 "prompt": "需求收集阶段",
-                "tools": ["record_requirement_tool"],
+                "tools": [
+                    "record_requirement_tool",
+                    "set_planning_mode_tool",
+                    "confirm_planning_mode_tool",
+                ],
                 "requires": [],
             }
         }
@@ -1074,6 +1079,7 @@ async def test_requirement_collection_prioritizes_record_when_user_already_provi
     )
 
     async def handler(request):
+        captured["tools"] = getattr(request, "tools", [])
         captured["tool_choice"] = getattr(request, "tool_choice", None)
         captured["system_prompt"] = getattr(request, "system_prompt", "")
         return "ok"
@@ -1083,12 +1089,9 @@ async def test_requirement_collection_prioritizes_record_when_user_already_provi
         handler,
     )
 
-    if compatibility.supports_forced_tool_choice:
-        assert captured["tool_choice"] == "record_requirement_tool"
-    else:
-        assert captured["tool_choice"] is None
-        assert "record_requirement_tool" in captured["system_prompt"]
-        assert "不要为了补充非关键偏好而继续追问" in captured["system_prompt"]
+    assert "confirm_planning_mode_tool" in captured["tools"]
+    assert "record_requirement_tool" not in captured["tools"]
+    assert "您想要现成省心方案，还是个性化旅游规划" in captured["system_prompt"]
 
 
 @pytest.mark.asyncio
