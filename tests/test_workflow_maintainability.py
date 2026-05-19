@@ -208,7 +208,7 @@ async def test_step_config_covers_all_planning_steps(monkeypatch):
     assert "以工具返回的 report 作为最终报告正文" in config["order_generation"]["prompt"]
     assert "不要输出" in config["order_generation"]["prompt"]
     assert "[根据之前的对话填写]" in config["order_generation"]["prompt"]
-    assert "用一句话确认" in config["requirement_collection"]["prompt"]
+    assert "先用一句自然话术承接目的地" in config["requirement_collection"]["prompt"]
     assert "memory_scope（记忆作用域参数）" in config["requirement_collection"]["prompt"]
     assert "不写入长期画像" in config["destination_recommendation"]["prompt"]
     assert 'memory_scope="temporary"' in config["accommodation_planning"]["prompt"]

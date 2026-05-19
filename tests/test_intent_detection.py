@@ -211,6 +211,19 @@ def test_compact_route_first_turn_without_mode_asks_for_two_planning_choices():
     assert decision.confirmed is False
 
 
+def test_destination_with_chinese_people_count_without_mode_asks_for_two_planning_choices():
+    decision = resolve_planning_mode(
+        "我们两个人，想去云南玩，大概预算每人5000,5天左右",
+        state={"current_step": "requirement_collection"},
+    )
+
+    assert decision.mode is None
+    assert decision.needs_confirmation is True
+    assert decision.confirmed is False
+    assert "省心方案" in decision.reason
+    assert "个性化旅游规划" in decision.reason
+
+
 def test_personalized_travel_planning_phrase_maps_to_free_planning():
     intent = detect_travel_intent(
         "我想要个性化旅游规划，不要现成旅行社产品。",
@@ -523,6 +536,7 @@ async def test_middleware_asks_to_confirm_ambiguous_planning_mode():
     assert "规划模式表达不够明确" in captured["system_prompt"]
     assert "您想要现成省心方案，还是个性化旅游规划" in captured["system_prompt"]
     assert "不要整理已知信息" in captured["system_prompt"]
+    assert "先用一句自然" in captured["system_prompt"]
 
 
 @pytest.mark.asyncio
@@ -562,6 +576,45 @@ async def test_middleware_asks_mode_for_complete_first_turn_without_mode():
     assert captured["tools"] == []
     assert "您想要现成省心方案，还是个性化旅游规划" in captured["system_prompt"]
     assert "不要整理已知信息" in captured["system_prompt"]
+    assert "先用一句自然" in captured["system_prompt"]
+
+
+@pytest.mark.asyncio
+async def test_middleware_asks_mode_for_destination_budget_duration_with_chinese_count():
+    captured = {}
+    middleware = StepConfigMiddleware(
+        {
+            "requirement_collection": {
+                "prompt": "collect",
+                "tools": [
+                    "record_requirement_tool",
+                    "set_planning_mode_tool",
+                    "confirm_planning_mode_tool",
+                    "search_agency_product_templates",
+                ],
+                "requires": [],
+            },
+        }
+    )
+    state = {"current_step": "requirement_collection"}
+
+    async def handler(request):
+        captured["tools"] = request.tools
+        captured["system_prompt"] = getattr(request, "system_prompt", "")
+        return "ok"
+
+    await middleware.awrap_model_call(
+        DummyRequest(
+            state,
+            [HumanMessage(content="我们两个人，想去云南玩，大概预算每人5000,5天左右")],
+        ),
+        handler,
+    )
+
+    assert captured["tools"] == []
+    assert "您想要现成省心方案，还是个性化旅游规划" in captured["system_prompt"]
+    assert "先用一句自然" in captured["system_prompt"]
+    assert "必须使用用户原文里的目的地" in captured["system_prompt"]
 
 
 @pytest.mark.asyncio
@@ -1022,7 +1075,7 @@ async def test_transport_query_result_selects_after_recent_record_authorization(
 
 
 @pytest.mark.asyncio
-async def test_initial_budgeted_style_trip_uses_lightweight_confirmation():
+async def test_initial_budgeted_style_trip_confirms_planning_mode_first():
     captured = {}
     middleware = StepConfigMiddleware(
         {
@@ -1053,7 +1106,9 @@ async def test_initial_budgeted_style_trip_uses_lightweight_confirmation():
     )
 
     assert captured["tools"] == []
-    assert "首轮轻量响应" in captured["system_prompt"]
+    assert "您想要现成省心方案，还是个性化旅游规划" in captured["system_prompt"]
+    assert "不要整理已知信息" in captured["system_prompt"]
+    assert "首轮轻量响应" not in captured["system_prompt"]
 
 
 @pytest.mark.asyncio
