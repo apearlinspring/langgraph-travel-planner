@@ -1452,6 +1452,35 @@ html {
         padding-right: 3px;
         overscroll-behavior: contain;
       }
+      .tool-audit-public {
+        margin-top: 12px;
+        border: 1px solid rgba(26, 77, 84, 0.08);
+        border-radius: 14px;
+        overflow: hidden;
+        background: rgba(255, 255, 255, 0.58);
+      }
+      .tool-audit-public > summary {
+        padding: 12px;
+        background: rgba(26, 77, 84, 0.045);
+      }
+      .tool-audit-public .governance-section {
+        padding-top: 12px;
+      }
+      .tool-audit-raw-name {
+        margin-top: 5px;
+        color: rgba(72, 97, 102, 0.72);
+        font-size: 11px;
+        line-height: 1.45;
+        overflow-wrap: anywhere;
+      }
+      .tool-audit-raw-name code {
+        padding: 2px 5px;
+        border-radius: 6px;
+        background: rgba(26, 77, 84, 0.08);
+        color: var(--primary);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 10px;
+      }
       .governance-details {
         border-top: 1px solid rgba(26, 77, 84, 0.08);
       }
@@ -1477,6 +1506,11 @@ html {
       }
       .governance-details[open] > summary i {
         transform: rotate(180deg);
+      }
+      .tool-audit-public > summary {
+        padding: 12px;
+        border-radius: 14px 14px 0 0;
+        background: rgba(26, 77, 84, 0.045);
       }
       .governance-detail-body {
         display: grid;

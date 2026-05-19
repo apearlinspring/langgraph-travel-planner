@@ -1625,13 +1625,15 @@ async def test_confirmed_date_and_agency_workflow_are_not_reasked_in_later_steps
         handler,
     )
 
-    assert "query_transport_options" in captured["tools"]
+    assert "query_transport_options" not in captured["tools"]
+    assert captured["tools"] == ["search_agency_product_templates"]
     assert "出发日期：2026-05-27" in captured["system_prompt"]
     assert "入住日期：2026-05-27" in captured["system_prompt"]
     assert "退房日期：2026-05-31" in captured["system_prompt"]
     assert "不得再次询问同一出发日期、入住日期或退房日期" in captured["system_prompt"]
     assert "active_workflow=agency_plan" in captured["system_prompt"]
     assert "不要漂回自由行逐项追问交通方式、酒店偏好" in captured["system_prompt"]
+    assert "不要询问用户选择飞机/高铁或酒店偏好" in captured["system_prompt"]
 
 
 @pytest.mark.asyncio

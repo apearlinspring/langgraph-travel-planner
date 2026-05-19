@@ -348,13 +348,13 @@ async function checkMainSurface(page, viewport) {
   await expectContainsText(
     page,
     "#readinessSummary",
-    ["方案类型", "已确认信息", "已使用服务", "重要提醒"],
+    ["方案类型", "已确认信息", "长期偏好", "重要提醒"],
     `${viewport.name} readiness human copy`
   );
   await expectNotContainsText(
     page,
     "#readinessSummary",
-    ["当前阶段", "工作流", "这里只放", "人工确认边界"],
+    ["当前阶段", "工作流", "这里只放", "人工确认边界", "已使用服务"],
     `${viewport.name} readiness internal copy`
   );
   if (!(await page.locator("#governanceDetails").isHidden())) {
@@ -395,9 +395,30 @@ async function checkMainSurface(page, viewport) {
         tool_failure_count: 1,
         fallback_count: 1,
         estimated_total_tokens: 180,
+        progress_snapshot: {
+          confirmed_facts: [
+            { key: "departure_city", label: "出发地", value: "西安" },
+            { key: "destination", label: "目的地", value: "南京" },
+            { key: "departure_date", label: "出发时间", value: "2026-05-25" },
+          ],
+          long_term_preferences: ["喜欢历史人文"],
+        },
       },
     });
   });
+  await expectContainsText(
+    page,
+    "#readinessSummary",
+    ["出发地：西安", "目的地：南京", "喜欢历史人文"],
+    `${viewport.name} readiness confirmed facts`
+  );
+  await expectVisible(page, "#toolAuditPanel[open]", `${viewport.name} service audit panel`);
+  await expectContainsText(
+    page,
+    "#toolAuditPanel",
+    ["已使用服务", "交通查询", "query_transport_options"],
+    `${viewport.name} service audit public and raw names`
+  );
   await expectContainsText(
     page,
     "#governanceConsole",

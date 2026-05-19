@@ -5,6 +5,7 @@ import json
 import asyncio
 import re
 import time
+from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -39,6 +40,7 @@ from app.tools.result_validation import (
 )
 from app.journey.visual_planner import JOURNEY_PLAN_VERSION, validate_journey_plan
 from app.utils.logger import app_logger
+from app.utils.date_normalization import normalize_travel_date
 from app.utils.security import redact_sensitive_data, redact_sensitive_text
 
 router = APIRouter(prefix="/chat", tags=["对话"])
@@ -54,6 +56,33 @@ _FAST_DESTINATION_COPY = {
     "云南": "云南很适合慢节奏看山水、古城和烟火气，五天左右可以先抓一条清爽主线。",
     "成都": "成都很适合美食、人文和轻松节奏，几天时间就能玩得很有层次。",
     "西安": "西安很适合人文、美食和博物馆路线，几天时间可以把经典体验排得很扎实。",
+}
+
+_FAST_PLACE_STOPWORDS = {
+    "我们",
+    "两个",
+    "左右",
+    "预算",
+    "每人",
+    "人均",
+    "出发",
+    "规划",
+    "方案",
+    "旅游",
+    "旅行",
+}
+_FAST_CN_NUMBERS = {
+    "一": 1,
+    "二": 2,
+    "两": 2,
+    "三": 3,
+    "四": 4,
+    "五": 5,
+    "六": 6,
+    "七": 7,
+    "八": 8,
+    "九": 9,
+    "十": 10,
 }
 
 
@@ -138,28 +167,164 @@ def _strip_assistant_thinking_content(text: str) -> str:
     return thinking_filter.feed(text) + thinking_filter.finish()
 
 
-def _extract_fast_mode_destination(text: str) -> str:
+def _fast_cn_number(value: str) -> int | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.isdigit():
+        return int(text)
+    if text in _FAST_CN_NUMBERS:
+        return _FAST_CN_NUMBERS[text]
+    if "十" not in text:
+        return None
+    left, _, right = text.partition("十")
+    tens = _FAST_CN_NUMBERS.get(left, 1 if not left else 0)
+    ones = _FAST_CN_NUMBERS.get(right, 0) if right else 0
+    value_int = tens * 10 + ones
+    return value_int if value_int > 0 else None
+
+
+def _clean_fast_place_candidate(value: str) -> str:
+    candidate = str(value or "").strip(" ，。,.；;：:、")
+    candidate = re.split(
+        r"(?:玩|旅游|旅行|游|出发|规划|安排|帮我|预算|人均|每人|两个人|二人|[一二两三四五六七八九十\d]+人|[一二两三四五六七八九十\d]+天|下周|这周|本周|明天|后天|大后天)",
+        candidate,
+        maxsplit=1,
+    )[0]
+    candidate = re.sub(r"(?:的)?(?:交通|酒店|住宿|路线|方案|行程)$", "", candidate)
+    candidate = candidate.strip(" ，。,.；;：:、")
+    if candidate in _FAST_PLACE_STOPWORDS:
+        return ""
+    return candidate
+
+
+def _extract_fast_route_places(text: str) -> tuple[str, str]:
     normalized = " ".join(str(text or "").split())
     if not normalized:
-        return ""
-    for destination in _FAST_DESTINATION_COPY:
-        if destination in normalized:
-            return destination
+        return "", ""
+    place = r"([一-龥]{2,12}?)"
+    destination_boundary = (
+        r"(?=$|[，,。；;\s]|玩|旅游|旅行|游|两个人|二人|[一二两三四五六七八九十\d]+人|"
+        r"[一二两三四五六七八九十\d]+天|预算|人均|每人|下周|这周|本周|明天|后天|帮我|规划|安排)"
+    )
     patterns = (
-        r"(?:想去|去|到|目的地是|目的地[:：]?)\s*([一-龥]{2,8})(?:玩|旅游|旅行|游|，|,|。|$)",
-        r"([一-龥]{2,8})(?:玩|旅游|旅行|游)",
+        rf"(?:从|自){place}(?:出发)?(?:去|到|前往|飞往|开车去|坐车去){place}{destination_boundary}",
+        rf"{place}(?:出发)?(?:到|去|前往|->|→){place}{destination_boundary}",
     )
     for pattern in patterns:
         match = re.search(pattern, normalized)
-        if match:
-            candidate = match.group(1).strip(" ，。,.")
-            if candidate and candidate not in {"我们", "两个", "左右", "预算", "每人"}:
-                return candidate
-    return ""
+        if not match:
+            continue
+        origin = _clean_fast_place_candidate(match.group(1))
+        destination = _clean_fast_place_candidate(match.group(2))
+        if origin and destination and origin != destination:
+            return origin, destination
+    return "", ""
+
+
+def _extract_fast_mode_destination(text: str) -> str:
+    facts = extract_fast_split_facts(text)
+    return str(facts.get("destination") or "")
+
+
+def _extract_fast_date(text: str) -> tuple[str, str]:
+    normalized = " ".join(str(text or "").split())
+    patterns = (
+        r"\d{4}[-/年]\d{1,2}[-/月]\d{1,2}日?",
+        r"\d{1,2}月\d{1,2}日?",
+        r"(?:今天|明天|后天|大后天|下下周|下周|这周|本周|周末)(?:周|星期|礼拜)?[一二三四五六日天]?",
+        r"(?:周|星期|礼拜)[一二三四五六日天]",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, normalized)
+        if not match:
+            continue
+        raw = match.group(0)
+        try:
+            parsed = normalize_travel_date(raw, today=date.today())
+        except ValueError:
+            parsed = ""
+        return raw, parsed
+    return "", ""
+
+
+def _extract_fast_days(text: str) -> int | None:
+    normalized = " ".join(str(text or "").split())
+    match = re.search(r"([一二两三四五六七八九十\d]+)\s*天(?:左右|以内|以上)?", normalized)
+    if not match:
+        return None
+    return _fast_cn_number(match.group(1))
+
+
+def _extract_fast_people(text: str) -> int | None:
+    normalized = " ".join(str(text or "").split())
+    match = re.search(r"([一二两三四五六七八九十\d]+)\s*(?:个)?(?:人|成人|大人)", normalized)
+    if not match:
+        return None
+    return _fast_cn_number(match.group(1))
+
+
+def _extract_fast_budget(text: str) -> str:
+    normalized = " ".join(str(text or "").split())
+    match = re.search(
+        r"((?:预算\s*(?:人均|每人)?|(?:人均|每人)\s*预算?)\s*[约大概左右]*\s*\d+(?:\.\d+)?\s*(?:万|千)?\s*元?(?:左右|以内|上下)?)",
+        normalized,
+    )
+    if not match:
+        match = re.search(r"预算\s*([^\s，,。；;]{1,12})", normalized)
+    if not match:
+        return ""
+    budget = re.sub(r"\s+", "", match.group(1)).strip("，,。；;")
+    if not budget:
+        return ""
+    if "人均" not in budget and "每人" not in budget:
+        return f"{budget}（口径待确认）"
+    return budget
+
+
+def extract_fast_split_facts(text: str) -> dict:
+    """Parse first-turn trip facts without creating the full travel agent."""
+
+    normalized = " ".join(str(text or "").split())
+    if not normalized:
+        return {}
+
+    departure_city, destination = _extract_fast_route_places(normalized)
+    if not destination:
+        for known_destination in _FAST_DESTINATION_COPY:
+            if known_destination in normalized:
+                destination = known_destination
+                break
+    if not destination:
+        patterns = (
+            r"(?:想去|计划去|打算去|去|目的地是|目的地[:：]?)\s*([一-龥]{2,12}?)(?=玩|旅游|旅行|游|，|,|。|$)",
+            r"([一-龥]{2,12}?)(?:玩|旅游|旅行|游)",
+        )
+        for pattern in patterns:
+            match = re.search(pattern, normalized)
+            if match:
+                destination = _clean_fast_place_candidate(match.group(1))
+                if destination:
+                    break
+
+    date_text, departure_date = _extract_fast_date(normalized)
+    facts = {
+        "raw_text": normalized,
+        "departure_city": departure_city,
+        "destination": destination,
+        "departure_date_text": date_text,
+        "departure_date": departure_date,
+        "travel_days": _extract_fast_days(normalized),
+        "adult_count": _extract_fast_people(normalized),
+        "budget_text": _extract_fast_budget(normalized),
+        "source": "first_turn_fast_split",
+    }
+    return {key: value for key, value in facts.items() if value not in (None, "", [], {})}
 
 
 def _build_fast_mode_split_message(user_message: str) -> str:
-    destination = _extract_fast_mode_destination(user_message)
+    facts = extract_fast_split_facts(user_message)
+    destination = str(facts.get("destination") or "")
     if destination in _FAST_DESTINATION_COPY:
         lead = _FAST_DESTINATION_COPY[destination]
     elif destination:
@@ -203,6 +368,166 @@ async def _should_use_fast_mode_split(
         )
         return False
     return counts.get("user", 0) == 1 and counts.get("assistant", 0) == 0
+
+
+def _progress_snapshot_from_trip_facts(
+    facts: dict | None,
+    *,
+    planning_mode: str | None = None,
+) -> dict:
+    facts = facts if isinstance(facts, dict) else {}
+    confirmed = []
+    labels = (
+        ("departure_city", "出发地"),
+        ("destination", "目的地"),
+        ("departure_date", "出发时间"),
+        ("travel_days", "行程天数"),
+        ("adult_count", "人数"),
+        ("budget_text", "预算"),
+    )
+    for key, label in labels:
+        value = facts.get(key)
+        if value in (None, "", [], {}):
+            continue
+        display_value = f"{value}天" if key == "travel_days" else f"{value}人" if key == "adult_count" else str(value)
+        confirmed.append({"key": key, "label": label, "value": display_value})
+    return {
+        "version": "travel_progress_snapshot.v1",
+        "planning_mode": planning_mode or "pending_confirmation",
+        "confirmed_facts": confirmed,
+        "long_term_preferences": [],
+        "pending_items": [],
+    }
+
+
+def _progress_snapshot_from_state(update: dict | None) -> dict:
+    if not isinstance(update, dict):
+        return {}
+    requirement = update.get("user_requirement")
+    if not isinstance(requirement, dict):
+        requirement = {}
+    confirmed_facts = update.get("confirmed_facts")
+    if not isinstance(confirmed_facts, dict):
+        confirmed_facts = {}
+    facts = {
+        "departure_city": requirement.get("departure_city") or confirmed_facts.get("departure_city"),
+        "destination": requirement.get("destination") or confirmed_facts.get("destination"),
+        "departure_date": requirement.get("departure_date") or confirmed_facts.get("departure_date"),
+        "travel_days": requirement.get("travel_days") or confirmed_facts.get("travel_days"),
+        "adult_count": requirement.get("adult_count") or confirmed_facts.get("adult_count"),
+        "budget_text": (
+            confirmed_facts.get("budget_text")
+            or requirement.get("budget_text")
+            or (
+                f"{requirement.get('budget_min')}-{requirement.get('budget_max')}元/人"
+                if requirement.get("budget_min") and requirement.get("budget_max")
+                else ""
+            )
+        ),
+    }
+    planning_mode = (
+        update.get("planning_mode")
+        or requirement.get("planning_mode")
+        or update.get("active_workflow")
+    )
+    return _progress_snapshot_from_trip_facts(facts, planning_mode=planning_mode)
+
+
+def _fast_split_state_seed(
+    facts: dict | None,
+    *,
+    planning_mode: str | None = None,
+) -> dict:
+    facts = facts if isinstance(facts, dict) else {}
+    if not facts:
+        return {}
+    requirement: dict[str, object] = {}
+    for source_key, target_key in (
+        ("departure_city", "departure_city"),
+        ("destination", "destination"),
+        ("departure_date", "departure_date"),
+        ("travel_days", "travel_days"),
+        ("adult_count", "adult_count"),
+    ):
+        value = facts.get(source_key)
+        if value not in (None, "", [], {}):
+            requirement[target_key] = value
+    if facts.get("budget_text"):
+        requirement["budget_text"] = facts["budget_text"]
+        requirement["special_needs"] = f"预算：{facts['budget_text']}"
+    if planning_mode in {"agency_plan", "free_planning"}:
+        requirement["planning_mode"] = planning_mode
+        requirement["active_workflow"] = planning_mode
+        requirement["planning_mode_confirmed"] = True
+    confirmed_facts = {
+        key: value
+        for key, value in {
+            "departure_city": facts.get("departure_city"),
+            "destination": facts.get("destination"),
+            "departure_date": facts.get("departure_date"),
+            "travel_days": facts.get("travel_days"),
+            "adult_count": facts.get("adult_count"),
+            "budget_text": facts.get("budget_text"),
+        }.items()
+        if value not in (None, "", [], {})
+    }
+    seed = {
+        "pending_initial_request_text": facts.get("raw_text", ""),
+        "fast_split_facts": dict(facts),
+        "progress_snapshot": _progress_snapshot_from_trip_facts(
+            facts,
+            planning_mode=planning_mode,
+        ),
+    }
+    if requirement:
+        seed["user_requirement"] = requirement
+    if confirmed_facts:
+        seed["confirmed_facts"] = confirmed_facts
+    if planning_mode in {"agency_plan", "free_planning"}:
+        seed.update(
+            {
+                "planning_mode": planning_mode,
+                "active_workflow": planning_mode,
+                "planning_mode_confirmed": True,
+                "pending_initial_planning_mode": planning_mode,
+                "pending_initial_planning_mode_reason": "用户在首轮分流后明确选择方案类型",
+            }
+        )
+    return seed
+
+
+async def _load_latest_fast_split_facts_for_turn(
+    db: AsyncSession,
+    *,
+    conversation_id: str,
+) -> dict:
+    if not callable(getattr(db, "execute", None)):
+        return {}
+    try:
+        result = await db.execute(
+            select(Message)
+            .where(Message.conversation_id == conversation_id)
+            .where(Message.role == "assistant")
+            .order_by(Message.created_at.desc())
+            .limit(5)
+        )
+    except Exception as exc:
+        app_logger.info(
+            "Fast split facts load skipped: "
+            f"conversation_id={conversation_id}, error={exc.__class__.__name__}"
+        )
+        return {}
+    for message in result.scalars().all():
+        extra_info = getattr(message, "extra_info", None)
+        if not isinstance(extra_info, dict):
+            continue
+        fast_split = extra_info.get("fast_mode_split")
+        if not isinstance(fast_split, dict) or not fast_split.get("needs_confirmation"):
+            continue
+        facts = fast_split.get("facts") or fast_split.get("fast_split_facts")
+        if isinstance(facts, dict) and facts:
+            return dict(facts)
+    return {}
 
 
 async def save_message(
@@ -546,6 +871,10 @@ def _update_observation_from_state_update(
             or "state_update"
         ),
     )
+    progress_snapshot = update.get("progress_snapshot")
+    if not isinstance(progress_snapshot, dict):
+        progress_snapshot = _progress_snapshot_from_state(update)
+    observation.set_progress_snapshot(progress_snapshot)
 
 
 def _safe_stream_error_payload(
@@ -696,11 +1025,15 @@ async def generate_sse_stream(
         await save_message(db, conversation_id, "user", user_message)
 
         if await _should_use_fast_mode_split(db, conversation_id, user_message):
+            fast_facts = extract_fast_split_facts(user_message)
             assistant_message = _build_fast_mode_split_message(user_message)
             turn_observation.update_context(
                 current_step="requirement_collection",
                 planning_mode="pending_confirmation",
                 planning_mode_source="fast_mode_split",
+            )
+            turn_observation.set_progress_snapshot(
+                _progress_snapshot_from_trip_facts(fast_facts)
             )
             yield sse(record_assistant_token(assistant_message))
             observability_snapshot = turn_observation.finish("completed")
@@ -708,6 +1041,7 @@ async def generate_sse_stream(
             assistant_extra_info["fast_mode_split"] = {
                 "needs_confirmation": True,
                 "question": _FAST_MODE_SPLIT_QUESTION,
+                "facts": fast_facts,
             }
             await save_message(
                 db,
@@ -736,6 +1070,28 @@ async def generate_sse_stream(
             "session_id": conversation_id,
             "turn_id": turn_observation.turn_id,
         }
+        latest_fast_split_facts = await _load_latest_fast_split_facts_for_turn(
+            db,
+            conversation_id=conversation_id,
+        )
+        if latest_fast_split_facts:
+            mode_decision = resolve_planning_mode(
+                user_message,
+                state={"current_step": "requirement_collection"},
+            )
+            if mode_decision.confirmed:
+                selected_mode = mode_decision.mode
+                fast_seed = _fast_split_state_seed(
+                    latest_fast_split_facts,
+                    planning_mode=selected_mode,
+                )
+                input_data.update(fast_seed)
+                if fast_seed.get("progress_snapshot"):
+                    turn_observation.set_progress_snapshot(fast_seed["progress_snapshot"])
+                app_logger.info(
+                    "Injected first-turn fast split facts into agent state: "
+                    f"conversation_id={conversation_id}, mode={selected_mode or 'pending'}"
+                )
         latest_journey_data = await _load_latest_journey_data_for_turn(
             db,
             conversation_id=conversation_id,

@@ -594,6 +594,27 @@
             正在整理行程进度。
           </div>
           <div class="readiness-service-grid" id="readinessServiceGrid"></div>
+          <details class="governance-details tool-audit-public" id="toolAuditPanel" open>
+            <summary>
+              <span>已使用服务</span>
+              <span class="governance-count-pill" id="toolAuditCount">0</span>
+              <i class="fa-solid fa-chevron-down"></i>
+            </summary>
+            <div class="governance-section audit" aria-labelledby="toolAuditTitle">
+              <div class="governance-section-head">
+                <div>
+                  <span class="governance-section-label">本轮服务记录</span>
+                  <h3 id="toolAuditTitle">服务摘要</h3>
+                </div>
+              </div>
+              <p class="governance-section-note">
+                同时展示用户可理解的服务名和原始工具名，便于验收本轮调用链路。
+              </p>
+              <div class="tool-audit-list" id="toolAuditList">
+                <div class="governance-empty">本轮还没有可展示的工具摘要。</div>
+              </div>
+            </div>
+          </details>
         </section>
 
         <details class="governance-details" id="governanceDetails" hidden>
@@ -646,22 +667,6 @@
                 <div id="approvalEventsList" class="governance-empty">
                   选择一条记录后展示后续状态变化。
                 </div>
-              </div>
-            </section>
-
-            <section class="governance-section audit" aria-labelledby="toolAuditTitle">
-              <div class="governance-section-head">
-                <div>
-                  <span class="governance-section-label">已调用服务</span>
-                  <h3 id="toolAuditTitle">服务摘要</h3>
-                </div>
-                <span class="governance-count-pill" id="toolAuditCount">0</span>
-              </div>
-              <p class="governance-section-note">
-                默认只展示服务结论；原始工具名和调试字段只用于顾问/调试视图。
-              </p>
-              <div class="tool-audit-list" id="toolAuditList">
-                <div class="governance-empty">本轮还没有可展示的工具摘要。</div>
               </div>
             </section>
 

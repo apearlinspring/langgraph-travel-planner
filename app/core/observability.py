@@ -229,6 +229,7 @@ class TurnObservation:
     error_type: str | None = None
     tool_events: list[dict[str, Any]] = field(default_factory=list)
     degradation_reasons: list[str] = field(default_factory=list)
+    progress_snapshot: dict[str, Any] = field(default_factory=dict)
 
     @property
     def user_message_chars(self) -> int:
@@ -326,6 +327,14 @@ class TurnObservation:
         self.error_type = str(error_type or "UnknownError")
         self.status = "failed"
 
+    def set_progress_snapshot(self, snapshot: dict[str, Any] | None) -> None:
+        if isinstance(snapshot, dict) and snapshot:
+            self.progress_snapshot = sanitize_observability_value(
+                snapshot,
+                max_text_length=160,
+                max_list_items=12,
+            )
+
     def finish(self, status: str = "completed", error_type: str | None = None) -> dict[str, Any]:
         if self.finished_at is None:
             self.finished_at = time.time()
@@ -353,6 +362,7 @@ class TurnObservation:
             "estimated_input_tokens": self.estimated_input_tokens,
             "estimated_output_tokens": self.estimated_output_tokens,
             "estimated_total_tokens": self.estimated_total_tokens,
+            "progress_snapshot": dict(self.progress_snapshot),
         }
 
     def to_internal_snapshot(self) -> dict[str, Any]:

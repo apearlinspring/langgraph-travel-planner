@@ -81,6 +81,9 @@ class MapPreviewDay(BaseModel):
 class MapPreviewResponse(BaseModel):
     provider: str = "leaflet-osm"
     geocoder: str = "amap-mcp"
+    status: str = "success"
+    message: str = ""
+    elapsed_seconds: float | None = None
     center: dict[str, float] | None = None
     points: list[MapPoint] = Field(default_factory=list)
     days: list[MapPreviewDay] = Field(default_factory=list)
@@ -93,9 +96,14 @@ GEOCODE_FAILURE_TTL_SECONDS = 60 * 15
 MAP_TOOL_LOAD_TIMEOUT_SECONDS = 3.0
 MAP_GEOCODE_TIMEOUT_SECONDS = 2.5
 MAP_DIRECTION_TIMEOUT_SECONDS = 2.5
+MAP_PREVIEW_OVERALL_TIMEOUT_SECONDS = 10.5
 
 _preview_cache: dict[str, tuple[float, MapPreviewResponse]] = {}
 _geocode_cache: dict[str, tuple[float, MapPoint | None]] = {}
+
+
+def _map_preview_deadline_expired(deadline: float | None) -> bool:
+    return bool(deadline and time.perf_counter() >= deadline)
 
 
 def _extract_text_payload(result: Any) -> str:
@@ -257,6 +265,9 @@ async def _resolve_point(
     kind: str,
     city: str | None = None,
 ) -> MapPoint | None:
+    if tool is None:
+        return None
+
     normalized = _normalize_query(address)
     if not normalized:
         return None
@@ -406,6 +417,8 @@ async def get_map_preview(
 ):
     """Resolve frontend route-preview places into coordinates and day segments."""
 
+    started_at = time.perf_counter()
+    deadline = started_at + MAP_PREVIEW_OVERALL_TIMEOUT_SECONDS
     cache_key = json.dumps(
         {
             "origin": data.origin,
@@ -450,10 +463,24 @@ async def get_map_preview(
     )
     cached_preview = _preview_cache.get(cache_key)
     if cached_preview and cached_preview[0] > time.time():
-        return MapPreviewResponse.model_validate(cached_preview[1].model_dump())
+        cached = MapPreviewResponse.model_validate(cached_preview[1].model_dump())
+        cached.elapsed_seconds = round(time.perf_counter() - started_at, 3)
+        return cached
 
-    geo_tool = await _get_amap_tool("maps_geo")
-    direction_tool = await _get_optional_amap_tool("maps_direction_driving")
+    geo_tool = None
+    direction_tool = None
+    geocoder_unavailable = False
+    try:
+        geo_tool = await _get_amap_tool("maps_geo")
+    except Exception as exc:
+        elapsed = round(time.perf_counter() - started_at, 3)
+        geocoder_unavailable = True
+        app_logger.warning(
+            "Map preview unavailable before geocoding: "
+            f"user_id={user.id}, elapsed_seconds={elapsed:.3f}, error={exc}"
+        )
+    if geo_tool is not None:
+        direction_tool = await _get_optional_amap_tool("maps_direction_driving")
     destination_hint = _normalize_query(data.destination)
 
     ordered_queries = [
@@ -469,6 +496,8 @@ async def get_map_preview(
 
     points: list[MapPoint] = []
     for kind, label, query, city in ordered_queries:
+        if _map_preview_deadline_expired(deadline):
+            break
         point = await _resolve_point(
             geo_tool,
             address=query or "",
@@ -480,6 +509,8 @@ async def get_map_preview(
             points.append(point)
 
     for highlight in data.highlights[:4]:
+        if _map_preview_deadline_expired(deadline):
+            break
         query = f"{destination_hint} {highlight}" if destination_hint else highlight
         point = await _resolve_point(
             geo_tool,
@@ -492,6 +523,8 @@ async def get_map_preview(
             points.append(point)
 
     for recommendation in data.recommendations[:8]:
+        if _map_preview_deadline_expired(deadline):
+            break
         normalized_name = _normalize_query(recommendation.name)
         if not normalized_name:
             continue
@@ -529,6 +562,8 @@ async def get_map_preview(
     day_groups: list[MapPreviewDay] = []
     all_segments: list[MapRouteSegment] = []
     for index, day in enumerate(data.days[:7]):
+        if _map_preview_deadline_expired(deadline):
+            break
         seen_names: set[str] = set()
         day_points: list[MapPoint] = []
         day_label = _normalize_query(day.label) or f"Day {index + 1}"
@@ -538,6 +573,8 @@ async def get_map_preview(
         else:
             waypoint_items = day.waypoints[:8]
         for waypoint_item in waypoint_items[:8]:
+            if _map_preview_deadline_expired(deadline):
+                break
             if isinstance(waypoint_item, MapPreviewStopRequest):
                 normalized_waypoint = _normalize_query(waypoint_item.name)
                 point = _point_from_stop_coordinates(
@@ -585,6 +622,8 @@ async def get_map_preview(
             day_key = day.key or _build_day_key(day.label, index)
             segments: list[MapRouteSegment] = []
             for point_index in range(max(len(day_points) - 1, 0)):
+                if _map_preview_deadline_expired(deadline):
+                    break
                 segment = await _resolve_segment(
                     direction_tool,
                     day_key=day_key,
@@ -622,20 +661,38 @@ async def get_map_preview(
         else None
     )
 
+    elapsed = round(time.perf_counter() - started_at, 3)
+    timed_out = _map_preview_deadline_expired(deadline)
     app_logger.info(
         "Generated map preview payload: "
         f"user_id={user.id}, points={len(points)}, day_groups={len(day_groups)}, "
-        f"segments={len(all_segments)}, destination={destination_hint or 'n/a'}"
+        f"segments={len(all_segments)}, destination={destination_hint or 'n/a'}, "
+        f"elapsed_seconds={elapsed:.3f}, timed_out={timed_out}"
     )
+    empty_result = not points and not day_groups
     response = MapPreviewResponse(
         provider="amap-js" if settings.amap_web_js_key.strip() else "leaflet-osm",
+        status="degraded" if (timed_out or empty_result) else "success",
+        message=(
+            "地图服务响应较慢，已先展示可定位到的地点。"
+            if timed_out
+            else "地图服务暂时没有响应，已保留文字路线。"
+            if empty_result and geocoder_unavailable
+            else "暂时没有定位到可展示的路线点，已保留文字路线。"
+            if empty_result
+            else "地图定位服务响应不稳定，已用已有坐标展示路线。"
+            if geocoder_unavailable
+            else ""
+        ),
+        elapsed_seconds=elapsed,
         center=center,
         points=points,
         days=day_groups,
         segments=all_segments,
     )
-    _preview_cache[cache_key] = (
-        time.time() + PREVIEW_CACHE_TTL_SECONDS,
-        MapPreviewResponse.model_validate(response.model_dump()),
-    )
+    if response.points or response.days:
+        _preview_cache[cache_key] = (
+            time.time() + PREVIEW_CACHE_TTL_SECONDS,
+            MapPreviewResponse.model_validate(response.model_dump()),
+        )
     return response

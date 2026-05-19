@@ -12,6 +12,7 @@ os.environ.setdefault("POSTGRES_PASSWORD", "test_password")
 
 from app.api.v1 import chat
 from app.api.v1.chat import (
+    extract_fast_split_facts,
     _report_content_from_tool_output,
     _report_extra_info_from_tool_output,
     _strip_assistant_thinking_content,
@@ -88,6 +89,29 @@ def test_report_content_from_command_output_falls_back_to_tool_message():
     assert _report_content_from_tool_output(output) == "工具消息报告"
 
 
+def test_fast_split_directional_route_uses_destination_not_first_place():
+    facts = extract_fast_split_facts("我想从西安去南京，两个人，预算1万左右，下周一出发，你帮我规划一下")
+
+    assert facts["departure_city"] == "西安"
+    assert facts["destination"] == "南京"
+    assert facts["departure_date"]
+    assert facts["adult_count"] == 2
+    assert "口径待确认" in facts["budget_text"]
+
+
+def test_fast_split_state_seed_carries_facts_into_agency_mode():
+    facts = extract_fast_split_facts("我想从西安去南京，两个人，预算1万左右，下周一出发，你帮我规划一下")
+
+    seed = chat._fast_split_state_seed(facts, planning_mode="agency_plan")
+
+    assert seed["planning_mode"] == "agency_plan"
+    assert seed["active_workflow"] == "agency_plan"
+    assert seed["user_requirement"]["departure_city"] == "西安"
+    assert seed["user_requirement"]["destination"] == "南京"
+    assert seed["confirmed_facts"]["destination"] == "南京"
+    assert seed["progress_snapshot"]["confirmed_facts"]
+
+
 @pytest.mark.asyncio
 async def test_chat_stream_fast_mode_split_skips_full_agent(monkeypatch):
     await reset_session_locks_for_tests()
@@ -128,7 +152,12 @@ async def test_chat_stream_fast_mode_split_skips_full_agent(monkeypatch):
     assert saved_messages[0]["role"] == "user"
     assert saved_messages[1]["role"] == "assistant"
     assert saved_messages[1]["extra_info"]["fast_mode_split"]["needs_confirmation"] is True
+    assert saved_messages[1]["extra_info"]["fast_mode_split"]["facts"]["destination"] == "杭州"
+    assert saved_messages[1]["extra_info"]["observability"]["metrics"]["progress_snapshot"][
+        "confirmed_facts"
+    ]
     assert events[1]["observability"]["planning_mode"] == "pending_confirmation"
+    assert events[1]["observability"]["progress_snapshot"]["confirmed_facts"]
 
 
 def test_strip_assistant_thinking_content_removes_complete_and_unclosed_blocks():

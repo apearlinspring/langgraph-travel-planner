@@ -1,11 +1,16 @@
+from types import SimpleNamespace
+
 import pytest
 
+import app.api.v1.maps as maps
 from app.api.v1.maps import (
     MapPoint,
     MapPreviewDay,
+    MapPreviewResponse,
     MapPreviewRequest,
     MapPreviewStopRequest,
     _fallback_points_from_day_groups,
+    _map_preview_deadline_expired,
     _point_from_stop_coordinates,
     _resolve_segment,
 )
@@ -90,6 +95,64 @@ def test_map_preview_request_accepts_structured_recommendation_points():
     assert point.label == "推荐点"
     assert point.name == "九溪烟树"
     assert point.address == "杭州"
+
+
+def test_map_preview_response_exposes_timing_and_degraded_status():
+    response = MapPreviewResponse(
+        status="degraded",
+        message="地图服务响应较慢，已先展示可定位到的地点。",
+        elapsed_seconds=10.5,
+    )
+
+    assert response.status == "degraded"
+    assert response.elapsed_seconds == 10.5
+    assert _map_preview_deadline_expired(0.0) is False
+
+
+@pytest.mark.asyncio
+async def test_map_preview_uses_structured_coordinates_when_geocoder_unavailable(
+    monkeypatch,
+):
+    async def fail_to_load_amap_tool(name):
+        raise TimeoutError()
+
+    monkeypatch.setattr(maps, "_get_amap_tool", fail_to_load_amap_tool)
+    request = MapPreviewRequest.model_validate(
+        {
+            "destination": "南京",
+            "days": [
+                {
+                    "label": "第1天",
+                    "stops": [
+                        {
+                            "name": "南京博物院",
+                            "city": "南京",
+                            "lng": 118.848,
+                            "lat": 32.043,
+                        },
+                        {
+                            "name": "总统府",
+                            "city": "南京",
+                            "lng": 118.792,
+                            "lat": 32.044,
+                        },
+                    ],
+                }
+            ],
+        }
+    )
+
+    response = await maps.get_map_preview(
+        request,
+        user=SimpleNamespace(id="map-coordinate-test"),
+    )
+
+    assert response.status == "success"
+    assert "已有坐标" in response.message
+    assert response.points
+    assert len(response.days) == 1
+    assert response.days[0].points[0].name == "南京博物院"
+    assert response.days[0].segments[0].confidence == "estimated_straight_line"
 
 
 def test_fallback_points_from_day_groups_uses_real_day_coordinates():

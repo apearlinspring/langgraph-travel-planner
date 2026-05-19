@@ -214,6 +214,7 @@
         const requestPromise = (async () => {
           const controller = new AbortController();
           const timeoutId = setTimeout(() => controller.abort(), 12000);
+          const startedAt = performance.now();
           let response;
           try {
             response = await fetch(`${getApiBase()}/api/v1/maps/preview`, {
@@ -232,6 +233,14 @@
             clearTimeout(timeoutId);
           }
           const data = await response.json();
+          data.client_elapsed_seconds = Number(((performance.now() - startedAt) / 1000).toFixed(3));
+          if (data.status === "degraded") {
+            console.warn("Map preview degraded", {
+              elapsedSeconds: data.client_elapsed_seconds,
+              serverElapsedSeconds: data.elapsed_seconds,
+              message: data.message,
+            });
+          }
           journeyMapPreviewCache.set(cacheKey, {
             data,
             timestamp: Date.now(),
@@ -239,6 +248,9 @@
           return data;
         })().catch((error) => {
           journeyMapPreviewCache.delete(cacheKey);
+          if (error?.name === "AbortError") {
+            console.warn("Map preview aborted after 12s", { payload });
+          }
           throw error;
         });
         journeyMapPreviewCache.set(cacheKey, {
@@ -1794,12 +1806,21 @@
 
         node.dataset.mapReady = "loading";
         node.innerHTML = '<div class="journey-live-map-state loading">正在定位行程路线的关键地点…</div>';
+        const longMapTimer = setTimeout(() => {
+          if (node.dataset.mapReady === "loading") {
+            console.warn("Map preview still loading after 180s", {
+              hasPayload: Boolean(node.dataset.mapPayload),
+              payloadSize: (node.dataset.mapPayload || "").length,
+              routeTitle: node.closest(".journey-live-map-shell")?.dataset?.mapTitle || "",
+            });
+          }
+        }, 180000);
 
         try {
           const preview = await fetchJourneyMapPreview(payload);
           const points = Array.isArray(preview?.points) ? preview.points : [];
           if (!points.length) {
-            throw new Error("map-preview-empty");
+            throw new Error(preview?.message || "map-preview-empty");
           }
 
           const mapConfig =
@@ -2039,7 +2060,15 @@
         } catch (error) {
           node.dataset.mapReady = "error";
           node.innerHTML =
-            '<div class="journey-live-map-state error">暂时没能定位到路线地图，请先查看文字方案。</div>';
+            `<div class="journey-live-map-state error">${escapeHtml(
+              error?.name === "AbortError"
+                ? "地图定位超过 12 秒，已先保留文字路线。"
+                : error?.message && !/^map-preview/.test(error.message)
+                  ? error.message
+                  : "暂时没能定位到路线地图，请先查看文字方案。"
+            )}</div>`;
+        } finally {
+          clearTimeout(longMapTimer);
         }
       }
 
@@ -3240,17 +3269,35 @@
         const planningMode =
           state.governance?.turnObservability?.planningModeLabel ||
           getStatusLabel(turn.planning_mode || "pending_confirmation");
-        const calledServices = Number(turn.toolCallCount || turn.tool_call_count || 0);
+        const progress = turn.progressSnapshot || turn.progress_snapshot || {};
+        const factItems = Array.isArray(progress.confirmed_facts)
+          ? progress.confirmed_facts
+              .map((item) => {
+                const label = item?.label || item?.key || "";
+                const value = item?.value;
+                if (!label || value === undefined || value === null || value === "") return "";
+                return `${label}：${value}`;
+              })
+              .filter(Boolean)
+          : [];
+        const preferenceItems = Array.isArray(progress.long_term_preferences)
+          ? progress.long_term_preferences
+              .map((item) => (typeof item === "string" ? item : item?.label || item?.value || ""))
+              .filter(Boolean)
+          : [];
         return [
           `<span>方案类型：${escapeHtml(planningMode)}</span>`,
           `<span>已确认信息：${escapeHtml(
-            turn.step ? "正在随对话更新" : "待你补充出发地、时间、人数和预算"
+            factItems.length
+              ? factItems.slice(0, 6).join("；")
+              : "待你补充出发地、时间、人数和预算"
           )}</span>`,
           `<span>长期偏好：${escapeHtml(
-            available.includes("长期偏好") ? "已接入，可用于后续建议" : "登录后逐步沉淀"
-          )}</span>`,
-          `<span>已使用服务：${escapeHtml(
-            calledServices ? `${calledServices} 次查询或整理` : "本轮暂未使用外部查询"
+            preferenceItems.length
+              ? preferenceItems.slice(0, 4).join("、")
+              : available.includes("长期偏好")
+                ? "暂无稳定偏好"
+                : "登录后逐步沉淀"
           )}</span>`,
           `<span>外部服务：${escapeHtml(
             mcpStatus === "ready"
@@ -3274,9 +3321,17 @@
 
       function readinessCurrentStageLabel() {
         const turn = state.governance?.turnObservability || {};
+        const planningMode = turn.planningMode || turn.planning_mode;
+        const step = turn.step || "requirement_collection";
+        if (
+          planningMode === "agency_plan" &&
+          ["transport_planning", "accommodation_planning", "destination_recommendation"].includes(step)
+        ) {
+          return "成熟方案匹配";
+        }
         return (
           state.governance?.turnObservability?.stepLabel ||
-          getStatusLabel(turn.step || "requirement_collection")
+          getStatusLabel(step)
         );
       }
 
@@ -3562,6 +3617,7 @@
           degradationStatus,
           degradationLabel: getStatusLabel(degradationStatus),
           estimatedTotalTokens: Number(observability.estimated_total_tokens || 0),
+          progressSnapshot: observability.progress_snapshot || {},
         };
         renderReadinessPanel();
         renderTurnObservability();
@@ -3590,6 +3646,9 @@
                   <span class="governance-status-pill ${escapeHtml(
                     event.semanticStatus
                   )}">${escapeHtml(event.statusLabel)}</span>
+                </div>
+                <div class="tool-audit-raw-name">
+                  原始工具名：<code>${escapeHtml(event.rawTool)}</code>
                 </div>
                 <p>${escapeHtml(event.statusExplanation)}</p>
                 <div class="tool-audit-meta">

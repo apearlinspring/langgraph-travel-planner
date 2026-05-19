@@ -250,6 +250,15 @@ FORCE_NARROW_TOOL_NAMES = frozenset(
 
 DATE_TOOL_NAMES = frozenset({"get-current-date", "getTodayDate"})
 LIVE_DATE_REQUIRED_TOOL_NAMES = frozenset({"query_transport_options", "query_hotel_options"})
+AGENCY_PLAN_PREFERENCE_TOOL_NAMES = frozenset(
+    {
+        "query_transport_options",
+        "query_hotel_options",
+        "select_transport_tool",
+        "select_accommodation_tool",
+        "update_accommodation_preference_tool",
+    }
+)
 DESTINATION_REFRESH_TOOL_NAMES = frozenset(
     {"query_destination_info", "search_travel_info", "search_food_recommendations"}
 )
@@ -1302,6 +1311,40 @@ def _agency_plan_workflow_instruction(state_dict: dict[str, Any]) -> str:
     )
 
 
+def _is_agency_plan_workflow(state_dict: dict[str, Any]) -> bool:
+    active_workflow = (
+        state_dict.get("active_workflow")
+        or state_dict.get("planning_mode")
+        or (state_dict.get("user_requirement") or {}).get("planning_mode")
+    )
+    return active_workflow == "agency_plan"
+
+
+def _is_explicit_live_transport_or_hotel_query(text: str) -> bool:
+    normalized = (text or "").strip()
+    if not normalized:
+        return False
+    query_keywords = ("查", "查询", "看看", "有没有", "实时", "票价", "班次", "余票", "航班", "酒店价格")
+    domain_keywords = CROSS_STEP_TRANSPORT_KEYWORDS + CROSS_STEP_HOTEL_KEYWORDS
+    return any(keyword in normalized for keyword in query_keywords) and any(
+        keyword in normalized for keyword in domain_keywords
+    )
+
+
+def _agency_plan_no_preference_instruction(current_step: str) -> str:
+    stage_hint = (
+        "即使当前内部阶段是交通或住宿，也不要询问用户选择飞机/高铁或酒店偏好；"
+        if current_step in {"transport_planning", "accommodation_planning"}
+        else ""
+    )
+    return (
+        "【省心方案工具护栏】"
+        f"{stage_hint}"
+        "请按成熟产品口径直接给交通安排建议、住宿商圈/档次、门票参考、餐饮安排和服务边界。"
+        "只有用户明确要求实时查航班/高铁/酒店时，才调用真实交通或酒店查询工具。"
+    )
+
+
 def _should_force_planning_mode_confirmation(
     decision: PlanningModeDecision,
     state_dict: dict[str, Any],
@@ -1327,9 +1370,16 @@ def _should_force_planning_mode_confirmation(
 
 def _confirm_planning_mode_instruction(mode: str) -> str:
     label = "省心方案" if mode == "agency_plan" else "个性化旅游规划"
+    followup = (
+        "如果状态里已有首句提取的出发地、目的地、日期、人数或预算，不要让用户重说；"
+        "省心方案要直接进入成熟路线样板表达，不要追问交通方式或酒店偏好。"
+        if mode == "agency_plan"
+        else "如果状态里已有首句提取的出发地、目的地、日期、人数或预算，不要让用户重说；"
+    )
     return (
         f"用户本轮已经选择“{label}”。本轮必须先调用 confirm_planning_mode_tool，"
         f"mode 参数传 {mode}，reason 写“用户明确选择{label}”。"
+        f"{followup}"
         "工具返回后再用一句自然话确认已按该方案类型推进，不要继续显示待确认。"
     )
 
@@ -2336,6 +2386,7 @@ class StepConfigMiddleware(AgentMiddleware):
             override_kwargs["system_prompt"] = (
                 f"{override_kwargs['system_prompt']}\n\n{agency_workflow_instruction}"
             )
+        agency_plan_workflow = _is_agency_plan_workflow(state_dict)
         if planning_instruction:
             override_kwargs["system_prompt"] = (
                 f"{override_kwargs['system_prompt']}\n\n{planning_instruction}"
@@ -2385,6 +2436,22 @@ class StepConfigMiddleware(AgentMiddleware):
                 override_kwargs["tools"] = []
             app_logger.info(
                 "规划模式待确认：本轮不开放工具，优先只确认省心方案或个性化旅游规划"
+            )
+
+        if agency_plan_workflow and not _is_explicit_live_transport_or_hotel_query(latest_human_text):
+            filtered_tools = _exclude_tools_by_name(
+                override_kwargs["tools"],
+                AGENCY_PLAN_PREFERENCE_TOOL_NAMES,
+            )
+            if len(filtered_tools) != len(override_kwargs["tools"]):
+                override_kwargs["tools"] = filtered_tools
+                available_tool_names = _tool_names(override_kwargs["tools"])
+                app_logger.info(
+                    "省心方案模式：移除自由规划式交通/住宿偏好工具"
+                )
+            override_kwargs["system_prompt"] = (
+                f"{override_kwargs['system_prompt']}\n\n"
+                f"{_agency_plan_no_preference_instruction(current_step)}"
             )
 
         if defer_initial_slow_tools:

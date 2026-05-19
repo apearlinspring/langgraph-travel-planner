@@ -273,6 +273,63 @@ async def test_middleware_forces_mode_confirmation_when_user_selects_agency_plan
     assert "mode 参数传 agency_plan" in captured["system_prompt"]
 
 
+@pytest.mark.asyncio
+async def test_agency_plan_transport_stage_does_not_force_free_planning_preferences(monkeypatch):
+    monkeypatch.setattr(
+        "app.core.middleware.get_model_compatibility",
+        lambda **_: ModelCompatibility(supports_forced_tool_choice=True),
+    )
+    captured = {}
+    middleware = StepConfigMiddleware(
+        {
+            "transport_planning": {
+                "prompt": "transport",
+                "tools": [
+                    "query_transport_options",
+                    "select_transport_tool",
+                    "query_hotel_options",
+                    "select_accommodation_tool",
+                    "scenic_price_lookup_tool",
+                    "search_agency_product_templates",
+                ],
+                "requires": ["user_requirement"],
+            },
+        }
+    )
+    state = {
+        "current_step": "transport_planning",
+        "planning_mode": "agency_plan",
+        "active_workflow": "agency_plan",
+        "planning_mode_confirmed": True,
+        "user_requirement": {
+            "departure_city": "西安",
+            "destination": "南京",
+            "departure_date": "2026-05-25",
+            "travel_days": 4,
+            "adult_count": 2,
+            "planning_mode": "agency_plan",
+        },
+    }
+
+    async def handler(request):
+        captured["tools"] = request.tools
+        captured["system_prompt"] = getattr(request, "system_prompt", "")
+        captured["tool_choice"] = getattr(request, "tool_choice", None)
+        return "ok"
+
+    await middleware.awrap_model_call(
+        DummyRequest(state, [HumanMessage(content="人均5000左右")]),
+        handler,
+    )
+
+    assert "query_transport_options" not in captured["tools"]
+    assert "select_transport_tool" not in captured["tools"]
+    assert "query_hotel_options" not in captured["tools"]
+    assert "select_accommodation_tool" not in captured["tools"]
+    assert captured["tool_choice"] not in {"query_transport_options", "select_transport_tool"}
+    assert "不要询问用户选择飞机/高铁或酒店偏好" in captured["system_prompt"]
+
+
 def test_personalized_travel_planning_phrase_maps_to_free_planning():
     intent = detect_travel_intent(
         "我想要个性化旅游规划，不要现成旅行社产品。",
