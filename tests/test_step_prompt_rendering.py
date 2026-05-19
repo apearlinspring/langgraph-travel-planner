@@ -638,6 +638,70 @@ async def test_step_middleware_forces_direct_transport_query():
 
 
 @pytest.mark.asyncio
+async def test_agency_workflow_uses_agency_step_and_blocks_free_stage_tools():
+    captured = {}
+    middleware = StepConfigMiddleware(
+        {
+            "transport_planning": {
+                "prompt": "自由交通阶段",
+                "tools": ["query_transport_options", "select_transport_tool"],
+                "requires": ["user_requirement", "selected_destination"],
+            },
+            "agency_product_match": {
+                "prompt": "省心方案匹配阶段",
+                "tools": [
+                    "record_requirement_tool",
+                    "search_agency_product_templates",
+                    "query_transport_options",
+                    "select_transport_tool",
+                ],
+                "requires": ["user_requirement"],
+            },
+        }
+    )
+    state = {
+        "current_step": "transport_planning",
+        "agency_step": "agency_product_match",
+        "planning_mode": "agency_plan",
+        "active_workflow": "agency_plan",
+        "planning_mode_confirmed": True,
+        "user_requirement": {
+            "departure_city": "西安",
+            "destination": "拉萨",
+            "departure_date": "2026-05-25",
+            "departure_date_confirmed": True,
+            "travel_days": 7,
+            "adult_count": 2,
+            "children_count": 0,
+            "budget_min": 5000,
+        },
+        "selected_destination": "拉萨",
+    }
+
+    async def handler(request):
+        captured["system_prompt"] = getattr(request, "system_prompt", "")
+        captured["tools"] = getattr(request, "tools", [])
+        captured["tool_choice"] = getattr(request, "tool_choice", None)
+        return "ok"
+
+    await middleware.awrap_model_call(
+        DummyRequest(state, [HumanMessage(content="继续给我现成方案")]),
+        handler,
+    )
+
+    assert "省心方案匹配阶段" in captured["system_prompt"]
+    assert "自由交通阶段" not in captured["system_prompt"]
+    assert set(captured["tools"]) == {
+        "record_requirement_tool",
+        "search_agency_product_templates",
+    }
+    assert "query_transport_options" not in captured["tools"]
+    assert "select_transport_tool" not in captured["tools"]
+    assert state["agency_step"] == "agency_product_match"
+    assert state["context_last_step"] == "agency_product_match"
+
+
+@pytest.mark.asyncio
 async def test_transport_stage_missing_date_does_not_open_live_query():
     captured = {}
     middleware = StepConfigMiddleware(

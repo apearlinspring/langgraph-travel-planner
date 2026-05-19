@@ -15,6 +15,14 @@ PlanningStep = Literal[
     "order_generation",
 ]
 
+AgencyStep = Literal[
+    "agency_requirement",
+    "agency_product_match",
+    "agency_plan_draft",
+    "agency_feedback",
+    "agency_report",
+]
+
 RollbackTargetStep = Literal[
     "requirement_collection",
     "destination_recommendation",
@@ -40,6 +48,17 @@ ROLLBACK_TARGET_STEPS: tuple[RollbackTargetStep, ...] = PLANNING_STEPS[:-1]
 INITIAL_PLANNING_STEP: PlanningStep = PLANNING_STEPS[0]
 FINAL_PLANNING_STEP: PlanningStep = PLANNING_STEPS[-1]
 
+AGENCY_STEPS: tuple[AgencyStep, ...] = (
+    "agency_requirement",
+    "agency_product_match",
+    "agency_plan_draft",
+    "agency_feedback",
+    "agency_report",
+)
+
+INITIAL_AGENCY_STEP: AgencyStep = AGENCY_STEPS[0]
+FINAL_AGENCY_STEP: AgencyStep = AGENCY_STEPS[-1]
+
 STEP_LABELS: dict[PlanningStep, str] = {
     "requirement_collection": "需求收集",
     "destination_recommendation": "目的地推荐",
@@ -49,6 +68,14 @@ STEP_LABELS: dict[PlanningStep, str] = {
     "itinerary_generation": "行程生成",
     "budget_summarization": "预算汇总",
     "order_generation": "订单生成",
+}
+
+AGENCY_STEP_LABELS: dict[AgencyStep, str] = {
+    "agency_requirement": "基础需求",
+    "agency_product_match": "匹配方案",
+    "agency_plan_draft": "方案草案",
+    "agency_feedback": "方案确认",
+    "agency_report": "报告生成",
 }
 
 STEP_STATE_FIELDS: dict[PlanningStep, list[str]] = {

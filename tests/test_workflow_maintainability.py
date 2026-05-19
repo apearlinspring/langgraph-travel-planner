@@ -9,7 +9,9 @@ from app.agents.subagents.transport_coordinator import create_transport_coordina
 from app.agency import product_rules as product_rules_module
 from app.core.state import create_initial_state
 from app.core.workflow import (
+    AGENCY_STEPS,
     FINAL_PLANNING_STEP,
+    INITIAL_AGENCY_STEP,
     INITIAL_PLANNING_STEP,
     PLANNING_STEPS,
     STEP_LABELS,
@@ -118,6 +120,7 @@ def test_workflow_metadata_covers_every_planning_step():
 def test_create_initial_state_uses_shared_entry_step():
     state = create_initial_state(user_id="user-1", session_id="session-1")
     assert state["current_step"] == INITIAL_PLANNING_STEP
+    assert state["agency_step"] == INITIAL_AGENCY_STEP
     assert state["key_history_turns"] == []
     assert state["context_layer_boundaries"] == {}
     assert state["tool_loop_guard"] == {}
@@ -177,7 +180,8 @@ async def test_step_config_covers_all_planning_steps(monkeypatch):
 
     config = await step_config_module.get_step_config()
 
-    assert tuple(config) == PLANNING_STEPS
+    assert tuple(key for key in config if key in PLANNING_STEPS) == PLANNING_STEPS
+    assert tuple(key for key in config if key in AGENCY_STEPS) == AGENCY_STEPS
     assert "可以引导用户关注公众号" not in config["order_generation"]["prompt"]
     assert "不要添加没有事实来源" in config["order_generation"]["prompt"]
     assert "不要直接生成订单" in config["order_generation"]["prompt"]
@@ -217,6 +221,11 @@ async def test_step_config_covers_all_planning_steps(monkeypatch):
     assert "set_planning_mode_tool" in requirement_tool_names
     assert "confirm_planning_mode_tool" in requirement_tool_names
     assert "record_evidence_bundle_tool" in requirement_tool_names
+    agency_tool_names = {tool.name for tool in config["agency_product_match"]["tools"]}
+    assert "query_transport_options" not in agency_tool_names
+    assert "query_hotel_options" not in agency_tool_names
+    assert "select_transport_tool" not in agency_tool_names
+    assert "search_agency_product_templates" in agency_tool_names
     assert all(tool.name != "add_travel_record_tool" for tool in config["order_generation"]["tools"])
 
 

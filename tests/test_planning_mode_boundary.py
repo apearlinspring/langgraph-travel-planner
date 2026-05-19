@@ -5,7 +5,14 @@ from app.agency.product_rules import infer_report_planning_mode
 from app.core.intent import detect_travel_intent, resolve_planning_mode
 from app.core.state import create_initial_state
 from app.reports import validate_report_data
-from app.tools.state_transition import generate_order_tool, record_requirement_tool
+from app.tools.state_transition import (
+    confirm_planning_mode_tool,
+    generate_order_tool,
+    record_requirement_tool,
+    select_accommodation_tool,
+    select_destination_tool,
+    select_transport_tool,
+)
 
 
 def _build_runtime(state):
@@ -212,6 +219,9 @@ def test_pending_initial_agency_request_preserves_mode_on_confirmation_turn():
 
     assert command.update["planning_mode"] == "agency_plan"
     assert command.update["user_requirement"]["planning_mode"] == "agency_plan"
+    assert command.update["active_workflow"] == "agency_plan"
+    assert command.update["agency_step"] == "agency_product_match"
+    assert command.update["current_step"] == "requirement_collection"
     assert command.update["pending_initial_request_text"] == ""
     assert command.update["pending_initial_planning_mode"] is None
 
@@ -253,6 +263,94 @@ def test_explicit_free_signal_overrides_overeager_agency_tool_argument():
     assert command.update["planning_mode"] == "free_planning"
     assert command.update["user_requirement"]["planning_mode"] == "free_planning"
     assert "个性化旅游规划" in command.update["messages"][0].content
+
+
+def test_confirm_agency_plan_starts_independent_agency_workflow():
+    state = create_initial_state(user_id="user-1", session_id="session-1")
+    command = confirm_planning_mode_tool.invoke(
+        {
+            "mode": "agency_plan",
+            "reason": "用户明确选择省心方案",
+            "runtime": _build_runtime(state),
+        }
+    )
+
+    assert command.update["planning_mode"] == "agency_plan"
+    assert command.update["active_workflow"] == "agency_plan"
+    assert command.update["agency_step"] == "agency_requirement"
+
+
+def test_agency_requirement_does_not_enter_free_transport_stage():
+    state = create_initial_state(user_id="user-1", session_id="session-1")
+    state.update(
+        {
+            "active_workflow": "agency_plan",
+            "planning_mode": "agency_plan",
+            "planning_mode_confirmed": True,
+        }
+    )
+
+    command = record_requirement_tool.invoke(
+        {
+            "departure_city": "西安",
+            "destination": "西藏",
+            "departure_date": "2026-06-01",
+            "travel_days": 7,
+            "adult_count": 2,
+            "children_count": 0,
+            "budget_min": 5000,
+            "budget_max": 8000,
+            "travel_styles": ["轻松舒适"],
+            "special_needs": "省心方案，偏好历史文化和舒适住宿。",
+            "planning_mode": "agency_plan",
+            "runtime": _build_runtime(state),
+        }
+    )
+
+    assert command.update["active_workflow"] == "agency_plan"
+    assert command.update["agency_step"] == "agency_product_match"
+    assert command.update["current_step"] == "requirement_collection"
+    assert command.update["current_step"] != "transport_planning"
+
+
+def test_agency_workflow_rejects_free_planning_transition_tools():
+    state = create_initial_state(user_id="user-1", session_id="session-1")
+    state.update(
+        {
+            "active_workflow": "agency_plan",
+            "planning_mode": "agency_plan",
+            "planning_mode_confirmed": True,
+            "agency_step": "agency_product_match",
+            "current_step": "transport_planning",
+            "user_requirement": {
+                "departure_city": "西安",
+                "destination": "西藏",
+                "departure_date": "2026-06-01",
+                "travel_days": 7,
+                "adult_count": 2,
+                "children_count": 0,
+                "budget_min": 5000,
+            },
+        }
+    )
+    runtime = _build_runtime(state)
+
+    destination = select_destination_tool.invoke(
+        {"destination": "拉萨", "runtime": runtime}
+    )
+    transport = select_transport_tool.invoke(
+        {"transport_type": "flight", "runtime": runtime}
+    )
+    accommodation = select_accommodation_tool.invoke(
+        {"accommodation_types": ["star_hotel"], "runtime": runtime}
+    )
+
+    for command in (destination, transport, accommodation):
+        assert command.update["active_workflow"] == "agency_plan"
+        assert command.update["planning_mode"] == "agency_plan"
+        assert command.update["current_step"] == "requirement_collection"
+        assert command.update["agency_step"] == "agency_product_match"
+        assert "不走自由规划" in command.update["messages"][0].content
 
 
 def test_confirmed_minimum_requirement_uses_pending_assumptions():

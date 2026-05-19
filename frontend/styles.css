@@ -3361,6 +3361,7 @@ html {
       }
       .message.assistant .message-text .travel-card.overview {
         background: rgba(194, 142, 92, 0.08);
+        grid-column: 1 / -1;
       }
       .message.assistant .message-text .travel-card.transport {
         background: rgba(34, 110, 122, 0.06);
@@ -3376,7 +3377,7 @@ html {
         background: rgba(180, 35, 24, 0.05);
       }
       .message.assistant .message-text .travel-card.next {
-        grid-column: span 2;
+        grid-column: 1 / -1;
         background: linear-gradient(135deg, rgba(255, 247, 232, 0.96), rgba(228, 246, 241, 0.96));
         border: 2px solid rgba(194, 142, 92, 0.42);
         box-shadow: 0 16px 34px rgba(146, 96, 36, 0.16);

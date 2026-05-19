@@ -683,6 +683,10 @@ def _planning_mode_state_update(
         "planning_mode_reason": planning_mode_reason,
         "planning_mode_confirmed": planning_mode_confirmed,
     }
+    if planning_mode == "agency_plan":
+        update["agency_step"] = state.get("agency_step") or "agency_requirement"
+    elif planning_mode == "free_planning":
+        update["agency_step"] = "agency_requirement"
     requirement = state.get("user_requirement")
     if isinstance(requirement, dict) and requirement:
         update["user_requirement"] = {
@@ -2473,6 +2477,30 @@ def _state_planning_mode(state: TravelState | None) -> str | None:
     return None
 
 
+def _agency_workflow_transition_guard(
+    runtime: Optional[ToolRuntime],
+    *,
+    attempted_tool: str,
+) -> Command | None:
+    state = _runtime_state(runtime)
+    if _state_planning_mode(state) != "agency_plan":
+        return None
+    agency_step = str(state.get("agency_step") or "agency_product_match")
+    return _command_with_message(
+        (
+            "当前已经进入省心方案工作流，不走自由规划的逐项交通、住宿、餐饮、行程或预算阶段。"
+            f"已拦截 `{attempted_tool}`，请继续按“基础需求 → 匹配方案 → 方案草案 → 方案确认 → 报告生成”推进；"
+            "交通和住宿只作为产品口径说明，除非用户明确要求实时查询。"
+        ),
+        runtime,
+        active_workflow="agency_plan",
+        planning_mode="agency_plan",
+        planning_mode_confirmed=True,
+        current_step="requirement_collection",
+        agency_step=agency_step,
+    )
+
+
 def _infer_planning_mode(requirement: dict, state: TravelState | None = None) -> str:
     explicit_mode = _normalize_planning_mode(requirement.get("planning_mode")) or _state_planning_mode(state)
     if explicit_mode:
@@ -2996,7 +3024,16 @@ def record_requirement_tool(
         "departure_date_confirmed": departure_date_confirmed,
         "confirmed_facts": confirmed_facts,
         "confirmation_history": confirmation_history,
-        "current_step": "destination_recommendation",
+        "current_step": (
+            "requirement_collection"
+            if normalized_planning_mode == "agency_plan"
+            else "destination_recommendation"
+        ),
+        "agency_step": (
+            "agency_product_match"
+            if normalized_planning_mode == "agency_plan"
+            else "agency_requirement"
+        ),
         "pending_initial_request_text": "",
         "pending_initial_planning_mode": None,
         "pending_initial_planning_mode_reason": "",
@@ -3028,6 +3065,13 @@ def select_destination_tool(
     runtime: ToolRuntime[None, TravelState] = None,
 ) -> Command:
     """Persist the chosen destination and optional destination context, then move to transport planning."""
+
+    guard_command = _agency_workflow_transition_guard(
+        runtime,
+        attempted_tool="select_destination_tool",
+    )
+    if guard_command is not None:
+        return guard_command
 
     app_logger.info(f"用户选择目的地: {destination}")
     state_update = {
@@ -3082,6 +3126,13 @@ def select_transport_tool(
     runtime: ToolRuntime[None, TravelState] = None,
 ) -> Command:
     """Persist the selected transport mode or concrete transport option and move to accommodation planning."""
+
+    guard_command = _agency_workflow_transition_guard(
+        runtime,
+        attempted_tool="select_transport_tool",
+    )
+    if guard_command is not None:
+        return guard_command
 
     if _needs_transport_audit_before_transport_selection(runtime):
         return _command_with_message(
@@ -3148,6 +3199,13 @@ def select_accommodation_tool(
     runtime: ToolRuntime[None, TravelState] = None,
 ) -> Command:
     """Persist accommodation preferences or a concrete hotel choice and move to food planning."""
+
+    guard_command = _agency_workflow_transition_guard(
+        runtime,
+        attempted_tool="select_accommodation_tool",
+    )
+    if guard_command is not None:
+        return guard_command
 
     state = _runtime_state(runtime)
     if _needs_hotel_audit_before_accommodation_selection(runtime):
@@ -3251,6 +3309,13 @@ def select_food_tool(
 ) -> Command:
     """Persist food preferences and move to itinerary generation."""
 
+    guard_command = _agency_workflow_transition_guard(
+        runtime,
+        attempted_tool="select_food_tool",
+    )
+    if guard_command is not None:
+        return guard_command
+
     state = _runtime_state(runtime)
     if state.get("current_step") == "food_planning" and not _has_confirmed_accommodation_state(
         state
@@ -3307,6 +3372,13 @@ def generate_itinerary_tool(
     runtime: ToolRuntime[None, TravelState] = None,
 ) -> Command:
     """Generate a lightweight itinerary skeleton and move to budget summarization."""
+
+    guard_command = _agency_workflow_transition_guard(
+        runtime,
+        attempted_tool="generate_itinerary_tool",
+    )
+    if guard_command is not None:
+        return guard_command
 
     app_logger.info("开始生成行程")
     state = _runtime_state(runtime)
@@ -3510,6 +3582,13 @@ def summarize_budget_tool(
 ) -> Command:
     """Estimate a simple budget breakdown and move to order generation."""
 
+    guard_command = _agency_workflow_transition_guard(
+        runtime,
+        attempted_tool="summarize_budget_tool",
+    )
+    if guard_command is not None:
+        return guard_command
+
     app_logger.info("开始汇总预算")
     state = _runtime_state(runtime)
     requirement = state.get("user_requirement")
@@ -3648,6 +3727,35 @@ def generate_order_tool(
         or requirement.get("budget_max") is not None
         or bool(requirement.get("budget_level"))
     )
+    planning_mode = _state_planning_mode(state)
+    if planning_mode == "agency_plan":
+        if selected_destination and not state.get("selected_destination"):
+            state["selected_destination"] = selected_destination
+        if not state.get("selected_transport") and not state.get("selected_transport_option"):
+            state["selected_transport"] = "flight"
+            state["selected_transport_option"] = {
+                "transport_type": "flight",
+                "details": "省心方案产品口径：大交通按航班/高铁择优，目的地当地以接送或包车衔接；正式出票前待核验。",
+                "source": "agency_plan_productized_policy",
+            }
+        if not state.get("selected_accommodation_option") and not state.get("selected_accommodation_types"):
+            state["selected_accommodation_types"] = ["star_hotel"]
+            state["selected_accommodation_option"] = _build_fallback_accommodation_option(
+                state,
+                requirement,
+            )
+        if not state.get("selected_food_types"):
+            state["selected_food_types"] = ["local", "specialty"]
+        if not state.get("itinerary"):
+            state["itinerary"] = _ensure_itinerary_day_count([], state, requirement)
+        if not state.get("budget") and has_budget_hint:
+            state["budget"] = _ensure_budget_quality_contract(
+                state,
+                requirement,
+                {},
+                state.get("itinerary") or [],
+            )
+
     missing_items = []
     if not selected_destination:
         missing_items.append("目的地")
@@ -3747,6 +3855,7 @@ def generate_order_tool(
         report=report,
         report_data=report_data,
         current_step="order_generation",
+        agency_step="agency_report" if _state_planning_mode(state) == "agency_plan" else "agency_requirement",
         **approval_update,
     )
 

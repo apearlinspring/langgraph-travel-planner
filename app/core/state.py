@@ -8,7 +8,7 @@ from typing_extensions import NotRequired, TypedDict
 
 from app.agency.models import AgencyProductData, QuotePolicyData
 from app.core.permissions import ApprovalAction, ApprovalStatus
-from app.core.workflow import INITIAL_PLANNING_STEP, PlanningStep
+from app.core.workflow import INITIAL_AGENCY_STEP, INITIAL_PLANNING_STEP, AgencyStep, PlanningStep
 
 TravelStyle = Literal["relaxation", "culture", "adventure", "food"]
 BudgetLevel = Literal["economy", "comfort", "luxury"]
@@ -274,6 +274,7 @@ class ConfirmedFacts(TypedDict, total=False):
 
 class TravelState(AgentState):
     current_step: NotRequired[PlanningStep]
+    agency_step: NotRequired[AgencyStep]
     planning_mode: NotRequired[PlanningMode]
     active_workflow: NotRequired[ActiveWorkflow]
     planning_mode_reason: NotRequired[str]
@@ -287,7 +288,7 @@ class TravelState(AgentState):
     tool_loop_guard: NotRequired[Annotated[dict, merge_tool_loop_guard]]
     conversation_summary: NotRequired[str]
     key_history_turns: NotRequired[list[dict]]
-    context_last_step: NotRequired[PlanningStep]
+    context_last_step: NotRequired[str]
     context_pack_metadata: NotRequired[dict]
     context_layer_boundaries: NotRequired[dict]
     context_summary_updated_at: NotRequired[float]
@@ -296,6 +297,7 @@ class TravelState(AgentState):
     pending_initial_planning_mode_reason: NotRequired[str]
     turn_id: NotRequired[str]
     observability_context: NotRequired[dict]
+    long_term_preferences_snapshot: NotRequired[list[str]]
     departure_date_confirmed: NotRequired[bool]
 
     user_requirement: NotRequired[UserRequirement]
@@ -342,6 +344,7 @@ def create_initial_state(user_id: str, session_id: str) -> TravelState:
     return TravelState(
         messages=[],
         current_step=INITIAL_PLANNING_STEP,
+        agency_step=INITIAL_AGENCY_STEP,
         destination_options=[],
         transport_options=[],
         accommodation_options=[],
@@ -366,6 +369,7 @@ def create_initial_state(user_id: str, session_id: str) -> TravelState:
         context_layer_boundaries={},
         turn_id="",
         observability_context={},
+        long_term_preferences_snapshot=[],
         user_id=user_id,
         session_id=session_id,
         created_at=time.time(),

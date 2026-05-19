@@ -374,6 +374,8 @@ def _progress_snapshot_from_trip_facts(
     facts: dict | None,
     *,
     planning_mode: str | None = None,
+    agency_step: str | None = None,
+    long_term_preferences: list | None = None,
 ) -> dict:
     facts = facts if isinstance(facts, dict) else {}
     confirmed = []
@@ -394,8 +396,9 @@ def _progress_snapshot_from_trip_facts(
     return {
         "version": "travel_progress_snapshot.v1",
         "planning_mode": planning_mode or "pending_confirmation",
+        "agency_step": agency_step or "",
         "confirmed_facts": confirmed,
-        "long_term_preferences": [],
+        "long_term_preferences": long_term_preferences or [],
         "pending_items": [],
     }
 
@@ -430,7 +433,15 @@ def _progress_snapshot_from_state(update: dict | None) -> dict:
         or requirement.get("planning_mode")
         or update.get("active_workflow")
     )
-    return _progress_snapshot_from_trip_facts(facts, planning_mode=planning_mode)
+    long_term_preferences = update.get("long_term_preferences_snapshot")
+    if not isinstance(long_term_preferences, list):
+        long_term_preferences = []
+    return _progress_snapshot_from_trip_facts(
+        facts,
+        planning_mode=planning_mode,
+        agency_step=update.get("agency_step"),
+        long_term_preferences=long_term_preferences,
+    )
 
 
 def _fast_split_state_seed(

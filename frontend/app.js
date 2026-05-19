@@ -3152,6 +3152,11 @@
           itinerary_generation: "行程生成",
           budget_summarization: "预算汇总",
           order_generation: "报告生成",
+          agency_requirement: "基础需求",
+          agency_product_match: "匹配方案",
+          agency_plan_draft: "方案草案",
+          agency_feedback: "方案确认",
+          agency_report: "报告生成",
           free_planning: "个性化旅游规划",
           agency_plan: "省心方案",
           unknown: "待确认",
@@ -3322,12 +3327,11 @@
       function readinessCurrentStageLabel() {
         const turn = state.governance?.turnObservability || {};
         const planningMode = turn.planningMode || turn.planning_mode;
+        const progress = turn.progressSnapshot || turn.progress_snapshot || {};
+        const agencyStep = progress.agency_step || turn.agency_step || "";
         const step = turn.step || "requirement_collection";
-        if (
-          planningMode === "agency_plan" &&
-          ["transport_planning", "accommodation_planning", "destination_recommendation"].includes(step)
-        ) {
-          return "成熟方案匹配";
+        if (planningMode === "agency_plan") {
+          return getStatusLabel(agencyStep || step || "agency_requirement");
         }
         return (
           state.governance?.turnObservability?.stepLabel ||
@@ -3428,6 +3432,13 @@
         search_agency_pricing_rules: "报价规则检索",
         search_agency_risk_playbook: "风险规则检索",
         search_agency_report_standards: "报告标准检索",
+        record_requirement_tool: "需求整理",
+        confirm_planning_mode_tool: "方案类型确认",
+        set_planning_mode_tool: "方案类型记录",
+        record_evidence_bundle_tool: "证据整理",
+        scenic_price_lookup_tool: "门票参考查询",
+        select_transport_tool: "交通方案记录",
+        select_accommodation_tool: "住宿方案记录",
         generate_order_tool: "报告生成",
       };
 
@@ -4820,8 +4831,17 @@
         return thinkingFilter.feed(text) + thinkingFilter.finish();
       }
 
+      function normalizeCollapsedMarkdownTables(text = "") {
+        return String(text || "")
+          .replace(
+            /(\|[^\n|]+(?:\|[^\n|]+)+\|)\s+(\|:?-{3,}:?(?:\|:?-{3,}:?)+\|)/g,
+            "$1\n$2"
+          )
+          .replace(/\s+(\|\s*(?:D\d+|Day\s*\d+|\d+)\s*\|)/gu, "\n$1");
+      }
+
       function splitAssistantBlocks(text) {
-        return sanitizeAssistantOutputText(text)
+        return normalizeCollapsedMarkdownTables(sanitizeAssistantOutputText(text))
           .replace(/\r\n/g, "\n")
           .split(/\n{2,}/)
           .map((block) => block.trim())
@@ -8200,6 +8220,51 @@
         return "fa-wallet";
       }
 
+      function parseBudgetAmountRange(amount = "") {
+        const raw = String(amount || "").replace(/,/g, "");
+        const matches = Array.from(raw.matchAll(/(\d+(?:\.\d+)?)/g)).map((item) =>
+          Number(item[1])
+        );
+        const values = matches.filter((value) => Number.isFinite(value) && value > 0);
+        if (!values.length) return null;
+        if (values.length >= 2 && /[-~到至]/u.test(raw)) {
+          return { min: Math.min(values[0], values[1]), max: Math.max(values[0], values[1]) };
+        }
+        return { min: values[0], max: values[0] };
+      }
+
+      function formatBudgetAmountRange(range) {
+        if (!range || !Number.isFinite(range.min) || !Number.isFinite(range.max)) return "待核验";
+        const min = Math.round(range.min);
+        const max = Math.round(range.max);
+        return min === max ? `${min}元` : `${min}-${max}元`;
+      }
+
+      function estimateBudgetTotalRow(rows = []) {
+        const explicit = rows.find((row) => /合计|总计|总预算/u.test(row.label));
+        if (explicit) return { row: explicit, synthetic: false };
+        const subtotalRows = rows.filter(
+          (row) => !/当前估算|预算参考|预算|人均|每人/u.test(row.label)
+        );
+        const ranges = subtotalRows
+          .map((row) => parseBudgetAmountRange(row.amount))
+          .filter(Boolean);
+        if (!ranges.length) {
+          return { row: rows[rows.length - 1], synthetic: false };
+        }
+        const total = ranges.reduce(
+          (sum, range) => ({
+            min: sum.min + range.min,
+            max: sum.max + range.max,
+          }),
+          { min: 0, max: 0 }
+        );
+        return {
+          row: { label: "估算合计", amount: formatBudgetAmountRange(total), note: "按分项加总，待出发前核验" },
+          synthetic: true,
+        };
+      }
+
       function renderTravelBudgetCardBody(lines = [], reminderLines = []) {
         const rows = extractTravelBudgetRows(lines);
         const reminders = reminderLines
@@ -8224,9 +8289,8 @@
           `;
         }
 
-        const totalRow =
-          rows.find((row) => /合计|总计|总预算|预算/u.test(row.label)) ||
-          rows[rows.length - 1];
+        const totalInfo = estimateBudgetTotalRow(rows);
+        const totalRow = totalInfo.row;
         return `
           <div class="travel-budget-layout">
             <div class="travel-budget-main">
@@ -8236,7 +8300,7 @@
               </div>
               <div class="travel-budget-rows">
                 ${rows
-                  .filter((row) => row !== totalRow || rows.length === 1)
+                  .filter((row) => totalInfo.synthetic || row !== totalRow || rows.length === 1)
                   .map(
                     (row) => `
                       <div class="travel-budget-row">

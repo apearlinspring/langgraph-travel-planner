@@ -12,7 +12,7 @@ from app.core.intent import PlanningModeDecision, TravelIntent, detect_travel_in
 from app.core.observability import build_observability_context
 from app.core.state import TravelState
 from app.core.store import get_user_memory_service
-from app.core.workflow import INITIAL_PLANNING_STEP
+from app.core.workflow import AGENCY_STEP_LABELS, INITIAL_AGENCY_STEP, INITIAL_PLANNING_STEP
 from app.utils.llm_factory import get_model_compatibility
 from app.utils.logger import app_logger
 
@@ -258,6 +258,28 @@ AGENCY_PLAN_PREFERENCE_TOOL_NAMES = frozenset(
         "select_accommodation_tool",
         "update_accommodation_preference_tool",
     }
+)
+AGENCY_PLAN_ALLOWED_TOOL_NAMES = frozenset(
+    {
+        "record_requirement_tool",
+        "set_planning_mode_tool",
+        "confirm_planning_mode_tool",
+        "record_evidence_bundle_tool",
+        "scenic_price_lookup_tool",
+        "generate_order_tool",
+        "search_agency_product_templates",
+        "search_agency_service_sop",
+        "search_agency_pricing_rules",
+        "search_agency_risk_playbook",
+        "search_agency_report_standards",
+        "update_travel_style_tool",
+        "update_dietary_restriction_tool",
+        "update_food_preference_tool",
+        "add_travel_record_tool",
+    }
+)
+AGENCY_PLAN_LIVE_QUERY_OVERRIDE_TOOL_NAMES = frozenset(
+    {"query_transport_options", "query_hotel_options"}
 )
 DESTINATION_REFRESH_TOOL_NAMES = frozenset(
     {"query_destination_info", "search_travel_info", "search_food_recommendations"}
@@ -1291,12 +1313,7 @@ def _confirmed_facts_instruction(state_dict: dict[str, Any]) -> str:
 
 
 def _agency_plan_workflow_instruction(state_dict: dict[str, Any]) -> str:
-    active_workflow = (
-        state_dict.get("active_workflow")
-        or state_dict.get("planning_mode")
-        or (state_dict.get("user_requirement") or {}).get("planning_mode")
-    )
-    if active_workflow != "agency_plan":
+    if state_dict.get("active_workflow") != "agency_plan":
         return ""
     matched_product = state_dict.get("matched_product") if isinstance(state_dict.get("matched_product"), dict) else {}
     product_name = matched_product.get("name") or "成熟路线样板"
@@ -1312,12 +1329,71 @@ def _agency_plan_workflow_instruction(state_dict: dict[str, Any]) -> str:
 
 
 def _is_agency_plan_workflow(state_dict: dict[str, Any]) -> bool:
-    active_workflow = (
-        state_dict.get("active_workflow")
-        or state_dict.get("planning_mode")
-        or (state_dict.get("user_requirement") or {}).get("planning_mode")
+    return state_dict.get("active_workflow") == "agency_plan"
+
+
+def _agency_step_from_state(state_dict: dict[str, Any]) -> str:
+    raw_step = str(state_dict.get("agency_step") or "").strip()
+    if raw_step in AGENCY_STEP_LABELS:
+        return raw_step
+    return INITIAL_AGENCY_STEP
+
+
+def _agency_step_for_request(
+    state_dict: dict[str, Any],
+    request: ModelRequest | None = None,
+) -> str:
+    step = _agency_step_from_state(state_dict)
+    latest_text = _latest_human_text(request) if request is not None else ""
+    recent_text = _recent_human_text(request, limit=1) if request is not None else ""
+    text = latest_text or recent_text
+    if _looks_like_final_report_request(text) or any(
+        keyword in text for keyword in ("满意", "没问题", "可以了", "就按这个", "生成报告", "出报告")
+    ):
+        return "agency_report"
+    if request is not None and _latest_message_is_tool_result(request):
+        latest_tool_names = _latest_tool_result_names(request)
+        if step == "agency_product_match" and latest_tool_names:
+            return "agency_plan_draft"
+    if step == "agency_plan_draft" and text and not _looks_like_final_report_request(text):
+        if any(keyword in text for keyword in ("改", "调整", "换", "不想", "增加", "减少", "删掉")):
+            return "agency_feedback"
+    return step
+
+
+def _workflow_step_for_request(
+    state_dict: dict[str, Any],
+    request: ModelRequest | None = None,
+) -> str:
+    if _is_agency_plan_workflow(state_dict):
+        return _agency_step_for_request(state_dict, request)
+    return str(state_dict.get("current_step") or INITIAL_PLANNING_STEP)
+
+
+def _agency_progress_instruction(agency_step: str) -> str:
+    label = AGENCY_STEP_LABELS.get(agency_step, "基础需求")
+    return (
+        f"【省心方案当前阶段】{label}。"
+        "这是一条独立的省心方案工作流，不使用自由规划的交通规划、住宿规划、餐饮规划阶段。"
+        "如果用户没有明确要求实时查票或酒店库存，不要调用实时交通/酒店工具，也不要写入这些自由规划阶段。"
     )
-    return active_workflow == "agency_plan"
+
+
+def _memory_prompt_preferences(memory_prompt: str) -> list[str]:
+    if not memory_prompt:
+        return []
+    preferences: list[str] = []
+    for raw_line in memory_prompt.splitlines():
+        line = raw_line.strip(" -•\t")
+        if not line:
+            continue
+        if any(keyword in line for keyword in ("偏好", "喜欢", "习惯", "禁忌", "不吃", "去过", "住宿")):
+            compact = re.sub(r"\s+", " ", line)
+            if compact not in preferences:
+                preferences.append(compact[:60])
+        if len(preferences) >= 6:
+            break
+    return preferences
 
 
 def _is_explicit_live_transport_or_hotel_query(text: str) -> bool:
@@ -1579,6 +1655,24 @@ def _can_generate_final_report(state_dict: dict[str, Any]) -> bool:
     destination = state_dict.get("selected_destination") or user_requirement.get("destination")
     if not _state_value_ready(destination):
         return False
+
+    if _is_agency_plan_workflow(state_dict):
+        total_people = (
+            (user_requirement.get("adult_count") or 0)
+            + (user_requirement.get("children_count") or 0)
+        )
+        has_budget_hint = (
+            user_requirement.get("budget_min") is not None
+            or user_requirement.get("budget_max") is not None
+            or bool(user_requirement.get("budget_level"))
+        )
+        return (
+            _has_confirmed_departure_city(state_dict)
+            and _has_confirmed_departure_date(state_dict)
+            and int(user_requirement.get("travel_days") or 0) > 0
+            and total_people > 0
+            and has_budget_hint
+        )
 
     if not _has_confirmed_departure_city(state_dict):
         return False
@@ -2213,11 +2307,29 @@ class StepConfigMiddleware(AgentMiddleware):
     ) -> ModelResponse:
         state: TravelState = request.state
         state_dict = dict(state) if hasattr(state, "items") else {}
-        current_step = state.get("current_step", INITIAL_PLANNING_STEP)
+        stored_step = state.get("current_step", INITIAL_PLANNING_STEP)
+        current_step = _workflow_step_for_request(state_dict, request)
+        agency_plan_workflow = _is_agency_plan_workflow(state_dict)
+        if (
+            agency_plan_workflow
+            and current_step not in self._step_config
+            and stored_step in self._step_config
+        ):
+            app_logger.warning(
+                "省心方案阶段配置缺失，回退到当前配置中的旧阶段: "
+                f"agency_step={current_step}, fallback={stored_step}"
+            )
+            current_step = str(stored_step)
+        if agency_plan_workflow and current_step in AGENCY_STEP_LABELS:
+            state["agency_step"] = current_step
         user_id = state.get("user_id")
 
         app_logger.info(f"用户ID: {user_id}")
-        app_logger.info(f"当前步骤: {current_step}")
+        app_logger.info(
+            "当前步骤: "
+            f"{current_step} (stored_current_step={stored_step}, "
+            f"active_workflow={state_dict.get('active_workflow')})"
+        )
 
         if current_step not in self._step_config:
             app_logger.error(f"未知步骤: {current_step}")
@@ -2244,8 +2356,12 @@ class StepConfigMiddleware(AgentMiddleware):
                 service = await get_user_memory_service()
                 memory_prompt = await service.format_memory_for_prompt(user_id)
                 if memory_prompt:
+                    state["long_term_preferences_snapshot"] = _memory_prompt_preferences(
+                        memory_prompt
+                    )
                     app_logger.info(f"已加载用户长期记忆: {user_id}")
                 else:
+                    state["long_term_preferences_snapshot"] = []
                     app_logger.info(f"用户暂无长期记忆: {user_id}")
             except Exception as exc:
                 app_logger.warning(f"加载长期记忆失败: {exc}")
@@ -2325,7 +2441,7 @@ class StepConfigMiddleware(AgentMiddleware):
             current_step == "requirement_collection"
             and _should_defer_initial_slow_tools(request, active_human_text)
         )
-        if current_step == "requirement_collection":
+        if current_step in {"requirement_collection", "agency_requirement"}:
             today_text = date.today().isoformat()
             override_kwargs["system_prompt"] = (
                 f"{override_kwargs['system_prompt']}\n\n"
@@ -2377,16 +2493,25 @@ class StepConfigMiddleware(AgentMiddleware):
         confirmed_departure_date = _has_confirmed_departure_date(state_dict)
         planning_instruction = _planning_mode_instruction(planning_mode)
         confirmed_instruction = _confirmed_facts_instruction(state_dict)
+        agency_plan_workflow = (
+            agency_plan_workflow
+            and planning_mode.mode != "free_planning"
+            and not planning_mode.needs_confirmation
+        )
         if confirmed_instruction:
             override_kwargs["system_prompt"] = (
                 f"{override_kwargs['system_prompt']}\n\n{confirmed_instruction}"
             )
-        agency_workflow_instruction = _agency_plan_workflow_instruction(state_dict)
+        agency_workflow_instruction = (
+            _agency_plan_workflow_instruction(state_dict) if agency_plan_workflow else ""
+        )
         if agency_workflow_instruction:
             override_kwargs["system_prompt"] = (
                 f"{override_kwargs['system_prompt']}\n\n{agency_workflow_instruction}"
             )
-        agency_plan_workflow = _is_agency_plan_workflow(state_dict)
+            override_kwargs["system_prompt"] = (
+                f"{override_kwargs['system_prompt']}\n\n{_agency_progress_instruction(current_step)}"
+            )
         if planning_instruction:
             override_kwargs["system_prompt"] = (
                 f"{override_kwargs['system_prompt']}\n\n{planning_instruction}"
@@ -2887,6 +3012,42 @@ class StepConfigMiddleware(AgentMiddleware):
                 override_kwargs["system_prompt"] = (
                     f"{override_kwargs['system_prompt']}\n\n{_temporary_accommodation_instruction()}"
                 )
+
+        if agency_plan_workflow:
+            agency_allowed_tools = set(AGENCY_PLAN_ALLOWED_TOOL_NAMES)
+            if _is_explicit_live_transport_or_hotel_query(latest_human_text):
+                agency_allowed_tools.update(AGENCY_PLAN_LIVE_QUERY_OVERRIDE_TOOL_NAMES)
+                override_kwargs["system_prompt"] = (
+                    f"{override_kwargs['system_prompt']}\n\n"
+                    "用户本轮明确要求实时交通或酒店查询，可以临时调用对应查询工具；"
+                    "查询结果只作为待核验参考，不要把流程切入自由规划的交通/住宿确认阶段。"
+                )
+            else:
+                override_kwargs["system_prompt"] = (
+                    f"{override_kwargs['system_prompt']}\n\n"
+                    "本轮按省心方案白名单收口：只能记录基础需求、检索产品/报价/风险/报告资料、"
+                    "查询景点票价参考、整理证据或生成报告；不得调用自由规划的交通/酒店查询或选择工具。"
+                )
+
+            filtered_tools = _keep_tools_by_name(
+                override_kwargs["tools"],
+                agency_allowed_tools,
+            )
+            if len(filtered_tools) != len(override_kwargs["tools"]):
+                override_kwargs["tools"] = filtered_tools
+                available_tool_names = _tool_names(override_kwargs["tools"])
+                app_logger.info(
+                    "省心方案工作流：按独立工具白名单最终收口: "
+                    f"tools={sorted(available_tool_names)}"
+                )
+            if middleware_forced_tool and middleware_forced_tool not in available_tool_names:
+                app_logger.info(
+                    "省心方案工作流：取消自由规划式强制工具: "
+                    f"{middleware_forced_tool}"
+                )
+                middleware_forced_tool = None
+            if intent_preferred_tool and intent_preferred_tool not in available_tool_names:
+                intent_preferred_tool = None
 
         if (
             current_step == "order_generation"

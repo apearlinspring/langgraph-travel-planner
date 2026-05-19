@@ -33,7 +33,7 @@ from app.tools.memory_tools import update_travel_style_tool, update_dietary_rest
     update_food_preference_tool, add_travel_record_tool, update_accommodation_preference_tool
 from app.tools.rag_tools import get_internal_rag_tools
 from app.tools.visual_journey import generate_visual_journey_tool
-from app.core.workflow import PLANNING_STEPS
+from app.core.workflow import AGENCY_STEPS, PLANNING_STEPS
 from app.utils.logger import app_logger
 
 
@@ -744,7 +744,119 @@ async def get_step_config():
         }
     }
 
-    expected_steps = set(PLANNING_STEPS)
+    agency_common_prompt = """你现在处于“省心方案”独立工作流，不走自由规划的交通/住宿/餐饮逐项确认链路。
+
+【省心方案固定节奏】
+1. 基础需求：确认目的地、天数、人数、预算、出发地和出发日期；缺关键事实时一次只补 1 个最影响方案的问题。
+2. 匹配方案：基于成熟路线样板、服务标准、门票参考、风险边界和报价口径组织方案。
+3. 方案草案：直接输出产品化方案，包含交通口径、住宿区域/档次、景点门票参考、餐饮安排、费用边界、待核验项。
+4. 用户评价：满意则生成报告；不满意则记录修改意见并再出一版。
+
+【硬性边界】
+- 不要询问用户选择飞机/高铁或酒店偏好；省心方案里这些是产品口径，由你直接给建议和待核验边界。
+- 不要调用实时交通查询、实时酒店查询、交通选择或住宿选择工具，除非用户明确说“查真实航班/高铁/酒店价格/库存”。
+- 不要输出 Markdown 表格作为主结构；优先用短标题、分组要点和 Day 1/Day 2 列表，方便前端渲染为卡片。
+- 不要暴露工具名、内部知识库、RAG 或状态字段。
+"""
+
+    step_config.update(
+        {
+            "agency_requirement": {
+                "prompt": agency_common_prompt
+                + """
+【当前阶段】省心方案 · 基础需求
+
+请先读取已确认事实和首轮暂存信息。如果已有目的地、天数、人数、预算、出发地或出发日期，不要让用户重说。
+
+【输出要求】
+- 基础事实足够时，调用 record_requirement_tool 记录需求，并把 planning_mode 传 agency_plan。
+- 如果缺关键事实，最多追问 1 个问题；可以先给“待核验成熟路线方向”，但不要进入自由规划交通/住宿偏好问题。
+""",
+                "tools": [
+                    record_requirement_tool,
+                    confirm_planning_mode_tool,
+                    record_evidence_bundle_tool,
+                    update_travel_style_tool,
+                    update_dietary_restriction_tool,
+                    update_food_preference_tool,
+                    add_travel_record_tool,
+                ],
+                "requires": [],
+            },
+            "agency_product_match": {
+                "prompt": agency_common_prompt
+                + """
+【当前阶段】省心方案 · 匹配方案
+
+【任务】
+- 优先检索成熟产品模板、服务 SOP、报价规则、风险手册和景点票价参考。
+- 如果资料不足，也要给保守的成熟路线样板，并明确“示例价、采集/来源、待核验、不锁价”。
+- 输出 1 个主推方案，最多 1 个备选方案；不要拆成自由规划阶段问题。
+""",
+                "tools": [
+                    scenic_price_lookup_tool,
+                    record_evidence_bundle_tool,
+                    *internal_rag_tools,
+                ],
+                "requires": ["user_requirement"],
+            },
+            "agency_plan_draft": {
+                "prompt": agency_common_prompt
+                + """
+【当前阶段】省心方案 · 方案草案
+
+请直接输出一版可读的产品化方案，结构固定为：
+- 方案定位：路线名称、适合人群、天数、预算口径
+- 交通口径：大交通建议和当地接驳安排，标注待核验
+- 住宿口径：商圈/区域、档次、晚数，不列虚构酒店库存
+- 每日安排：用 Day 1 / Day 2 / Day 3 列表，不用 Markdown 表格
+- 门票与餐饮：景点门票参考、预约提醒、餐饮安排
+- 费用边界：包含/不含、示例价、待核验、不锁价
+- 服务边界：接送、预约、应急和人工确认边界
+- 下一步：请用户评价满意/想改哪里
+""",
+                "tools": [
+                    scenic_price_lookup_tool,
+                    record_evidence_bundle_tool,
+                    *internal_rag_tools,
+                ],
+                "requires": ["user_requirement"],
+            },
+            "agency_feedback": {
+                "prompt": agency_common_prompt
+                + """
+【当前阶段】省心方案 · 方案确认
+
+如果用户说满意、没问题、就按这个，简短确认并准备生成报告。
+如果用户提出修改意见，记录修改点并输出修订版方案；不要改走自由规划交通/住宿阶段。
+""",
+                "tools": [
+                    record_requirement_tool,
+                    record_evidence_bundle_tool,
+                    scenic_price_lookup_tool,
+                    *internal_rag_tools,
+                ],
+                "requires": ["user_requirement"],
+            },
+            "agency_report": {
+                "prompt": agency_common_prompt
+                + """
+【当前阶段】省心方案 · 报告生成
+
+用户要求正式报告时，调用 generate_order_tool。报告要是用户交付视图，默认不展示预算置信度详情、工具审计、交付清单或治理边界。
+如果还有出发地、出发日期、人数、预算这类基础事实缺失，先补问关键事实，不要生成伪报告。
+""",
+                "tools": [
+                    generate_order_tool,
+                    record_evidence_bundle_tool,
+                    *internal_rag_tools,
+                ],
+                "requires": ["user_requirement"],
+            },
+        }
+    )
+
+    expected_steps = set(PLANNING_STEPS) | set(AGENCY_STEPS)
     actual_steps = set(step_config)
     missing_steps = expected_steps - actual_steps
     extra_steps = actual_steps - expected_steps
