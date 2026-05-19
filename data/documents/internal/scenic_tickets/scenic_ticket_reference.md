@@ -4,7 +4,9 @@ category: scenic_tickets
 visibility: internal
 source: curated_public_scenic_ticket_reference
 provider: curated_rag_ticket_catalog
-provider_status: reference_only
+provider_status: public_reference_only
+public_search_fallback: true
+supplier_integration_status: deferred_no_business_qualification
 applicable_modes:
   - agency_plan
   - free_planning
@@ -12,22 +14,22 @@ evidence_level: reference
 last_reviewed: "2026-05-11"
 title: 景点门票与预约公开参考价目录
 price_collected_at: "2026-05-19"
-supplier_candidates:
+deferred_supplier_candidates:
   - name: 携程玩乐开放平台
     role: OTA 门票/玩乐分销接口候选
-    access_note: 需商户或合作资质、API 密钥、沙箱联调和结算/退改规则确认
+    access_note: 当前无商务资质，接入搁置；未来需商户或合作资质、API 密钥、沙箱联调和结算/退改规则确认
     docs_url: https://ttdstp.ctrip.com/apiplatform/document/channelin.do
   - name: 飞猪开放平台门票 API2.0
     role: 门票商品、价格、库存和订单接口候选
-    access_note: 需淘宝/飞猪开放平台应用、类目权限和商家合作授权
+    access_note: 当前无商务资质，接入搁置；未来需淘宝/飞猪开放平台应用、类目权限和商家合作授权
     docs_url: https://open.alitrip.com/
   - name: 票付通
     role: 景区票务系统和分销对接候选
-    access_note: 适合已有景区/分销合作后做库存、下单和核销联调
+    access_note: 当前无景区/分销商务关系，接入搁置；未来适合已有合作后做库存、下单和核销联调
     docs_url: https://www.piaofutong.com/
   - name: 智游宝
     role: 景区电子票务和分销接口候选
-    access_note: 适合供应链侧接入，需商务开通和接口联调
+    access_note: 当前无供应链侧授权，接入搁置；未来需商务开通和接口联调
     docs_url: https://www.zhiyoubao.com/
 ticket_items:
   - destination: 杭州
@@ -267,7 +269,7 @@ ticket_items:
 
 - 实时门票、库存、预约、下单和核销需要接入 OTA、景区票务系统或分销平台，并完成商务资质、API 密钥、沙箱联调、结算、退改和售后规则确认。
 - 当前目录先服务演示和方案报价边界：可展示“样例价、采集日期、来源、待核验、不锁价”，不能承诺出票或预约。
-- 后续接入供应商后，`provider_status` 可从 `reference_only` 升级为 `live_supplier`，并在工具层按供应商优先级合并实时价格和本目录兜底参考价。
+- 后续只有在补齐商务资质、接口授权、结算、售后和核销流程后，`provider_status` 才可升级为 `live_supplier`；当前统一保持公开目录或公网搜索参考，不承诺预约成功或锁价。
 
 ## 输出规则
 

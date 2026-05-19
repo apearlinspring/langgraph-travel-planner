@@ -243,7 +243,7 @@ INTERNAL_CONTRACTS: dict[str, KnowledgeContract] = {
         constraints=(
             "只作为景点门票、预约和开放时间参考资料",
             "不得承诺实时库存、预约成功、优惠政策或锁价",
-            "正式报价和预订前必须以景区官方购票页或票务供应商接口二次核验",
+            "正式报价和预订前必须以景区官方购票页或公开票务页二次核验",
         ),
         user_segments=("family", "couple", "senior", "team", "general"),
         regions=("domestic", "destination_specific"),

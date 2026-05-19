@@ -353,12 +353,68 @@ def test_scenic_price_lookup_persists_ticket_evidence_with_sources():
     assert evidence["destination"] == "杭州"
     assert evidence["collected_at"] == "2026-05-19"
     assert evidence["provider"] == "curated_rag_ticket_catalog"
-    assert evidence["provider_status"] == "reference_only"
+    assert evidence["provider_status"] == "public_reference_only"
     assert evidence["catalog_source"].endswith("scenic_ticket_reference.md")
-    assert evidence["supplier_candidates"]
+    assert evidence["public_search_status"] == "not_needed_catalog_match"
+    assert "门票" in evidence["public_search_query"]
     assert {item["name"] for item in evidence["items"]} == {"灵隐飞来峰", "西溪湿地"}
     assert all(item["source_url"].startswith("https://") for item in evidence["items"])
     assert "不锁价" in evidence["disclaimer"]
+
+
+def test_scenic_price_lookup_uses_public_search_when_catalog_misses(monkeypatch):
+    state = create_initial_state(user_id="user-1", session_id="session-1")
+    state["selected_destination"] = "黄山"
+
+    def fake_public_search(destination, scenic_names=None, max_results=5):
+        assert destination == "黄山"
+        assert scenic_names == ["黄山风景区"]
+        assert max_results == 5
+        return {
+            "provider": "public_web_search",
+            "provider_status": "public_search",
+            "destination": destination,
+            "query": "黄山 黄山风景区 门票 票价 预约 开放时间 官方",
+            "queried_at": "2026-05-19T12:00:00",
+            "collected_at": "2026-05-19",
+            "items": [
+                {
+                    "destination": "黄山",
+                    "name": "黄山风景区",
+                    "price_label": "成人票 190 元",
+                    "reservation_note": "按来源页实名预约规则二次核验",
+                    "open_note": "开放时间以景区公告为准",
+                    "source": "黄山风景区公开票务页",
+                    "source_url": "https://www.huangshan.com.cn/",
+                    "provider": "public_web_search",
+                    "provider_status": "public_search",
+                    "requires_verification": True,
+                }
+            ],
+            "disclaimer": "公网搜索结果仅作参考，不锁价。",
+        }
+
+    monkeypatch.setattr(
+        state_transition_module,
+        "search_public_scenic_ticket_references_sync",
+        fake_public_search,
+    )
+
+    command = scenic_price_lookup_tool.invoke(
+        {
+            "destination": "黄山",
+            "scenic_names": ["黄山风景区"],
+            "runtime": _build_runtime(state),
+        }
+    )
+
+    evidence = command.update["scenic_price_evidence"]
+    assert evidence["provider"] == "public_web_search"
+    assert evidence["provider_status"] == "public_search"
+    assert evidence["public_search"]["query"].startswith("黄山")
+    assert evidence["items"][0]["price_label"] == "成人票 190 元"
+    assert "不锁价" in evidence["disclaimer"]
+    assert "公网搜索结果" in command.update["messages"][0].content
 
 
 def test_xian_to_hangzhou_product_sample_has_realistic_price_boundaries():

@@ -171,9 +171,9 @@ TOOL_GOVERNANCE_EXCEPTIONS: dict[str, ToolGovernanceRecord] = {
     ),
     "scenic_price_lookup_tool": ToolGovernanceRecord(
         tool_name="scenic_price_lookup_tool",
-        coverage="exception",
-        category="curated_reference_lookup",
-        reason="只读取本地景点价格参考库并写入待核验证据，不执行真实购票、预约或锁价。",
+        coverage="governed_boundary",
+        category="public_reference_lookup",
+        reason="优先读取本地公开票价目录，目录未覆盖时只调用受网关保护的公网搜索工具；不执行真实购票、预约、支付或锁价。",
         test_protection="tests/test_workflow_maintainability.py",
     ),
     "select_destination_tool": ToolGovernanceRecord(

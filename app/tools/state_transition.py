@@ -75,7 +75,9 @@ from app.reports.route_builder import (
 )
 from app.tools.scenic_ticket_provider import (
     SCENIC_TICKET_COLLECTION_DATE,
+    build_public_ticket_search_query,
     find_scenic_ticket_candidates,
+    search_public_scenic_ticket_references_sync,
 )
 from app.utils.date_normalization import normalize_travel_date
 from app.utils.logger import app_logger
@@ -894,7 +896,7 @@ def scenic_price_lookup_tool(
     scenic_names: Any = None,
     runtime: ToolRuntime[None, TravelState] = None,
 ) -> Command:
-    """Return first-version scenic ticket evidence from curated public reference data."""
+    """Return scenic ticket evidence from public references and public search."""
 
     state = _runtime_state(runtime)
     if not destination:
@@ -905,19 +907,56 @@ def scenic_price_lookup_tool(
         )
     destination_name, items, catalog = _scenic_price_candidates(destination, scenic_names)
     collected_at = str(catalog.get("collected_at") or SCENIC_PRICE_COLLECTION_DATE)
+    public_search_query = build_public_ticket_search_query(destination_name, scenic_names)
     if not items:
+        public_search = search_public_scenic_ticket_references_sync(
+            destination_name,
+            scenic_names,
+            max_results=5,
+        )
+        search_items = list(public_search.get("items") or [])
+        if search_items:
+            payload = {
+                "destination": destination_name,
+                "collected_at": str(public_search.get("collected_at") or collected_at),
+                "queried_at": public_search.get("queried_at"),
+                "provider": public_search.get("provider") or "public_web_search",
+                "provider_status": public_search.get("provider_status") or "public_search",
+                "catalog_source": catalog.get("source"),
+                "public_search_query": public_search.get("query") or public_search_query,
+                "public_search": public_search,
+                "items": search_items,
+                "disclaimer": public_search.get("disclaimer")
+                or "公网搜索结果只作为参考价和来源入口；不代表实时库存、预约成功或锁价。",
+            }
+            lines = [
+                f"{destination_name} 景点门票公网参考（查询时间：{payload.get('queried_at') or '本轮查询'}）",
+                "当前未命中本地公开票价目录，已改用公网搜索结果；价格不是实时价，不锁价，预约和开放时间需打开来源页二次核验。",
+            ]
+            for item in search_items:
+                lines.append(
+                    f"- {item['name']}：{item['price_label']}；预约/开放：{item['reservation_note']} {item['open_note']}；来源：{item['source']} {item['source_url']}"
+                )
+            return _command_with_message(
+                "\n".join(lines),
+                runtime,
+                scenic_price_evidence=payload,
+            )
+
         payload = {
             "destination": destination_name,
             "collected_at": collected_at,
             "provider": catalog.get("provider") or "curated_rag_ticket_catalog",
-            "provider_status": catalog.get("provider_status") or "reference_only",
+            "provider_status": catalog.get("provider_status") or "public_reference_only",
             "supplier_candidates": catalog.get("supplier_candidates") or [],
             "catalog_source": catalog.get("source"),
+            "public_search_query": public_search.get("query") or public_search_query,
+            "public_search": public_search,
             "items": [],
-            "disclaimer": "第一版景点价格库尚未覆盖该目的地；门票、预约、开放时间和优惠政策需出发前二次核验，不锁价。",
+            "disclaimer": "景点价格库和公网搜索本轮均未得到可靠票价；门票、预约、开放时间和优惠政策需人工打开官方/公开票务页面二次核验，不锁价。",
         }
         return _command_with_message(
-            f"{destination_name} 的景点价格库暂未覆盖；门票和预约请以官方渠道二次核验。",
+            f"{destination_name} 的景点价格本轮未得到可靠公开结果；门票和预约请以官方渠道二次核验。",
             runtime,
             scenic_price_evidence=payload,
         )
@@ -926,9 +965,11 @@ def scenic_price_lookup_tool(
         "destination": destination_name,
         "collected_at": collected_at,
         "provider": catalog.get("provider") or "curated_rag_ticket_catalog",
-        "provider_status": catalog.get("provider_status") or "reference_only",
+        "provider_status": catalog.get("provider_status") or "public_reference_only",
         "supplier_candidates": catalog.get("supplier_candidates") or [],
         "catalog_source": catalog.get("source"),
+        "public_search_query": public_search_query,
+        "public_search_status": "not_needed_catalog_match",
         "items": items,
         "disclaimer": "以上为公开资料整理的样例参考价，不代表实时库存、优惠政策、预约成功或锁价；不锁价，正式出发前必须以官方购票页/景区公告二次核验。",
     }
