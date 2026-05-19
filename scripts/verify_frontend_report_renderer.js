@@ -202,6 +202,148 @@ const decisionHtml = context.renderAssistantText(`
 `);
 assertIncludes(decisionHtml, ['class="travel-card next', "想跟你确认一下"], "decision-card");
 
+const visualJourneyData = {
+  version: "journey_plan.v1",
+  overview: {
+    title: "西藏7天经典之旅",
+    destination: "西藏",
+    date_range: "2026-05-27至2026-06-02",
+    duration_days: 7,
+    route_label: "林芝进拉萨出",
+    summary: "林芝进拉萨出，低海拔渐进适应高反。",
+  },
+  days: [
+    {
+      day_number: 1,
+      date: "2026-05-27",
+      weekday: "周三",
+      title: "林芝初抵·巴松措",
+      summary: "林芝 · 巴松措",
+      pois: [
+        {
+          id: "d1-p1",
+          name: "林芝",
+          city: "林芝",
+          type_label: "城市节点",
+          suggested_time: "抵达后",
+          duration_minutes: 60,
+          description: "低海拔适应点。",
+          estimated_cost: "待核验",
+          map_verified: true,
+          address: "林芝市巴宜区",
+          amap_type: "城市节点",
+        },
+        {
+          id: "d1-p2",
+          name: "巴松措",
+          city: "林芝",
+          type_label: "景点",
+          suggested_time: "下午",
+          duration_minutes: 180,
+          description: "湖泊、雪山和寺庙组合。",
+          estimated_cost: "待核验",
+          coordinate_estimated: true,
+          verification_note: "暂按同日已核验地点附近落点展示。",
+        },
+      ],
+    },
+  ],
+  pois: [
+    {
+      id: "d1-p1",
+      name: "林芝",
+      city: "林芝",
+      type_label: "城市节点",
+      suggested_time: "抵达后",
+      duration_minutes: 60,
+      description: "低海拔适应点。",
+      estimated_cost: "待核验",
+      map_verified: true,
+      address: "林芝市巴宜区",
+      amap_type: "城市节点",
+    },
+    {
+      id: "d1-p2",
+      name: "巴松措",
+      city: "林芝",
+      type_label: "景点",
+      suggested_time: "下午",
+      duration_minutes: 180,
+      description: "湖泊、雪山和寺庙组合。",
+      estimated_cost: "待核验",
+      coordinate_estimated: true,
+      verification_note: "暂按同日已核验地点附近落点展示。",
+    },
+  ],
+  pending_checks: ["地图路段距离和时长以高德实时路线为准。"],
+};
+const visualJourneyHtml = context.renderAssistantText("可视化旅程草案已整理完成。", {
+  journeyData: visualJourneyData,
+  planningTrace: [
+    {
+      phase: "search",
+      status: "completed",
+      title: "公开攻略检索任务完成",
+      detail: "正在搜索小红书和全网公开信息：西藏7天经典旅游路线推荐拉萨林芝羊湖。",
+      count: 1,
+    },
+  ],
+});
+assertIncludes(
+  visualJourneyHtml,
+  [
+    "visual-journey-workbench",
+    "data-journey-data",
+    "规划过程",
+    "西藏7天经典之旅",
+    "visual-journey-stats",
+    "路线预览",
+    "巴松措",
+    "visual-poi-card",
+    "visual-poi-media",
+    "visual-poi-evidence",
+    "高德核验",
+    "估算落点",
+    "visual-day-focus-btn",
+    "visual-poi-focus-btn",
+    "journey-status-chip",
+    "journey-map-title-pill",
+    "journey-map-bottom-drawer",
+    "journey-map-bottom-toggle",
+    "journey-poi-bottom-sheet",
+    "journey-poi-bottom-media",
+    "data-poi-sheet-proof",
+    "data-poi-sheet-action",
+    "替换这个点",
+    "核验门票交通",
+    "保留继续规划",
+    "沉浸地图",
+    "推荐点",
+    "data-journey-edit-action",
+    "可调顺序，地图即时刷新",
+    "距离/时长待核验",
+    "地图路段距离和时长以高德实时路线为准",
+  ],
+  "visual-journey-workbench"
+);
+assertIncludes(appScript, ["/api/v1/chat/journey/"], "journey-draft-save-api");
+assertIncludes(
+  appScript,
+  [
+    "amap-journey-day-badge",
+    "leaflet-journey-day-badge",
+    "leaflet-journey-day-marker",
+    "getJourneyDayBadgeLabel",
+    "getJourneyShortDayLabel",
+    "getJourneySegmentLabelParts",
+    "activateJourneyBottomStop",
+    "isJourneyRecommendationPoint",
+    "replaceJourneyPoiFromSheet",
+    "getJourneyReplacementCandidates",
+  ],
+  "journey-map-day-badges"
+);
+
 const placeholderReportData = JSON.parse(JSON.stringify(fixtures[0][1]));
 placeholderReportData.itinerary = [
   {

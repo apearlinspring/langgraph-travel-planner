@@ -234,6 +234,18 @@ class ReportData(TypedDict, total=False):
     sections: list[dict]
 
 
+class JourneyPlanData(TypedDict, total=False):
+    version: str
+    overview: dict
+    days: list[dict]
+    pois: list[dict]
+    segments: list[dict]
+    weather: list[dict]
+    route_strategy: dict
+    pending_checks: list[str]
+    source_summary: dict
+
+
 class TravelState(AgentState):
     current_step: NotRequired[PlanningStep]
     planning_mode: NotRequired[PlanningMode]
@@ -274,6 +286,8 @@ class TravelState(AgentState):
     budget: NotRequired[BudgetBreakdown]
     report: NotRequired[str]
     report_data: NotRequired[ReportData]
+    journey_plan: NotRequired[JourneyPlanData]
+    planning_trace: NotRequired[list[dict[str, Any]]]
     order_id: NotRequired[str]
 
     approval_pending: NotRequired[bool]

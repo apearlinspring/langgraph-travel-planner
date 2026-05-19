@@ -220,6 +220,7 @@ ONE_SHOT_TOOLS_AFTER_CALL = frozenset(
         "select_transport_tool",
         "select_accommodation_tool",
         "select_food_tool",
+        "generate_visual_journey_tool",
         "generate_itinerary_tool",
         "summarize_budget_tool",
         "generate_order_tool",
@@ -238,6 +239,7 @@ FORCE_NARROW_TOOL_NAMES = frozenset(
         "select_transport_tool",
         "select_accommodation_tool",
         "select_food_tool",
+        "generate_visual_journey_tool",
         "generate_itinerary_tool",
         "summarize_budget_tool",
         "generate_order_tool",
@@ -461,6 +463,33 @@ def _format_itinerary_summary(state_dict: dict[str, Any]) -> str:
     if len(itinerary) > 5:
         lines.append(f"其余 {len(itinerary) - 5} 天按已生成行程执行")
     return "\n".join(lines) if lines else "行程已有记录，但明细不完整"
+
+
+def _format_visual_journey_summary(state_dict: dict[str, Any]) -> str:
+    journey_plan = state_dict.get("journey_plan")
+    if not isinstance(journey_plan, dict) or journey_plan.get("version") != "journey_plan.v1":
+        return "尚未生成可视化旅程草案"
+
+    overview = journey_plan.get("overview") if isinstance(journey_plan.get("overview"), dict) else {}
+    days = journey_plan.get("days") if isinstance(journey_plan.get("days"), list) else []
+    title = overview.get("title") or "可视化旅程草案"
+    route_label = overview.get("route_label") or overview.get("summary") or ""
+    lines = [f"{title}：{route_label}".rstrip("：")]
+    for day in days[:5]:
+        if not isinstance(day, dict):
+            continue
+        day_number = day.get("day_number") or len(lines)
+        day_title = day.get("title") or day.get("summary") or f"Day {day_number}"
+        pois = [
+            str(poi.get("name"))
+            for poi in day.get("pois") or []
+            if isinstance(poi, dict) and poi.get("name")
+        ]
+        poi_text = " → ".join(pois[:4]) if pois else "点位待核验"
+        lines.append(f"Day {day_number} {day_title}：{poi_text}")
+    if len(days) > 5:
+        lines.append(f"其余 {len(days) - 5} 天按地图草案顺序继续执行")
+    return "\n".join(lines)
 
 
 def _latest_human_text(request: ModelRequest) -> str:
@@ -1075,6 +1104,12 @@ def _forced_tool_choice(
 
 
 def _tool_choice_instruction(tool_name: str) -> str:
+    if tool_name == "generate_visual_journey_tool":
+        return (
+            "本轮用户想先看可视化经典路线。请直接调用 `generate_visual_journey_tool`，"
+            "尽量从上下文读取目的地，并把用户本轮提到的相对日期、天数和风格传给工具。"
+            "该工具只生成旅程草案和地图工作台，不生成最终报告、订单、锁价、真实交通或酒店预订。"
+        )
     return (
         f"本轮优先直接调用工具 `{tool_name}`，不要先继续追问。"
         " 如果工具返回候选结果，再基于结果继续回答。"
@@ -1416,6 +1451,36 @@ def _has_itinerary_prerequisites(state_dict: dict[str, Any]) -> bool:
     )
 
 
+def _has_destination_context_for_visual_journey(state_dict: dict[str, Any]) -> bool:
+    user_requirement = state_dict.get("user_requirement") or {}
+    destination = state_dict.get("selected_destination")
+    if not destination and isinstance(user_requirement, dict):
+        destination = user_requirement.get("destination")
+    return _state_value_ready(destination)
+
+
+def _looks_like_visual_journey_request(text: str) -> bool:
+    normalized = (text or "").strip()
+    if not normalized:
+        return False
+    route_keywords = (
+        "经典线",
+        "经典路线",
+        "路线图",
+        "地图路线",
+        "可视化",
+        "旅程地图",
+        "先排路线",
+        "排个路线",
+        "圆周旅迹",
+    )
+    day_pattern = re.search(r"\d{1,2}\s*天", normalized) is not None
+    return (
+        any(keyword in normalized for keyword in route_keywords)
+        and any(keyword in normalized for keyword in ("路线", "行程", "经典", "地图", "天"))
+    ) or (day_pattern and "经典" in normalized and "记录" not in normalized and "结构化" not in normalized)
+
+
 def _progress_tool_for_explicit_request(
     latest_human_text: str,
     state_dict: dict[str, Any],
@@ -1423,6 +1488,9 @@ def _progress_tool_for_explicit_request(
     text = latest_human_text.strip()
     if not text:
         return None
+
+    if _looks_like_visual_journey_request(text) and _has_destination_context_for_visual_journey(state_dict):
+        return "generate_visual_journey_tool"
 
     if _looks_like_final_report_request(text):
         if _can_generate_final_report(state_dict):
@@ -2037,10 +2105,23 @@ class StepConfigMiddleware(AgentMiddleware):
             )
             state_dict.setdefault("budget_summary", _format_budget_summary(state_dict))
             state_dict.setdefault("itinerary_summary", _format_itinerary_summary(state_dict))
+            state_dict.setdefault(
+                "visual_journey_summary",
+                _format_visual_journey_summary(state_dict),
+            )
 
             state_dict["user_memory"] = memory_prompt
             prompt_values = {key: _to_prompt_value(value) for key, value in state_dict.items()}
             system_prompt = step_config["prompt"].format_map(prompt_values)
+            visual_journey_summary = str(prompt_values.get("visual_journey_summary") or "")
+            if visual_journey_summary and visual_journey_summary != "尚未生成可视化旅程草案":
+                system_prompt = (
+                    f"{system_prompt}\n\n"
+                    "【已保存可视化旅程草案】\n"
+                    f"{visual_journey_summary}\n"
+                    "- 后续交通、住宿、预算和最终报告应优先沿用这份草案的分日顺序与用户编辑结果；"
+                    "但不能绕过交通、住宿、预算和最终报告门禁。"
+                )
 
         except (KeyError, AttributeError) as exc:
             app_logger.warning(f"提示词变量缺失: {exc}，使用原始模板")
