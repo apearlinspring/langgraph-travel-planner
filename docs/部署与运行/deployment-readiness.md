@@ -152,6 +152,14 @@ for url in [
 - `/health/live` 返回 `status=alive`
 - `/health/ready` 返回 `status=ready` 和 `environment=production`
 
+如果当前本机网络访问 `http://travel.403edr.cn/...` 返回 `Non-compliance ICP Filing`，或访问 HTTPS（安全超文本传输协议）出现 `UNEXPECTED_EOF_WHILE_READING` / `failed to receive handshake`，但用户浏览器可访问，先不要判定线上不可用。这通常是当前网络路径按 Host/SNI（服务器名称指示）触发了运营商或云侧备案拦截。此时补做服务器侧公网验证：
+
+```powershell
+ssh root@8.145.46.253 'set -eu; curl -k -fsS https://travel.403edr.cn/health/live; echo; curl -k -fsS https://travel.403edr.cn/health/ready | head -c 3000; echo'
+```
+
+若服务器侧公网验证和用户浏览器均正常，且上一节内部健康检查为 `ready`，应记录为“当前验收机网络路径受限”，而不是应用或 Caddy（反向代理服务器）故障。
+
 ### 3. 日志抽查
 
 ```powershell

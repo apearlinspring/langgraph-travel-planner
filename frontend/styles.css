@@ -5725,6 +5725,46 @@ html {
         padding-right: 12px;
       }
 
+      .journey-live-map-shell--modal {
+        display: grid;
+        gap: 12px;
+      }
+
+      .journey-map-modal-days {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+      }
+
+      .journey-map-modal-days .journey-map-day-btn {
+        border: 1px solid rgba(26, 77, 84, 0.14);
+        border-radius: 999px;
+        padding: 8px 12px;
+        background: rgba(255, 255, 255, 0.92);
+        color: var(--primary);
+        font-size: 12px;
+        font-weight: 800;
+        cursor: pointer;
+      }
+
+      .journey-map-modal-days .journey-map-day-btn.active {
+        background: rgba(26, 77, 84, 0.14);
+        border-color: rgba(26, 77, 84, 0.24);
+      }
+
+      .journey-map-modal-days .journey-map-day-btn span,
+      .journey-map-modal-days .journey-map-day-btn small {
+        display: block;
+        line-height: 1.2;
+      }
+
+      .journey-map-modal-days .journey-map-day-btn small {
+        color: #4e6f74;
+        font-size: 10px;
+        margin-top: 2px;
+      }
+
       .message.assistant .message-text .journey-map-floating-panel .journey-map-day-btn {
         min-width: auto;
         align-items: center;

@@ -9,6 +9,7 @@ from app.rag.document_loader import DocumentManager
 from app.rag.contracts import (
     CONTRACT_VERSION,
     INTERNAL_KNOWLEDGE_BASE,
+    parse_markdown_metadata,
     validate_internal_document_file,
     validate_internal_knowledge_base,
 )
@@ -22,6 +23,16 @@ from app.rag.readiness import (
 )
 from app.rag.text_splitter import AdvancedParentDocumentSplitter
 from app.tools import rag_tools
+
+
+def test_markdown_metadata_parser_tolerates_local_prefixed_front_matter_opener():
+    parsed = parse_markdown_metadata(
+        "u---\nsource_type: agency_internal\ncategory: products\n---\n正文"
+    )
+
+    assert parsed.metadata["source_type"] == "agency_internal"
+    assert parsed.metadata["category"] == "products"
+    assert parsed.body == "正文"
 
 
 def test_document_manager_loads_internal_documents_with_business_metadata():
@@ -85,6 +96,17 @@ def test_document_manager_filters_internal_documents_by_category():
     assert {doc.metadata.get("category") for doc in documents} == {"pricing"}
     assert any("报价" in doc.page_content for doc in documents)
     assert all("待核验" in doc.metadata.get("constraints", "") or "锁价" in doc.metadata.get("constraints", "") for doc in documents)
+
+
+def test_document_manager_loads_scenic_ticket_reference_category():
+    documents = DocumentManager().load_internal_documents(category="scenic_tickets")
+
+    assert len(documents) == 1
+    document = documents[0]
+    assert document.metadata["category"] == "scenic_tickets"
+    assert document.metadata["evidence_level"] == "reference"
+    assert "灵隐飞来峰" in document.page_content
+    assert "不锁价" in document.page_content
 
 
 def test_document_manager_loads_public_documents_with_evidence_contract():

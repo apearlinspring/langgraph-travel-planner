@@ -22,10 +22,11 @@ def test_report_bundle_renders_markdown_from_valid_report_data():
 
     assert bundle.validation.ok is True
     assert "# Personalized travel planning report" in bundle.markdown
-    assert "顾问交付清单" in bundle.markdown
+    assert "顾问交付清单" not in bundle.markdown
+    assert "预算置信度与待核验项" not in bundle.markdown
     assert "verify ticket price" in bundle.markdown
     assert "产品与报价规则" in bundle.markdown
-    assert "| 类别 | 金额 | 置信度 | 依据 |" in bundle.markdown
+    assert "| 类别 | 金额 | 依据 |" in bundle.markdown
     assert "人均：" not in bundle.markdown
 
 
@@ -143,6 +144,8 @@ def test_report_builder_assembles_report_data_from_domain_inputs():
         "other",
     ]
     assert any(section["id"] == "product_quote" for section in report_data["sections"])
+    assert "budget_confidence" in report_data["advisor_sections"]
+    assert "budget_confidence" not in report_data["customer_sections"]
     assert validate_report_data(report_data).ok is True
 
 

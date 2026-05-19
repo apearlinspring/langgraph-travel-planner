@@ -339,6 +339,13 @@ def _state_planning_mode(state: dict[str, Any] | None) -> TravelPlanningMode | N
     if not state:
         return None
 
+    confirmed = _state_planning_mode_confirmed(state)
+    raw_mode = state.get("active_workflow")
+    if raw_mode == "agency_plan":
+        return raw_mode
+    if raw_mode == "free_planning" and confirmed:
+        return raw_mode
+
     raw_mode = state.get("planning_mode")
     if raw_mode in ("free_planning", "agency_plan"):
         return raw_mode

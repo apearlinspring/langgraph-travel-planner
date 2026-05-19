@@ -16,6 +16,7 @@ TransportType = Literal["flight", "train", "driving"]
 AccommodationType = Literal["star_hotel", "economy_hotel", "hostel", "youth_hostel"]
 FoodType = Literal["specialty", "chain", "local"]
 PlanningMode = Literal["free_planning", "agency_plan"]
+ActiveWorkflow = PlanningMode
 
 
 def merge_tool_audit_events(
@@ -232,6 +233,8 @@ class ReportData(TypedDict, total=False):
     evidence_bundle: dict
     tool_audit_summary: dict
     sections: list[dict]
+    customer_sections: list[str]
+    advisor_sections: list[str]
 
 
 class JourneyPlanData(TypedDict, total=False):
@@ -246,11 +249,39 @@ class JourneyPlanData(TypedDict, total=False):
     source_summary: dict
 
 
+class ConfirmationHistoryEntry(TypedDict, total=False):
+    key: str
+    value: Any
+    label: str
+    confirmed_at: float
+    source: str
+
+
+class ConfirmedFacts(TypedDict, total=False):
+    departure_city: str
+    destination: str
+    departure_date: str
+    travel_days: int
+    return_date: str
+    check_in_date: str
+    check_out_date: str
+    adult_count: int
+    children_count: int
+    budget_min: float
+    budget_max: float
+    active_workflow: ActiveWorkflow
+
+
 class TravelState(AgentState):
     current_step: NotRequired[PlanningStep]
     planning_mode: NotRequired[PlanningMode]
+    active_workflow: NotRequired[ActiveWorkflow]
     planning_mode_reason: NotRequired[str]
     planning_mode_confirmed: NotRequired[bool]
+    confirmed_facts: NotRequired[ConfirmedFacts]
+    confirmation_history: NotRequired[list[ConfirmationHistoryEntry]]
+    matched_product: NotRequired[dict[str, Any]]
+    scenic_price_evidence: NotRequired[dict[str, Any]]
     evidence_bundle: NotRequired[dict]
     tool_audit_events: NotRequired[Annotated[list[dict], merge_tool_audit_events]]
     tool_loop_guard: NotRequired[Annotated[dict, merge_tool_loop_guard]]
@@ -323,6 +354,9 @@ def create_initial_state(user_id: str, session_id: str) -> TravelState:
         approval_required=False,
         approval_governance={},
         planning_mode_confirmed=False,
+        active_workflow="free_planning",
+        confirmed_facts={},
+        confirmation_history=[],
         tool_audit_events=[],
         tool_loop_guard={},
         conversation_summary="",

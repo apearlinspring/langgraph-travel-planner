@@ -561,12 +561,12 @@
       <aside
         class="governance-console glass-card"
         id="governanceConsole"
-        aria-label="知行治理台"
+        aria-label="知行行程进度台"
       >
         <div class="governance-console-head">
           <div>
-            <div class="governance-console-kicker">行程保障</div>
-            <h2>服务状态</h2>
+            <div class="governance-console-kicker">行程进度台</div>
+            <h2>当前进展</h2>
           </div>
           <button
             class="governance-icon-btn"
@@ -583,25 +583,25 @@
         <section class="governance-section readiness" aria-labelledby="readinessTitle">
           <div class="governance-section-head">
             <div>
-              <span class="governance-section-label">服务就绪</span>
-              <h3 id="readinessTitle">当前能力</h3>
+              <span class="governance-section-label">规划进度</span>
+              <h3 id="readinessTitle">当前阶段</h3>
             </div>
             <span class="governance-status-pill checking" id="readinessStatusPill">
               检查中
             </span>
           </div>
           <p class="governance-section-note">
-            看这里判断现在能聊什么、哪些外部查询可用，以及哪些真实动作仍需要人工确认。
+            这里只放用户需要知道的进度、已确认信息、长期偏好、已调用服务和人工确认边界。
           </p>
           <div class="readiness-summary" id="readinessSummary">
-            正在读取服务就绪摘要。
+            正在整理行程进度。
           </div>
           <div class="readiness-service-grid" id="readinessServiceGrid"></div>
         </section>
 
         <details class="governance-details" id="governanceDetails">
           <summary>
-            <span>查看保障明细</span>
+            <span>顾问/调试明细</span>
             <i class="fa-solid fa-chevron-down"></i>
           </summary>
           <div class="governance-detail-body">
@@ -655,13 +655,13 @@
             <section class="governance-section audit" aria-labelledby="toolAuditTitle">
               <div class="governance-section-head">
                 <div>
-                  <span class="governance-section-label">工具审计</span>
-                  <h3 id="toolAuditTitle">查询结果</h3>
+                  <span class="governance-section-label">已调用服务</span>
+                  <h3 id="toolAuditTitle">服务摘要</h3>
                 </div>
                 <span class="governance-count-pill" id="toolAuditCount">0</span>
               </div>
               <p class="governance-section-note">
-                这里只展示脱敏后的工具结论：查到了、需核验、未查到或因参数不足被跳过。
+                默认只展示服务结论；原始工具名和调试字段只用于顾问/调试视图。
               </p>
               <div class="tool-audit-list" id="toolAuditList">
                 <div class="governance-empty">本轮还没有可展示的工具摘要。</div>
@@ -723,11 +723,14 @@
             <i class="fa-solid fa-xmark"></i>
           </button>
         </div>
-        <div
-          class="journey-live-map journey-live-map-modal-canvas"
-          data-map-payload=""
-        >
-          <div class="journey-live-map-state loading">正在准备大图地图…</div>
+        <div class="journey-live-map-shell journey-live-map-shell--modal" id="journeyMapModalShell">
+          <div class="journey-map-modal-days" id="journeyMapModalDays"></div>
+          <div
+            class="journey-live-map journey-live-map-modal-canvas"
+            data-map-payload=""
+          >
+            <div class="journey-live-map-state loading">正在准备大图地图…</div>
+          </div>
         </div>
       </div>
     </div>

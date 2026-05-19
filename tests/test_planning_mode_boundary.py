@@ -42,6 +42,28 @@ def test_free_city_three_days_stays_free_across_intent_and_report_mode():
     assert report_mode == "free_planning"
 
 
+def test_active_workflow_agency_plan_does_not_drift_to_free_without_explicit_rejection():
+    state = {
+        "active_workflow": "agency_plan",
+        "planning_mode": "agency_plan",
+        "planning_mode_confirmed": True,
+        "user_requirement": {
+            "planning_mode": "agency_plan",
+            "planning_mode_confirmed": True,
+            "destination": "杭州",
+            "special_needs": "用户已确认旅行社省心方案",
+        },
+    }
+
+    decision = resolve_planning_mode("住宿和交通你按成熟方案安排就行", state=state)
+    assert decision.mode == "agency_plan"
+    assert decision.source == "state"
+
+    explicit_free = resolve_planning_mode("我改主意了，要自由行，酒店和票我自己订", state=state)
+    assert explicit_free.mode == "free_planning"
+    assert explicit_free.source == "latest_user"
+
+
 def test_family_or_low_stress_preferences_do_not_imply_agency_plan():
     prompt = "亲子游，2大1小，从上海去杭州3天2晚，希望少走路、酒店干净、行程轻松。"
     state = create_initial_state(user_id="user-1", session_id="session-1")

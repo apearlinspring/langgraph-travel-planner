@@ -107,29 +107,28 @@ def _format_budget_items(budget: dict[str, Any]) -> list[str]:
     items = _as_list(budget.get("items"))
     if items:
         lines = [
-            "| 类别 | 金额 | 置信度 | 依据 |",
-            "| --- | ---: | --- | --- |",
+            "| 类别 | 金额 | 依据 |",
+            "| --- | ---: | --- |",
         ]
         for item in items:
             if not isinstance(item, dict):
                 continue
             lines.append(
-                "| {label} | {amount} | {confidence} | {basis} |".format(
+                "| {label} | {amount} | {basis} |".format(
                     label=_table_cell(item.get("label", "费用")),
                     amount=_format_money(item.get("amount")),
-                    confidence=_table_cell(item.get("confidence", "估算")),
                     basis=_table_cell(item.get("basis", "依据待补充")),
                 )
             )
         lines.append(
-            f"| 合计 | {_format_money(budget.get('total'))} | 待正式锁价 | 以上为当前规划估算，正式预订前需复核。 |"
+            f"| 合计 | {_format_money(budget.get('total'))} | 以上为当前规划估算，正式预订前需复核。 |"
         )
         return lines
 
     return [
-        "| 类别 | 金额 | 置信度 | 依据 |",
-        "| --- | ---: | --- | --- |",
-        f"| 合计 | {_format_money(budget.get('total'))} | 待正式锁价 | 费用依据待补充，建议以正式预订页面为准。 |",
+        "| 类别 | 金额 | 依据 |",
+        "| --- | ---: | --- |",
+        f"| 合计 | {_format_money(budget.get('total'))} | 费用依据待补充，建议以正式预订页面为准。 |",
     ]
 
 
@@ -237,7 +236,6 @@ def render_report_markdown(report_data: dict[str, Any]) -> str:
     budget = _as_dict(report_data.get("budget"))
     quote_policy = _as_dict(report_data.get("quote_policy") or budget.get("quote_policy"))
     budget_confidence = _as_dict(report_data.get("budget_confidence"))
-    tool_audit = _as_dict(report_data.get("tool_audit_summary"))
 
     travel_styles = "、".join(str(item) for item in _as_list(overview.get("travel_styles"))) or "待确认"
     map_lines = [
@@ -258,6 +256,11 @@ def render_report_markdown(report_data: dict[str, Any]) -> str:
         for item in _as_list(report_data.get("adjustment_options"))
         if _clean_line(item)
     ] or ["- 可继续调整交通、住宿、景点顺序或预算。"]
+    verification_lines = [
+        f"- {_clean_line(item)}"
+        for item in _as_list(budget_confidence.get("verification_items"))[:5]
+        if _clean_line(item)
+    ] or ["- 出发前复核交通、酒店、景点开放和天气。"]
     lines = [
         f"# {report_data.get('title') or '个性化旅游规划报告'}",
         str(report_data.get("subtitle") or "最终旅行方案报告"),
@@ -302,16 +305,13 @@ def render_report_markdown(report_data: dict[str, Any]) -> str:
         "费用依据：",
         *assumption_lines,
         "",
-        "预算置信度与待核验项：",
-        *_format_budget_confidence(budget_confidence),
-        "",
         "天气与风险提醒：",
         *risk_lines,
         "",
+        "出发前确认：",
+        *verification_lines,
+        "",
         "后续可调整：",
         *adjustment_lines,
-        "",
-        "顾问交付清单：",
-        *_format_tool_audit(tool_audit),
     ]
     return "\n".join(_clean_markdown_lines(lines))

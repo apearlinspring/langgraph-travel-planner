@@ -1570,6 +1570,67 @@ async def test_user_rejecting_agency_product_switches_to_free_planning_tools():
 
 
 @pytest.mark.asyncio
+async def test_confirmed_date_and_agency_workflow_are_not_reasked_in_later_steps():
+    captured = {}
+    middleware = StepConfigMiddleware(
+        {
+            "transport_planning": {
+                "prompt": "交通阶段",
+                "tools": ["query_transport_options", "search_agency_product_templates"],
+                "requires": ["user_requirement", "selected_destination"],
+            }
+        }
+    )
+    state = {
+        "current_step": "transport_planning",
+        "active_workflow": "agency_plan",
+        "planning_mode": "agency_plan",
+        "planning_mode_confirmed": True,
+        "confirmed_facts": {
+            "departure_city": "西安",
+            "destination": "杭州",
+            "departure_date": "2026-05-27",
+            "travel_days": 5,
+            "check_in_date": "2026-05-27",
+            "check_out_date": "2026-05-31",
+            "active_workflow": "agency_plan",
+        },
+        "matched_product": {"name": "西安出发杭州 5 天省心样板"},
+        "user_requirement": {
+            "departure_city": "西安",
+            "destination": "杭州",
+            "departure_date": "2026-05-27",
+            "departure_date_confirmed": True,
+            "travel_days": 5,
+            "adult_count": 2,
+            "children_count": 0,
+            "budget_level": "comfort",
+            "planning_mode": "agency_plan",
+            "planning_mode_confirmed": True,
+        },
+        "selected_destination": "杭州",
+    }
+
+    async def handler(request):
+        captured["tools"] = getattr(request, "tools", [])
+        captured["system_prompt"] = getattr(request, "system_prompt", "")
+        return "ok"
+
+    await middleware.awrap_model_call(
+        DummyRequest(state, [HumanMessage(content="交通和住宿按这个省心方案继续，不用问我偏好。")]),
+        handler,
+    )
+
+    assert "query_transport_options" in captured["tools"]
+    assert "出发日期：2026-05-27" in captured["system_prompt"]
+    assert "入住日期：2026-05-27" in captured["system_prompt"]
+    assert "退房日期：2026-05-31" in captured["system_prompt"]
+    assert "不得再次询问同一出发日期、入住日期或退房日期" in captured["system_prompt"]
+    assert "active_workflow=agency_plan" in captured["system_prompt"]
+    assert "不要漂回自由行逐项追问交通方式、酒店偏好" in captured["system_prompt"]
+
+
+@pytest.mark.asyncio
 async def test_order_generation_final_report_request_forces_report_tool():
     captured = {}
     compatibility = get_model_compatibility()

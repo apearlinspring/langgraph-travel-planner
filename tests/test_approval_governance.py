@@ -368,7 +368,8 @@ def test_generate_order_tool_records_non_blocking_governance_boundary():
     assert approval_summary["record_only"] is True
     assert approval_summary["is_blocking"] is False
     assert report_data["evidence_bundle"]["approval_governance"] == approval_summary
-    assert "审批治理" in update["report"]
+    assert "审批治理" not in update["report"]
+    assert "approval_governance" in report_data["evidence_bundle"]
     assert "未来接入真实支付或真实预订时必须先完成人工审批" in update["messages"][0].content
     assert "pay.example.com" not in update["messages"][0].content
 

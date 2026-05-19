@@ -234,6 +234,20 @@ INTERNAL_CONTRACTS: dict[str, KnowledgeContract] = {
         user_segments=("general",),
         regions=("general",),
     ),
+    "scenic_tickets": KnowledgeContract(
+        category="scenic_tickets",
+        source_type="agency_internal",
+        visibility="internal",
+        evidence_level="reference",
+        applicable_modes=("agency_plan", "free_planning"),
+        constraints=(
+            "只作为景点门票、预约和开放时间参考资料",
+            "不得承诺实时库存、预约成功、优惠政策或锁价",
+            "正式报价和预订前必须以景区官方购票页或公开票务页二次核验",
+        ),
+        user_segments=("family", "couple", "senior", "team", "general"),
+        regions=("domestic", "destination_specific"),
+    ),
 }
 
 INTERNAL_CATEGORIES = set(INTERNAL_CONTRACTS)
@@ -357,6 +371,11 @@ def parse_markdown_metadata(text: str) -> MarkdownMetadata:
     """Parse YAML-style Markdown front matter and return a stripped body."""
 
     normalized = text.lstrip("\ufeff")
+    lines = normalized.splitlines(keepends=True)
+    if lines and lines[0].strip() == "u---":
+        # Tolerate a known local typo in the front-matter opener without mutating the file.
+        lines[0] = lines[0].replace("u---", "---", 1)
+        normalized = "".join(lines)
     if not normalized.startswith("---"):
         return MarkdownMetadata(metadata={}, body=normalized)
 

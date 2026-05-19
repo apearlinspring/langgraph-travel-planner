@@ -251,6 +251,13 @@ def _state_planning_mode(state: dict[str, Any] | None) -> PlanningMode | None:
     if not state:
         return None
 
+    confirmed = bool(state.get("planning_mode_confirmed"))
+    state_mode = _normalize_planning_mode(state.get("active_workflow"))
+    if state_mode == "agency_plan":
+        return state_mode
+    if state_mode == "free_planning" and confirmed:
+        return state_mode
+
     state_mode = _normalize_planning_mode(state.get("planning_mode"))
     if state_mode:
         return state_mode
@@ -325,11 +332,11 @@ def fallback_internal_evidence(category: str) -> dict[str, Any]:
         "report": "最终报告交付标准规则",
     }
     snippet_by_category = {
-        "products": "按用户人群、天数、预算和节奏选择轻量产品能力，只表达路线结构和服务节点，不承诺真实库存或成团。",
+        "products": "按用户人群、天数、预算和节奏选择成熟路线结构，费用与名额需在预订前二次核验。",
         "sop": "交付前需要完成需求确认、路线初稿、交通住宿核验、预算说明和出发前提醒。",
         "pricing": "费用需要区分已确认价格、工具返回价格、规则估算价格和待核验价格，不承诺锁价或支付。",
         "risk": "报告需要保留天气、交通、酒店、预约和体力风险，并给出可执行 Plan B。",
-        "report": "最终报告需要包含行程概览、每日路线、地图节点、预算置信度、待核验项和不支持承诺。",
+        "report": "最终报告需要包含行程概览、每日路线、地图节点、预算依据、待核验提醒和调整选项。",
     }
     return {
         "source": f"agency_rules/{category}",
@@ -384,6 +391,13 @@ def _pick_highlight(lines: list[str], keywords: tuple[str, ...], fallback_index:
     return None
 
 
+def _highlight_lines_or_fallback(category: str, limit: int = 2) -> list[str]:
+    lines = list(internal_doc_highlights(category, limit))
+    if lines:
+        return lines
+    return [str(fallback_internal_evidence(category).get("snippet") or "").strip()]
+
+
 def build_agency_context(
     requirement: dict[str, Any],
     state: dict[str, Any] | None = None,
@@ -401,11 +415,11 @@ def build_agency_context(
         or (state.get("planning_mode_confirmed") if state else False)
     )
     light_product = build_light_product(requirement, state)
-    product_lines = list(internal_doc_highlights("products", 2))
-    service_lines = list(internal_doc_highlights("sop", 2))
-    pricing_lines = list(internal_doc_highlights("pricing", 2))
-    risk_lines = list(internal_doc_highlights("risk", 2))
-    report_lines = list(internal_doc_highlights("report", 2))
+    product_lines = _highlight_lines_or_fallback("products", 2)
+    service_lines = _highlight_lines_or_fallback("sop", 2)
+    pricing_lines = _highlight_lines_or_fallback("pricing", 2)
+    risk_lines = _highlight_lines_or_fallback("risk", 2)
+    report_lines = _highlight_lines_or_fallback("report", 2)
     evidence = [
         _internal_doc_evidence_for_mode(category, mode)
         for category in ("products", "sop", "pricing", "risk", "report")

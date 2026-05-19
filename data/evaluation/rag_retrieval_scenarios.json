@@ -90,6 +90,24 @@
       "tags": ["internal", "agency_plan", "products", "xian", "family", "value"]
     },
     {
+      "id": "retrieval_product_xian_to_hangzhou_5d_budget",
+      "name": "Productized demo: Xi'an to Hangzhou 5-day 5000 per person",
+      "query": "西安出发去杭州5天，每人5000元左右，想要旅行社现成省心方案，交通住宿门票和餐饮都给样例价。",
+      "expected_sources": ["data/documents/internal/products/xian_to_hangzhou_5d_agency_sample.md"],
+      "expected_categories": ["products"],
+      "expected_source_types": ["agency_internal"],
+      "tags": ["internal", "agency_plan", "products", "xian", "hangzhou", "budget", "realistic_sample"]
+    },
+    {
+      "id": "retrieval_scenic_ticket_hangzhou_references",
+      "name": "Internal scenic tickets: Hangzhou ticket reference",
+      "query": "杭州旅行社方案需要灵隐飞来峰、西溪湿地、宋城门票参考价、预约说明、采集日期和不锁价边界。",
+      "expected_sources": ["data/documents/internal/scenic_tickets/scenic_ticket_reference.md"],
+      "expected_categories": ["scenic_tickets"],
+      "expected_source_types": ["agency_internal"],
+      "tags": ["internal", "agency_plan", "scenic_tickets", "hangzhou", "ticket_price"]
+    },
+    {
       "id": "retrieval_product_free_planning_boundary",
       "name": "Internal products: free-planning boundary",
       "query": "用户不接受产品化方向，只想自己预订和自由规划，桂林4天需要路线优化、住宿区域、预算拆分和核验清单。",

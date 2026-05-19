@@ -221,6 +221,7 @@ ONE_SHOT_TOOLS_AFTER_CALL = frozenset(
         "select_accommodation_tool",
         "select_food_tool",
         "generate_visual_journey_tool",
+        "scenic_price_lookup_tool",
         "generate_itinerary_tool",
         "summarize_budget_tool",
         "generate_order_tool",
@@ -240,6 +241,7 @@ FORCE_NARROW_TOOL_NAMES = frozenset(
         "select_accommodation_tool",
         "select_food_tool",
         "generate_visual_journey_tool",
+        "scenic_price_lookup_tool",
         "generate_itinerary_tool",
         "summarize_budget_tool",
         "generate_order_tool",
@@ -1219,6 +1221,11 @@ def _is_iso_date_text(value: Any) -> bool:
 
 def _has_confirmed_departure_date(state_dict: dict[str, Any]) -> bool:
     requirement = state_dict.get("user_requirement") or {}
+    confirmed_facts = state_dict.get("confirmed_facts") or {}
+    if isinstance(confirmed_facts, dict):
+        confirmed_date = str(confirmed_facts.get("departure_date") or "").strip()
+        if confirmed_date and _is_iso_date_text(confirmed_date):
+            return True
     if not isinstance(requirement, dict):
         return False
 
@@ -1228,6 +1235,69 @@ def _has_confirmed_departure_date(state_dict: dict[str, Any]) -> bool:
     if requirement.get("departure_date_confirmed") is False:
         return False
     return True
+
+
+def _confirmed_facts_instruction(state_dict: dict[str, Any]) -> str:
+    facts = state_dict.get("confirmed_facts") or {}
+    if not isinstance(facts, dict) or not facts:
+        return ""
+    lines: list[str] = []
+    labels = {
+        "departure_city": "出发城市",
+        "destination": "目的地",
+        "departure_date": "出发日期",
+        "travel_days": "行程天数",
+        "return_date": "行程结束日期",
+        "check_in_date": "入住日期",
+        "check_out_date": "退房日期",
+        "adult_count": "成人数",
+        "children_count": "儿童数",
+        "budget_min": "预算下限",
+        "budget_max": "预算上限",
+    }
+    for key in (
+        "departure_city",
+        "destination",
+        "departure_date",
+        "travel_days",
+        "return_date",
+        "check_in_date",
+        "check_out_date",
+        "adult_count",
+        "children_count",
+        "budget_min",
+        "budget_max",
+    ):
+        value = facts.get(key)
+        if value not in (None, "", [], {}):
+            lines.append(f"- {labels[key]}：{value}")
+    if not lines:
+        return ""
+    return (
+        "【已确认事实】\n"
+        + "\n".join(lines[:12])
+        + "\n用户已经确认过上述事实；交通、住宿、预算和报告阶段不得再次询问同一出发日期、入住日期或退房日期。"
+        "只有用户明确修改日期、改成自由行/自己订/不要旅行社，或指出信息错误时，才重新确认相关事实。"
+    )
+
+
+def _agency_plan_workflow_instruction(state_dict: dict[str, Any]) -> str:
+    active_workflow = (
+        state_dict.get("active_workflow")
+        or state_dict.get("planning_mode")
+        or (state_dict.get("user_requirement") or {}).get("planning_mode")
+    )
+    if active_workflow != "agency_plan":
+        return ""
+    matched_product = state_dict.get("matched_product") if isinstance(state_dict.get("matched_product"), dict) else {}
+    product_name = matched_product.get("name") or "成熟路线样板"
+    return (
+        "【旅行社方案工作流已锁定】\n"
+        f"当前按“{product_name}”的省心方案交付思路推进，active_workflow=agency_plan。"
+        "不要漂回自由行逐项追问交通方式、酒店偏好或自行订购方式；"
+        "应直接给产品化交通口径、住宿商圈/档次、景点门票参考、餐饮安排、服务节点和不承诺边界。"
+        "只有用户明确说“自由行/自己订/不要旅行社/不需要旅行社产品”时，才切回 free_planning。"
+    )
 
 
 def _has_confirmed_departure_city(state_dict: dict[str, Any]) -> bool:
@@ -2216,6 +2286,16 @@ class StepConfigMiddleware(AgentMiddleware):
         )
         confirmed_departure_date = _has_confirmed_departure_date(state_dict)
         planning_instruction = _planning_mode_instruction(planning_mode)
+        confirmed_instruction = _confirmed_facts_instruction(state_dict)
+        if confirmed_instruction:
+            override_kwargs["system_prompt"] = (
+                f"{override_kwargs['system_prompt']}\n\n{confirmed_instruction}"
+            )
+        agency_workflow_instruction = _agency_plan_workflow_instruction(state_dict)
+        if agency_workflow_instruction:
+            override_kwargs["system_prompt"] = (
+                f"{override_kwargs['system_prompt']}\n\n{agency_workflow_instruction}"
+            )
         if planning_instruction:
             override_kwargs["system_prompt"] = (
                 f"{override_kwargs['system_prompt']}\n\n{planning_instruction}"

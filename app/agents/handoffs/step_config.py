@@ -10,6 +10,7 @@ from app.tools.state_transition import (
     set_planning_mode_tool,
     confirm_planning_mode_tool,
     record_evidence_bundle_tool,
+    scenic_price_lookup_tool,
     select_destination_tool,
     select_transport_tool,
     select_accommodation_tool,
@@ -177,6 +178,7 @@ async def get_step_config():
 - 如果用户要求“省心方案/旅行社方案/成熟路线/亲子团建/预算透明/避坑”，可调用内部产品模板、服务 SOP 或风险手册工具辅助判断。
 - 内部知识只用于增强方案依据和服务表达，不要把它说成真实库存或强制购买。
 - 对旅行社方案，要自然落到轻量产品能力表达：适合人群、产品形态、服务节点、交付标准和不承诺项；不要把它说成已成团、已占位或已锁价。
+- 对旅行社方案，不要像自由行一样反复追问用户交通方式或酒店偏好；优先给产品化交通口径、住宿商圈/档次、景点门票参考、餐饮和服务边界，并标注待核验。
 - 如果出发城市或出发日期还没确认，只能先给“可参考的成熟路线方向”，并一次性追问出发城市和大致出发日期；不要把产品样板包装成正式推荐、报价或最终报告。
 - 在目的地/产品框架阶段，只能给 2-3 个成熟路线方向、适用人群、服务边界和报价口径；不要生成最终 report_data 或最终报告卡片。
 - 如果用户明确要“先看几天经典线/路线图/地图上看每天怎么走/圆周旅迹那种可视化路线”，优先调用 generate_visual_journey_tool 生成旅程草案。该工具只生成 journey_plan，不生成最终 report_data，不绕过交通、住宿、预算和最终报告门禁。
@@ -244,6 +246,7 @@ async def get_step_config():
 """,
             "tools": [
                 select_destination_tool,
+                scenic_price_lookup_tool,
                 go_back_to_requirement,
                 generate_visual_journey_tool,
                 query_destination_info,
@@ -528,6 +531,7 @@ async def get_step_config():
 【旅行社业务知识使用】
 - 生成草案或最终行程前，如果用户明显倾向省心方案、亲子/银发/团建，或要求“像旅行社一样安排”，可调用内部产品模板、服务 SOP 或风险手册工具。
 - 内部知识用于控制节奏、动线、留白和 Plan B，不替代真实交通、酒店或景区实时信息。
+- 如行程涉及高门票或强预约景点，可先查景点价格参考；输出时必须说明采集日期、来源和不锁价边界。
 
 1) 先判断用户意图：
    - 如果用户已经要求生成/记录/确认最终行程，立即调用 generate_itinerary_tool，不要进入草案输出流程。
@@ -578,6 +582,7 @@ async def get_step_config():
 """,
             "tools": [
                 generate_itinerary_tool,
+                scenic_price_lookup_tool,
                 go_back_to_destination,
                 go_back_to_requirement,
                 go_back_to_transport,
@@ -617,6 +622,7 @@ async def get_step_config():
 - 如果用户询问报价是否合理、费用包含什么、为什么这样估算、怎样降本，优先参考内部报价规则。
 - 预算说明必须区分已确认价格、估算价格和待核验价格，不要写成真实锁价。
 - 预算输出必须自然说明“轻量产品与报价规则”：当前匹配哪类产品、报价包含哪些规划服务、哪些实际出行费用不包含、哪些价格变量需要出发前复核。
+- 景点/门票费用优先引用已查到的景点价格参考；没有覆盖时再用兜底估算，并明确不锁价。
 
 1) 先告知用户你将基于当前方案做预算拆分，并说明这是估算（价格会随日期/库存波动）
 2) 计算费用（交通/住宿/餐饮/门票/杂费）
@@ -656,6 +662,7 @@ async def get_step_config():
 """,
             "tools": [
                 summarize_budget_tool,
+                scenic_price_lookup_tool,
                 go_back_to_destination,
                 go_back_to_requirement,
                 go_back_to_transport,
@@ -701,10 +708,11 @@ async def get_step_config():
    - 产品与报价规则：说明轻量产品匹配、费用包含/不含、估算性质和不锁价边界
    - 预算明细：交通、住宿、餐饮、景点/体验、其他；给总计和人均，并写每项费用依据、预算置信度和待核验项
    - 费用依据：保留交通票价、酒店晚数/房间数、餐饮人均、门票/体验、其他机动费的估算规则
-   - 预算置信度与待核验项：必须作为独立章节保留，并稳定包含“已确认/可追溯价格”“估算项”“待核验项”三组；如果酒店 MCP 或交通 API 失败后使用兜底价格，必须明确写“兜底估算”，不要写成真实锁价
+   - 面向用户默认只展示预算总览、费用依据和关键待核验提醒；预算置信度详情、工具审计、交付清单和治理边界只保留在结构化 report_data 内部证据里，不作为主报告章节展示。
+   - 酒店 MCP 或交通 API 失败时，只写“待二次核实/需出发前复核”，不要编造真实库存、票价、房态或支付链接。
    - 天气与风险提醒：稳定包含天气风险、预约、交通、预算波动、节假日人流等
    - 后续可调整：告诉用户可以继续修改交通、住宿、景点顺序或预算
-5. 调用 generate_order_tool 后，以工具返回的 report 作为最终报告正文；不要二次改写、压缩或删减工具报告章节，尤其不要删掉“预算置信度与待核验项”。
+5. 调用 generate_order_tool 后，以工具返回的 report 作为最终报告正文；不要二次改写、压缩或扩展成内部审计报告。
 6. 生成工具会写入 report_data 结构化数据；可见报告不要破坏章节结构，便于后续 PDF/图片导出直接使用。
 7. 不要输出“[根据之前的对话填写]”这类占位符；缺失信息要写成“待二次核实”，不要编造。
 8. 感谢用户，询问是否需要其他帮助。
