@@ -160,6 +160,114 @@ async def test_chat_stream_fast_mode_split_skips_full_agent(monkeypatch):
     assert events[1]["observability"]["progress_snapshot"]["confirmed_facts"]
 
 
+@pytest.mark.asyncio
+async def test_chat_stream_fast_agency_confirmation_sets_mode_without_agent(monkeypatch):
+    await reset_session_locks_for_tests()
+    saved_messages = []
+    initial_facts = extract_fast_split_facts(
+        "我想从西安去杭州，两个人，四天左右，人均预算3500，请你帮我规划一下"
+    )
+
+    async def fake_save_message(db, conversation_id, role, content, extra_info=None):
+        saved_messages.append(
+            {
+                "role": role,
+                "content": content,
+                "extra_info": extra_info or {},
+            }
+        )
+        return SimpleNamespace()
+
+    async def fake_role_counts(db, conversation_id):
+        return {"user": 2, "assistant": 1}
+
+    async def fake_load_fast_facts(db, *, conversation_id):
+        return dict(initial_facts)
+
+    async def fake_create_travel_agent():
+        raise AssertionError("agency confirmation fast path should not create the full agent")
+
+    monkeypatch.setattr(chat, "save_message", fake_save_message)
+    monkeypatch.setattr(chat, "_conversation_role_counts", fake_role_counts)
+    monkeypatch.setattr(chat, "_load_latest_fast_split_facts_for_turn", fake_load_fast_facts)
+    monkeypatch.setattr(chat, "create_travel_agent", fake_create_travel_agent)
+
+    events = []
+    async for frame in chat.generate_sse_stream(
+        "conversation-agency-confirm",
+        "省心方案",
+        db=SimpleNamespace(),
+        user=SimpleNamespace(id="user-1"),
+    ):
+        events.append(json.loads(frame.removeprefix("data: ").strip()))
+
+    assert [event["type"] for event in events] == ["token", "turn_observability", "done"]
+    assert "已切到省心方案" in events[0]["content"]
+    assert "计划哪天出发" in events[0]["content"]
+    assert events[1]["observability"]["planning_mode"] == "agency_plan"
+    assert events[1]["observability"]["step"] == "agency_requirement"
+    assert events[1]["observability"]["progress_snapshot"]["planning_mode"] == "agency_plan"
+    assert saved_messages[-1]["extra_info"]["fast_mode_split"]["needs_confirmation"] is False
+    assert saved_messages[-1]["extra_info"]["fast_mode_split"]["facts"]["planning_mode"] == "agency_plan"
+    assert saved_messages[-1]["extra_info"]["fast_mode_split"]["facts"]["destination"] == "杭州"
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_fast_agency_date_update_sets_progress_without_agent(monkeypatch):
+    await reset_session_locks_for_tests()
+    saved_messages = []
+    initial_facts = extract_fast_split_facts(
+        "我想从西安去杭州，两个人，四天左右，人均预算3500，请你帮我规划一下"
+    )
+    initial_facts.update({"planning_mode": "agency_plan", "active_workflow": "agency_plan"})
+
+    async def fake_save_message(db, conversation_id, role, content, extra_info=None):
+        saved_messages.append(
+            {
+                "role": role,
+                "content": content,
+                "extra_info": extra_info or {},
+            }
+        )
+        return SimpleNamespace()
+
+    async def fake_role_counts(db, conversation_id):
+        return {"user": 3, "assistant": 2}
+
+    async def fake_load_fast_facts(db, *, conversation_id):
+        return dict(initial_facts)
+
+    async def fake_create_travel_agent():
+        raise AssertionError("agency date fast path should not create the full agent")
+
+    monkeypatch.setattr(chat, "save_message", fake_save_message)
+    monkeypatch.setattr(chat, "_conversation_role_counts", fake_role_counts)
+    monkeypatch.setattr(chat, "_load_latest_fast_split_facts_for_turn", fake_load_fast_facts)
+    monkeypatch.setattr(chat, "create_travel_agent", fake_create_travel_agent)
+
+    events = []
+    async for frame in chat.generate_sse_stream(
+        "conversation-agency-date",
+        "计划下周一",
+        db=SimpleNamespace(),
+        user=SimpleNamespace(id="user-1"),
+    ):
+        events.append(json.loads(frame.removeprefix("data: ").strip()))
+
+    assert [event["type"] for event in events] == ["token", "turn_observability", "done"]
+    assert "出发时间按" in events[0]["content"]
+    assert events[1]["observability"]["planning_mode"] == "agency_plan"
+    progress = events[1]["observability"]["progress_snapshot"]
+    assert progress["agency_step"] == "agency_requirement"
+    confirmed = {
+        item["key"]: item["value"]
+        for item in progress["confirmed_facts"]
+        if isinstance(item, dict)
+    }
+    assert confirmed["departure_date"]
+    assert saved_messages[-1]["extra_info"]["fast_mode_split"]["facts"]["departure_date"]
+
+
 def test_strip_assistant_thinking_content_removes_complete_and_unclosed_blocks():
     text = (
         "公开建议。"

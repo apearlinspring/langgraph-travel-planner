@@ -3152,6 +3152,7 @@
           itinerary_generation: "行程生成",
           budget_summarization: "预算汇总",
           order_generation: "报告生成",
+          intent_split: "意图分流",
           agency_requirement: "基础需求",
           agency_product_match: "匹配方案",
           agency_plan_draft: "方案草案",
@@ -3271,10 +3272,13 @@
           ...(data.startup_complete === false ? ["服务仍在启动中"] : []),
         ];
         const turn = state.governance?.turnObservability || {};
-        const planningMode =
-          state.governance?.turnObservability?.planningModeLabel ||
-          getStatusLabel(turn.planning_mode || "pending_confirmation");
         const progress = turn.progressSnapshot || turn.progress_snapshot || {};
+        const planningModeValue =
+          progress.planning_mode ||
+          turn.planningMode ||
+          turn.planning_mode ||
+          "pending_confirmation";
+        const planningMode = getStatusLabel(planningModeValue);
         const factItems = Array.isArray(progress.confirmed_facts)
           ? progress.confirmed_facts
               .map((item) => {
@@ -3326,10 +3330,17 @@
 
       function readinessCurrentStageLabel() {
         const turn = state.governance?.turnObservability || {};
-        const planningMode = turn.planningMode || turn.planning_mode;
         const progress = turn.progressSnapshot || turn.progress_snapshot || {};
+        const planningMode =
+          progress.planning_mode ||
+          turn.planningMode ||
+          turn.planning_mode ||
+          "pending_confirmation";
         const agencyStep = progress.agency_step || turn.agency_step || "";
         const step = turn.step || "requirement_collection";
+        if (planningMode === "pending_confirmation") {
+          return getStatusLabel("intent_split");
+        }
         if (planningMode === "agency_plan") {
           return getStatusLabel(agencyStep || step || "agency_requirement");
         }
@@ -8332,6 +8343,20 @@
         `;
       }
 
+      function isPrematureTravelBudgetSection(section = {}) {
+        if (section.tone !== "budget") return false;
+        const rows = extractTravelBudgetRows(section.rawLines || []);
+        if (!rows.length) return false;
+        const labels = rows.map((row) => String(row.label || ""));
+        const hasTripCostItem = labels.some((label) =>
+          /交通|大交通|机票|高铁|酒店|住宿|门票|景点|服务|地接|专车|合计|总计|总预算/u.test(label)
+        );
+        const onlyMealEstimate = labels.every((label) =>
+          /美食|餐饮|餐厅|吃|用餐/u.test(label)
+        );
+        return rows.length <= 1 && (!hasTripCostItem || onlyMealEstimate);
+      }
+
       function renderStructuredTravelPlan(blocks, options = {}) {
         const expandedBlocks = expandStructuredTravelBlocks(blocks);
         const summaryBlocks = [];
@@ -8386,10 +8411,13 @@
         });
 
         const journeyPreviewState = buildJourneyPreviewState(summaryBlocks, sections);
-        const shouldRenderTravelCards = sections.length >= 2;
+        const visibleSections = sections.filter(
+          (section) => !isPrematureTravelBudgetSection(section)
+        );
+        const shouldRenderTravelCards = visibleSections.length >= 2;
         const shouldRenderJourneyPreview =
           !options?.suppressJourneyPreview &&
-          shouldRenderJourneyPreviewBlock(journeyPreviewState, sections);
+          shouldRenderJourneyPreviewBlock(journeyPreviewState, visibleSections);
         if (!shouldRenderTravelCards && !shouldRenderJourneyPreview) {
           return null;
         }
@@ -8399,14 +8427,14 @@
         const journeyPreviewHtml = shouldRenderJourneyPreview
           ? renderJourneyPreview(journeyPreviewState)
           : "";
-        const budgetReminderLines = sections
+        const budgetReminderLines = visibleSections
           .filter((section) => section.tone === "warning")
           .flatMap((section) => section.rawLines || []);
-        const hasBudgetCard = sections.some((section) => section.tone === "budget");
+        const hasBudgetCard = visibleSections.some((section) => section.tone === "budget");
         const displaySections =
           hasBudgetCard && budgetReminderLines.length
-            ? sections.filter((section) => section.tone !== "warning")
-            : sections;
+            ? visibleSections.filter((section) => section.tone !== "warning")
+            : visibleSections;
 
         return `
           <div class="travel-plan">

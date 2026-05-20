@@ -129,7 +129,11 @@ def sanitize_observability_value(
 
     if isinstance(value, dict):
         return {
-            str(key): "[REDACTED]" if _is_sensitive_key(key) else sanitize_observability_value(item)
+            str(key): "[REDACTED]" if _is_sensitive_key(key) else sanitize_observability_value(
+                item,
+                max_text_length=max_text_length,
+                max_list_items=max_list_items,
+            )
             for key, item in value.items()
         }
     if isinstance(value, list):

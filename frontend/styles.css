@@ -3365,9 +3365,11 @@ html {
       }
       .message.assistant .message-text .travel-card.transport {
         background: rgba(34, 110, 122, 0.06);
+        grid-column: 1 / -1;
       }
       .message.assistant .message-text .travel-card.stay {
         background: rgba(23, 96, 58, 0.06);
+        grid-column: 1 / -1;
       }
       .message.assistant .message-text .travel-card.budget {
         background: rgba(146, 96, 36, 0.08);

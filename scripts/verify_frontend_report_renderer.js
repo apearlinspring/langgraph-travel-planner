@@ -196,6 +196,24 @@ if (mixedBudgetHtml.includes("| 项目 |") || mixedBudgetHtml.includes("| --- |"
   throw new Error("mixed-budget-table should render Markdown tables visually.");
 }
 
+const prematureBudgetHtml = context.renderAssistantText(`
+### 出发地
+西安 → 杭州，4天3晚，2位成人。
+
+### 预算参考
+| 项目 | 费用 |
+| --- | --- |
+| 美食 | 600-700元 |
+
+### 住宿商圈
+与星级档次参考，核心景点门票和动线安排后续补齐。
+`);
+assertExcludes(
+  prematureBudgetHtml,
+  ["travel-budget-layout", "当前估算", "600-700元"],
+  "premature-budget-card"
+);
+
 const decisionHtml = context.renderAssistantText(`
 ### 想跟你确认一下
 这条“拉萨适应 + 林芝舒缓”的路线方向你觉得合适吗？还是你想看看其他备选？

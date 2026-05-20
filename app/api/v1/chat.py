@@ -49,6 +49,7 @@ SESSION_BUSY_MESSAGE = "当前会话正在处理上一轮消息，请稍后再�
 _THINK_OPEN_TAG = "<think>"
 _THINK_CLOSE_TAG = "</think>"
 _FAST_MODE_SPLIT_QUESTION = "您想要现成省心方案，还是个性化旅游规划？"
+_AGENT_EVENT_IDLE_TIMEOUT_SECONDS = 90.0
 
 _FAST_DESTINATION_COPY = {
     "杭州": "杭州很适合慢逛和尝鲜，四天左右刚好能把西湖周边和老城区的烟火气走舒服。",
@@ -334,6 +335,82 @@ def _build_fast_mode_split_message(user_message: str) -> str:
     return f"{lead}{_FAST_MODE_SPLIT_QUESTION}"
 
 
+def _merge_fast_trip_facts(*fact_sets: dict | None) -> dict:
+    merged: dict = {}
+    for facts in fact_sets:
+        if not isinstance(facts, dict):
+            continue
+        for key, value in facts.items():
+            if value in (None, "", [], {}):
+                continue
+            if key in {"raw_text", "source"} and merged.get(key):
+                continue
+            merged[key] = value
+    return merged
+
+
+def _agency_requirement_missing_items(facts: dict | None) -> list[str]:
+    facts = facts if isinstance(facts, dict) else {}
+    required = (
+        ("destination", "目的地"),
+        ("travel_days", "天数"),
+        ("adult_count", "人数"),
+        ("budget_text", "预算"),
+        ("departure_date", "出发日期"),
+    )
+    return [label for key, label in required if facts.get(key) in (None, "", [], {})]
+
+
+def _fast_agency_requirement_message(facts: dict, *, mode_just_confirmed: bool) -> str:
+    destination = str(facts.get("destination") or "目的地")
+    departure_city = str(facts.get("departure_city") or "出发地")
+    missing = _agency_requirement_missing_items(facts)
+    if "出发日期" in missing:
+        lead = "收到，已切到省心方案。" if mode_just_confirmed else "收到，我先把省心方案的基础信息补上。"
+        return (
+            f"{lead}你前面说的{departure_city}到{destination}、"
+            f"{facts.get('travel_days', '待定')}天、{facts.get('adult_count', '待定')}人、"
+            f"{facts.get('budget_text', '预算待定')}我都先记下了。\n\n"
+            "还差一个关键日期：计划哪天出发？给我一个大致时间也可以，比如“下周一”或“6月中旬”。"
+        )
+    return (
+        f"收到，出发时间按 {facts.get('departure_date')} 记录。"
+        "你已选择省心方案，我会按这些基础信息匹配成熟路线样板；"
+        "下一步直接给方案草案，包含交通口径、住宿区域/档次、景点门票参考、餐饮安排和待核验项。"
+    )
+
+
+def _should_use_fast_agency_requirement_reply(
+    *,
+    latest_fast_split_facts: dict,
+    user_message: str,
+    mode_decision,
+) -> tuple[bool, dict, bool]:
+    if not latest_fast_split_facts:
+        return False, {}, False
+    latest_mode = latest_fast_split_facts.get("planning_mode")
+    mode_just_confirmed = (
+        mode_decision.confirmed
+        and mode_decision.mode == "agency_plan"
+        and getattr(mode_decision, "source", "") == "latest_user"
+    )
+    in_agency_fast_context = latest_mode == "agency_plan" or mode_just_confirmed
+    if not in_agency_fast_context:
+        return False, {}, False
+    user_facts = extract_fast_split_facts(user_message)
+    merged_facts = _merge_fast_trip_facts(
+        latest_fast_split_facts,
+        user_facts,
+        {"planning_mode": "agency_plan", "active_workflow": "agency_plan"},
+    )
+    missing = _agency_requirement_missing_items(merged_facts)
+    if mode_just_confirmed and missing:
+        return True, merged_facts, True
+    if latest_mode == "agency_plan" and user_facts and set(user_facts) - {"raw_text", "source"}:
+        return True, merged_facts, False
+    return False, merged_facts, mode_just_confirmed
+
+
 async def _conversation_role_counts(
     db: AsyncSession,
     conversation_id: str,
@@ -533,7 +610,7 @@ async def _load_latest_fast_split_facts_for_turn(
         if not isinstance(extra_info, dict):
             continue
         fast_split = extra_info.get("fast_mode_split")
-        if not isinstance(fast_split, dict) or not fast_split.get("needs_confirmation"):
+        if not isinstance(fast_split, dict):
             continue
         facts = fast_split.get("facts") or fast_split.get("fast_split_facts")
         if isinstance(facts, dict) and facts:
@@ -1070,6 +1147,67 @@ async def generate_sse_stream(
             yield sse(_turn_done_payload(turn_observation))
             return
 
+        latest_fast_split_facts = await _load_latest_fast_split_facts_for_turn(
+            db,
+            conversation_id=conversation_id,
+        )
+        mode_decision = resolve_planning_mode(
+            user_message,
+            state={
+                "current_step": "requirement_collection",
+                "planning_mode": latest_fast_split_facts.get("planning_mode"),
+                "active_workflow": latest_fast_split_facts.get("active_workflow"),
+                "planning_mode_confirmed": latest_fast_split_facts.get("planning_mode") == "agency_plan",
+            },
+        )
+        should_fast_agency, agency_facts, mode_just_confirmed = (
+            _should_use_fast_agency_requirement_reply(
+                latest_fast_split_facts=latest_fast_split_facts,
+                user_message=user_message,
+                mode_decision=mode_decision,
+            )
+        )
+        if should_fast_agency:
+            assistant_message = _fast_agency_requirement_message(
+                agency_facts,
+                mode_just_confirmed=mode_just_confirmed,
+            )
+            turn_observation.update_context(
+                current_step="agency_requirement",
+                planning_mode="agency_plan",
+                planning_mode_source="fast_agency_requirement",
+            )
+            turn_observation.set_progress_snapshot(
+                _progress_snapshot_from_trip_facts(
+                    agency_facts,
+                    planning_mode="agency_plan",
+                    agency_step="agency_requirement",
+                )
+            )
+            yield sse(record_assistant_token(assistant_message))
+            observability_snapshot = turn_observation.finish("completed")
+            assistant_extra_info["observability"] = observability_snapshot
+            assistant_extra_info["fast_mode_split"] = {
+                "needs_confirmation": False,
+                "question": _FAST_MODE_SPLIT_QUESTION,
+                "facts": agency_facts,
+            }
+            await save_message(
+                db,
+                conversation_id,
+                "assistant",
+                assistant_message,
+                extra_info=assistant_extra_info,
+            )
+            app_logger.info(
+                "SSE fast agency requirement reply completed without creating travel agent: "
+                f"turn_id={turn_observation.turn_id}, conversation_id={conversation_id}, "
+                f"user_id={user.id}, missing={_agency_requirement_missing_items(agency_facts)}"
+            )
+            yield sse(turn_observation.to_sse_event())
+            yield sse(_turn_done_payload(turn_observation))
+            return
+
         # 2. 创建 agent
         agent = await create_travel_agent()
 
@@ -1081,15 +1219,7 @@ async def generate_sse_stream(
             "session_id": conversation_id,
             "turn_id": turn_observation.turn_id,
         }
-        latest_fast_split_facts = await _load_latest_fast_split_facts_for_turn(
-            db,
-            conversation_id=conversation_id,
-        )
         if latest_fast_split_facts:
-            mode_decision = resolve_planning_mode(
-                user_message,
-                state={"current_step": "requirement_collection"},
-            )
             if mode_decision.confirmed:
                 selected_mode = mode_decision.mode
                 fast_seed = _fast_split_state_seed(
@@ -1116,16 +1246,24 @@ async def generate_sse_stream(
             )
 
         # 4. 使用 astream_events 获取更细粒度的流式输出
-        async for event in agent.astream_events(
-                input_data,
-                config={
-                    "recursion_limit": settings.langgraph_recursion_limit,
-                    "configurable": {
-                        "thread_id": conversation_id
-                    }
-                },
-                version="v2"
-        ):
+        event_stream = agent.astream_events(
+            input_data,
+            config={
+                "recursion_limit": settings.langgraph_recursion_limit,
+                "configurable": {
+                    "thread_id": conversation_id
+                }
+            },
+            version="v2",
+        )
+        while True:
+            try:
+                event = await asyncio.wait_for(
+                    anext(event_stream),
+                    timeout=_AGENT_EVENT_IDLE_TIMEOUT_SECONDS,
+                )
+            except StopAsyncIteration:
+                break
             kind = event.get("event")
 
             # 捕获 LLM 流式输出
@@ -1368,15 +1506,22 @@ async def generate_sse_stream(
         raise
     except Exception as e:
         total_elapsed = time.perf_counter() - request_started_at
-        if _is_transient_stream_disconnect(e):
+        is_stream_timeout = isinstance(e, (asyncio.TimeoutError, TimeoutError))
+        if _is_transient_stream_disconnect(e) or is_stream_timeout:
+            fallback_reason = (
+                "agent_stream_idle_timeout"
+                if is_stream_timeout
+                else "transient_stream_disconnect"
+            )
             app_logger.warning(
-                "SSE upstream stream disconnected after partial generation; "
+                "SSE upstream stream did not finish normally; "
                 "finishing turn without emitting user-facing error: "
                 f"turn_id={turn_observation.turn_id}, "
                 f"conversation_id={conversation_id}, user_id={user.id}, "
-                f"elapsed_seconds={total_elapsed:.2f}, assistant_chars={len(assistant_message)}"
+                f"elapsed_seconds={total_elapsed:.2f}, assistant_chars={len(assistant_message)}, "
+                f"reason={fallback_reason}"
             )
-            turn_observation.mark_fallback("transient_stream_disconnect")
+            turn_observation.mark_fallback(fallback_reason)
             tail_token = thinking_filter.finish()
             if tail_token:
                 yield sse(record_assistant_token(tail_token))
@@ -1389,10 +1534,16 @@ async def generate_sse_stream(
                     assistant_message
                 )
             if not assistant_message.strip():
-                assistant_message = (
-                    "本轮模型流式连接中断，已保留当前规划状态；"
-                    "可以继续下一步处理。"
-                )
+                if is_stream_timeout:
+                    assistant_message = (
+                        "这轮处理时间超过预期，我先把已经确认的信息保留住。"
+                        "你可以直接继续说下一步，我会接着当前会话往下处理。"
+                    )
+                else:
+                    assistant_message = (
+                        "本轮模型流式连接中断，已保留当前规划状态；"
+                        "可以继续下一步处理。"
+                    )
                 if first_token_elapsed is None:
                     first_token_elapsed = total_elapsed
                     turn_observation.ensure_assistant_text_observed(assistant_message)
