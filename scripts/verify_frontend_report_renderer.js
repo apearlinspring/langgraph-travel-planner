@@ -70,6 +70,10 @@ function assertExcludes(html, fragments, label) {
   }
 }
 
+function countOccurrences(text, fragment) {
+  return String(text || "").split(fragment).length - 1;
+}
+
 const context = createRenderContext();
 
 const fixtures = [
@@ -203,6 +207,34 @@ if (mixedBudgetHtml.includes("| 项目 |") || mixedBudgetHtml.includes("| --- |"
   throw new Error("mixed-budget-table should render Markdown tables visually.");
 }
 
+const duplicatedBudgetHtml = context.renderAssistantText(`
+# 杭州 5 天省心方案
+
+### 预算拆分与依据
+| 项目 | 参考 |
+| --- | --- |
+| 门票 | 45元 |
+| 门票 | 80元 |
+
+### 预算拆分与依据
+| 项目 | 参考 |
+| --- | --- |
+| 门票 | 45元 |
+| 门票 | 80元 |
+
+### 预算拆分与依据
+| 项目 | 参考 |
+| --- | --- |
+| 门票 | 45元 |
+| 门票 | 80元 |
+`);
+const duplicatedBudgetCardCount =
+  countOccurrences(duplicatedBudgetHtml, "travel-budget-layout") +
+  countOccurrences(duplicatedBudgetHtml, "message-table-wrap");
+if (duplicatedBudgetCardCount !== 1) {
+  throw new Error("duplicated-budget-card should keep a single budget card.");
+}
+
 const prematureBudgetHtml = context.renderAssistantText(`
 ### 出发地
 西安 → 杭州，4天3晚，2位成人。
@@ -267,6 +299,29 @@ assertExcludes(
   "report-next-action-not-grid-card"
 );
 
+const embeddedNextActionHtml = context.renderAssistantText(`
+# 杭州 5 天旅游规划报告
+
+### 行程概览
+下一步
+请您评价这版方案：
+- 如果满意，我将按此结构生成最终可导出的旅行规划报告。
+- 如果想调整，请告诉我具体想改哪里。
+
+### 天气与风险提醒
+出发前 24-48 小时重新核验天气和预约状态。
+`);
+assertIncludes(
+  embeddedNextActionHtml,
+  ["travel-report-next-action", "请您评价这版方案"],
+  "embedded-next-action-bottom"
+);
+assertExcludes(
+  embeddedNextActionHtml,
+  ['travel-report-card next', "行程概览</h4>"],
+  "embedded-next-action-not-grid"
+);
+
 const sparseRouteReportData = JSON.parse(JSON.stringify(fixtures[0][1]));
 sparseRouteReportData.overview.duration = "5 天 4 晚";
 sparseRouteReportData.overview.route_label = "西安 → 杭州 5 天";
@@ -313,8 +368,21 @@ const sparseRouteHtml = context.renderAssistantText("", {
 });
 assertIncludes(
   sparseRouteHtml,
-  ["report-day-2", "report-day-3", "灵隐寺", "西溪湿地"],
+  [
+    "report-day-1",
+    "report-day-2",
+    "report-day-3",
+    "report-day-4",
+    "report-day-5",
+    "灵隐寺",
+    "西溪湿地",
+  ],
   "sparse-route-days"
+);
+assertExcludes(
+  sparseRouteHtml,
+  ["journey-map-bottom-drawer"],
+  "sparse-route-no-bottom-drawer"
 );
 
 const bareDailyMarkerHtml = context.renderAssistantText(`

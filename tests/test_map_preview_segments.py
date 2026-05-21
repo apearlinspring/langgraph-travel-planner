@@ -204,6 +204,66 @@ async def test_map_preview_uses_structured_coordinates_when_geocoder_unavailable
     assert response.days[0].segments[0].confidence == "estimated_straight_line"
 
 
+@pytest.mark.asyncio
+async def test_map_preview_preserves_sparse_days_and_connects_available_points(
+    monkeypatch,
+):
+    async def fail_to_load_amap_tool(name):
+        raise TimeoutError()
+
+    monkeypatch.setattr(maps, "_get_amap_tool", fail_to_load_amap_tool)
+    request = MapPreviewRequest.model_validate(
+        {
+            "destination": "杭州",
+            "days": [
+                {
+                    "label": "Day 1",
+                    "stops": [
+                        {
+                            "name": "西湖",
+                            "city": "杭州",
+                            "lng": 120.14,
+                            "lat": 30.25,
+                        },
+                        {
+                            "name": "灵隐寺",
+                            "city": "杭州",
+                            "lng": 120.10,
+                            "lat": 30.24,
+                        },
+                    ],
+                },
+                {
+                    "label": "Day 2",
+                    "waypoints": ["待核验路线"],
+                },
+                {
+                    "label": "Day 3",
+                    "stops": [
+                        {
+                            "name": "西溪湿地",
+                            "city": "杭州",
+                            "lng": 120.06,
+                            "lat": 30.27,
+                        }
+                    ],
+                },
+            ],
+        }
+    )
+
+    response = await maps.get_map_preview(
+        request,
+        user=SimpleNamespace(id="map-sparse-day-test"),
+    )
+
+    assert [day.label for day in response.days] == ["Day 1", "Day 2", "Day 3"]
+    assert response.days[0].segments
+    assert response.days[1].points == []
+    assert response.days[1].segments == []
+    assert response.days[2].points[0].name == "西溪湿地"
+
+
 def test_fallback_points_from_day_groups_uses_real_day_coordinates():
     day_groups = [
         MapPreviewDay(

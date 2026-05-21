@@ -50,6 +50,17 @@ _THINK_OPEN_TAG = "<think>"
 _THINK_CLOSE_TAG = "</think>"
 _FAST_MODE_SPLIT_QUESTION = "您想要现成省心方案，还是个性化旅游规划？"
 _AGENT_EVENT_IDLE_TIMEOUT_SECONDS = 90.0
+_FAST_MEANINGFUL_FACT_KEYS = {
+    "departure_city",
+    "destination",
+    "departure_date",
+    "travel_days",
+    "adult_count",
+    "budget_text",
+    "planning_mode",
+    "active_workflow",
+    "agency_step",
+}
 
 _FAST_DESTINATION_COPY = {
     "杭州": "杭州很适合慢逛和尝鲜，四天左右刚好能把西湖周边和老城区的烟火气走舒服。",
@@ -228,11 +239,46 @@ def _extract_fast_mode_destination(text: str) -> str:
     return str(facts.get("destination") or "")
 
 
-def _extract_fast_date(text: str) -> tuple[str, str]:
+def _parse_fast_month_day(raw: str, *, today: date) -> str:
+    month_day = re.fullmatch(r"(\d{1,2})月(\d{1,2})(?:日|号)?", raw.strip())
+    if not month_day:
+        return ""
+    month = int(month_day.group(1))
+    day = int(month_day.group(2))
+    try:
+        parsed = date(today.year, month, day)
+    except ValueError:
+        return ""
+    if parsed < today:
+        try:
+            parsed = date(today.year + 1, month, day)
+        except ValueError:
+            return ""
+    return parsed.isoformat()
+
+
+def _parse_fast_year_month_day(raw: str) -> str:
+    year_month_day = re.fullmatch(
+        r"(\d{4})[-/年](\d{1,2})(?:[-/月])(\d{1,2})(?:日|号)?",
+        raw.strip(),
+    )
+    if not year_month_day:
+        return ""
+    year = int(year_month_day.group(1))
+    month = int(year_month_day.group(2))
+    day = int(year_month_day.group(3))
+    try:
+        return date(year, month, day).isoformat()
+    except ValueError:
+        return ""
+
+
+def _extract_fast_date(text: str, *, today: date | None = None) -> tuple[str, str]:
+    today = today or date.today()
     normalized = " ".join(str(text or "").split())
     patterns = (
-        r"\d{4}[-/年]\d{1,2}[-/月]\d{1,2}日?",
-        r"\d{1,2}月\d{1,2}日?",
+        r"\d{4}[-/年]\d{1,2}[-/月]\d{1,2}(?:日|号)?",
+        r"\d{1,2}月\d{1,2}(?:日|号)?",
         r"(?:今天|明天|后天|大后天|下下周|下周|这周|本周|周末)(?:周|星期|礼拜)?[一二三四五六日天]?",
         r"(?:周|星期|礼拜)[一二三四五六日天]",
     )
@@ -241,8 +287,12 @@ def _extract_fast_date(text: str) -> tuple[str, str]:
         if not match:
             continue
         raw = match.group(0)
+        if re.fullmatch(r"\d{4}[-/年]\d{1,2}[-/月]\d{1,2}(?:日|号)?", raw):
+            return raw, _parse_fast_year_month_day(raw)
+        if re.fullmatch(r"\d{1,2}月\d{1,2}(?:日|号)?", raw):
+            return raw, _parse_fast_month_day(raw, today=today)
         try:
-            parsed = normalize_travel_date(raw, today=date.today())
+            parsed = normalize_travel_date(raw, today=today)
         except ValueError:
             parsed = ""
         return raw, parsed
@@ -283,7 +333,7 @@ def _extract_fast_budget(text: str) -> str:
     return budget
 
 
-def extract_fast_split_facts(text: str) -> dict:
+def extract_fast_split_facts(text: str, *, today: date | None = None) -> dict:
     """Parse first-turn trip facts without creating the full travel agent."""
 
     normalized = " ".join(str(text or "").split())
@@ -308,7 +358,7 @@ def extract_fast_split_facts(text: str) -> dict:
                 if destination:
                     break
 
-    date_text, departure_date = _extract_fast_date(normalized)
+    date_text, departure_date = _extract_fast_date(normalized, today=today)
     facts = {
         "raw_text": normalized,
         "departure_city": departure_city,
@@ -321,6 +371,33 @@ def extract_fast_split_facts(text: str) -> dict:
         "source": "first_turn_fast_split",
     }
     return {key: value for key, value in facts.items() if value not in (None, "", [], {})}
+
+
+def _has_meaningful_fast_trip_facts(facts: dict | None) -> bool:
+    if not isinstance(facts, dict):
+        return False
+    return any(facts.get(key) not in (None, "", [], {}) for key in _FAST_MEANINGFUL_FACT_KEYS)
+
+
+def _should_apply_current_turn_fast_facts(facts: dict | None) -> bool:
+    if not _has_meaningful_fast_trip_facts(facts):
+        return False
+    assert isinstance(facts, dict)
+    explicit_trip_keys = {
+        "departure_city",
+        "departure_date",
+        "travel_days",
+        "adult_count",
+        "budget_text",
+        "planning_mode",
+        "active_workflow",
+        "agency_step",
+    }
+    if any(facts.get(key) not in (None, "", [], {}) for key in explicit_trip_keys):
+        return True
+    # A bare place name can be a destination lookup, not a planning update.
+    # Only let destination override progress when the same turn also carries trip facts.
+    return False
 
 
 def _build_fast_mode_split_message(user_message: str) -> str:
@@ -406,7 +483,7 @@ def _should_use_fast_agency_requirement_reply(
     missing = _agency_requirement_missing_items(merged_facts)
     if mode_just_confirmed and missing:
         return True, merged_facts, True
-    if latest_mode == "agency_plan" and user_facts and set(user_facts) - {"raw_text", "source"}:
+    if latest_mode == "agency_plan" and _has_meaningful_fast_trip_facts(user_facts):
         return True, merged_facts, False
     return False, merged_facts, mode_just_confirmed
 
@@ -456,6 +533,9 @@ def _progress_snapshot_from_trip_facts(
     current_trip_preferences: list | None = None,
 ) -> dict:
     facts = facts if isinstance(facts, dict) else {}
+    active_workflow = str(facts.get("active_workflow") or "").strip()
+    if not active_workflow and planning_mode in {"agency_plan", "free_planning"}:
+        active_workflow = planning_mode
     confirmed = []
     labels = (
         ("departure_city", "出发地"),
@@ -474,6 +554,7 @@ def _progress_snapshot_from_trip_facts(
     return {
         "version": "travel_progress_snapshot.v1",
         "planning_mode": planning_mode or "pending_confirmation",
+        "active_workflow": active_workflow,
         "agency_step": agency_step or "",
         "confirmed_facts": confirmed,
         "long_term_preferences": long_term_preferences or [],
@@ -1253,9 +1334,11 @@ async def generate_sse_stream(
         )
         # 1. 保存用户消息
         await save_message(db, conversation_id, "user", user_message)
+        turn_fast_facts = extract_fast_split_facts(user_message)
+        turn_has_fast_fact_updates = _should_apply_current_turn_fast_facts(turn_fast_facts)
 
         if await _should_use_fast_mode_split(db, conversation_id, user_message):
-            fast_facts = extract_fast_split_facts(user_message)
+            fast_facts = turn_fast_facts
             assistant_message = _build_fast_mode_split_message(user_message)
             turn_observation.update_context(
                 current_step="requirement_collection",
@@ -1293,6 +1376,11 @@ async def generate_sse_stream(
             db,
             conversation_id=conversation_id,
         )
+        if turn_has_fast_fact_updates:
+            latest_fast_split_facts = _merge_fast_trip_facts(
+                latest_fast_split_facts,
+                turn_fast_facts,
+            )
         mode_decision = resolve_planning_mode(
             user_message,
             state={
@@ -1349,6 +1437,25 @@ async def generate_sse_stream(
             yield sse(turn_observation.to_sse_event())
             yield sse(_turn_done_payload(turn_observation))
             return
+
+        if turn_has_fast_fact_updates:
+            snapshot_mode = (
+                latest_fast_split_facts.get("planning_mode")
+                if latest_fast_split_facts
+                else None
+            )
+            if not snapshot_mode and mode_decision.confirmed:
+                snapshot_mode = mode_decision.mode
+            turn_observation.set_progress_snapshot(
+                _progress_snapshot_from_trip_facts(
+                    latest_fast_split_facts or turn_fast_facts,
+                    planning_mode=snapshot_mode,
+                    agency_step=latest_fast_split_facts.get("agency_step")
+                    if latest_fast_split_facts
+                    else None,
+                )
+            )
+            yield sse(turn_observation.to_sse_event())
 
         # 2. 创建 agent
         agent = await create_travel_agent()

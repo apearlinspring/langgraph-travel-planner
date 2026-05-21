@@ -1088,12 +1088,12 @@
       }
 
       const JOURNEY_DAY_COLORS = [
-        "#ffd08a",
-        "#8fd3c1",
-        "#9fb8ff",
-        "#f2a8b5",
-        "#c9e37f",
-        "#f7c66f",
+        "#0f766e",
+        "#2563eb",
+        "#b45309",
+        "#be123c",
+        "#4d7c0f",
+        "#7c3aed",
       ];
 
       function getJourneyDayColor(index = 0) {
@@ -1162,16 +1162,17 @@
       }
 
       function applyJourneyDayView(entry) {
-        if (!entry?.dayLayers?.length) return;
+        if (!entry) return;
         const activeDayKey = entry.activeDayKey || "all";
         const activeMode = entry.dayDisplayMode || "solo";
         const isOverview = activeDayKey === "all";
+        const dayLayers = Array.isArray(entry.dayLayers) ? entry.dayLayers : [];
         const selectedPlan = entry.dayPlans?.find((day) => day.key === activeDayKey);
         const selectedHighlightIndexes = new Set(
           resolveJourneyPlanHighlightIndexes(selectedPlan, entry.highlightPoints)
         );
 
-        entry.dayLayers.forEach((layer) => {
+        dayLayers.forEach((layer) => {
           const isSelected = layer.key === activeDayKey;
           const opacity = isOverview
             ? 0.92
@@ -1192,7 +1193,7 @@
           setJourneyLayerOpacity(layer.polyline, opacity);
           if (typeof layer.polyline?.setStyle === "function") {
             layer.polyline.setStyle({
-              weight: isOverview ? 4 : isSelected ? 5 : 3,
+              weight: isOverview ? 6 : isSelected ? 8 : 4,
             });
           }
         });
@@ -1202,7 +1203,7 @@
         if (entry.routeLine?.setStyle) {
           entry.routeLine.setStyle({
             opacity: baseOpacity,
-            weight: isOverview ? 4 : 3,
+            weight: isOverview ? 6 : 4,
           });
         }
         getJourneyRecommendationMarkers(entry).forEach((marker, index) => {
@@ -1225,7 +1226,7 @@
           );
         }
 
-        const selectedLayer = entry.dayLayers.find((layer) => layer.key === activeDayKey);
+        const selectedLayer = dayLayers.find((layer) => layer.key === activeDayKey);
         if (entry.shell) {
           entry.shell.dataset.activeDay = activeDayKey;
           entry.shell.dataset.dayMode = activeMode;
@@ -1234,9 +1235,11 @@
         if (metaValue) {
           metaValue.textContent = isOverview
             ? `已定位 ${entry.points.length} 个路线地点`
-            : `${selectedLayer?.label || selectedPlan?.label || "当日"}已切换为${
-                activeMode === "solo" ? "单日路线" : "重点路线"
-              }`;
+            : selectedLayer
+              ? `${selectedLayer.label || selectedPlan?.label || "当日"}已切换为${
+                  activeMode === "solo" ? "单日路线" : "重点路线"
+                }`
+              : `${selectedPlan?.label || "当日"}路线待核验`;
         }
         renderJourneyDayInsight(entry);
         updateJourneyDayButtons(entry.shell, activeDayKey, activeMode);
@@ -1310,7 +1313,7 @@
           const enabled = key === "all" || availableDayKeys.has(key);
           button.disabled = !enabled;
           button.classList.toggle("disabled", !enabled);
-          button.hidden = key !== "all" && !enabled;
+          button.hidden = false;
         });
         const dayModes = shell?.querySelector(".journey-map-floating-modes");
         if (dayModes) {
@@ -1590,9 +1593,9 @@
         if (path.length < 2) return null;
         const polyline = new AMap.Polyline({
           path,
-          strokeColor: options.color || "#16b8aa",
-          strokeWeight: options.weight || 5,
-          strokeOpacity: options.opacity ?? 0.9,
+          strokeColor: options.color || "#0f766e",
+          strokeWeight: options.weight || 7,
+          strokeOpacity: options.opacity ?? 0.98,
           strokeStyle: options.dashed ? "dashed" : "solid",
           lineJoin: "round",
           lineCap: "round",
@@ -1732,8 +1735,8 @@
         const routeLine =
           routePoints.length >= 2
             ? createAmapJourneyPolyline(AMap, map, routePoints, {
-                color: "#d6a56c",
-                weight: 5,
+                color: "#a16207",
+                weight: 7,
                 dashed: true,
                 zIndex: 70,
               })
@@ -1763,7 +1766,7 @@
             const dayRoutePoints = getJourneySegmentRoutePoints(dayPoints, day.segments);
             const polyline = createAmapJourneyPolyline(AMap, map, dayRoutePoints, {
               color,
-              weight: 6,
+              weight: 8,
               zIndex: 90 + index,
             });
             const dayBadge = createAmapJourneyDayBadge(
@@ -1984,9 +1987,9 @@
           if (routePoints.length >= 2) {
             const routeLatLngs = routePoints.map((point) => [point.lat, point.lng]);
             routeLine = L.polyline(routeLatLngs, {
-              color: "#d6a56c",
-              weight: 4,
-              opacity: 0.9,
+              color: "#a16207",
+              weight: 6,
+              opacity: 0.95,
               dashArray: "10 8",
             }).addTo(map);
           }
@@ -2036,8 +2039,8 @@
                 dayLatLngs.length >= 2
                   ? L.polyline(dayLatLngs, {
                       color,
-                      weight: 5,
-                      opacity: 0.96,
+                      weight: 7,
+                      opacity: 1,
                     }).addTo(map)
                   : null;
               const firstPoint = dayPoints[0];
@@ -2174,6 +2177,131 @@
         document.body.classList.remove("journey-map-modal-open");
       }
 
+      function getJourneyPlanDayNumber(day = {}, fallback = 0) {
+        const explicit = Number(day.dayNumber || day.day_number || day.day || 0);
+        if (explicit > 0) return explicit;
+        const parsed = parseJourneyDayNumber(
+          [day.key, day.label, day.title, day.date].filter(Boolean).join(" ")
+        );
+        return parsed || fallback || 0;
+      }
+
+      function normalizeJourneyModalDayPlan(day = {}, fallback = 0) {
+        if (!day || typeof day !== "object") return null;
+        const dayNumber = getJourneyPlanDayNumber(day, fallback);
+        if (!dayNumber) return null;
+        const stops = Array.isArray(day.stops) ? day.stops : [];
+        const stopNames = stops
+          .map((stop) => cleanJourneyLocationValue(stop?.name || ""))
+          .filter(Boolean);
+        const waypoints = [
+          ...(Array.isArray(day.waypoints) ? day.waypoints : []),
+          ...(Array.isArray(day.points) ? day.points.map((point) => point?.name || point?.label || "") : []),
+          ...stopNames,
+        ]
+          .map((item) => cleanJourneyLocationValue(item || ""))
+          .filter(Boolean)
+          .filter((item, index, list) => list.indexOf(item) === index);
+        return {
+          ...day,
+          key: day.key || `report-day-${dayNumber}`,
+          dayNumber,
+          label: day.label || `Day ${dayNumber}`,
+          title: day.title || day.summary || `Day ${dayNumber}`,
+          note: day.note || day.route_note || day.summary || "",
+          waypoints,
+          stops,
+          segments: Array.isArray(day.segments) ? day.segments : [],
+        };
+      }
+
+      function collectJourneyDayPlanCandidates(source) {
+        if (!source) return [];
+        const parsed = typeof source === "string" ? parseMapPayload(source) : source;
+        if (!parsed) return [];
+        if (Array.isArray(parsed)) return parsed;
+        if (Array.isArray(parsed.days)) return parsed.days;
+        return typeof parsed === "object" ? [parsed] : [];
+      }
+
+      function mergeJourneyDayPlanSources(...sources) {
+        const byDay = new Map();
+        let maxDay = 0;
+        sources
+          .flatMap((source) => collectJourneyDayPlanCandidates(source))
+          .forEach((day, index) => {
+            const normalized = normalizeJourneyModalDayPlan(day, index + 1);
+            if (!normalized) return;
+            maxDay = Math.max(maxDay, normalized.dayNumber);
+            const existing = byDay.get(normalized.dayNumber) || {};
+            const waypoints = [
+              ...(existing.waypoints || []),
+              ...(normalized.waypoints || []),
+            ].filter((item, itemIndex, list) => item && list.indexOf(item) === itemIndex);
+            const stops = [
+              ...(Array.isArray(existing.stops) ? existing.stops : []),
+              ...(Array.isArray(normalized.stops) ? normalized.stops : []),
+            ].filter((stop, stopIndex, list) => {
+              const name = cleanJourneyLocationValue(stop?.name || "");
+              return name && list.findIndex((item) => cleanJourneyLocationValue(item?.name || "") === name) === stopIndex;
+            });
+            byDay.set(normalized.dayNumber, {
+              ...existing,
+              ...normalized,
+              key: existing.key || normalized.key,
+              label: existing.label || normalized.label,
+              title: existing.title || normalized.title,
+              note: existing.note || normalized.note,
+              waypoints,
+              stops,
+              segments: (existing.segments || []).length
+                ? existing.segments
+                : normalized.segments || [],
+            });
+          });
+        const result = [];
+        for (let dayNumber = 1; dayNumber <= maxDay; dayNumber += 1) {
+          result.push(
+            byDay.get(dayNumber) || {
+              key: `report-day-${dayNumber}`,
+              dayNumber,
+              label: `Day ${dayNumber}`,
+              title: `Day ${dayNumber}`,
+              waypoints: [],
+              stops: [],
+              segments: [],
+              note: "当天路线待核验。",
+            }
+          );
+        }
+        return result;
+      }
+
+      function mergeMapPayloadWithDayPlans(rawPayload, dayPlans = []) {
+        const parsed = typeof rawPayload === "string" ? parseMapPayload(rawPayload) : rawPayload;
+        const payload = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+          ? { ...parsed }
+          : {};
+        const originalDays = Array.isArray(payload.days) ? payload.days : [];
+        const mergedDayPlans = mergeJourneyDayPlanSources(dayPlans, originalDays);
+        payload.days = mergedDayPlans.map((day) => {
+          const matchingOriginal = originalDays.find(
+            (item, index) =>
+              getJourneyPlanDayNumber(item, index + 1) === day.dayNumber ||
+              (item.key && item.key === day.key)
+          ) || {};
+          return {
+            ...matchingOriginal,
+            key: day.key,
+            label: day.label,
+            waypoints: day.waypoints || [],
+            stops: day.stops || [],
+            segments: day.segments || matchingOriginal.segments || [],
+          };
+        });
+        return payload;
+      }
+
       function openJourneyMapModalFromButton(button) {
         const shell = button.closest(".journey-live-map-shell");
         const sourceMap = shell?.querySelector(".journey-live-map[data-map-payload]");
@@ -2181,16 +2309,22 @@
         const modalShell = document.getElementById("journeyMapModalShell");
         const modalDays = document.getElementById("journeyMapModalDays");
         if (!shell || !sourceMap || !modal) return;
-        const payload = sourceMap.dataset.mapPayload || "";
+        const sourcePayload = parseMapPayload(sourceMap.dataset.mapPayload || "") || {};
+        const sourceEntry = journeyMapInstances.get(sourceMap);
         const title = shell.dataset.mapTitle || "路线地图";
-        const dayPlans = parseMapPayload(shell.dataset.dayPlans || "") || [];
+        const dayPlans = mergeJourneyDayPlanSources(
+          shell.dataset.dayPlans || "",
+          sourceEntry?.dayPlans || [],
+          sourcePayload?.days || []
+        );
+        const modalPayload = mergeMapPayloadWithDayPlans(sourcePayload, dayPlans);
         const modalTitle = modal.querySelector(".journey-map-modal-title");
         const modalMap = modal.querySelector(".journey-live-map-modal-canvas");
         if (!modalTitle || !modalMap) return;
         modalTitle.textContent = title;
         if (modalShell) {
           modalShell.dataset.mapTitle = title;
-          modalShell.dataset.dayPlans = shell.dataset.dayPlans || "[]";
+          modalShell.dataset.dayPlans = serializeMapPayload(dayPlans);
           modalShell.dataset.routeStops = shell.dataset.routeStops || "[]";
           modalShell.dataset.activeDay = "all";
           modalShell.dataset.dayMode = "solo";
@@ -2214,8 +2348,8 @@
               .join("")}
           `;
         }
-        modalMap.dataset.mapPayload = payload;
-        modalMap.dataset.dayPlans = shell.dataset.dayPlans || "[]";
+        modalMap.dataset.mapPayload = serializeMapPayload(modalPayload);
+        modalMap.dataset.dayPlans = serializeMapPayload(dayPlans);
         modalMap.dataset.routeStops = shell.dataset.routeStops || "[]";
         modalMap.dataset.mapReady = "";
         modalMap.innerHTML =
@@ -3900,6 +4034,60 @@
           return null;
         }
         return { key, label, value: String(value) };
+      }
+
+      function normalizeOptimisticTripDate(monthText = "", dayText = "") {
+        const month = Number(monthText);
+        const day = Number(dayText);
+        if (!month || !day) return "";
+        const now = new Date();
+        let year = now.getFullYear();
+        const candidate = new Date(year, month - 1, day);
+        if (candidate.getTime() < new Date(year, now.getMonth(), now.getDate()).getTime()) {
+          year += 1;
+        }
+        return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+      }
+
+      function parseOptimisticTripFactsFromText(text = "") {
+        const normalized = String(text || "").replace(/\s+/g, " ").trim();
+        if (!normalized) return {};
+        const facts = {};
+        const directionalPatterns = [
+          /从\s*([\u4e00-\u9fa5A-Za-z]{2,12})\s*(?:出发)?\s*(?:去|到|前往)\s*([\u4e00-\u9fa5A-Za-z]{2,12})/u,
+          /([\u4e00-\u9fa5A-Za-z]{2,12})\s*(?:->|→|到)\s*([\u4e00-\u9fa5A-Za-z]{2,12})/u,
+        ];
+        const routeMatch = directionalPatterns
+          .map((pattern) => normalized.match(pattern))
+          .find(Boolean);
+        if (routeMatch) {
+          facts.departure_city = routeMatch[1];
+          facts.destination = routeMatch[2];
+        } else {
+          const destinationMatch = normalized.match(/(?:想去|去|到|前往)\s*([\u4e00-\u9fa5A-Za-z]{2,12})(?:玩|旅游|旅行|休闲|度假)?/u);
+          if (destinationMatch) facts.destination = destinationMatch[1];
+        }
+        const dateMatch = normalized.match(/(\d{1,2})\s*月\s*(\d{1,2})\s*(?:日|号)?\s*(?:出发)?/u);
+        if (dateMatch) {
+          facts.departure_date = normalizeOptimisticTripDate(dateMatch[1], dateMatch[2]);
+        }
+        const dayMatch = normalized.match(/([一二两三四五六七八九十\d]+)\s*天(?:左右|以内|以上)?/u);
+        if (dayMatch) {
+          const days = /^\d+$/.test(dayMatch[1])
+            ? Number(dayMatch[1])
+            : parseJourneyChineseDayNumber(dayMatch[1]);
+          if (days) facts.travel_days = days;
+        }
+        const peopleMatch = normalized.match(/([一二两三四五六七八九十\d]+)\s*(?:个)?(?:人|成人|大人)/u);
+        if (peopleMatch) {
+          const people = /^\d+$/.test(peopleMatch[1])
+            ? Number(peopleMatch[1])
+            : parseJourneyChineseDayNumber(peopleMatch[1]);
+          if (people) facts.adult_count = people;
+        }
+        const budgetMatch = normalized.match(/((?:预算\s*(?:人均|每人)?|(?:人均|每人)\s*预算?)\s*(?:约|大概|左右)?\s*\d+(?:\.\d+)?\s*(?:万|千)?\s*元?(?:左右|以内|上下)?)/u);
+        if (budgetMatch) facts.budget_text = budgetMatch[1].replace(/\s+/g, "");
+        return facts;
       }
 
       function progressSnapshotFromFastSplit(fastSplit = {}) {
@@ -5731,8 +5919,34 @@
         return chunks.join("");
       }
 
+      function dedupeAssistantFallbackBlocks(blocks = []) {
+        const seen = new Set();
+        return (Array.isArray(blocks) ? blocks : []).filter((block) => {
+          const lines = String(block || "")
+            .split("\n")
+            .map((line) => line.trim())
+            .filter(Boolean);
+          if (!lines.length) return false;
+          const title = lines[0].replace(/^#{1,4}\s+/, "").trim();
+          const normalizedTitle = title.replace(/[【】\[\]\s*_#|:-]+/g, "");
+          const normalizedBody = lines
+            .join(" ")
+            .replace(/[【】\[\]\s*_#|:-]+/g, "")
+            .replace(/\s+/g, "")
+            .toLowerCase();
+          const isBudget = /预算|费用|价格|花费/u.test(normalizedTitle);
+          const key = isBudget
+            ? `budget:${normalizedTitle || "section"}`
+            : `${normalizedTitle}:${normalizedBody}`;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+      }
+
       function renderAssistantFallback(blocks) {
-        return `<div class="travel-fallback">${blocks
+        const uniqueBlocks = dedupeAssistantFallbackBlocks(blocks);
+        return `<div class="travel-fallback">${uniqueBlocks
           .map((block) => {
             const lines = block
               .split("\n")
@@ -6393,6 +6607,9 @@
           days: dayPlans.map((day) => ({
             key: day.key,
             label: day.label,
+            day_number: day.dayNumber,
+            title: day.title,
+            route_note: day.note,
             waypoints: day.waypoints,
             stops: day.stops || [],
             segments: day.segments || [],
@@ -6936,6 +7153,57 @@
         return getTravelSectionMeta(normalized);
       }
 
+      function normalizeReportDedupeText(value = "") {
+        return String(value || "")
+          .replace(/<[^>]+>/g, " ")
+          .replace(/[【】\[\]\s*_#|:-]+/g, "")
+          .trim()
+          .toLowerCase();
+      }
+
+      function isReportNextActionLine(line = "") {
+        const normalized = String(line || "")
+          .replace(/^[-*•]\s*/, "")
+          .trim();
+        if (!normalized) return false;
+        return /(?:下一步|接下来|请你?评价|请您评价|需要你确认|满意|想调整|想改哪里|如果满意|如果想调整|如果要调整)/u.test(
+          normalized
+        );
+      }
+
+      function splitReportSectionNextActionLines(lines = []) {
+        const firstNextIndex = lines.findIndex((line) => isReportNextActionLine(line));
+        if (firstNextIndex < 0) {
+          return { mainLines: lines, nextLines: [] };
+        }
+        return {
+          mainLines: lines.slice(0, firstNextIndex).filter(Boolean),
+          nextLines: lines.slice(firstNextIndex).filter(Boolean),
+        };
+      }
+
+      function dedupeTravelReportSections(sections = []) {
+        const seen = new Set();
+        const deduped = [];
+        sections.forEach((section) => {
+          if (!section || typeof section !== "object") return;
+          const tone = section.reportTone || section.tone || "";
+          const title = normalizeReportDedupeText(section.title || section.reportLabel || "");
+          const body = normalizeReportDedupeText((section.rawLines || []).join(" "));
+          const isBudget = tone === "budget" || /预算|费用|budget/u.test(title);
+          const key =
+            isBudget && /预算拆分|预算明细|费用拆分|费用明细/u.test(title)
+              ? `budget:${title}`
+              : isBudget
+                ? `budget:${body || title}`
+                : `${tone}:${title}:${body}`;
+          if (key && seen.has(key)) return;
+          seen.add(key);
+          deduped.push(section);
+        });
+        return deduped;
+      }
+
       function extractTravelReportSections(blocks = []) {
         const summaryBlocks = [];
         const sections = [];
@@ -6971,11 +7239,14 @@
               const introLines = lines
                 .slice(0, firstDayIndex)
                 .filter((line) => !looksLikeDecisionPrompt(line))
+                .filter((line) => !isReportNextActionLine(line))
                 .filter((line) => !isReportSummaryMarkerOnly(line));
               if (introLines.length) {
                 summaryBlocks.push(introLines);
               }
-              const dayLines = lines.slice(firstDayIndex);
+              const dayLines = lines
+                .slice(firstDayIndex)
+                .filter((line) => !isReportNextActionLine(line));
               sections.push({
                 tone: "overview",
                 reportTone: "daily",
@@ -6986,7 +7257,21 @@
               });
               return;
             }
-            const cleanSummaryLines = filterReportSummaryLines(lines);
+            const { mainLines: summaryCandidateLines, nextLines } =
+              splitReportSectionNextActionLines(lines);
+            if (nextLines.length) {
+              sections.push({
+                tone: "next",
+                reportTone: "next",
+                reportLabel: "需要你确认",
+                title: "下一步",
+                rawLines: nextLines,
+                bodyHtml: renderReportSectionBody("next", nextLines),
+              });
+            }
+            const cleanSummaryLines = filterReportSummaryLines(
+              summaryCandidateLines.length ? summaryCandidateLines : lines
+            );
             if (cleanSummaryLines.length) {
               summaryBlocks.push(cleanSummaryLines);
             }
@@ -6997,6 +7282,33 @@
             meta.tone === "daily" || meta.tone === "map"
               ? { tone: "overview", icon: meta.icon }
               : { tone: meta.tone, icon: meta.icon };
+          const { mainLines, nextLines } =
+            meta.tone === "next"
+              ? { mainLines: [], nextLines: bodyLines }
+              : splitReportSectionNextActionLines(bodyLines);
+          if (mainLines.length) {
+            sections.push({
+              ...travelMeta,
+              reportTone: meta.tone,
+              reportLabel: meta.label || normalizeSectionTitle(sectionTitle),
+              title: normalizeSectionTitle(sectionTitle),
+              rawLines: mainLines,
+              bodyHtml: renderReportSectionBody(meta.tone, mainLines),
+            });
+          }
+          if (nextLines.length) {
+            sections.push({
+              tone: "next",
+              reportTone: "next",
+              reportLabel: "需要你确认",
+              title: "下一步",
+              rawLines: nextLines,
+              bodyHtml: renderReportSectionBody("next", nextLines),
+            });
+          }
+          if (mainLines.length || nextLines.length) {
+            return;
+          }
           sections.push({
             ...travelMeta,
             reportTone: meta.tone,
@@ -7007,7 +7319,7 @@
           });
         });
 
-        return { summaryBlocks, sections };
+        return { summaryBlocks, sections: dedupeTravelReportSections(sections) };
       }
 
       function mergeTravelReportDailySections(sections = []) {
@@ -7512,10 +7824,27 @@
               value.title,
               value.location,
               value.place,
+              value.poi,
+              value.spot,
+              value.scenic_spot,
+              value.destination,
+              value.area,
               value.address,
               value.summary,
               value.description,
+              value.content,
+              value.note,
+              value.activity,
             ].forEach(pushName);
+            if (value.route && typeof value.route === "object") pushName(value.route);
+            if (Array.isArray(value.pois)) pushName(value.pois);
+            if (Array.isArray(value.waypoints)) pushName(value.waypoints);
+            if (Array.isArray(value.stops)) pushName(value.stops);
+            if (Array.isArray(value.activities)) pushName(value.activities);
+            if (Array.isArray(value.items)) pushName(value.items);
+            if (Array.isArray(value.time_blocks)) pushName(value.time_blocks);
+            if (Array.isArray(value.timeline)) pushName(value.timeline);
+            if (Array.isArray(value.schedule)) pushName(value.schedule);
             if (Array.isArray(value.route_points)) pushName(value.route_points);
             if (Array.isArray(value.points)) pushName(value.points);
             return;
@@ -7540,17 +7869,28 @@
       function extractReportItineraryDayRoutePoints(day = {}) {
         if (!day || typeof day !== "object") return [];
         return normalizeReportRoutePointNames([
+          day.pois,
+          day.waypoints,
+          day.stops,
           day.route_points,
           day.points,
           day.route?.route_points,
           day.route?.points,
+          day.route?.waypoints,
+          day.route?.stops,
           day.route?.summary,
           day.time_blocks,
+          day.timeline,
+          day.schedule,
           day.activities,
+          day.items,
           day.meals,
           day.accommodation,
           day.transport_note,
           day.route_note,
+          day.summary,
+          day.content,
+          day.note,
           day.title,
         ]);
       }
@@ -8127,6 +8467,28 @@
         `;
       }
 
+      function renderStructuredReportNextAction(reportData = {}) {
+        const explicitLines = normalizeReportDataList([
+          reportData.next_action,
+          reportData.next_steps,
+          reportData.follow_up,
+        ]);
+        const lines = explicitLines.length
+          ? explicitLines
+          : [
+              "请评价这版方案：",
+              "如果满意，我将按此结构生成最终可导出的旅行规划报告。",
+              "如果想调整，请告诉我具体想改哪里（例如：节奏太快/太慢、想替换景点、住宿想换区域或预算想压缩等）。",
+            ];
+        return renderTravelReportNextAction([
+          {
+            tone: "next",
+            reportTone: "next",
+            rawLines: lines,
+          },
+        ]);
+      }
+
       function renderTravelReportFromData(reportData, options = {}) {
         if (!isStructuredTravelReportData(reportData)) return null;
 
@@ -8285,6 +8647,7 @@
               }
             </div>
             ${mapDigest ? `<div class="travel-report-map">${mapDigest}</div>` : ""}
+            ${renderStructuredReportNextAction(reportData)}
           </div>
         `;
       }
@@ -8423,7 +8786,9 @@
           ? renderAssistantLines(summaryLines)
           : "";
         const previewState = buildJourneyPreviewState(summaryBlocks, sections);
-        const mergedReportSections = mergeTravelReportDailySections(sections);
+        const mergedReportSections = dedupeTravelReportSections(
+          mergeTravelReportDailySections(sections)
+        );
         const nextActionHtml = renderTravelReportNextAction(mergedReportSections);
         const reportSections = mergedReportSections.filter(
           (section) => (section.reportTone || section.tone) !== "next"
@@ -8966,8 +9331,9 @@
           });
         });
 
-        const journeyPreviewState = buildJourneyPreviewState(summaryBlocks, sections);
-        const visibleSections = sections.filter(
+        const dedupedSections = dedupeTravelReportSections(sections);
+        const journeyPreviewState = buildJourneyPreviewState(summaryBlocks, dedupedSections);
+        const visibleSections = dedupedSections.filter(
           (section) => !isPrematureTravelBudgetSection(section)
         );
         const shouldRenderTravelCards = visibleSections.length >= 2;
@@ -10334,6 +10700,23 @@
 
         // 用户消息
         addMessage("user", content);
+        const optimisticFacts = parseOptimisticTripFactsFromText(content);
+        if (Object.keys(optimisticFacts).length) {
+          const existingProgress = getGovernanceProgressSnapshot();
+          rememberProgressSnapshot(
+            progressSnapshotFromFastSplit({
+              facts: {
+                ...optimisticFacts,
+                planning_mode:
+                  existingProgress.planning_mode || optimisticFacts.planning_mode || "",
+                active_workflow:
+                  existingProgress.active_workflow || existingProgress.planning_mode || "",
+                agency_step: existingProgress.agency_step || optimisticFacts.agency_step || "",
+              },
+            })
+          );
+          renderReadinessPanel();
+        }
         input.value = "";
         input.style.height = "auto";
         persistComposerDraft();

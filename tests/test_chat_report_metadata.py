@@ -1,5 +1,6 @@
 import os
 import json
+from datetime import date
 from types import SimpleNamespace
 
 import pytest
@@ -99,6 +100,18 @@ def test_fast_split_directional_route_uses_destination_not_first_place():
     assert "口径待确认" in facts["budget_text"]
 
 
+def test_fast_split_month_day_date_does_not_fall_back_to_weekday():
+    facts = extract_fast_split_facts(
+        "我想从西安去杭州，两个人，6月10日出发，玩4天，人均预算5000",
+        today=date(2026, 5, 21),
+    )
+
+    assert facts["departure_date_text"] == "6月10日"
+    assert facts["departure_date"] == "2026-06-10"
+    assert facts["departure_city"] == "西安"
+    assert facts["destination"] == "杭州"
+
+
 def test_fast_split_state_seed_carries_facts_into_agency_mode():
     facts = extract_fast_split_facts("我想从西安去南京玩5天，两个人，预算1万左右，下周一出发，你帮我规划一下")
 
@@ -173,6 +186,46 @@ def test_progress_snapshot_merge_preserves_confirmed_agency_state():
     assert confirmed == {"departure_city": "西安", "destination": "杭州"}
     assert merged["long_term_preferences"] == ["历史文化", "少折腾"]
     assert merged["pending_items"] == ["出发日期"]
+
+
+def test_progress_snapshot_merge_current_turn_facts_override_old_report_date():
+    previous = {
+        "planning_mode": "agency_plan",
+        "active_workflow": "agency_plan",
+        "agency_step": "agency_plan_draft",
+        "confirmed_facts": [
+            {"key": "departure_city", "label": "出发地", "value": "西安"},
+            {"key": "destination", "label": "目的地", "value": "杭州"},
+            {"key": "departure_date", "label": "出发时间", "value": "2026-05-24"},
+            {"key": "people", "label": "人数", "value": "2人"},
+        ],
+    }
+    current_turn_snapshot = {
+        "planning_mode": "agency_plan",
+        "active_workflow": "agency_plan",
+        "agency_step": "agency_requirement",
+        "confirmed_facts": [
+            {"key": "departure_city", "label": "出发地", "value": "西安"},
+            {"key": "destination", "label": "目的地", "value": "杭州"},
+            {"key": "departure_date", "label": "出发时间", "value": "2026-06-10"},
+            {"key": "days", "label": "行程天数", "value": "4天"},
+            {"key": "budget", "label": "预算", "value": "人均预算5000"},
+        ],
+    }
+
+    merged = chat._merge_progress_snapshot(previous, current_turn_snapshot)
+
+    confirmed = {
+        item["key"]: item["value"]
+        for item in merged["confirmed_facts"]
+        if isinstance(item, dict)
+    }
+    assert confirmed["departure_date"] == "2026-06-10"
+    assert confirmed["days"] == "4天"
+    assert confirmed["budget"] == "人均预算5000"
+    assert confirmed["people"] == "2人"
+    assert merged["planning_mode"] == "agency_plan"
+    assert merged["active_workflow"] == "agency_plan"
 
 
 @pytest.mark.asyncio

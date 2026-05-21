@@ -603,11 +603,20 @@ async def get_map_preview(
     day_groups: list[MapPreviewDay] = []
     all_segments: list[MapRouteSegment] = []
     for index, day in enumerate(data.days[:7]):
-        if _map_preview_deadline_expired(deadline):
-            break
         seen_names: set[str] = set()
         day_points: list[MapPoint] = []
         day_label = _normalize_query(day.label) or f"Day {index + 1}"
+        day_key = day.key or _build_day_key(day.label, index)
+        if _map_preview_deadline_expired(deadline):
+            day_groups.append(
+                MapPreviewDay(
+                    key=day_key,
+                    label=day_label,
+                    points=[],
+                    segments=[],
+                )
+            )
+            continue
         stop_items = [stop for stop in day.stops[:8] if _normalize_query(stop.name)]
         if stop_items:
             waypoint_items: list[MapPreviewStopRequest | str] = stop_items
@@ -664,31 +673,29 @@ async def get_map_preview(
                 continue
             seen_names.add(dedupe_key)
             day_points.append(point)
-        if day_points:
-            day_key = day.key or _build_day_key(day.label, index)
-            segments: list[MapRouteSegment] = []
-            for point_index in range(max(len(day_points) - 1, 0)):
-                if _map_preview_deadline_expired(deadline):
-                    break
-                segment = await _resolve_segment(
-                    direction_tool,
-                    day_key=day_key,
-                    day_label=day_label,
-                    left=day_points[point_index],
-                    right=day_points[point_index + 1],
-                )
-                segments.append(segment)
-                all_segments.append(segment)
-            day_groups.append(
-                MapPreviewDay(
-                    key=day_key,
-                    label=day_label,
-                    points=day_points,
-                    segments=segments,
-                )
+        segments: list[MapRouteSegment] = []
+        for point_index in range(max(len(day_points) - 1, 0)):
+            if _map_preview_deadline_expired(deadline):
+                break
+            segment = await _resolve_segment(
+                direction_tool,
+                day_key=day_key,
+                day_label=day_label,
+                left=day_points[point_index],
+                right=day_points[point_index + 1],
             )
+            segments.append(segment)
+            all_segments.append(segment)
+        day_groups.append(
+            MapPreviewDay(
+                key=day_key,
+                label=day_label,
+                points=day_points,
+                segments=segments,
+            )
+        )
 
-    if not points and day_groups:
+    if not points and any(day.points for day in day_groups):
         points = _fallback_points_from_day_groups(day_groups)
 
     center_source = next(
@@ -715,7 +722,7 @@ async def get_map_preview(
         f"segments={len(all_segments)}, destination={destination_hint or 'n/a'}, "
         f"elapsed_seconds={elapsed:.3f}, timed_out={timed_out}"
     )
-    empty_result = not points and not day_groups
+    empty_result = not points and not any(day.points for day in day_groups)
     response = MapPreviewResponse(
         provider="amap-js" if settings.amap_web_js_key.strip() else "leaflet-osm",
         status="degraded" if (timed_out or empty_result) else "success",
@@ -736,7 +743,7 @@ async def get_map_preview(
         days=day_groups,
         segments=all_segments,
     )
-    if response.points or response.days:
+    if response.points or any(day.points for day in response.days):
         _preview_cache[cache_key] = (
             time.time() + PREVIEW_CACHE_TTL_SECONDS,
             MapPreviewResponse.model_validate(response.model_dump()),
