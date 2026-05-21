@@ -91,6 +91,8 @@ for (const [mode, reportData] of fixtures) {
       "路线预览",
       "轻量地图预览",
       "分日路线",
+      "路线参考",
+      "全屏",
       "商业街区",
       "服务/预留",
       "travel-report-budget-table",
@@ -98,6 +100,11 @@ for (const [mode, reportData] of fixtures) {
       "导出报告",
     ],
     mode
+  );
+  assertExcludes(
+    html,
+    ["travel-report-day-map", "放大查看地图", ">放大<", "分日状态", "待继续比较交通方式", "待继续补住宿区域"],
+    `${mode}-day-map-suppressed`
   );
   assertExcludes(
     html,
@@ -153,11 +160,8 @@ assertIncludes(
     "预算参考",
     "travel-budget-layout",
     "出发前确认",
-    "看周边",
-    "住宿周边",
-    "主要景点",
-    "热闹商业街",
-    "美食小吃",
+    "路线说明",
+    "展开分日路线",
     'data-map-action="toggle-tools"',
     'data-map-action="toggle-sidebar"',
     "journey-map-tools-collapsed",
@@ -170,6 +174,9 @@ if (feedbackHtml.includes("预算粗估（每人）")) {
 }
 if (/class="travel-card transport"[\s\S]{0,420}地图定位/.test(feedbackHtml)) {
   throw new Error("feedback-polish should not render map buttons on transport cards.");
+}
+if (/住宿周边|热闹商业街|美食小吃/.test(feedbackHtml)) {
+  throw new Error("feedback-polish should keep route preview sidebar focused on day routes only.");
 }
 if (/(^|>)-(<|$)/.test(feedbackHtml) || feedbackHtml.includes("<br>-<br>")) {
   throw new Error("feedback-polish should remove standalone dash separators.");
@@ -225,6 +232,40 @@ const decisionHtml = context.renderAssistantText(`
 | 合计 | 4500元 |
 `);
 assertIncludes(decisionHtml, ['class="travel-card next', "想跟你确认一下"], "decision-card");
+
+const reportNextActionHtml = context.renderAssistantText(`
+# 杭州 4 天旅游规划报告
+
+### 行程概览
+杭州 4 天省心方案草案已整理，路线先按西湖、灵隐和老城慢逛展开。
+
+### 交通口径
+西安到杭州优先高铁或航班，正式出发前二次核验。
+
+### 费用说明
+总预算约 5000 元/人，正式票价、酒店和门票出发前再核验。
+
+### 下一步
+* 请评价本方案草案：
+* 满意：确认可行后，我将生成详细版旅游规划报告。
+* 想改哪里：例如想换酒店商圈、增加亲子点或压缩预算。
+`);
+assertIncludes(
+  reportNextActionHtml,
+  ["travel-report-next-action", "需要你确认", "满意：确认可行后"],
+  "report-next-action-bottom"
+);
+if (
+  reportNextActionHtml.indexOf("travel-report-next-action") <
+  reportNextActionHtml.indexOf("travel-report-grid")
+) {
+  throw new Error("report-next-action-bottom should render after the main report grid.");
+}
+assertExcludes(
+  reportNextActionHtml,
+  ['travel-report-card next', "<br>* 请评价"],
+  "report-next-action-not-grid-card"
+);
 
 const visualJourneyData = {
   version: "journey_plan.v1",
@@ -331,8 +372,8 @@ assertIncludes(
     "visual-poi-focus-btn",
     "journey-status-chip",
     "journey-map-title-pill",
-    "journey-map-bottom-drawer",
-    "journey-map-bottom-toggle",
+    "journey-map-sidebar-routes",
+    "路线参考",
     "journey-poi-bottom-sheet",
     "journey-poi-bottom-media",
     "data-poi-sheet-proof",
@@ -342,14 +383,16 @@ assertIncludes(
     "保留继续规划",
     "沉浸地图",
     "推荐点",
-    "data-journey-edit-action",
-    "可调顺序，地图即时刷新",
     "路程时间行前确认",
     "地图路段距离和时长以高德实时路线为准",
   ],
   "visual-journey-workbench"
 );
-assertExcludes(visualJourneyHtml, ["规划过程"], "visual-journey-customer-view");
+assertExcludes(
+  visualJourneyHtml,
+  ["规划过程", "journey-map-bottom-drawer"],
+  "visual-journey-customer-view"
+);
 assertIncludes(appScript, ["/api/v1/chat/journey/"], "journey-draft-save-api");
 assertIncludes(
   appScript,

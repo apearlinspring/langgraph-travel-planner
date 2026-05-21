@@ -1,9 +1,11 @@
 # Planning Mode Boundary（规划模式边界）
 
-本项目的 `report_data`（结构化报告数据）必须稳定输出 `agency_context.mode`，当前只允许两个值：
+本项目先通过意图分流确认规划方式，再在 `report_data`（结构化报告数据）里稳定输出 `agency_context.mode`。当前只允许两个最终模式值：
 
-- `free_planning`：自由规划。用户自己决策和预订，系统提供路线、预算、住宿区域、风险和核验建议。
-- `agency_plan`：旅行社顾问方案。用户明确需要省心方案、旅行社产品、报价、合同规则或服务标准时，系统才使用旅行社方案表达。
+- `free_planning`：个性化旅游规划。用户自己决策和预订，系统提供路线、预算、住宿区域、风险和核验建议。
+- `agency_plan`：省心方案。用户明确需要现成省心方案、旅行社产品、报价、合同规则或服务标准时，系统使用产品化方案表达。
+
+模式未确认时，运行态可以使用 `pending_confirmation` 表示“待确认”，但不能写入最终 `agency_context.mode`。
 
 ## 判定原则
 
@@ -11,10 +13,33 @@
 - 明确旅行社信号才切换：省心方案、旅行社方案、旅行社顾问方案、成熟路线、定制游、小包团、私家团、一站式托管等，进入 `agency_plan`。
 - 报价和服务边界信号进入旅行社表达：报价、报价单、费用包含、费用不含、合同规则、服务标准、SOP（标准作业流程）等，进入 `agency_plan`。
 - 弱偏好不触发旅行社模式：亲子、老人、银发、少走路、轻松、不想太赶、酒店干净、交通稳妥、交通省心、住宿兜底等，只是路线和服务偏好，默认不改变模式。
+- 用户首轮已经给出完整旅行需求，但没有明确选择模式时，优先只问“您想要现成省心方案，还是个性化旅游规划？”，不先进入交通、酒店或预算推理。
+
+## 工作流边界
+
+`active_workflow` 只表示当前分支，不能直接等同于自由规划阶段：
+
+- `free_planning` 使用 `current_step`，走 `requirement_collection -> destination_recommendation -> transport_planning -> accommodation_planning -> food_planning -> itinerary_generation -> budget_summarization -> order_generation`。
+- `agency_plan` 使用 `agency_step`，走 `agency_requirement -> agency_product_match -> agency_plan_draft -> agency_feedback -> agency_report`。
+
+省心方案默认不进入 `transport_planning` 或 `accommodation_planning`。交通和住宿在省心方案中是产品口径说明，例如“推荐高铁/飞机口径”“住宿商圈和档次”，不是逐项偏好确认或实时库存查询。只有用户明确要求查实时交通或酒店时，才临时开放对应工具。
+
+用户选择“省心方案”后，同轮必须写入：
+
+- `planning_mode=agency_plan`
+- `active_workflow=agency_plan`
+- `planning_mode_confirmed=True`
+- `agency_step=agency_requirement`
+
+用户选择“个性化旅游规划”后，同轮必须写入：
+
+- `planning_mode=free_planning`
+- `active_workflow=free_planning`
+- `planning_mode_confirmed=True`
 
 ## 自由规划的证据使用
 
-自由规划可以参考公开 RAG（检索增强生成）和通用交付标准，但不能把内部旅行社产品包装成用户已选择的省心套餐。报告表达要保持中立实用，重点说明：
+个性化旅游规划可以参考公开 RAG（检索增强生成）和通用交付标准，但不能把内部旅行社产品包装成用户已选择的省心套餐。报告表达要保持中立实用，重点说明：
 
 - 每日路线和地图节点。
 - 预算估算、置信度和待核验项。
@@ -27,11 +52,21 @@
 
 - 产品或成熟路线模板。
 - 服务 SOP。
-- 报价规则和费用边界。
+- 报价规则和费用说明。
 - 风险与 Plan B。
 - 最终报告交付标准。
 
 这些证据只能支撑“方案依据、服务节点、报价口径和风险控制”，不能承诺真实库存、锁价、成团、支付或预订完成。
+
+省心方案面向用户的主输出应是成熟路线样板和可评价方案，默认包含：
+
+- 交通口径。
+- 住宿商圈/档次与示例酒店。
+- 景点门票或预约参考。
+- 餐饮安排。
+- 费用说明和分项拆分。
+- 涵盖服务。
+- 待核验项和不承诺边界。
 
 ## 验收关注点
 

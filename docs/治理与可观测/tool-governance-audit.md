@@ -69,6 +69,29 @@
 
 机器校验入口是 `describe_travel_agent_tool_governance()`，`tests/test_travel_agent_tool_registry.py` 会断言 Travel Agent 当前注册工具没有 `missing` 覆盖项。
 
+## 双工作流工具白名单
+
+个性化旅游规划 `free_planning` 继续按 `current_step` 使用既有阶段工具，例如交通阶段允许真实交通查询，住宿阶段允许酒店查询。
+
+省心方案 `agency_plan` 使用独立 `agency_step`，默认工具白名单更窄：
+
+- 基础需求：`record_requirement_tool`、`confirm_planning_mode_tool`、长期偏好读取/记录相关工具。
+- 产品匹配：`search_agency_product_templates`、景点票价参考、风险和报价规则相关工具。
+- 方案草案：产品模板、SOP、报价规则、风险手册、证据整理工具。
+- 方案确认/报告：修改意见记录、报告标准和 `generate_order_tool`。
+
+省心方案默认不开放：
+
+- `query_transport_options`
+- `query_hotel_options`
+- `select_transport_tool`
+- `select_accommodation_tool`
+- 自由规划式交通、住宿、餐饮阶段切换工具
+
+如果用户明确说“帮我查真实航班 / 高铁 / 酒店”，中间件可以在本轮临时开放对应真实查询工具；但结果仍必须进入待核验，不承诺库存、锁价或真实下单。
+
+`record_evidence_bundle_tool` 是证据整理工具，用来把产品模板、报价规则、风险手册和报告标准等来源归并成可追溯证据摘要。它本身不访问外部服务、不查库存、不下单；真正需要治理的是它所引用的来源工具。
+
 ## 子代理与公开 RAG 覆盖
 
 交通子代理的核心工具也纳入治理：

@@ -18,7 +18,7 @@ from app.api.v1.chat import (
     _strip_assistant_thinking_content,
 )
 from app.core.approval import ApprovalGovernanceManager
-from app.core.observability import get_turn_observability_snapshot
+from app.core.observability import TurnObservation, get_turn_observability_snapshot
 from app.core.session_lock import reset_session_locks_for_tests
 from app.tools.audit import build_tool_audit_event, start_tool_audit
 
@@ -100,7 +100,7 @@ def test_fast_split_directional_route_uses_destination_not_first_place():
 
 
 def test_fast_split_state_seed_carries_facts_into_agency_mode():
-    facts = extract_fast_split_facts("我想从西安去南京，两个人，预算1万左右，下周一出发，你帮我规划一下")
+    facts = extract_fast_split_facts("我想从西安去南京玩5天，两个人，预算1万左右，下周一出发，你帮我规划一下")
 
     seed = chat._fast_split_state_seed(facts, planning_mode="agency_plan")
 
@@ -110,6 +110,69 @@ def test_fast_split_state_seed_carries_facts_into_agency_mode():
     assert seed["user_requirement"]["destination"] == "南京"
     assert seed["confirmed_facts"]["destination"] == "南京"
     assert seed["progress_snapshot"]["confirmed_facts"]
+    assert seed["agency_step"] == "agency_product_match"
+    assert seed["progress_snapshot"]["agency_step"] == "agency_product_match"
+
+
+def test_empty_tool_update_does_not_overwrite_fast_split_progress():
+    facts = extract_fast_split_facts("西安到杭州玩5天，两个人，预算每人5000，下周一出发")
+    seed = chat._fast_split_state_seed(facts, planning_mode="agency_plan")
+    observation = TurnObservation(
+        conversation_id="conversation-progress",
+        user_id="user-1",
+        user_message="省心方案",
+    )
+    observation.update_context(
+        current_step=seed["current_step"],
+        planning_mode=seed["planning_mode"],
+        planning_mode_source="fast_split_seed",
+    )
+    observation.set_progress_snapshot(seed["progress_snapshot"])
+
+    chat._update_observation_from_state_update(
+        observation,
+        {"messages": [SimpleNamespace(content="工具返回文本，但没有状态更新")]},
+    )
+
+    assert observation.planning_mode == "agency_plan"
+    assert observation.progress_snapshot["planning_mode"] == "agency_plan"
+    assert observation.progress_snapshot["agency_step"] == "agency_product_match"
+    assert observation.progress_snapshot["confirmed_facts"]
+
+
+def test_progress_snapshot_merge_preserves_confirmed_agency_state():
+    previous = {
+        "planning_mode": "agency_plan",
+        "active_workflow": "agency_plan",
+        "agency_step": "agency_plan_draft",
+        "confirmed_facts": [
+            {"key": "departure_city", "label": "出发地", "value": "西安"},
+            {"key": "destination", "label": "目的地", "value": "杭州"},
+        ],
+        "long_term_preferences": ["历史文化", "少折腾"],
+    }
+    weak_tool_snapshot = {
+        "planning_mode": "pending_confirmation",
+        "active_workflow": "",
+        "agency_step": "",
+        "confirmed_facts": [],
+        "long_term_preferences": [],
+        "pending_items": ["出发日期"],
+    }
+
+    merged = chat._merge_progress_snapshot(previous, weak_tool_snapshot)
+
+    assert merged["planning_mode"] == "agency_plan"
+    assert merged["active_workflow"] == "agency_plan"
+    assert merged["agency_step"] == "agency_plan_draft"
+    confirmed = {
+        item["key"]: item["value"]
+        for item in merged["confirmed_facts"]
+        if isinstance(item, dict)
+    }
+    assert confirmed == {"departure_city": "西安", "destination": "杭州"}
+    assert merged["long_term_preferences"] == ["历史文化", "少折腾"]
+    assert merged["pending_items"] == ["出发日期"]
 
 
 @pytest.mark.asyncio

@@ -29,7 +29,9 @@ FastAPI API 层
         v
 Travel Agent（主控 Agent）
   - 基于 TravelState 管理状态
-  - 按 current_step 分阶段推进
+  - 先按 active_workflow 路由到省心方案或个性化旅游规划
+  - free_planning 按 current_step 分阶段推进
+  - agency_plan 按 agency_step 推进独立省心方案阶段
   - 通过中间件动态切换 prompt / tools
         |
         +---- 状态流转工具（记录需求、选择目的地、回退步骤）
@@ -83,7 +85,17 @@ Travel Agent（主控 Agent）
 
 ## 4. 主业务流程怎么跑
 
-主流程不是“问一句答一句”，而是一个分阶段旅行规划状态机。
+主流程不是“问一句答一句”，而是先做意图分流，再进入对应工作流。
+
+### 4.1 意图分流
+
+用户第一句话如果已经包含目的地、天数、人数、预算或日期等旅行需求，但没有明确选择规划方式，`app/api/v1/chat.py` 会先走轻量快路径，不创建完整 Travel Agent（旅行智能体），直接问：
+
+> 您想要现成省心方案，还是个性化旅游规划？
+
+这条快路径会同步解析并暂存首句里的出发地、目的地、日期、人数和预算，写入消息 `extra_info.fast_mode_split`，避免第二轮再让用户重复描述。
+
+### 4.2 个性化旅游规划
 
 核心状态定义在 `app/core/state.py`，`current_step` 会在以下阶段之间推进：
 
@@ -115,24 +127,45 @@ Travel Agent（主控 Agent）
 
 “不是做一个万能大模型，而是把旅行规划拆成多个可控阶段，每个阶段只开放该阶段应有的能力。”
 
+### 4.3 省心方案工作流
+
+用户选择“省心方案 / 现成方案 / 成熟产品”后，状态写入：
+
+- `planning_mode=agency_plan`
+- `active_workflow=agency_plan`
+- `agency_step=agency_requirement`
+
+省心方案不复用自由规划的交通、住宿、餐饮逐项确认阶段，而是使用独立阶段：
+
+1. `agency_requirement`：确认基础事实，例如目的地、天数、人数、预算、出发地和出发日期。
+2. `agency_product_match`：检索成熟路线样板、景点票价、风险和服务边界。
+3. `agency_plan_draft`：输出产品化方案，包含交通口径、住宿区域/档次与示例酒店、门票参考、餐饮、费用说明、涵盖服务和待核验项。
+4. `agency_feedback`：用户满意则进入报告，不满意则记录修改意见并再出一版。
+5. `agency_report`：生成用户交付视图报告。
+
+省心方案默认不开放实时交通查询、实时酒店搜索、交通选择和住宿选择工具。只有用户明确要求“查真实航班/高铁/酒店”时，中间件才临时开放对应能力，并且结果必须保留待核验和不锁价边界。
+
 ## 5. 一次聊天请求的完整调用链
 
 以用户发送一条消息为例：
 
 1. 前端调用 `/api/v1/chat/stream/{conversation_id}`
 2. `app/api/v1/chat.py` 保存用户消息
-3. 创建 `Travel Agent`
-4. 把 `messages` 和 `user_id` 作为输入送入 Agent
-5. Agent 在当前阶段使用对应 prompt 和 tools 推理
-6. 如果触发工具，工具会返回 `Command(update=...)` 更新状态
-7. LangGraph 继续基于新状态进入下一轮
-8. API 通过 SSE 持续把 token / tool_call / done 推给前端
-9. 最终回复再写回消息表
+3. 先尝试轻量快路径：规划方式确认、方向语义解析和省心方案基础事实补齐可以直接返回
+4. 快路径不能处理时，创建 `Travel Agent`
+5. 把 `messages` 和 `user_id` 作为输入送入 Agent
+6. Agent 在当前工作流和阶段使用对应 prompt 和 tools 推理
+7. 如果触发工具，工具会返回 `Command(update=...)` 更新状态
+8. LangGraph 继续基于新状态进入下一轮
+9. API 通过 SSE 持续把 token / tool_call / report_data / done 推给前端
+10. 最终回复再写回消息表
 
 这意味着：
 
 - API 层只负责“接入和流式输出”
 - 真正的业务推进发生在 Agent + Tool + State 三层
+- 首轮意图分流和少量省心方案补事实属于 API 层快路径，目的是避开全量 Agent 和 MCP（模型上下文协议）工具初始化，保障首个响应片段速度
+- 完整 Agent 流有事件空闲超时保护，避免模型或上游长时间无事件时前端无限等待
 
 ## 6. 多智能体部分怎么分工
 
@@ -145,7 +178,8 @@ Travel Agent（主控 Agent）
 - 作为整个旅行规划的总入口
 - 汇总全部工具
 - 基于 `TravelState` 管控流程
-- 借助 middleware 在不同步骤切换能力
+- 借助 middleware 在不同工作流和阶段切换能力
+- 对省心方案执行独立工具白名单，避免漂回自由规划
 
 ### 6.2 目的地 Router
 
@@ -308,6 +342,8 @@ SQLAlchemy 模型在 `app/models/`：
 - RAG、MCP、长期记忆和治理边界都有接入口
 - 前端优先消费结构化 `report_data`，不是从自然语言里硬解析报告
 - acceptance-core（核心验收）和 acceptance-smoke（验收烟测）已有可复跑门禁和脱敏证据包
+- 已有双工作流编排：个性化旅游规划走八阶段状态机，省心方案走独立 `agency_step` 节奏
+- 首轮分流和省心方案基础事实补齐已有快路径，可在不加载完整 Agent 的情况下秒级返回
 
 仍然需要继续谨慎说明的部分：
 
@@ -315,6 +351,7 @@ SQLAlchemy 模型在 `app/models/`：
 - 外部 API（应用程序接口）失败时，只能写入待核验和兜底说明，不能承诺真实库存、锁价或履约成功
 - RAG 离线召回评估是小型标注集，不代表全量线上查询分布
 - 轻量前端适合展示，长期产品化仍建议组件化重构
+- 省心方案仍是“成熟路线样板 + 待核验报价口径”，不是旅行社真实库存或真实可售产品
 
 所以更准确地说，这不是只停留在演示层的页面，而是：
 

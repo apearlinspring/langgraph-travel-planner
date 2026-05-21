@@ -47,6 +47,8 @@
 
 运行时会把其中的 `product_id`、`destination`、`theme`、`duration`、`audience`、`service_level`、`price_band`、`evidence_type` 以及可选的 `service_boundary`、`quote_basis`、`verification_items` 写入检索证据。原始 `source` 仍保留为 Markdown 文件路径，产品目录来源会映射为 `product_source`，避免覆盖可追溯文件路径。
 
+产品样板如果要进入省心方案草案，正文还应提供“住宿示例候选”和“费用说明”两类可检索文本：住宿示例至少包含 1 家公开可查酒店名、所在区域、使用边界和二次核验要求；费用说明要能按大交通、住宿、门票/体验、当地交通、餐饮和服务/机动拆分。示例酒店只代表选址和档次参考，不能解释为真实库存、占房或锁价。
+
 内部 Markdown（标记文本）文档的 front matter（头部元数据）仍由 `scripts/validate_rag_knowledge.py` 校验，避免分类错位、复审过期或内部资料误标为 public（公开）。
 
 ## Readiness 失败代码
@@ -77,6 +79,8 @@
 - 适用人群。
 - 服务边界。
 - 报价口径。
+- 住宿示例候选。
+- 分项费用说明。
 - 待核验项。
 
 这些方向只代表虚构内部产品模板和成熟路线结构，不能解释为真实供应商、真实客户、真实库存、锁价或履约承诺。用户不接受产品化方向时，Agent（智能体）必须明确切回自由规划，只保留路线、预算、住宿区域和核验建议，不继续强推旅行社方案。

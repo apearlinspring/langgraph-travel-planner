@@ -453,6 +453,7 @@ def _progress_snapshot_from_trip_facts(
     planning_mode: str | None = None,
     agency_step: str | None = None,
     long_term_preferences: list | None = None,
+    current_trip_preferences: list | None = None,
 ) -> dict:
     facts = facts if isinstance(facts, dict) else {}
     confirmed = []
@@ -476,12 +477,54 @@ def _progress_snapshot_from_trip_facts(
         "agency_step": agency_step or "",
         "confirmed_facts": confirmed,
         "long_term_preferences": long_term_preferences or [],
+        "current_trip_preferences": current_trip_preferences or [],
         "pending_items": [],
     }
 
 
+def _current_trip_preferences_from_requirement(requirement: dict | None) -> list[str]:
+    if not isinstance(requirement, dict):
+        return []
+    picked: list[str] = []
+
+    def add(value: object, prefix: str = "") -> None:
+        if value in (None, "", [], {}):
+            return
+        if isinstance(value, list):
+            for item in value:
+                add(item, prefix=prefix)
+            return
+        text = str(value).strip()
+        if not text or text in {"无", "暂无", "待确认"}:
+            return
+        candidate = f"{prefix}{text}" if prefix and not text.startswith(prefix) else text
+        if candidate not in picked:
+            picked.append(candidate)
+
+    add(requirement.get("travel_styles"), prefix="风格：")
+    add(requirement.get("food_preferences"), prefix="餐饮：")
+    add(requirement.get("accommodation_preferences"), prefix="住宿：")
+    add(requirement.get("special_needs"), prefix="需求：")
+    return picked[:6]
+
+
 def _progress_snapshot_from_state(update: dict | None) -> dict:
     if not isinstance(update, dict):
+        return {}
+    has_explicit_progress_signal = any(
+        update.get(key) not in (None, "", [], {})
+        for key in (
+            "progress_snapshot",
+            "user_requirement",
+            "confirmed_facts",
+            "planning_mode",
+            "active_workflow",
+            "agency_step",
+            "long_term_preferences_snapshot",
+            "report_data",
+        )
+    )
+    if not has_explicit_progress_signal:
         return {}
     requirement = update.get("user_requirement")
     if not isinstance(requirement, dict):
@@ -489,6 +532,12 @@ def _progress_snapshot_from_state(update: dict | None) -> dict:
     confirmed_facts = update.get("confirmed_facts")
     if not isinstance(confirmed_facts, dict):
         confirmed_facts = {}
+    report_data = update.get("report_data")
+    report_mode = None
+    if isinstance(report_data, dict):
+        agency_context = report_data.get("agency_context")
+        if isinstance(agency_context, dict):
+            report_mode = agency_context.get("mode")
     facts = {
         "departure_city": requirement.get("departure_city") or confirmed_facts.get("departure_city"),
         "destination": requirement.get("destination") or confirmed_facts.get("destination"),
@@ -509,6 +558,7 @@ def _progress_snapshot_from_state(update: dict | None) -> dict:
         update.get("planning_mode")
         or requirement.get("planning_mode")
         or update.get("active_workflow")
+        or report_mode
     )
     long_term_preferences = update.get("long_term_preferences_snapshot")
     if not isinstance(long_term_preferences, list):
@@ -518,7 +568,84 @@ def _progress_snapshot_from_state(update: dict | None) -> dict:
         planning_mode=planning_mode,
         agency_step=update.get("agency_step"),
         long_term_preferences=long_term_preferences,
+        current_trip_preferences=_current_trip_preferences_from_requirement(requirement),
     )
+
+
+def _merge_progress_snapshot(previous: dict | None, current: dict | None) -> dict:
+    """Merge sparse progress updates without letting weak tool results erase known facts."""
+
+    if not isinstance(previous, dict) or not previous:
+        return current if isinstance(current, dict) else {}
+    if not isinstance(current, dict) or not current:
+        return previous
+
+    merged = {**previous, **current}
+    previous_mode = str(previous.get("planning_mode") or "").strip()
+    current_mode = str(current.get("planning_mode") or "").strip()
+    if (
+        previous_mode
+        and previous_mode != "pending_confirmation"
+        and (not current_mode or current_mode == "pending_confirmation")
+    ):
+        merged["planning_mode"] = previous_mode
+    previous_workflow = str(previous.get("active_workflow") or "").strip()
+    current_workflow = str(current.get("active_workflow") or "").strip()
+    if (
+        previous_workflow
+        and previous_workflow != "pending_confirmation"
+        and (not current_workflow or current_workflow == "pending_confirmation")
+    ):
+        merged["active_workflow"] = previous_workflow
+
+    previous_agency_step = str(previous.get("agency_step") or "").strip()
+    current_agency_step = str(current.get("agency_step") or "").strip()
+    if previous_agency_step and not current_agency_step:
+        merged["agency_step"] = previous_agency_step
+
+    def merge_fact_list(key: str) -> None:
+        existing = previous.get(key)
+        incoming = current.get(key)
+        if not isinstance(existing, list):
+            existing = []
+        if not isinstance(incoming, list):
+            incoming = []
+        by_key: dict[str, dict] = {}
+        ordered_keys: list[str] = []
+        for item in [*existing, *incoming]:
+            if not isinstance(item, dict):
+                continue
+            item_key = str(item.get("key") or item.get("label") or "").strip()
+            item_value = item.get("value")
+            if not item_key or item_value in (None, "", [], {}):
+                continue
+            if item_key not in by_key:
+                ordered_keys.append(item_key)
+            by_key[item_key] = item
+        if ordered_keys:
+            merged[key] = [by_key[item_key] for item_key in ordered_keys]
+
+    merge_fact_list("confirmed_facts")
+
+    for key in ("long_term_preferences", "current_trip_preferences", "pending_items"):
+        existing = previous.get(key)
+        incoming = current.get(key)
+        if not isinstance(existing, list):
+            existing = []
+        if not isinstance(incoming, list):
+            incoming = []
+        seen = set()
+        merged_items = []
+        for item in [*existing, *incoming]:
+            marker = str(item)
+            if not marker or marker in seen:
+                continue
+            seen.add(marker)
+            merged_items.append(item)
+        if merged_items:
+            merged[key] = merged_items
+
+    return merged
 
 
 def _fast_split_state_seed(
@@ -559,12 +686,20 @@ def _fast_split_state_seed(
         }.items()
         if value not in (None, "", [], {})
     }
+    agency_step = ""
+    if planning_mode == "agency_plan":
+        agency_step = (
+            "agency_requirement"
+            if _agency_requirement_missing_items(facts)
+            else "agency_product_match"
+        )
     seed = {
         "pending_initial_request_text": facts.get("raw_text", ""),
         "fast_split_facts": dict(facts),
         "progress_snapshot": _progress_snapshot_from_trip_facts(
             facts,
             planning_mode=planning_mode,
+            agency_step=agency_step,
         ),
     }
     if requirement:
@@ -581,6 +716,9 @@ def _fast_split_state_seed(
                 "pending_initial_planning_mode_reason": "用户在首轮分流后明确选择方案类型",
             }
         )
+        if planning_mode == "agency_plan":
+            seed["current_step"] = "requirement_collection"
+            seed["agency_step"] = agency_step or "agency_requirement"
     return seed
 
 
@@ -962,6 +1100,10 @@ def _update_observation_from_state_update(
     progress_snapshot = update.get("progress_snapshot")
     if not isinstance(progress_snapshot, dict):
         progress_snapshot = _progress_snapshot_from_state(update)
+    progress_snapshot = _merge_progress_snapshot(
+        observation.progress_snapshot,
+        progress_snapshot,
+    )
     observation.set_progress_snapshot(progress_snapshot)
 
 
@@ -1222,11 +1364,17 @@ async def generate_sse_stream(
         if latest_fast_split_facts:
             if mode_decision.confirmed:
                 selected_mode = mode_decision.mode
+                seed_facts = agency_facts if agency_facts else latest_fast_split_facts
                 fast_seed = _fast_split_state_seed(
-                    latest_fast_split_facts,
+                    seed_facts,
                     planning_mode=selected_mode,
                 )
                 input_data.update(fast_seed)
+                turn_observation.update_context(
+                    current_step=fast_seed.get("agency_step") or fast_seed.get("current_step"),
+                    planning_mode=selected_mode,
+                    planning_mode_source="fast_split_seed",
+                )
                 if fast_seed.get("progress_snapshot"):
                     turn_observation.set_progress_snapshot(fast_seed["progress_snapshot"])
                 app_logger.info(

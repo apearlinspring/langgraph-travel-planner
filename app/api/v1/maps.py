@@ -69,6 +69,7 @@ class MapRouteSegment(BaseModel):
     distance_meters: float | None = None
     duration_seconds: float | None = None
     confidence: str = "needs_live_route"
+    path: list[dict[str, float]] = Field(default_factory=list)
 
 
 class MapPreviewDay(BaseModel):
@@ -339,6 +340,44 @@ def _haversine_distance_meters(left: MapPoint, right: MapPoint) -> float:
     return radius * 2 * math.atan2(math.sqrt(value), math.sqrt(1 - value))
 
 
+def _decode_amap_polyline(value: str | None) -> list[dict[str, float]]:
+    if not value:
+        return []
+    points: list[dict[str, float]] = []
+    for item in str(value).split(";"):
+        if "," not in item:
+            continue
+        lng_text, lat_text = item.split(",", 1)
+        try:
+            lng = float(lng_text)
+            lat = float(lat_text)
+        except ValueError:
+            continue
+        if -180 <= lng <= 180 and -90 <= lat <= 90:
+            points.append({"lng": lng, "lat": lat})
+    return points
+
+
+def _extract_amap_route_path(path: dict[str, Any]) -> list[dict[str, float]]:
+    route_path: list[dict[str, float]] = []
+    for step in path.get("steps") or []:
+        step_path = _decode_amap_polyline(step.get("polyline"))
+        if not step_path:
+            continue
+        if route_path and step_path:
+            previous = route_path[-1]
+            first = step_path[0]
+            if (
+                abs(previous["lng"] - first["lng"]) < 0.000001
+                and abs(previous["lat"] - first["lat"]) < 0.000001
+            ):
+                step_path = step_path[1:]
+        route_path.extend(step_path)
+    if not route_path:
+        route_path = _decode_amap_polyline(path.get("polyline"))
+    return route_path
+
+
 async def _resolve_segment(
     direction_tool: Any | None,
     *,
@@ -375,6 +414,7 @@ async def _resolve_segment(
                         distance_meters=distance,
                         duration_seconds=duration,
                         confidence="amap_driving",
+                        path=_extract_amap_route_path(path),
                     )
         except Exception as exc:
             app_logger.warning(
@@ -394,6 +434,7 @@ async def _resolve_segment(
         distance_meters=distance,
         duration_seconds=duration,
         confidence="estimated_straight_line",
+        path=[{"lng": left.lng, "lat": left.lat}, {"lng": right.lng, "lat": right.lat}],
     )
 
 
@@ -590,9 +631,14 @@ async def get_map_preview(
             if not normalized_waypoint:
                 continue
             if point is None:
+                geocode_address = (
+                    f"{city_hint} {normalized_waypoint}".strip()
+                    if city_hint and city_hint not in normalized_waypoint
+                    else normalized_waypoint
+                )
                 point = await _resolve_point(
                     geo_tool,
-                    address=normalized_waypoint,
+                    address=geocode_address,
                     label=day_label,
                     kind="day",
                     city=city_hint,

@@ -40,6 +40,7 @@ prohibited_commitments:
 price_basis:
   - 西安北至杭州东高铁/动车票价需以 12306 出发日前实时查询为准
   - 杭州湖滨/武林/西湖东线舒适型酒店按样例间夜估算
+  - 住宿示例可参考杭州西湖湖滨银泰亚朵酒店，库存、房型、早餐、取消政策和价格必须行前二次核验
   - 西湖开放式湖区免费，灵隐飞来峰、西溪湿地、宋城等按公开参考价列入待核验清单
   - 餐饮按本地小吃、杭帮菜和商圈简餐组合估算
 source_links:
@@ -47,6 +48,13 @@ source_links:
   - https://westlake.hangzhou.gov.cn/
   - https://www.xixiwetland.com.cn/
   - https://www.songcn.com/
+  - https://www.trip.com/hotels/v2/hangzhou-hotel-detail-15083387/atour-hotel-hangzhou-west-lake-lakeside-yintai/
+example_hotels:
+  - name: 杭州西湖湖滨银泰亚朵酒店
+    area: 湖滨/西湖东线/上城
+    use: 舒适型示例候选
+    source: Trip.com 公开酒店页
+    verification: 库存、房型、早餐、取消政策和价格均需行前二次核验，不锁价
 included:
   - 5天4晚省心路线骨架
   - 杭州住宿商圈和档次建议
@@ -114,12 +122,19 @@ evidence_type: public_reference_product_sample
 
 样例总价：约 4500-5950 元/人；顾问展示时可说“5000 元/人左右可做舒适档样板”，必须同时说明“采集日期 2026-05-19、待核验、不锁价”。
 
+## 住宿示例候选
+
+- 示例酒店：杭州西湖湖滨银泰亚朵酒店（湖滨/西湖东线/上城一带舒适型候选，适合减少西湖、湖滨商圈和市区景点之间的折返）。
+- 参考来源：Trip.com 公开酒店页显示该酒店位于杭州上城区中河中路 228 号，周边可衔接西湖游船、湖滨步行街等点位；页面价格、房型和权益会随日期变化。
+- 使用边界：这只是选址和档次示例，不代表已占房、已锁价、已确认早餐权益或取消政策；正式方案必须用酒店接口/官方或 OTA 公开页二次核验。
+
 ## 公开参考来源
 
 - 12306 官方查询入口：https://www.12306.cn/
 - 杭州西湖风景名胜区公开信息：https://westlake.hangzhou.gov.cn/
 - 杭州西溪国家湿地公园公开信息：https://www.xixiwetland.com.cn/
 - 宋城演艺/景区公开信息：https://www.songcn.com/
+- 杭州西湖湖滨银泰亚朵酒店公开酒店页：https://www.trip.com/hotels/v2/hangzhou-hotel-detail-15083387/atour-hotel-hangzhou-west-lake-lakeside-yintai/
 
 ## 景点/体验参考价
 
@@ -149,3 +164,10 @@ evidence_type: public_reference_product_sample
 ## 出发前待核验
 
 12306 车次余票和票价、航班替代价格、酒店房型和取消政策、灵隐飞来峰/西溪湿地/宋城开放与预约、杭州天气、节假日人流和临时交通管制。
+
+## 产品化表达示例
+
+- 交通口径：西安到杭州优先高铁直达或航班，按“少折腾 + 可控抵达时间”筛选；票价、余票和退改规则按出发日期二次核验。
+- 住宿商圈/档次：湖滨、武林或西湖东线舒适型酒店，优先地铁便利、早餐和晚间回酒店便利，房型与取消政策待核验。
+- 景点票价参考：灵隐飞来峰成人约 45 元、西溪湿地成人约 80 元、宋城演艺套票常见约 320 元起，采集日期 2026-05-19；来源见上表，预约和场次待核验，不锁价。
+- 餐饮/服务边界：可推荐杭帮菜、龙井茶歇和运河夜游备选；不承诺演出座席、景区预约成功、酒店占房或价格锁定。

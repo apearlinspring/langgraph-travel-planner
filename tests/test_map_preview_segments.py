@@ -48,6 +48,55 @@ async def test_resolve_segment_falls_back_to_estimated_distance_without_directio
     assert segment.confidence == "estimated_straight_line"
     assert segment.distance_meters and segment.distance_meters > 0
     assert "约" in segment.distance_text
+    assert segment.path == [
+        {"lng": left.lng, "lat": left.lat},
+        {"lng": right.lng, "lat": right.lat},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_resolve_segment_exposes_amap_route_path():
+    class FakeDirectionTool:
+        async def ainvoke(self, payload):
+            assert payload["origin"] == "120.1,30.1"
+            return (
+                '{"paths":[{"distance":"1200","duration":"900","steps":['
+                '{"polyline":"120.100000,30.100000;120.110000,30.105000"},'
+                '{"polyline":"120.110000,30.105000;120.120000,30.110000"}]}]}'
+            )
+
+    left = MapPoint(
+        kind="day",
+        label="Day 1",
+        name="西湖",
+        lng=120.1,
+        lat=30.1,
+        address="西湖",
+    )
+    right = MapPoint(
+        kind="day",
+        label="Day 1",
+        name="灵隐寺",
+        lng=120.12,
+        lat=30.11,
+        address="灵隐寺",
+    )
+
+    segment = await _resolve_segment(
+        FakeDirectionTool(),
+        day_key="day-1",
+        day_label="Day 1",
+        left=left,
+        right=right,
+    )
+
+    assert segment.confidence == "amap_driving"
+    assert segment.distance_text == "1.2 公里"
+    assert segment.path == [
+        {"lng": 120.1, "lat": 30.1},
+        {"lng": 120.11, "lat": 30.105},
+        {"lng": 120.12, "lat": 30.11},
+    ]
 
 
 def test_point_from_stop_coordinates_uses_structured_poi_position():

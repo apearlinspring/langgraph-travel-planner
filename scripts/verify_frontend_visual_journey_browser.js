@@ -598,6 +598,15 @@ function enhancedLeafletStub() {
           bindPopup(html) {
             return makePopup(this, html);
           },
+          bindTooltip(html) {
+            this._tooltipHtml = html;
+            if (this._element) {
+              const container = document.createElement("div");
+              container.innerHTML = String(html || "");
+              this._element.title = container.textContent || String(html || "");
+            }
+            return this;
+          },
           openPopup() {
             if (!this._map || !this._popupHtml) return this;
             this._map._popup.innerHTML = this._popupHtml;
@@ -1019,7 +1028,21 @@ async function checkVisualJourneySurface(page, viewport) {
   );
   await expectVisible(page, ".journey-live-map.leaflet-container", `${viewport.name} map`);
   await expectVisible(page, ".journey-map-title-pill", `${viewport.name} map title pill`);
-  await expectVisible(page, ".journey-map-bottom-drawer", `${viewport.name} bottom drawer`);
+  await expectVisible(page, ".journey-map-sidebar-open", `${viewport.name} route explanation toggle`);
+  await page.locator(".journey-map-sidebar-open").first().click();
+  await expectVisible(page, ".journey-map-sidebar-routes", `${viewport.name} route explanation`);
+  await expectContainsText(
+    page,
+    '[data-map-action="toggle-day-routes"]',
+    ["展开分日路线"],
+    `${viewport.name} day route toggle collapsed`
+  );
+  await page.locator('[data-map-action="toggle-day-routes"]').first().click();
+  await page.waitForFunction(
+    () => !document.querySelector(".journey-map-sidebar-routes")?.classList.contains("is-collapsed"),
+    null,
+    { timeout: 5000 }
+  );
   await expectVisible(page, ".leaflet-journey-day-marker", `${viewport.name} numbered day markers`);
   await expectVisible(page, ".leaflet-journey-day-badge", `${viewport.name} day badges`);
   await expectVisible(
@@ -1054,37 +1077,21 @@ async function checkVisualJourneySurface(page, viewport) {
     `${viewport.name} recommendation toggle active`
   );
   await page.locator(".journey-live-marker.kind-recommendation").first().dispatchEvent("click");
-  await expectContainsText(
-    page,
-    ".journey-poi-bottom-sheet.show",
-    ["九溪烟树", "地图推荐点", "加入05-27 周三", "替换当天首点"],
-    `${viewport.name} recommendation POI sheet`
-  );
-  await page.locator('[data-poi-sheet-action="add-recommendation"]').click();
-  await expectContainsText(
-    page,
-    ".journey-map-bottom-drawer",
-    ["九溪烟树"],
-    `${viewport.name} recommendation added to day`
-  );
-  await page.locator(".leaflet-journey-day-marker").first().dispatchEvent("click");
-  await expectVisible(page, ".journey-map-bottom-stop.active", `${viewport.name} active drawer stop`);
-  await expectContainsText(
-    page,
-    ".journey-map-bottom-stop.active",
-    ["西湖"],
-    `${viewport.name} map marker reverse drawer highlight`
-  );
-  await expectContainsText(
-    page,
-    ".journey-poi-bottom-sheet.show",
-    ["西湖", "高德地点已核验"],
-    `${viewport.name} map marker opens POI sheet`
-  );
-  await page.locator(".journey-poi-bottom-close").first().click();
   await page.waitForSelector(".journey-poi-bottom-sheet.show", {
     state: "hidden",
-    timeout: 5000,
+    timeout: 3000,
+  });
+  await page.locator(".leaflet-journey-day-marker").first().dispatchEvent("click");
+  await expectVisible(page, ".journey-map-sidebar-place-chip.active", `${viewport.name} active route stop`);
+  await expectContainsText(
+    page,
+    ".journey-map-sidebar-place-chip.active",
+    ["西湖"],
+    `${viewport.name} map marker reverse route highlight`
+  );
+  await page.waitForSelector(".journey-poi-bottom-sheet.show", {
+    state: "hidden",
+    timeout: 3000,
   });
   await expectContainsText(
     page,
@@ -1101,13 +1108,13 @@ async function checkVisualJourneySurface(page, viewport) {
   await expectContainsText(
     page,
     ".visual-journey-workbench",
-    ["路线预览", "4 天路线", "分日路线", "可调顺序，地图即时刷新", "交通、酒店和预算后续继续核验"],
+    ["路线预览", "4 天路线", "分日路线", "路线参考", "交通、酒店和预算后续继续核验"],
     `${viewport.name} journey workbench text`
   );
 
   await page
     .locator(
-      '.journey-map-bottom-drawer .journey-map-day-btn[data-map-day="visual-day-2"]'
+      '.journey-map-sidebar-routes .journey-map-day-btn[data-map-day="visual-day-2"]'
     )
     .first()
     .click();
@@ -1127,53 +1134,24 @@ async function checkVisualJourneySurface(page, viewport) {
     .locator('button.journey-map-stage-stop[data-map-day-stop="visual-day-2:0"]')
     .first()
     .click();
-  await expectVisible(page, ".journey-poi-bottom-sheet.show", `${viewport.name} POI sheet`);
-  await expectContainsText(
-    page,
-    ".journey-poi-bottom-sheet.show",
-    ["灵隐寺", "高德地点已核验", "开放规则待二次确认", "替换为满觉陇", "核验门票交通"],
-    `${viewport.name} POI sheet text`
-  );
-  await page.locator('[data-poi-sheet-action="replace"]').click();
-  await expectContainsText(
-    page,
-    ".journey-map-bottom-drawer",
-    ["满觉陇", "部分路线已回填"],
-    `${viewport.name} POI direct replacement`
-  );
-  await page
-    .locator('button.journey-map-stage-stop[data-map-day-stop="visual-day-2:0"]')
-    .first()
-    .click();
-  await expectContainsText(
-    page,
-    ".journey-poi-bottom-sheet.show",
-    ["满觉陇", "高德地点已核验", "核验门票交通"],
-    `${viewport.name} replaced POI sheet text`
-  );
-  await page.locator('[data-poi-sheet-action="verify"]').click();
-  await expectInputValueContains(
-    page,
-    "#chatInput",
-    ["继续核验", "满觉陇", "开放时间", "交通距离"],
-    `${viewport.name} POI action composer`
-  );
-  await page.locator(".journey-poi-bottom-close").first().click();
   await page.waitForSelector(".journey-poi-bottom-sheet.show", {
     state: "hidden",
-    timeout: 5000,
+    timeout: 3000,
   });
-
-  await page.locator(".journey-map-bottom-toggle").first().click();
-  await page.waitForSelector(".journey-map-bottom-drawer.is-collapsed", {
-    state: "visible",
-    timeout: 5000,
-  });
-  await page.locator(".journey-map-bottom-toggle").first().click();
-  await page.waitForSelector(
-    ".journey-map-bottom-drawer:not(.is-collapsed)",
-    { state: "visible", timeout: 5000 }
+  await expectContainsText(
+    page,
+    ".journey-map-sidebar-routes",
+    ["灵隐寺", "路线参考"],
+    `${viewport.name} day route stays readable without POI sheet`
   );
+
+  await page.locator(".journey-map-sidebar-toggle").first().click();
+  await page.waitForSelector(".journey-map-sidebar-collapsed", {
+    state: "attached",
+    timeout: 5000,
+  });
+  await page.locator(".journey-map-sidebar-open").first().click();
+  await expectVisible(page, ".journey-map-sidebar-routes", `${viewport.name} route explanation reopened`);
 }
 
 async function checkLayoutHealth(page, viewport) {
@@ -1198,13 +1176,13 @@ async function checkLayoutHealth(page, viewport) {
       viewportHeight: window.innerHeight,
       workbench: box(".visual-journey-workbench"),
       map: box(".journey-live-map"),
-      drawer: box(".journey-map-bottom-drawer"),
+      routeExplanation: box(".journey-map-sidebar"),
       floatingPanel: box(".journey-map-floating-panel"),
       poiSheet: box(".journey-poi-bottom-sheet.show"),
     };
   });
 
-  if (!metrics.workbench || !metrics.map || !metrics.drawer || !metrics.floatingPanel) {
+  if (!metrics.workbench || !metrics.map || !metrics.routeExplanation || !metrics.floatingPanel) {
     throw new Error(`${viewport.name} visual journey layout elements were not measured.`);
   }
   const minWorkbenchWidth = viewport.isMobile ? 340 : 620;
@@ -1219,8 +1197,8 @@ async function checkLayoutHealth(page, viewport) {
       `${viewport.name} map is too short: ${Math.round(metrics.map.height)}px.`
     );
   }
-  if (metrics.drawer.height > metrics.map.height * 0.48) {
-    throw new Error(`${viewport.name} bottom drawer covers too much of the map.`);
+  if (metrics.routeExplanation.height > metrics.map.height + 180) {
+    throw new Error(`${viewport.name} route explanation is disproportionate to the map.`);
   }
   if (metrics.floatingPanel.width > metrics.map.width - 16) {
     throw new Error(`${viewport.name} floating map controls overflow horizontally.`);

@@ -444,6 +444,9 @@ def test_xian_to_hangzhou_product_sample_has_realistic_price_boundaries():
     assert "采集日期 2026-05-19" in content
     assert "https://www.12306.cn/" in content
     assert "https://westlake.hangzhou.gov.cn/" in content
+    assert "杭州西湖湖滨银泰亚朵酒店" in content
+    assert "住宿示例候选" in content
+    assert "https://www.trip.com/hotels/v2/hangzhou-hotel-detail-15083387/atour-hotel-hangzhou-west-lake-lakeside-yintai/" in content
     assert "待核验" in content and "不锁价" in content
 
 

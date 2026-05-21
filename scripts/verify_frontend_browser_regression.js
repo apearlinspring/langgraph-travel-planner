@@ -99,6 +99,7 @@ async function installNetworkStubs(context) {
             const makeLayer = () => ({
               addTo(map) { map?._layers?.add(this); return this; },
               bindPopup() { return this; },
+              bindTooltip() { return this; },
               openPopup() { return this; },
               on() { return this; },
               setStyle() { return this; },
@@ -348,7 +349,7 @@ async function checkMainSurface(page, viewport) {
   await expectContainsText(
     page,
     "#readinessSummary",
-    ["方案类型", "已确认信息", "长期偏好", "重要提醒"],
+    ["方案类型", "已确认信息", "偏好记录", "重要提醒"],
     `${viewport.name} readiness human copy`
   );
   await expectNotContainsText(
@@ -386,7 +387,7 @@ async function checkMainSurface(page, viewport) {
       observability: {
         turn_id: "turn_browser_regression_123456",
         status: "completed",
-        step: "transport_planning",
+        step: "agency_plan_draft",
         planning_mode: "agency_plan",
         degradation_status: "degraded",
         first_token_seconds: 0.42,
@@ -396,6 +397,9 @@ async function checkMainSurface(page, viewport) {
         fallback_count: 1,
         estimated_total_tokens: 180,
         progress_snapshot: {
+          planning_mode: "agency_plan",
+          active_workflow: "agency_plan",
+          agency_step: "agency_plan_draft",
           confirmed_facts: [
             { key: "departure_city", label: "出发地", value: "西安" },
             { key: "destination", label: "目的地", value: "南京" },
@@ -409,7 +413,7 @@ async function checkMainSurface(page, viewport) {
   await expectContainsText(
     page,
     "#readinessSummary",
-    ["出发地：西安", "目的地：南京", "喜欢历史人文"],
+    ["方案类型：省心方案", "出发地：西安", "目的地：南京", "喜欢历史人文"],
     `${viewport.name} readiness confirmed facts`
   );
   await expectVisible(page, "#toolAuditPanel[open]", `${viewport.name} service audit panel`);
@@ -463,11 +467,24 @@ async function checkReportSurface(page) {
   await expectContainsText(
     page,
     ".travel-report-map",
-    ["路线预览", "成都东站", "路线地图", "地图工具", "放大"],
+    ["路线预览", "成都东站", "路线地图", "地图工具", "全屏", "路线参考"],
     "route map"
   );
   const mapText = (await page.locator(".travel-report-map").textContent()) || "";
-  ["点位连线", "天气待查", "真实点位", "距离/时长待核验", "这轮先", "Day 结构", "自动切", "这段旅程"].forEach((internalLabel) => {
+  [
+    "点位连线",
+    "天气待查",
+    "真实点位",
+    "距离/时长待核验",
+    "分日状态",
+    "待继续比较交通方式",
+    "待继续补住宿区域",
+    "放大",
+    "这轮先",
+    "Day 结构",
+    "自动切",
+    "这段旅程",
+  ].forEach((internalLabel) => {
     if (mapText.includes(internalLabel)) {
       throw new Error(`Route map leaked internal label: ${internalLabel}`);
     }

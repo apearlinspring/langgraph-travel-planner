@@ -22,6 +22,7 @@
           isApprovalLoading: false,
           toolAuditEvents: [],
           turnObservability: null,
+          progressSnapshot: null,
         },
         plannerCollapsed: localStorage.getItem("zhixing-planner-collapsed") === "1",
         mobileChatFocus: false,
@@ -83,6 +84,7 @@
       let journeyMapRuntimeConfig = null;
       const journeyMapInstances = new WeakMap();
       const journeyMapPreviewCache = new Map();
+      const JOURNEY_MAP_DEGRADE_AFTER_MS = 180000;
       const DEFAULT_CONVERSATION_TITLE = "新行程";
 
       function serializeMapPayload(payload) {
@@ -472,7 +474,7 @@
           duration: 0.7,
         });
         marker.openPopup?.();
-        showJourneyPoiSheet(entry, dayKey, stopIndex);
+        hideJourneyPoiSheet(entry.shell);
       }
 
       function hideJourneyPoiSheet(shell) {
@@ -955,7 +957,7 @@
           insightTitle.textContent = "当前查看总览路线";
           insightCopy.textContent =
             overviewRoute ||
-            "先把出发、目的地、交通和落脚点定住，后面再继续展开成完整的分日路线。";
+            "补齐具体地点后会显示更完整的分日路线。";
           insightList.innerHTML = entry.routeStops
             .map(
               (stop) => `
@@ -973,6 +975,7 @@
         const selectedPlan =
           entry.dayPlans.find((day) => day.key === activeDayKey) ||
           entry.dayPlans.find((day) => day.label === selectedLayer?.label);
+        const selectedLabel = selectedLayer?.label || selectedPlan?.label || "当日";
         const waypoints = selectedPlan?.waypoints?.length
           ? selectedPlan.waypoints
           : selectedLayer?.points?.map((point) => point.name || point.address || point.label) || [];
@@ -982,12 +985,12 @@
           entry.highlightPoints
         );
 
-        insightTitle.textContent = `${selectedLayer?.label || "当日"} · ${
+        insightTitle.textContent = `${selectedLabel} · ${
           activeMode === "solo" ? "单独显示" : "突出显示"
         }`;
         insightCopy.textContent =
           selectedPlan?.note ||
-          `${selectedLayer?.label || "这一天"}的路线节点已经高亮出来了，你可以继续看当天怎么走、住哪里、看什么。`;
+          `${selectedLabel}的路线节点已经高亮出来了，你可以继续看当天怎么走、住哪里、看什么。`;
         insightList.innerHTML = [
           ...waypoints.slice(0, 5).map(
             (point, index) => `
@@ -999,7 +1002,7 @@
                 >
                   <span>${index + 1 < 10 ? `0${index + 1}` : index + 1}</span>
                   <strong>${escapeHtml(point)}</strong>
-                  <small>${escapeHtml(selectedLayer?.label || "当日路线")}</small>
+                  <small>${escapeHtml(selectedLabel)}</small>
                 </button>
               </li>
             `
@@ -1133,7 +1136,7 @@
       function getJourneySegmentLabelViewOpacity({
         isOverview = true,
         isSelected = false,
-        activeMode = "solo",
+        activeMode = "fade",
         labelIndex = 0,
       } = {}) {
         if (isOverview) {
@@ -1145,7 +1148,7 @@
         return isSelected ? 0.98 : 0;
       }
 
-      function updateJourneyDayButtons(shell, activeDay = "all", activeMode = "solo") {
+      function updateJourneyDayButtons(shell, activeDay = "all", activeMode = "fade") {
         shell?.querySelectorAll(".journey-map-day-btn").forEach((btn) => {
           const isActive = (btn.dataset.mapDay || "all") === activeDay;
           btn.classList.toggle("active", isActive);
@@ -1231,7 +1234,7 @@
         if (metaValue) {
           metaValue.textContent = isOverview
             ? `已定位 ${entry.points.length} 个路线地点`
-            : `${selectedLayer?.label || "当日"}已切换为${
+            : `${selectedLayer?.label || selectedPlan?.label || "当日"}已切换为${
                 activeMode === "solo" ? "单日路线" : "重点路线"
               }`;
         }
@@ -1254,7 +1257,9 @@
 
       function setJourneyMapDaySelection(entry, dayKey = "all") {
         if (!entry) return;
-        if (dayKey !== "all" && !entry.dayLayers?.some((layer) => layer.key === dayKey)) {
+        const hasLayer = entry.dayLayers?.some((layer) => layer.key === dayKey);
+        const hasPlan = entry.dayPlans?.some((day) => day.key === dayKey);
+        if (dayKey !== "all" && !hasLayer && !hasPlan) {
           return;
         }
         entry.activeDayKey = dayKey || "all";
@@ -1280,9 +1285,9 @@
         }
       }
 
-      function setJourneyMapDayMode(entry, mode = "solo") {
+      function setJourneyMapDayMode(entry, mode = "fade") {
         if (!entry) return;
-        entry.dayDisplayMode = mode === "fade" ? "fade" : "solo";
+          entry.dayDisplayMode = mode === "fade" ? "fade" : "solo";
         applyJourneyDayView(entry);
       }
 
@@ -1295,7 +1300,10 @@
       function registerJourneyMapEntry(node, entry) {
         const shell = entry.shell;
         const availableDayKeys = new Set(
-          (entry.dayLayers || []).map((layer) => layer.key)
+          [
+            ...(entry.dayLayers || []).map((layer) => layer.key),
+            ...(entry.dayPlans || []).map((day) => day.key),
+          ].filter(Boolean)
         );
         shell?.querySelectorAll(".journey-map-day-btn").forEach((button) => {
           const key = button.dataset.mapDay || "all";
@@ -1329,6 +1337,7 @@
             action === "expand" ||
             action === "toggle-tools" ||
             action === "toggle-sidebar" ||
+            action === "toggle-day-routes" ||
             action === "toggle-bottom-drawer" ||
             (action === "recommendations" && entry.recommendationPoints?.length > 0) ||
             (action === "route" && entry.routePoints?.length >= 2) ||
@@ -1446,6 +1455,60 @@
         return { lng, lat };
       }
 
+      function getJourneyPointTooltip(point = {}, fallback = "地点") {
+        return [point.name, point.address, point.label, fallback]
+          .map((item) => String(item || "").trim())
+          .find(Boolean) || "地点";
+      }
+
+      function normalizeJourneyRoutePathPoint(point = {}) {
+        const lng = Number(point?.lng);
+        const lat = Number(point?.lat);
+        if (!Number.isFinite(lng) || !Number.isFinite(lat)) return null;
+        return { lng, lat };
+      }
+
+      function isSameJourneyRoutePoint(left, right) {
+        return (
+          left &&
+          right &&
+          Math.abs(Number(left.lng) - Number(right.lng)) < 0.000001 &&
+          Math.abs(Number(left.lat) - Number(right.lat)) < 0.000001
+        );
+      }
+
+      function getJourneySegmentRoutePoints(dayPoints = [], segments = []) {
+        const routePoints = [];
+        const normalizedDayPoints = dayPoints
+          .map((point) => normalizeJourneyRoutePathPoint(point))
+          .filter(Boolean);
+        if (!Array.isArray(segments) || !segments.length) {
+          return normalizedDayPoints;
+        }
+
+        segments.forEach((segment, segmentIndex) => {
+          const segmentPath = Array.isArray(segment?.path)
+            ? segment.path.map((point) => normalizeJourneyRoutePathPoint(point)).filter(Boolean)
+            : [];
+          const fallbackPath = [dayPoints[segmentIndex], dayPoints[segmentIndex + 1]]
+            .map((point) => normalizeJourneyRoutePathPoint(point))
+            .filter(Boolean);
+          const chosenPath = segmentPath.length >= 2 ? segmentPath : fallbackPath;
+          chosenPath.forEach((point, pointIndex) => {
+            if (
+              routePoints.length &&
+              pointIndex === 0 &&
+              isSameJourneyRoutePoint(routePoints[routePoints.length - 1], point)
+            ) {
+              return;
+            }
+            routePoints.push(point);
+          });
+        });
+
+        return routePoints.length >= 2 ? routePoints : normalizedDayPoints;
+      }
+
       function wrapAmapLayer(overlay, options = {}) {
         const { contentNode = null, infoWindow = null, map = null, point = null } = options;
         return {
@@ -1485,11 +1548,13 @@
 
       function createAmapJourneyMarker(AMap, map, point, options = {}) {
         const kind = options.kind || point.kind || "highlight";
+        const tooltipText = getJourneyPointTooltip(point, options.label || point.label);
         const contentNode = buildAmapMarkerContent(
           kind,
           options.text || (kind === "highlight" ? "★" : "●"),
           options.color || ""
         );
+        contentNode.title = tooltipText;
         if (options.dayKey) {
           contentNode.dataset.mapDayStop = `${options.dayKey}:${options.stopIndex || 0}`;
         }
@@ -1498,14 +1563,16 @@
           content: contentNode,
           offset: new AMap.Pixel(-11, -11),
           zIndex: options.zIndex || 100,
+          title: tooltipText,
         });
+        marker.setTitle?.(tooltipText);
         marker.setMap(map);
         const infoWindow = new AMap.InfoWindow({
           offset: new AMap.Pixel(0, -18),
           content: `
             <div class="amap-journey-popup">
-              <strong>${escapeHtml(point.label || options.label || "地点")}</strong>
-              <span>${escapeHtml(point.address || point.name || "")}</span>
+              <strong>${escapeHtml(point.name || point.label || options.label || "地点")}</strong>
+              <span>${escapeHtml(point.address || point.label || "")}</span>
             </div>
           `,
         });
@@ -1650,9 +1717,7 @@
             text: point.kind === "highlight" ? "★" : point.kind === "recommendation" ? "+" : "●",
             onClick:
               point.kind === "recommendation"
-                ? () => {
-                    if (entry) showJourneyRecommendationSheet(entry, point);
-                  }
+                ? () => hideJourneyPoiSheet(shell)
                 : point.kind === "highlight"
                 ? () => {
                     activateJourneyHighlightCard(shell, highlightIndex);
@@ -1695,9 +1760,10 @@
                 },
               })
             );
-            const polyline = createAmapJourneyPolyline(AMap, map, dayPoints, {
+            const dayRoutePoints = getJourneySegmentRoutePoints(dayPoints, day.segments);
+            const polyline = createAmapJourneyPolyline(AMap, map, dayRoutePoints, {
               color,
-              weight: 5,
+              weight: 6,
               zIndex: 90 + index,
             });
             const dayBadge = createAmapJourneyDayBadge(
@@ -1813,11 +1879,18 @@
               payloadSize: (node.dataset.mapPayload || "").length,
               routeTitle: node.closest(".journey-live-map-shell")?.dataset?.mapTitle || "",
             });
+            node.dataset.mapReady = "error";
+            node.dataset.mapDegraded = "timeout";
+            node.innerHTML =
+              '<div class="journey-live-map-state error">路线地图定位超过 180 秒，已先保留文字路线。</div>';
           }
-        }, 180000);
+        }, JOURNEY_MAP_DEGRADE_AFTER_MS);
 
         try {
           const preview = await fetchJourneyMapPreview(payload);
+          if (node.dataset.mapDegraded === "timeout") {
+            return;
+          }
           const points = Array.isArray(preview?.points) ? preview.points : [];
           if (!points.length) {
             throw new Error(preview?.message || "map-preview-empty");
@@ -1884,19 +1957,22 @@
               icon: buildJourneyMapIcon(L, point.kind),
             }).addTo(map);
             marker.bindPopup(
-              `<strong>${escapeHtml(point.label)}</strong><br>${escapeHtml(
-                point.address || point.name
+              `<strong>${escapeHtml(point.name || point.label)}</strong><br>${escapeHtml(
+                point.address || point.label || ""
               )}`
             );
+            marker.bindTooltip(escapeHtml(getJourneyPointTooltip(point, point.label)), {
+              direction: "top",
+              sticky: true,
+              opacity: 0.96,
+            });
             if (point.kind === "highlight") {
               const highlightIndex = markersByKind.highlight?.length || 0;
               marker.on("click", () => {
                 activateJourneyHighlightCard(shell, highlightIndex);
               });
             } else if (point.kind === "recommendation") {
-              marker.on("click", () => {
-                if (entry) showJourneyRecommendationSheet(entry, point);
-              });
+              marker.on("click", () => hideJourneyPoiSheet(shell));
             }
             latLngs.push([point.lat, point.lng]);
             markers.push(marker);
@@ -1940,6 +2016,11 @@
                     point.address || point.name
                   )}`
                 );
+                marker.bindTooltip(escapeHtml(getJourneyPointTooltip(point, day.label || `Day ${index + 1}`)), {
+                  direction: "top",
+                  sticky: true,
+                  opacity: 0.96,
+                });
                 marker.on("click", () => {
                   if (entry) {
                     focusJourneyDayStop(entry, dayKey, pointIndex);
@@ -1947,13 +2028,16 @@
                 });
                 return marker;
               });
-              const dayLatLngs = dayPoints.map((point) => [point.lat, point.lng]);
+              const dayLatLngs = getJourneySegmentRoutePoints(dayPoints, day.segments).map((point) => [
+                point.lat,
+                point.lng,
+              ]);
               const polyline =
                 dayLatLngs.length >= 2
                   ? L.polyline(dayLatLngs, {
                       color,
-                      weight: 4,
-                      opacity: 0.92,
+                      weight: 5,
+                      opacity: 0.96,
                     }).addTo(map)
                   : null;
               const firstPoint = dayPoints[0];
@@ -2109,7 +2193,7 @@
           modalShell.dataset.dayPlans = shell.dataset.dayPlans || "[]";
           modalShell.dataset.routeStops = shell.dataset.routeStops || "[]";
           modalShell.dataset.activeDay = "all";
-          modalShell.dataset.dayMode = "solo";
+          modalShell.dataset.dayMode = "fade";
         }
         if (modalDays) {
           modalDays.innerHTML = `
@@ -2164,6 +2248,16 @@
             button.setAttribute("aria-expanded", String(!sidebarCollapsed));
           });
 
+        shell
+          .querySelectorAll('[data-map-action="toggle-day-routes"]')
+          .forEach((button) => {
+            const routesCard = button.closest(".journey-map-sidebar-routes");
+            const collapsed = routesCard?.classList.contains("is-collapsed");
+            button.textContent = collapsed ? "展开分日路线" : "收起分日路线";
+            button.title = collapsed ? "展开分日路线" : "收起分日路线";
+            button.setAttribute("aria-expanded", String(!collapsed));
+          });
+
         const bottomDrawer = shell.querySelector(".journey-map-bottom-drawer");
         const drawerCollapsed = bottomDrawer?.classList.contains("is-collapsed");
         shell
@@ -2190,6 +2284,12 @@
           const mapNode = shell?.querySelector(".journey-live-map[data-map-payload]");
           const entry = mapNode ? journeyMapInstances.get(mapNode) : null;
           setTimeout(() => entry?.map?.invalidateSize(), 80);
+          return;
+        }
+        if (action === "toggle-day-routes") {
+          const routesCard = button.closest(".journey-map-sidebar-routes");
+          routesCard?.classList.toggle("is-collapsed");
+          syncJourneyMapToggleLabels(shell);
           return;
         }
         if (action === "toggle-bottom-drawer") {
@@ -2665,6 +2765,103 @@
           .join("");
       }
 
+      function renderJourneySidebarDayRoutes(dayPlans = []) {
+        if (!Array.isArray(dayPlans) || !dayPlans.length) return "";
+        return `
+          <div class="journey-map-sidebar-card journey-map-sidebar-routes is-collapsed">
+            <div class="journey-map-sidebar-head">
+              <span>分日路线</span>
+              <button
+                class="journey-map-day-list-toggle journey-map-action-btn secondary"
+                type="button"
+                data-map-action="toggle-day-routes"
+                aria-expanded="false"
+                title="展开分日路线"
+              >
+                展开分日路线
+              </button>
+            </div>
+            <div class="journey-map-sidebar-day-list">
+              <article class="journey-map-sidebar-day-card overview">
+                <div class="journey-map-sidebar-day-head">
+                  <button
+                    class="journey-map-day-btn active"
+                    type="button"
+                    data-map-day="all"
+                    aria-pressed="true"
+                    title="查看全程路线总览"
+                  >
+                    <span>总览</span>
+                    <small>全程叠加路线</small>
+                  </button>
+                  <button
+                    class="journey-map-route-reference-btn journey-map-day-btn active"
+                    type="button"
+                    data-map-day="all"
+                    aria-pressed="true"
+                  >
+                    路线参考
+                  </button>
+                </div>
+              </article>
+              ${dayPlans
+                .map((day, dayIndex) => {
+                  const dayKey = day.key || `day-${dayIndex + 1}`;
+                  const places = [...(day.waypoints || []), ...(day.highlights || [])]
+                    .map((item) => cleanJourneyLocationValue(item))
+                    .filter(Boolean)
+                    .slice(0, 4);
+                  return `
+                    <article class="journey-map-sidebar-day-card" data-journey-day-card="${escapeHtml(dayKey)}">
+                      <div class="journey-map-sidebar-day-head">
+                        <button
+                          class="journey-map-day-btn"
+                          type="button"
+                          data-map-day="${escapeHtml(dayKey)}"
+                          aria-pressed="false"
+                          title="${escapeHtml(`${day.label || `Day ${dayIndex + 1}`}路线参考`)}"
+                        >
+                          <span>${escapeHtml(day.label || `Day ${dayIndex + 1}`)}</span>
+                          <small>${escapeHtml(day.title || day.note || "当天路线")}</small>
+                        </button>
+                        <button
+                          class="journey-map-route-reference-btn journey-map-day-btn"
+                          type="button"
+                          data-map-day="${escapeHtml(dayKey)}"
+                          aria-pressed="false"
+                        >
+                          路线参考
+                        </button>
+                      </div>
+                      ${
+                        places.length
+                          ? `<div class="journey-map-sidebar-place-chips">
+                              ${places
+                                .map(
+                                  (place, placeIndex) => `
+                                    <button
+                                      class="journey-map-sidebar-place-chip journey-map-stage-stop journey-map-stage-stop--inline"
+                                      type="button"
+                                      data-map-day-stop="${escapeHtml(dayKey)}:${placeIndex}"
+                                    >
+                                      <span>${placeIndex + 1}</span>
+                                      <strong>${escapeHtml(place)}</strong>
+                                    </button>
+                                  `
+                                )
+                                .join("")}
+                            </div>`
+                          : `<p class="journey-map-sidebar-muted">当天路线待补充具体地点。</p>`
+                      }
+                    </article>
+                  `;
+                })
+                .join("")}
+            </div>
+          </div>
+        `;
+      }
+
       function refreshJourneyMapAfterEdit(shell, dayPlans) {
         const mapNode = shell?.querySelector(".journey-live-map[data-map-payload]");
         if (!shell || !mapNode) return;
@@ -2682,6 +2879,13 @@
         const drawerDays = shell.querySelector(".journey-map-bottom-days");
         if (drawerDays) {
           drawerDays.innerHTML = renderJourneyBottomDrawerDays(normalizedDayPlans);
+        }
+        const sidebarDays = shell.querySelector(".journey-map-sidebar-day-list");
+        if (sidebarDays) {
+          const wrapper = document.createElement("div");
+          wrapper.innerHTML = renderJourneySidebarDayRoutes(normalizedDayPlans);
+          sidebarDays.innerHTML =
+            wrapper.querySelector(".journey-map-sidebar-day-list")?.innerHTML || "";
         }
         destroyJourneyMapEntry(mapNode);
         mapNode.dataset.mapReady = "";
@@ -3272,7 +3476,7 @@
           ...(data.startup_complete === false ? ["服务仍在启动中"] : []),
         ];
         const turn = state.governance?.turnObservability || {};
-        const progress = turn.progressSnapshot || turn.progress_snapshot || {};
+        const progress = getGovernanceProgressSnapshot();
         const planningModeValue =
           progress.planning_mode ||
           turn.planningMode ||
@@ -3294,6 +3498,18 @@
               .map((item) => (typeof item === "string" ? item : item?.label || item?.value || ""))
               .filter(Boolean)
           : [];
+        const currentPreferenceItems = Array.isArray(progress.current_trip_preferences)
+          ? progress.current_trip_preferences
+              .map((item) => (typeof item === "string" ? item : item?.label || item?.value || ""))
+              .filter(Boolean)
+          : [];
+        const preferenceCopy = preferenceItems.length
+          ? `长期：${preferenceItems.slice(0, 4).join("、")}`
+          : currentPreferenceItems.length
+            ? `本次：${currentPreferenceItems.slice(0, 5).join("、")}`
+            : available.includes("长期偏好")
+              ? "本次偏好待继续沉淀"
+              : "登录后逐步沉淀";
         return [
           `<span>方案类型：${escapeHtml(planningMode)}</span>`,
           `<span>已确认信息：${escapeHtml(
@@ -3301,13 +3517,7 @@
               ? factItems.slice(0, 6).join("；")
               : "待你补充出发地、时间、人数和预算"
           )}</span>`,
-          `<span>长期偏好：${escapeHtml(
-            preferenceItems.length
-              ? preferenceItems.slice(0, 4).join("、")
-              : available.includes("长期偏好")
-                ? "暂无稳定偏好"
-                : "登录后逐步沉淀"
-          )}</span>`,
+          `<span>偏好记录：${escapeHtml(preferenceCopy)}</span>`,
           `<span>外部服务：${escapeHtml(
             mcpStatus === "ready"
               ? "天气、地图、交通、酒店等查询可用"
@@ -3330,7 +3540,7 @@
 
       function readinessCurrentStageLabel() {
         const turn = state.governance?.turnObservability || {};
-        const progress = turn.progressSnapshot || turn.progress_snapshot || {};
+        const progress = getGovernanceProgressSnapshot();
         const planningMode =
           progress.planning_mode ||
           turn.planningMode ||
@@ -3607,17 +3817,188 @@
         return text;
       }
 
+      function isConfirmedPlanningMode(value = "") {
+        return ["agency_plan", "free_planning"].includes(String(value || "").trim());
+      }
+
+      function mergeProgressFactItems(previous = [], incoming = []) {
+        const byKey = new Map();
+        const order = [];
+        [...(Array.isArray(previous) ? previous : []), ...(Array.isArray(incoming) ? incoming : [])]
+          .forEach((item) => {
+            if (!item || typeof item !== "object") return;
+            const key = String(item.key || item.label || "").trim();
+            const value = item.value;
+            if (!key || value === undefined || value === null || value === "") return;
+            if (!byKey.has(key)) order.push(key);
+            byKey.set(key, item);
+          });
+        return order.map((key) => byKey.get(key));
+      }
+
+      function mergeProgressStringItems(previous = [], incoming = []) {
+        const merged = [];
+        const seen = new Set();
+        [...(Array.isArray(previous) ? previous : []), ...(Array.isArray(incoming) ? incoming : [])]
+          .forEach((item) => {
+            const marker = typeof item === "string"
+              ? item
+              : item?.key || item?.label || item?.value || JSON.stringify(item || "");
+            if (!marker || seen.has(marker)) return;
+            seen.add(marker);
+            merged.push(item);
+          });
+        return merged;
+      }
+
+      function mergeGovernanceProgressSnapshots(previous = {}, incoming = {}) {
+        if (!previous || typeof previous !== "object") previous = {};
+        if (!incoming || typeof incoming !== "object") incoming = {};
+        if (!Object.keys(previous).length) return { ...incoming };
+        if (!Object.keys(incoming).length) return { ...previous };
+
+        const merged = { ...previous, ...incoming };
+        const previousMode = previous.planning_mode || "";
+        const incomingMode = incoming.planning_mode || "";
+        if (isConfirmedPlanningMode(previousMode) && !isConfirmedPlanningMode(incomingMode)) {
+          merged.planning_mode = previousMode;
+        }
+        const previousWorkflow = previous.active_workflow || "";
+        const incomingWorkflow = incoming.active_workflow || "";
+        if (
+          isConfirmedPlanningMode(previousWorkflow) &&
+          !isConfirmedPlanningMode(incomingWorkflow)
+        ) {
+          merged.active_workflow = previousWorkflow;
+        }
+        if (previous.agency_step && !incoming.agency_step) {
+          merged.agency_step = previous.agency_step;
+        }
+        const facts = mergeProgressFactItems(
+          previous.confirmed_facts,
+          incoming.confirmed_facts
+        );
+        if (facts.length) merged.confirmed_facts = facts;
+        ["long_term_preferences", "current_trip_preferences", "pending_items"].forEach((key) => {
+          const values = mergeProgressStringItems(previous[key], incoming[key]);
+          if (values.length) merged[key] = values;
+        });
+        return merged;
+      }
+
+      function getGovernanceProgressSnapshot() {
+        return (
+          state.governance?.progressSnapshot ||
+          state.governance?.turnObservability?.progressSnapshot ||
+          state.governance?.turnObservability?.progress_snapshot ||
+          {}
+        );
+      }
+
+      function factItem(key, label, value) {
+        if (value === undefined || value === null || value === "" || value === "待确认") {
+          return null;
+        }
+        return { key, label, value: String(value) };
+      }
+
+      function progressSnapshotFromFastSplit(fastSplit = {}) {
+        const facts = fastSplit.facts || fastSplit || {};
+        if (!facts || typeof facts !== "object") return {};
+        const confirmed = [
+          factItem("departure_city", "出发地", facts.departure_city),
+          factItem("destination", "目的地", facts.destination),
+          factItem("departure_date", "出发时间", facts.departure_date),
+          factItem(
+            "travel_days",
+            "行程天数",
+            facts.travel_days ? `${facts.travel_days}天` : ""
+          ),
+          factItem("adult_count", "人数", facts.adult_count ? `${facts.adult_count}人` : ""),
+          factItem("budget_text", "预算", facts.budget_text),
+        ].filter(Boolean);
+        return {
+          version: "travel_progress_snapshot.v1",
+          planning_mode:
+            facts.planning_mode || fastSplit.planning_mode || "pending_confirmation",
+          active_workflow:
+            facts.active_workflow || facts.planning_mode || fastSplit.active_workflow || "",
+          agency_step: facts.agency_step || fastSplit.agency_step || "",
+          confirmed_facts: confirmed,
+        };
+      }
+
+      function progressSnapshotFromReportData(reportData = {}) {
+        if (!reportData || typeof reportData !== "object") return {};
+        const overview = reportData.overview || {};
+        const agencyContext = reportData.agency_context || {};
+        const cityPair = extractJourneyCityPair(overview.route_label || "");
+        const budget = reportData.budget || {};
+        const budgetValue =
+          budget.total || budget.per_person
+            ? [
+                budget.total ? `总计约${budget.total}元` : "",
+                budget.per_person ? `人均约${budget.per_person}元` : "",
+              ].filter(Boolean).join("，")
+            : "";
+        const confirmed = [
+          factItem("departure_city", "出发地", cityPair?.origin),
+          factItem("destination", "目的地", cityPair?.destination),
+          factItem("travel_days", "行程天数", overview.duration),
+          factItem("adult_count", "人数", overview.people),
+          factItem("budget_text", "预算", budgetValue),
+        ].filter(Boolean);
+        return {
+          version: "travel_progress_snapshot.v1",
+          planning_mode: agencyContext.mode || reportData.planning_mode || "",
+          active_workflow: agencyContext.mode || reportData.active_workflow || "",
+          agency_step: agencyContext.mode === "agency_plan" ? "agency_feedback" : "",
+          confirmed_facts: confirmed,
+          long_term_preferences: Array.isArray(overview.travel_styles)
+            ? overview.travel_styles
+            : [],
+        };
+      }
+
+      function rememberProgressSnapshot(snapshot = {}) {
+        if (!snapshot || typeof snapshot !== "object" || !Object.keys(snapshot).length) return;
+        state.governance.progressSnapshot = mergeGovernanceProgressSnapshots(
+          state.governance.progressSnapshot || {},
+          snapshot
+        );
+      }
+
       function rememberTurnObservability(event = {}) {
         const observability = event.observability || event;
         if (!observability || typeof observability !== "object") return;
+        const observationSnapshot = {
+          ...(observability.progress_snapshot || {}),
+        };
+        if (isConfirmedPlanningMode(observability.planning_mode)) {
+          observationSnapshot.planning_mode = observability.planning_mode;
+          observationSnapshot.active_workflow =
+            observationSnapshot.active_workflow || observability.planning_mode;
+        }
+        if (
+          observability.step &&
+          String(observability.step).startsWith("agency_") &&
+          !observationSnapshot.agency_step
+        ) {
+          observationSnapshot.agency_step = observability.step;
+        }
+        rememberProgressSnapshot(observationSnapshot);
+        const mergedProgress = getGovernanceProgressSnapshot();
         const step = normalizeObservabilityField(
           observability.step || observability.current_step,
           "requirement_collection"
         );
-        const planningMode = normalizeObservabilityField(
+        let planningMode = normalizeObservabilityField(
           observability.planning_mode,
-          "pending_confirmation"
+          mergedProgress.planning_mode || "pending_confirmation"
         );
+        if (!isConfirmedPlanningMode(planningMode) && isConfirmedPlanningMode(mergedProgress.planning_mode)) {
+          planningMode = mergedProgress.planning_mode;
+        }
         const status = normalizeObservabilityField(observability.status, "completed");
         const degradationStatus = normalizeObservabilityField(
           observability.degradation_status,
@@ -3639,7 +4020,7 @@
           degradationStatus,
           degradationLabel: getStatusLabel(degradationStatus),
           estimatedTotalTokens: Number(observability.estimated_total_tokens || 0),
-          progressSnapshot: observability.progress_snapshot || {},
+          progressSnapshot: mergedProgress,
         };
         renderReadinessPanel();
         renderTurnObservability();
@@ -4548,7 +4929,7 @@
 
         const modeInstruction =
           mode === "agency"
-            ? "。请按“现成省心方案”来做：优先匹配成熟路线样板，直接给交通、住宿商圈、门票参考、餐饮和服务边界；价格只按参考价和待核验口径说明，不承诺实时锁价。"
+            ? "。请按“现成省心方案”来做：优先匹配成熟路线样板，直接给交通、住宿商圈与示例酒店、门票参考、餐饮、费用说明和涵盖服务；价格只按参考价和待核验口径说明，不承诺实时锁价。"
             : "。请按“个性化旅游规划”来做：先判断需求是否完整；如果已经足够，请继续完成目的地、交通、住宿、预算、每日路线，并在最后整理成专属于我的个性化旅游规划报告。交通和住宿可以结合可用工具做真实查询与对比。";
         parts.push(modeInstruction);
 
@@ -4954,6 +5335,15 @@
         if (looksLikeDecisionPrompt(normalized)) {
           return { tone: "next", icon: "fa-circle-question" };
         }
+        if (contains("下一步", "接下来", "行动", "后续", "请评价")) {
+          return { tone: "next", icon: "fa-arrow-right" };
+        }
+        if (contains("费用说明", "费用边界", "预算", "费用", "花费", "价格", "成本")) {
+          return { tone: "budget", icon: "fa-wallet" };
+        }
+        if (contains("涵盖服务", "服务边界", "接送", "预约", "应急", "人工确认")) {
+          return { tone: "service", icon: "fa-handshake-angle" };
+        }
         if (
           contains(
             "概览",
@@ -4978,17 +5368,11 @@
         if (contains("住宿", "酒店", "民宿", "住哪里")) {
           return { tone: "stay", icon: "fa-bed" };
         }
-        if (contains("预算", "费用", "花费", "价格", "成本")) {
-          return { tone: "budget", icon: "fa-wallet" };
-        }
         if (contains("美食", "餐饮", "吃")) {
           return { tone: "food", icon: "fa-utensils" };
         }
         if (contains("提醒", "注意", "避坑", "贴士", "须知")) {
           return { tone: "warning", icon: "fa-triangle-exclamation" };
-        }
-        if (contains("下一步", "接下来", "行动", "后续")) {
-          return { tone: "next", icon: "fa-arrow-right" };
         }
         return null;
       }
@@ -4997,11 +5381,21 @@
         return value
           .replace(/^[-*#\s]+/, "")
           .replace(/[📍✅⚠️✨🌤️]/g, "")
+          .replace(/^(?:上午|中午|午餐|下午|傍晚|晚上|晚餐|早餐|早上|全天)[：:\s-]*/u, "")
           .replace(/^(需求很完整|信息基本齐了|现在先把|我已经按你的要求查到|我先帮你梳理确认一下)[！!：:\s]*/g, "")
           .replace(/\s*[·•｜|].*$/, "")
           .replace(/(一句话定位|为什么适合你|适合你|两个小提醒|小提醒|提醒|建议)$/g, "")
           .replace(/\s+/g, " ")
           .trim();
+      }
+
+      function isJourneyNoiseLocation(value = "") {
+        const normalized = cleanJourneyLocationValue(value);
+        if (!normalized) return true;
+        if (normalized.length > 28) return true;
+        return /^(?:路线参考|当前查看|总览|默认|若满意|如果满意|请评价|请评估|下一步|需要你确认|值停留|地图定位|住宿周边|关键节点|自然醒|自由返程|从容返程|返回|返程|专车接站|办理入住|稍作休整|待核验|费用待核验|停留时间待核验|杭州玩\d+天|西安到杭州玩\d+天)$/u.test(
+          normalized
+        );
       }
 
       function splitTableCells(line) {
@@ -5347,7 +5741,21 @@
         const normalized = (title || "").replace(/\s+/g, " ").trim();
         if (!normalized || isDefaultConversationTitle(normalized)) return null;
         const coreTitle = normalized.split("·")[0].trim();
-        return extractJourneyCityPair(coreTitle);
+        const routePair = extractJourneyCityPair(coreTitle);
+        if (routePair?.origin || routePair?.destination) return routePair;
+        const destinationOnly = sanitizeConversationTitleSegment(coreTitle)
+          .replace(/(?:玩|游)?\s*\d+\s*天.*$/u, "")
+          .replace(/\s*(?:方案|行程|规划|报告)$/u, "")
+          .trim();
+        if (
+          destinationOnly &&
+          destinationOnly.length >= 2 &&
+          destinationOnly.length <= 8 &&
+          !/(?:新行程|专属旅程|自然醒|路线|预算|交通|住宿)/u.test(destinationOnly)
+        ) {
+          return { origin: "", destination: destinationOnly };
+        }
+        return null;
       }
 
       function splitJourneyFragments(text = "") {
@@ -5404,6 +5812,7 @@
           const normalized = fragment.replace(/[：:]/g, " ").trim();
           if (
             !normalized ||
+            isJourneyNoiseLocation(normalized) ||
             picked.some((item) => item.includes(normalized) || normalized.includes(item))
           ) {
             return;
@@ -5657,8 +6066,43 @@
           .map((item) => item.trim())
           .map((item) => item.replace(/^[|｜:：-]+|[|｜:：-]+$/g, "").trim())
           .filter(Boolean)
+          .filter((item) => !isJourneyNoiseLocation(item))
           .filter((item, index, list) => list.indexOf(item) === index)
           .slice(0, 6);
+      }
+
+      function extractJourneyDayWaypointsFromLines(lines = []) {
+        const candidates = [];
+        const pushCandidate = (value = "") => {
+          const cleaned = cleanJourneyLocationValue(value)
+            .replace(/（[^）]*）|\([^)]*\)/g, " ")
+            .replace(/^(?:推荐|建议|可选|可去|前往|游览|参观|观看)\s*/u, "")
+            .replace(/\s+/g, " ")
+            .trim();
+          if (!cleaned || isJourneyNoiseLocation(cleaned)) return;
+          if (/^(?:上午|中午|下午|晚上|午餐|晚餐|早餐|全天)$/u.test(cleaned)) return;
+          if (!candidates.includes(cleaned)) candidates.push(cleaned);
+        };
+
+        lines.slice(1).forEach((rawLine) => {
+          const normalized = normalizeJourneyDayHeading(rawLine)
+            .replace(/^[-*•]\s*/, "")
+            .trim();
+          if (!normalized || /(?:请评价|若满意|如果满意|下一步|生成报告|调整方向)/u.test(normalized)) {
+            return;
+          }
+          const afterTime = normalized.replace(
+            /^(?:上午|中午|午餐|下午|傍晚|晚上|晚餐|早餐|早上|全天)[：:\s-]*/u,
+            ""
+          );
+          const mainText = afterTime.split(/[。；;，,]/u)[0] || afterTime;
+          mainText
+            .split(/(?:→|->|\+|＋|、|\/|及|和|至|到)+/u)
+            .map((item) => item.trim())
+            .forEach(pushCandidate);
+        });
+
+        return candidates.slice(0, 6);
       }
 
       function extractJourneyDayPlansFromLines(lines = []) {
@@ -5668,6 +6112,9 @@
           if (!current?.dayNumber) return;
           const routeSeed =
             current.rawLines.find((line) => /(?:→|->|—|－|至|到)/.test(line)) || current.title;
+          const bodyWaypoints = extractJourneyDayWaypointsFromLines(current.rawLines);
+          const titleWaypoints = splitJourneyWaypoints(routeSeed);
+          const waypoints = bodyWaypoints.length >= 2 ? bodyWaypoints : titleWaypoints;
           const note = truncateJourneyNote(
             current.rawLines.slice(1).join(" "),
             "这一天的节奏会在后续继续细化。"
@@ -5677,7 +6124,7 @@
             dayNumber: current.dayNumber,
             label: `Day ${current.dayNumber}`,
             title: current.title,
-            waypoints: splitJourneyWaypoints(routeSeed),
+            waypoints,
             highlights: extractJourneyHighlights([
               {
                 title: current.title,
@@ -5719,7 +6166,12 @@
             );
             if (!dayNumber) return null;
             const routeTitle = section.title || section.rawLines?.[0] || "";
-            const waypoints = splitJourneyWaypoints(routeTitle);
+            const bodyWaypoints = extractJourneyDayWaypointsFromLines([
+              routeTitle,
+              ...(section.rawLines || []),
+            ]);
+            const waypoints =
+              bodyWaypoints.length >= 2 ? bodyWaypoints : splitJourneyWaypoints(routeTitle);
             return {
               key: `day-${dayNumber}`,
               dayNumber,
@@ -5785,8 +6237,92 @@
         const normalized = (value || "").trim();
         return (
           !normalized ||
-          /待确认|待继续|待补充|待比较|待定|后面继续补/.test(normalized)
+          /待确认|待继续|待补充|待比较|待定|后面继续补/.test(normalized) ||
+          isJourneyNoiseLocation(normalized)
         );
+      }
+
+      function isLowValueJourneyMetric(value = "") {
+        const normalized = String(value || "").trim();
+        return (
+          !normalized ||
+          /待继续|待补充|待比较|待定|后面会继续|后面继续|待核验/.test(
+            normalized
+          )
+        );
+      }
+
+      function getJourneySectionText(section = {}) {
+        return [
+          section?.title || "",
+          ...(Array.isArray(section?.rawLines) ? section.rawLines : []),
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .replace(/\s+/g, " ")
+          .trim();
+      }
+
+      function summarizeJourneyTransportMetric(section = {}, cityPair = {}) {
+        const title = cleanJourneyLocationValue(section?.title || "");
+        if (title && !/服务边界|涵盖服务|交通住宿|待/.test(title)) {
+          return truncateJourneyNote(title, "交通待核验", 30);
+        }
+        const text = getJourneySectionText(section);
+        const match = text.match(
+          /(?:大交通|交通|高铁|航班|接送|专车|网约车|地铁)[：:\s-]*([^。；\n]{4,60})/u
+        );
+        if (match?.[1]) {
+          return truncateJourneyNote(match[1], "交通待核验", 34);
+        }
+        if (cityPair?.origin && cityPair?.destination) {
+          return "";
+        }
+        return "";
+      }
+
+      function extractJourneyExampleHotel(text = "") {
+        const normalized = String(text || "").replace(/\s+/g, " ");
+        const explicitMatch = normalized.match(
+          /(?:示例酒店|酒店示例|住宿示例|候选酒店)[：:\s-]*([^。；，,\n]{4,36}(?:酒店|饭店|宾馆|度假村))/u
+        );
+        if (explicitMatch?.[1]) return explicitMatch[1].trim();
+        const hotelMatch = normalized.match(
+          /([\u4e00-\u9fa5A-Za-z0-9·\- ]{2,32}(?:酒店|饭店|宾馆|度假村))/u
+        );
+        return hotelMatch?.[1]?.trim() || "";
+      }
+
+      function summarizeJourneyStayMetric(section = {}, combinedText = "") {
+        const sectionText = getJourneySectionText(section);
+        const hotelName = extractJourneyExampleHotel(`${sectionText} ${combinedText}`);
+        if (hotelName) {
+          return truncateJourneyNote(hotelName, "住宿示例待核验", 30);
+        }
+        const title = cleanJourneyLocationValue(section?.title || "");
+        if (title && !/住宿口径|交通住宿|服务边界|待/.test(title)) {
+          return truncateJourneyNote(title, "住宿待核验", 30);
+        }
+        const areaMatch = sectionText.match(
+          /(?:住宿|酒店|商圈|区域|落脚)[：:\s-]*([^。；\n]{4,60})/u
+        );
+        if (areaMatch?.[1]) {
+          return truncateJourneyNote(areaMatch[1], "住宿区域待核验", 34);
+        }
+        return "";
+      }
+
+      function formatJourneyDayNightLabel(dayCount = 0, text = "") {
+        const normalized = String(text || "");
+        const dayNightMatch = normalized.match(
+          /(\d+\s*天\s*\d+\s*[晚夜]|[一二三四五六七八九十]\s*天\s*[一二三四五六七八九十]\s*[晚夜])/u
+        );
+        if (dayNightMatch?.[1]) {
+          return dayNightMatch[1].replace(/\s+/g, "");
+        }
+        if (dayCount > 1) return `${dayCount}天${Math.max(dayCount - 1, 1)}晚`;
+        if (dayCount === 1) return "1天";
+        return "先显示总览";
       }
 
       function buildJourneyAtlasTitle(previewState, previewStops = []) {
@@ -5814,6 +6350,7 @@
         ]
           .map((item) => cleanJourneyLocationValue(item || ""))
           .filter(Boolean)
+          .filter((item) => !isJourneyNoiseLocation(item))
           .filter((item, index, list) => list.indexOf(item) === index)
           .slice(0, 6);
         const routeStops = [
@@ -5849,34 +6386,11 @@
             segments: day.segments || [],
           })),
         });
-        const summaryChips = [
-          ...previewMetrics.slice(0, 3),
-          {
-            icon: "fa-calendar-days",
-            label: "分日状态",
-            value: hasDayView ? `已拆成 ${dayPlans.length} 天` : "先显示总览",
-          },
-        ];
-
         const isImmersive = previewState.mapExperience === "immersive";
         return `
           <section class="journey-map-studio${
             isImmersive ? " journey-map-studio--immersive" : ""
           }">
-            <div class="journey-map-studio-brief">
-              ${summaryChips
-                .map(
-                  (item) => `
-                    <div class="journey-map-studio-brief-item">
-                      <span class="journey-map-studio-brief-label">
-                        <i class="fa-solid ${item.icon}"></i> ${escapeHtml(item.label)}
-                      </span>
-                      <strong>${escapeHtml(item.value)}</strong>
-                    </div>
-                  `
-                )
-                .join("")}
-            </div>
             <div
               class="journey-live-map-shell journey-live-map-shell--studio${
                 isImmersive ? " journey-live-map-shell--immersive" : ""
@@ -5895,7 +6409,7 @@
                   <strong>${escapeHtml(atlasTitle)}</strong>
                   <span>${
                     hasDayView
-                      ? "直接在地图里切换总览和每天的路线，沿途景点会同步高亮。"
+                      ? "地图默认显示全程叠加总览；展开路线说明后，可切换查看某一天的路线参考。"
                       : "当前显示路线总览。"
                   }</span>
                 </div>
@@ -5911,44 +6425,7 @@
                   <div class="journey-map-floating-panel">
                     <div class="journey-map-floating-actions journey-map-floating-summary">
                       <button class="journey-map-action-btn secondary" type="button" data-map-action="toggle-tools" aria-expanded="false" title="展开地图工具">地图工具</button>
-                      <button class="journey-map-action-btn secondary" type="button" data-map-action="expand" title="放大查看地图">放大</button>
-                    </div>
-                    <div class="journey-map-floating-days">
-                      <button
-                        class="journey-map-day-btn active"
-                        type="button"
-                        data-map-day="all"
-                        aria-pressed="true"
-                        title="查看整段路线总览"
-                      >
-                        <span>总览</span>
-                        <small>全程</small>
-                      </button>
-                      ${dayPlans
-                        .map(
-                          (day, index) => `
-                            <button class="journey-map-day-btn" type="button" data-map-day="${escapeHtml(
-                              day.key
-                            )}" data-map-day-label="${escapeHtml(
-                              day.label || `Day ${index + 1}`
-                            )}" aria-pressed="false" title="${escapeHtml(
-                              `${day.label || `Day ${index + 1}`} · ${Math.max(
-                                day.waypoints?.length || 0,
-                                day.highlights?.length || 0,
-                                1
-                              )} 站`
-                            )}">
-                              <span>${escapeHtml(day.label || `Day ${index + 1}`)}</span>
-                              <small>${Math.max(day.waypoints?.length || 0, day.highlights?.length || 0, 1)}站</small>
-                            </button>
-                          `
-                        )
-                        .join("")}
-                      ${
-                        hasDayView
-                          ? ""
-                          : `<span class="journey-map-passive-pill">日程规划中</span>`
-                      }
+                      <button class="journey-map-action-btn secondary" type="button" data-map-action="expand" title="全屏查看地图">全屏</button>
                     </div>
                     ${
                       hasDayView
@@ -6003,33 +6480,6 @@
                       }
                     </div>
                   </div>
-                  ${
-                    hasDayView
-                      ? `
-                          <div class="journey-map-bottom-drawer">
-                            <span class="journey-map-bottom-handle"></span>
-                            <div class="journey-map-bottom-head">
-                              <div>
-                                <strong>分日路线</strong>
-                                <small>可调顺序，地图即时刷新</small>
-                              </div>
-                              <button
-                                class="journey-map-bottom-toggle journey-map-action-btn secondary"
-                                type="button"
-                                data-map-action="toggle-bottom-drawer"
-                                aria-expanded="true"
-                                title="收起分日路线"
-                              >
-                                收起
-                              </button>
-                            </div>
-                            <div class="journey-map-bottom-days">
-                              ${renderJourneyBottomDrawerDays(dayPlans)}
-                            </div>
-                          </div>
-                        `
-                      : ""
-                  }
                   <div class="journey-poi-bottom-sheet" hidden>
                     <span class="journey-poi-bottom-handle"></span>
                     <button
@@ -6067,151 +6517,20 @@
                     <span>路线说明</span>
                     <button class="journey-map-sidebar-toggle journey-map-action-btn secondary" type="button" data-map-action="toggle-sidebar" aria-expanded="true" title="收起路线说明">收起路线说明</button>
                   </div>
-                  <div class="journey-map-sidebar-card intro">
-                    <div class="journey-map-sidebar-head">
-                      <span>路线概览</span>
-                      <strong>${hasDayView ? `${dayPlans.length} 天` : "总览"}</strong>
-                    </div>
-                    <div class="journey-map-sidebar-copy">
-                      <strong>${escapeHtml(atlasTitle)}</strong>
-                      <p>${
-                        hasDayView
-                          ? "切换到某一天看当天路线，再根据沿途景点继续细化玩法、交通和落脚点。"
-                          : "当前显示路线总览，已识别的地点会先汇总在这里。"
-                      }</p>
-                    </div>
-                  </div>
                   ${
                     hasDayView
-                      ? `
-                          <div class="journey-map-sidebar-card">
-                            <div class="journey-map-sidebar-head">
-                              <span>当前日程视角</span>
-                              <strong class="journey-map-day-insight-title">当前查看总览路线</strong>
-                            </div>
-                            <p class="journey-map-day-insight-copy">
-                              先看整段路线，再切换到某一天查看当天怎么走。
-                            </p>
-                            <ul class="journey-map-day-insight-points">
-                              ${validRouteStops
-                                .map(
-                                  (stop) => `
-                                    <li>
-                                      <span>${escapeHtml(stop.label)}</span>
-                                      <strong>${escapeHtml(stop.value)}</strong>
-                                    </li>
-                                  `
-                                )
-                                .join("")}
-                            </ul>
-                          </div>
-                        `
+                      ? renderJourneySidebarDayRoutes(dayPlans)
                       : `
                           <div class="journey-map-sidebar-card compact">
                             <div class="journey-map-sidebar-head">
-                              <span>当前日程视角</span>
-                              <strong>总览模式</strong>
+                              <span>路线说明</span>
+                              <strong>暂无分日路线</strong>
                             </div>
                             <p class="journey-map-day-insight-copy">
-                              当前显示整段路线总览。
+                              具体地点补齐后会显示分日路线。
                             </p>
                           </div>
                         `
-                  }
-                  <div class="journey-map-sidebar-card">
-                    <div class="journey-map-sidebar-head">
-                      <span>关键节点</span>
-                      <strong>点一下联动地图</strong>
-                    </div>
-                    <div class="journey-map-route-list">
-                      ${validRouteStops
-                        .map(
-                          (stop) => `
-                            <button
-                              class="journey-map-focus-btn journey-map-route-stop"
-                              type="button"
-                              data-map-focus="${escapeHtml(stop.target)}"
-                            >
-                              <div class="journey-map-route-stop-head">
-                                <span class="journey-stop-label">
-                                  <i class="fa-solid ${stop.icon}"></i> ${escapeHtml(stop.label)}
-                                </span>
-                              </div>
-                              <strong class="journey-map-route-stop-value">${escapeHtml(stop.value)}</strong>
-                              <span class="journey-map-route-stop-note">${escapeHtml(stop.note)}</span>
-                            </button>
-                          `
-                        )
-                        .join("")}
-                    </div>
-                  </div>
-                  ${
-                    stayNearbyHighlights.length
-                      ? `
-                          <div class="journey-map-sidebar-card">
-                            <div class="journey-map-sidebar-head">
-                              <span>住宿周边</span>
-                              <strong>落脚点怎么选</strong>
-                            </div>
-                            <div class="journey-map-nearby-grid">
-                              ${stayNearbyHighlights
-                                .map(
-                                  (item) => `
-                                    <button
-                                      class="journey-map-focus-btn journey-map-nearby-card"
-                                      type="button"
-                                      data-map-focus="highlights"
-                                    >
-                                      <span><i class="fa-solid ${escapeHtml(item.icon)}"></i>${escapeHtml(
-                                        item.label
-                                      )}</span>
-                                      <strong>${escapeHtml(item.name)}</strong>
-                                    </button>
-                                  `
-                                )
-                                .join("")}
-                            </div>
-                          </div>
-                        `
-                      : ""
-                  }
-                  ${
-                    highlightCards.length
-                      ? `
-                          <div class="journey-map-sidebar-card">
-                            <div class="journey-map-sidebar-head">
-                              <span>沿途看点</span>
-                              <strong>点卡片同步定位</strong>
-                            </div>
-                            <div class="journey-map-highlight-list">
-                              ${highlightCards
-                                .slice(0, 4)
-                                .map(
-                                  (item) => `
-                                    <button
-                                      class="journey-map-focus-btn journey-highlight-card ${
-                                        item.index === 0 ? "active" : ""
-                                      }"
-                                      type="button"
-                                      data-map-focus="highlight:${item.index}"
-                                      data-highlight-index="${item.index}"
-                                    >
-                                      <div class="journey-highlight-card-head">
-                                        <span class="journey-highlight-card-theme">${escapeHtml(
-                                          item.theme
-                                        )}</span>
-                                        <span class="journey-map-inline-link">地图定位</span>
-                                      </div>
-                                      <strong>${escapeHtml(item.title)}</strong>
-                                      <p>${escapeHtml(item.note)}</p>
-                                    </button>
-                                  `
-                                )
-                                .join("")}
-                            </div>
-                          </div>
-                        `
-                      : ""
                   }
                 </aside>
               </div>
@@ -6242,20 +6561,15 @@
           },
           {
             icon: "fa-train-subway",
-            label: "优先交通",
-            value: transportSection?.title || "待继续比较交通方式",
+            label: "交通",
+            value: summarizeJourneyTransportMetric(transportSection, cityPair),
           },
           {
             icon: "fa-bed",
-            label: "落脚节奏",
-            value: staySection?.title || "待继续补住宿区域",
+            label: "住宿",
+            value: summarizeJourneyStayMetric(staySection, previewState.combinedText),
           },
-          {
-            icon: "fa-wallet",
-            label: "预算感知",
-            value: budgetSection?.title || "后面会继续细化预算",
-          },
-        ];
+        ].filter((item) => !isLowValueJourneyMetric(item.value));
 
         const previewStops = [
           {
@@ -6535,6 +6849,28 @@
         return hasFinalSignal && sectionHits >= 2;
       }
 
+      function inferTextTravelReportMode(text = "") {
+        const normalized = String(text || "").replace(/\s+/g, " ").trim();
+        const agencyScore = [
+          /省心方案/u,
+          /旅行社/u,
+          /成熟路线/u,
+          /产品口径/u,
+          /涵盖服务/u,
+          /服务边界/u,
+          /费用说明/u,
+          /待核验/u,
+        ].filter((pattern) => pattern.test(normalized)).length;
+        const freeScore = [
+          /个性化旅游规划/u,
+          /自由行/u,
+          /自己订/u,
+          /自助/u,
+          /专属旅程/u,
+        ].filter((pattern) => pattern.test(normalized)).length;
+        return agencyScore > freeScore ? "agency_plan" : "free_planning";
+      }
+
       function getReportSectionMeta(title = "", bodyLines = []) {
         const normalized = normalizeSectionTitle(title);
         const bodyText = bodyLines.join(" ");
@@ -6546,17 +6882,26 @@
         if (looksLikeDecisionPrompt(`${normalized} ${bodyText}`)) {
           return { tone: "next", icon: "fa-circle-question", label: "需要你确认" };
         }
-        if (contains("概览", "总览", "旅行计划", "方案", "行程摘要")) {
-          return { tone: "overview", icon: "fa-passport", label: "行程概览" };
+        if (contains("下一步", "接下来", "用户下一步", "请评价")) {
+          return { tone: "next", icon: "fa-circle-question", label: "需要你确认" };
         }
-        if (contains("交付", "核验清单", "用户下一步", "下一步")) {
+        if (contains("交付", "核验清单")) {
           return { tone: "handoff", icon: "fa-list-check", label: "交付清单" };
         }
-        if (contains("置信度", "待核验", "可追溯", "兜底估算")) {
+        if (
+          contains("置信度", "待核验", "可追溯", "兜底估算") &&
+          !contains("费用说明", "费用边界", "预算拆分", "预算明细", "人均", "总计")
+        ) {
           return { tone: "budget-confidence", icon: "fa-clipboard-check", label: "预算核验" };
         }
         if (contains("预算", "费用", "花费", "明细", "人均", "总计")) {
-          return { tone: "budget", icon: "fa-wallet", label: "预算明细" };
+          return { tone: "budget", icon: "fa-wallet", label: "费用说明" };
+        }
+        if (contains("涵盖服务", "服务边界", "接送", "预约", "应急", "人工确认")) {
+          return { tone: "service", icon: "fa-handshake-angle", label: "涵盖服务" };
+        }
+        if (contains("概览", "总览", "旅行计划", "方案", "行程摘要")) {
+          return { tone: "overview", icon: "fa-passport", label: "行程概览" };
         }
         if (contains("每日", "分日", "Day", "第", "日程")) {
           return { tone: "daily", icon: "fa-calendar-days", label: "每日行程" };
@@ -6609,6 +6954,25 @@
           const meta = isHeading ? preliminaryMeta : null;
 
           if (!meta || !bodyLines.length) {
+            const firstDayIndex = lines.findIndex((line) => parseJourneyDayNumber(line));
+            if (firstDayIndex >= 0) {
+              const introLines = lines
+                .slice(0, firstDayIndex)
+                .filter((line) => !looksLikeDecisionPrompt(line));
+              if (introLines.length) {
+                summaryBlocks.push(introLines);
+              }
+              const dayLines = lines.slice(firstDayIndex);
+              sections.push({
+                tone: "overview",
+                reportTone: "daily",
+                reportLabel: "每日行程",
+                title: "每日安排",
+                rawLines: dayLines,
+                bodyHtml: renderReportSectionBody("daily", dayLines),
+              });
+              return;
+            }
             summaryBlocks.push(lines);
             return;
           }
@@ -6628,6 +6992,82 @@
         });
 
         return { summaryBlocks, sections };
+      }
+
+      function mergeTravelReportDailySections(sections = []) {
+        const dailySections = sections.filter((section) => section.reportTone === "daily");
+        if (dailySections.length <= 1) return sections;
+        const firstDaily = dailySections[0];
+        const seen = new Set();
+        const mergedLines = [];
+        dailySections.forEach((section) => {
+          (section.rawLines || []).forEach((line) => {
+            const normalized = String(line || "").trim();
+            if (!normalized || seen.has(normalized)) return;
+            seen.add(normalized);
+            mergedLines.push(normalized);
+          });
+        });
+        const mergedDaily = {
+          ...firstDaily,
+          title: "每日安排",
+          reportLabel: "每日行程",
+          rawLines: mergedLines,
+          bodyHtml: renderReportSectionBody("daily", mergedLines),
+        };
+        let inserted = false;
+        return sections
+          .flatMap((section) => {
+            if (section.reportTone !== "daily") return [section];
+            if (inserted) return [];
+            inserted = true;
+            return [mergedDaily];
+          });
+      }
+
+      function renderTravelReportNextAction(sections = []) {
+        const nextSections = sections.filter(
+          (section) => (section.reportTone || section.tone) === "next"
+        );
+        if (!nextSections.length) return "";
+        const seen = new Set();
+        const lines = [];
+        nextSections.forEach((section) => {
+          (section.rawLines || []).forEach((line) => {
+            const normalized = String(line || "")
+              .trim()
+              .replace(/^[-*•]\s*/, "")
+              .trim();
+            if (
+              !normalized ||
+              /^下一步[:：]?$/.test(normalized) ||
+              seen.has(normalized)
+            ) {
+              return;
+            }
+            seen.add(normalized);
+            lines.push(normalized);
+          });
+        });
+        if (!lines.length) return "";
+        return `
+          <section class="travel-report-next-action">
+            <div class="travel-report-next-action-head">
+              <span><i class="fa-solid fa-circle-check"></i></span>
+              <div>
+                <small>需要你确认</small>
+                <h4>下一步</h4>
+              </div>
+            </div>
+            <div class="travel-report-next-action-body">
+              <ul>
+                ${lines
+                  .map((line) => `<li>${formatInlineText(line)}</li>`)
+                  .join("")}
+              </ul>
+            </div>
+          </section>
+        `;
       }
 
       function extractReportExpectedDayCount(text = "") {
@@ -6668,6 +7108,10 @@
         const normalized = String(value || "").replace(/\s+/g, "");
         if (!normalized) return "";
         return normalized.startsWith("¥") ? normalized : normalized.replace(/^￥/, "¥");
+      }
+
+      function isMeaningfulBudgetAmount(value = "") {
+        return /[元¥￥]/u.test(String(value || ""));
       }
 
       function getBudgetItemMeta(label = "") {
@@ -6725,12 +7169,13 @@
         const source = [lines.join(" "), combinedText].filter(Boolean).join(" ");
         const normalized = source.replace(/\s+/g, " ");
         const pattern =
-          /(交通|大交通|市内交通|住宿|酒店|民宿|餐饮|美食|吃饭|景点体验|景点|门票|体验|服务\/预留|服务|预留|其他|机动|总计|合计|总预算|预算)[：:\s|，,、]*([¥￥]?\s*\d[\d,.]*\s*元?)/gu;
+          /(交通|大交通|市内交通|住宿|酒店|民宿|餐饮|美食|吃饭|景点体验|景点|门票|体验|服务\/预留|服务|预留|其他|机动|总计|合计|总预算|预算|人均)[：:\s|，,、]*([¥￥]?\s*\d[\d,.]*(?:\s*(?:-|~|—|–|至|到)\s*\d[\d,.]*)?\s*元?(?:\/人|每人)?)/gu;
         const picked = [];
         const seen = new Set();
         let match;
         while ((match = pattern.exec(normalized))) {
           const label = match[1].replace(/预算$/, "总计");
+          if (!isMeaningfulBudgetAmount(match[2])) continue;
           const amount = normalizeReportAmount(match[2]);
           const key = `${label}-${amount}`;
           if (!amount || seen.has(key)) continue;
@@ -6747,7 +7192,10 @@
       function renderReportBudgetBreakdown(lines = [], combinedText = "") {
         const items = extractReportBudgetItems(lines, combinedText);
         if (!items.length) {
-          return renderAssistantLines(lines);
+          return `${renderAssistantLines(lines)}
+            <div class="travel-report-budget-gap">
+              预算仍缺少交通、住宿、门票、餐饮等分项拆分，生成正式报告前需要继续补齐依据。
+            </div>`;
         }
 
         return `
@@ -6771,6 +7219,11 @@
               )
               .join("")}
           </div>
+          ${
+            items.length < 3
+              ? `<div class="travel-report-budget-gap">当前只识别到总价或少量预算项，还需要继续补齐交通、住宿、门票、餐饮和机动费用依据。</div>`
+              : ""
+          }
         `;
       }
 
@@ -7044,16 +7497,17 @@
             const points = normalizeRouteMapDayPoints(routeDay, matchedRoute)
               .map((point) => cleanJourneyLocationValue(point.name || ""))
               .filter(Boolean);
-            if (!points.length) return null;
+            const filteredPoints = points.filter((point) => !isJourneyNoiseLocation(point));
+            if (!filteredPoints.length) return null;
             const dayNumber = Number(routeDay.day_number || matchedRoute.day_number || index + 1);
             return {
               key: `report-day-${dayNumber}`,
               dayNumber,
               label: `Day ${dayNumber}`,
               title: routeDay.summary || matchedRoute.summary || `Day ${dayNumber}`,
-              waypoints: points,
-              highlights: points.slice(0, 3),
-              note: routeDay.summary || matchedRoute.summary || points.join(" → "),
+              waypoints: filteredPoints,
+              highlights: filteredPoints.slice(0, 3),
+              note: routeDay.summary || matchedRoute.summary || filteredPoints.join(" → "),
             };
           })
           .filter(Boolean)
@@ -7499,6 +7953,7 @@
                             )}</p>`
                           : ""
                       }
+                      ${renderReportRoutePointChips(routePoints)}
                       ${renderReportDataList(timeBlocks.slice(0, 4), "当天时段待补充")}
                       ${
                         meals.length
@@ -7519,19 +7974,6 @@
                             )}</p>`
                           : ""
                       }
-                    </div>
-                    <div class="travel-report-day-map">
-                      <div class="travel-report-day-map-head">
-                        <span>${escapeHtml(day.missing ? "待补齐路线" : "分日路线")}</span>
-                        <strong>${escapeHtml(
-                          routeMapDay.summary || route.summary || routeSummary || "路线待核验"
-                        )}</strong>
-                      </div>
-                      ${renderReportRouteSketch(
-                        routePoints.map((point) => point.name),
-                        `Day ${day.day_number || ""}`
-                      )}
-                      ${renderReportRoutePointChips(routePoints)}
                     </div>
                   </article>
                 `;
@@ -7769,11 +8211,6 @@
           return renderAssistantLines(lines);
         }
 
-        const fallbackRoute = {
-          origin: previewState.cityPair?.origin || "",
-          destination: previewState.cityPair?.destination || "",
-        };
-
         return `<div class="travel-report-days">${entries
           .map(
             (day) => `
@@ -7788,16 +8225,6 @@
                         )}</div>`
                       : ""
                   }
-                </div>
-                <div class="travel-report-day-map">
-                  <div class="travel-report-day-map-head">
-                    <span>${escapeHtml(day.missing ? "待补齐路线" : "当天路线")}</span>
-                    <strong>${escapeHtml(routeLabel || day.title || "路线示意")}</strong>
-                  </div>
-                  ${renderReportRouteSketch(
-                    getReportRouteWaypoints(day.plan || day, fallbackRoute),
-                    day.title
-                  )}
                 </div>
               </article>
             `
@@ -7880,14 +8307,11 @@
           ? renderAssistantLines(summaryBlocks.flat())
           : "";
         const previewState = buildJourneyPreviewState(summaryBlocks, sections);
-        const reportSections = [...sections];
-        if (
-          !reportSections.some(
-            (section) => (section.reportTone || section.tone) === "warning"
-          )
-        ) {
-          reportSections.push(buildReportDefaultWarningSection(combinedText));
-        }
+        const mergedReportSections = mergeTravelReportDailySections(sections);
+        const nextActionHtml = renderTravelReportNextAction(mergedReportSections);
+        const reportSections = mergedReportSections.filter(
+          (section) => (section.reportTone || section.tone) !== "next"
+        );
         const renderOptions = {
           combinedText,
           expectedDayCount,
@@ -7898,15 +8322,23 @@
           !options?.suppressJourneyPreview &&
           (Boolean(renderTravelReportMapDigest(previewState, routeLabel)) ||
             shouldRenderJourneyPreviewBlock(previewState, sections));
+        const textReportMode = inferTextTravelReportMode(combinedText);
+        const textReportMeta = getReportPlanningModeMeta({
+          agency_context: { mode: textReportMode },
+        });
 
         return `
-          <div class="travel-report">
+          <div class="travel-report travel-report--${escapeHtml(
+            textReportMeta.tone
+          )}" data-planning-mode="${escapeHtml(textReportMeta.mode)}">
             <div class="travel-report-hero">
               <div class="travel-report-kicker">
-                <i class="fa-solid fa-file-signature"></i> 个性化旅游规划报告
+                <i class="fa-solid ${escapeHtml(textReportMeta.icon)}"></i> ${escapeHtml(
+                  textReportMeta.label
+                )}报告
               </div>
               <h3>${escapeHtml(routeLabel)}</h3>
-              <p>我把当前已经确认的交通、住宿、预算和每日安排整理成一份可查看、可继续微调的旅行报告。</p>
+              <p>${escapeHtml(textReportMeta.copy)}</p>
               <div class="travel-report-metrics">
                 <span><i class="fa-solid fa-route"></i>${escapeHtml(routeLabel)}</span>
                 <span><i class="fa-regular fa-calendar"></i>${escapeHtml(dayCount)}</span>
@@ -7937,11 +8369,15 @@
                     const sectionTone = section.reportTone || section.tone;
                     const sectionTitle =
                       sectionTone === "budget"
-                        ? "预算拆分与依据"
+                        ? "费用说明"
+                        : sectionTone === "service"
+                          ? "涵盖服务"
                         : section.title;
                     const sectionLabel =
                       sectionTone === "budget"
-                        ? "费用拆分"
+                        ? "预算拆分"
+                        : sectionTone === "service"
+                          ? "服务范围"
                         : section.reportLabel || section.title;
                     return `
                     <section class="travel-report-card ${section.reportTone || section.tone}">
@@ -7973,6 +8409,7 @@
                   )}</div>`
                 : ""
             }
+            ${nextActionHtml}
           </div>
         `;
       }
@@ -8203,7 +8640,9 @@
               amount: (cells[1] || cells[cells.length - 1] || "待核验").trim(),
               note: cells.slice(2).filter(Boolean).join("；"),
             }));
-          return rows.filter((row) => row.label && row.amount);
+          return rows.filter(
+            (row) => row.label && row.amount && isMeaningfulBudgetAmount(row.amount)
+          );
         }
 
         const joined = compactLines.join("；");
@@ -8214,6 +8653,7 @@
         while ((match = pattern.exec(joined))) {
           const label = match[1].replace(/往返$/, "交通");
           const amount = match[2].replace(/\s+/g, "");
+          if (!isMeaningfulBudgetAmount(amount)) continue;
           const key = `${label}-${amount}`;
           if (!amount || rows.some((row) => `${row.label}-${row.amount}` === key)) continue;
           rows.push({ label, amount, note: "" });
@@ -9635,6 +10075,7 @@
       function hydrateGovernanceFromMessages(messages = []) {
         state.governance.toolAuditEvents = [];
         state.governance.turnObservability = null;
+        state.governance.progressSnapshot = null;
         (Array.isArray(messages) ? messages : []).forEach((msg) => {
           if (msg.role !== "assistant") return;
           const extra = msg.extra_info || msg.extraInfo || {};
@@ -9645,9 +10086,15 @@
             const normalized = normalizeToolAuditEvent(event);
             state.governance.toolAuditEvents.unshift(normalized);
           });
+          if (extra.fast_mode_split) {
+            rememberProgressSnapshot(progressSnapshotFromFastSplit(extra.fast_mode_split));
+          }
+          const reportData = extra.report_data || extra.reportData;
+          if (reportData) {
+            rememberProgressSnapshot(progressSnapshotFromReportData(reportData));
+          }
           const observation = extra.observability?.metrics || extra.observability;
           if (observation) {
-            state.governance.turnObservability = null;
             rememberTurnObservability(observation);
           }
         });

@@ -26,17 +26,22 @@
 
 新 Agent（智能体）接手时，先以 `origin/main` 当前状态为准，不要沿用旧对话里的过期 review findings（评审发现）。截至最近一次更新：
 
-- 主线提交：`9b1ebad Fix demo report gates and map usability`。
+- 主线提交：`589b1e0 Fix agency fast path and progress display`。
 - 线上入口：`https://travel.403edr.cn/`，已按生产 runbook（运行手册）更新到服务器。
 - 服务器目录：`/opt/langgraph-travel-planner`；生产部署唯一入口是 `docs/部署与运行/deployment-readiness.md`。
 - 最近部署后验证：根页面、`/docs`、`/health/live`、`/health/ready` 均返回 200，`/health/ready` 为 `ready`，环境为 `production`。
-- 最近本地回归：`uv run python -m pytest -q` 为 `518 passed, 24 deselected, 1 warning`；警告来自 `jieba/pkg_resources` 三方依赖弃用提示。
+- 最近本地回归：`uv run python -m pytest -q` 为 `569 passed, 24 deselected, 1 warning`；警告来自 `jieba/pkg_resources` 三方依赖弃用提示。
 - 最近前端验证：`node --check frontend\app.js`、`node scripts\verify_frontend_report_renderer.js`、`node scripts\verify_frontend_browser_regression.js` 均通过。
 - 真实敏感文件边界：`.env`、`.env.production`、`.runtime/`、`.venv/`、`data/vectorstore/`、`data/vectorstore_internal/` 只应保持 ignored（忽略）状态，不要提交或写入文档。
 
 最近几轮重点改动：
 
 - 产品化 RAG：用户没有明确拒绝产品/跟团/省心方案时，允许按目的地、风格或人群弱匹配成熟路线样板；回复必须标注示例价、待核验、不锁价，并保留自由行选择。
+- 双工作流重编排：首轮先做“省心方案 / 个性化旅游规划”分流；`free_planning` 继续使用 `current_step` 八阶段自由规划状态机，`agency_plan` 使用独立 `agency_step`，按“基础需求 -> 产品匹配 -> 方案草案 -> 用户评价/微调 -> 报告”推进。
+- 快路径分流与补事实：`app/api/v1/chat.py` 会在创建完整 Travel Agent 前，用本地规则解析首句中的出发地、目的地、日期、人数和预算；需要确认模式或只补省心方案基础事实时，直接通过 SSE 返回，不加载全量 MCP 工具。
+- 省心方案工具治理：省心方案默认只开放需求记录、产品模板、景点票价/风险/证据和报告相关能力；不主动调用自由规划的交通/酒店实时查询工具，除非用户明确要求查实时交通或酒店。
+- 进度台与服务记录：前端右侧栏按工作流展示当前阶段、方案类型、已确认信息、长期偏好和确认边界；“已使用服务”单独折叠展示，同时给出用户可理解服务名和原始工具名。
+- 慢响应兜底：聊天 SSE 增加 Agent 事件空闲超时，避免模型或上游流长时间无事件导致前端一直等待；首轮分流和省心方案基础事实补齐目标是秒级返回。
 - 最终报告门禁：生成正式报告前必须至少确认出发城市、出发日期、交通、住宿、完整每日行程和预算；缺项时只给路线方向和待补信息，不能伪装成最终报告。
 - 思考内容过滤：后端 SSE（服务器发送事件）和保存消息前会清理 `<think>...</think>`；前端历史渲染和流式渲染也有兜底清理。
 - 前端演示修复：地图侧栏可折叠/放大，浅色文字对比度已增强，Markdown（标记文本）表格会渲染成可读表格，结构化报告不会再渲染“待补齐当天安排”占位日。
@@ -138,7 +143,12 @@
 
 ## 核心业务流程
 
-主流程是分阶段旅行规划状态机，不是简单问答。工作流定义在 `app/core/workflow.py`，阶段顺序是：
+主流程不是简单问答，而是先做规划方式分流，再按不同工作流推进。`active_workflow` 只表示当前分支：
+
+- `free_planning`：个性化旅游规划。继续使用 `current_step`，走既有八阶段状态机。
+- `agency_plan`：省心方案。使用 `agency_step`，走独立的旅行社方案工作流，不进入自由规划的交通/住宿逐项确认阶段。
+
+自由规划状态机定义在 `app/core/workflow.py`，阶段顺序是：
 
 1. `requirement_collection`：需求收集。
 2. `destination_recommendation`：目的地推荐。
@@ -150,6 +160,14 @@
 8. `order_generation`：订单和最终报告生成。
 
 状态结构在 `app/core/state.py` 的 `TravelState` 中，包含用户需求、目的地、交通、住宿、餐饮、行程、预算、报告、订单号、用户 ID、会话 ID 等字段。
+
+省心方案阶段包括：
+
+1. `agency_requirement`：确认基础事实，例如目的地、天数、人数、预算、出发地和日期。
+2. `agency_product_match`：匹配成熟路线样板、景点票价、风险和服务边界。
+3. `agency_plan_draft`：输出产品化方案，包含交通口径、住宿区域/档次、门票参考、餐饮、费用边界和待核验项。
+4. `agency_feedback`：用户满意则进入报告，不满意则记录修改意见并再出一版。
+5. `agency_report`：生成用户交付视图报告。
 
 每个阶段对应的 prompt（提示词）、tools（工具）和 requires（前置依赖）在 `app/agents/handoffs/step_config.py` 中维护。修改阶段字段、状态迁移或新增阶段时，要同步检查：
 
@@ -166,7 +184,7 @@
 
 - 使用 `build_chat_model(profile="planner", streaming=True)` 创建流式规划模型。
 - 通过 `create_step_config_middleware()` 挂载阶段配置中间件。
-- 注册状态迁移工具、查询工具、记忆工具、内部 RAG 工具、酒店 follow-up 工具和所有 MCP 工具。
+- 注册状态迁移工具、查询工具、记忆工具、内部 RAG 工具、酒店 follow-up 工具和 MCP 工具；实际可用工具会由中间件按规划模式和阶段收口。
 - 使用 `get_checkpointer()` 接入 LangGraph checkpoint（执行检查点）。
 - 绑定 `settings.langgraph_recursion_limit`，避免图执行递归过浅。
 
@@ -181,6 +199,7 @@
 - 防止同一轮重复调用酒店或交通查询工具。
 - 把最终报告请求挡在必要信息之后：未确认出发城市、出发日期、交通、住宿、完整每日行程或预算时，不允许进入 `generate_order_tool`。
 - 控制产品化 RAG 的“软推荐”边界：用户未拒绝时可以给成熟路线样板，用户明确自由行/自己订/不要产品时应切回自由规划。
+- 对省心方案应用独立工作流护栏：`active_workflow=agency_plan` 时，阶段由 `agency_step` 控制，并移除自由规划式交通/住宿偏好工具；只有用户明确要求实时查询时才临时开放相关工具。
 
 ## 聊天 API 与前端流式协议
 
@@ -193,10 +212,13 @@
 
 1. 校验会话归属。
 2. 保存用户消息。
-3. 创建或复用 Travel Agent。
-4. 以 `thread_id=conversation_id` 调用 Agent。
-5. 把模型 token、工具调用、结构化报告数据和完成事件以 SSE 返回前端。
-6. 保存助手消息；如果工具返回 `report_data`，会把它写入消息 `extra_info`，供前端报告页渲染。
+3. 先走轻量快路径：如果本轮只需要确认“省心方案 / 个性化旅游规划”，或省心方案只缺日期等基础事实，直接返回并把解析事实写入消息 `extra_info.fast_mode_split`，不创建完整 Travel Agent。
+4. 快路径不能处理时，创建或复用 Travel Agent。
+5. 以 `thread_id=conversation_id` 调用 Agent。
+6. 把模型 token、工具调用、结构化报告数据和完成事件以 SSE 返回前端。
+7. 保存助手消息；如果工具返回 `report_data`，会把它写入消息 `extra_info`，供前端报告页渲染。
+
+完整 Agent 流有事件空闲超时保护；如果模型或上游长时间没有任何事件，后端会写入可恢复兜底回复，保留当前已确认状态，避免前端无限等待。
 
 SSE 事件类型主要包括：
 
@@ -360,6 +382,8 @@ LangGraph 还使用两类持久化：
 - Markdown 表格要渲染成视觉表格，不能以管道文本大段堆在聊天气泡里。
 - 关键确认问题应作为醒目的下一步卡片，而不是埋在普通正文中。
 - 前端只做展示兜底，业务门禁仍以后端状态和 `report_data` 契约为准。
+- 普通用户视图不展示内部过程词，例如“工作流”“Day 结构”“这轮先”等；右侧进度台只展示用户能理解的阶段、方案类型、已确认事实、长期偏好、确认边界和服务记录。
+- 需求收集早期不展示低价值单项预算卡，避免用户误以为已形成完整预算；省心方案报告优先渲染结构化卡片，避免 Markdown 管道表格在流式结束后退化成原始字符。
 
 ## 评估体系
 
@@ -433,7 +457,7 @@ node scripts\verify_frontend_browser_regression.js
 最近一次主线默认回归结果是：
 
 ```text
-518 passed, 24 deselected, 1 warning
+569 passed, 24 deselected, 1 warning
 ```
 
 测试数量会随功能增加变化；新增测试后优先以实际 `pytest -q` 和 `pytest --collect-only -q` 输出为准。README 中可能保留历史测试数量，不要用旧数量判断当前是否回归。
@@ -470,8 +494,9 @@ node scripts\verify_frontend_browser_regression.js
 
 ## 修改代码时的高风险点
 
-- 改工作流阶段时，必须同步状态、阶段配置、状态迁移工具和维护性测试。
+- 改工作流阶段时，必须同步状态、阶段配置、状态迁移工具和维护性测试；涉及省心方案时还要同步 `agency_step`、工具白名单、进度台渲染和防漂移测试。
 - 改聊天流式输出时，必须确认前端 `processSseBuffer`、`sendMessage` 和 `report_data` 渲染仍能消费对应事件，并且 `<think>` 内部推理不会泄漏到用户消息或历史消息。
+- 改首轮分流或省心方案基础事实快路径时，必须确认不会创建完整 Agent、不会加载 MCP 工具，并且 `fast_mode_split` 中的出发地、目的地、日期、人数和预算能在下一轮继续合并到状态。
 - 改最终报告结构时，必须同步 `report_quality.py` 评分契约和前端报告渲染逻辑。
 - 改最终报告门禁时，必须同步 `app/core/middleware.py`、`app/agents/handoffs/step_config.py`、`tests/test_intent_detection.py` 和 `tests/test_step_prompt_rendering.py`。
 - 改产品化 RAG 时，必须同步 `data/documents/internal/products/`、`data/evaluation/rag_retrieval_scenarios.json`、`docs/RAG与知识库/rag-demo-evaluation-guide.md` 和 RAG 召回评测。

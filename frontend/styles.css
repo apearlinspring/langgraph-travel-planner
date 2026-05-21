@@ -2245,6 +2245,85 @@ html {
         background:
           linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.06));
       }
+      .message.assistant .message-text .journey-map-sidebar-routes {
+        display: grid !important;
+      }
+      .message.assistant .message-text .journey-map-sidebar-day-list {
+        display: grid;
+        gap: 10px;
+      }
+      .message.assistant .message-text .journey-map-sidebar-day-card {
+        display: grid;
+        gap: 8px;
+        padding: 10px;
+        border-radius: 16px;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        background: rgba(255, 255, 255, 0.06);
+      }
+      .message.assistant .message-text .journey-map-sidebar-day-card.active,
+      .message.assistant .message-text .journey-map-sidebar-day-card:has(.journey-map-day-btn.active) {
+        border-color: rgba(255, 218, 170, 0.36);
+        background: rgba(255, 255, 255, 0.12);
+      }
+      .message.assistant .message-text .journey-map-sidebar-day-head {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 8px;
+        align-items: stretch;
+      }
+      .message.assistant .message-text .journey-map-sidebar-day-head .journey-map-day-btn {
+        justify-content: flex-start;
+        min-width: 0;
+        text-align: left;
+      }
+      .message.assistant .message-text .journey-map-route-reference-btn {
+        padding-inline: 11px;
+        white-space: nowrap;
+        background: rgba(255, 240, 219, 0.14);
+      }
+      .message.assistant .message-text .journey-map-sidebar-place-chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+      .message.assistant .message-text .journey-map-sidebar-place-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        max-width: 100%;
+        padding: 5px 8px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.08);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        color: rgba(255, 248, 236, 0.9);
+        cursor: pointer;
+        font-size: 11px;
+        line-height: 1.45;
+        overflow-wrap: anywhere;
+      }
+      .message.assistant .message-text .journey-map-sidebar-place-chip.active {
+        background: rgba(255, 218, 170, 0.2);
+        border-color: rgba(255, 218, 170, 0.34);
+      }
+      .message.assistant .message-text .journey-map-sidebar-place-chip span {
+        width: 18px;
+        min-height: 18px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.12);
+        font-size: 10px;
+      }
+      .message.assistant .message-text .journey-map-sidebar-place-chip strong {
+        min-width: 0;
+        color: rgba(255, 248, 236, 0.9);
+        font-size: 11px;
+        line-height: 1.35;
+      }
+      .message.assistant .message-text .journey-map-sidebar-muted {
+        margin: 0;
+        color: rgba(244, 239, 231, 0.72);
+        font-size: 12px;
+        line-height: 1.7;
+      }
       .message.assistant .message-text .journey-map-sidebar-head {
         display: flex;
         align-items: center;
@@ -2530,12 +2609,12 @@ html {
         display: none;
       }
       .message.assistant .message-text .journey-map-bottom-drawer {
+        display: none !important;
         position: absolute;
         left: 14px;
         right: 14px;
         bottom: 14px;
         z-index: 12;
-        display: grid;
         gap: 10px;
         max-height: min(38%, 240px);
         padding: 10px;
@@ -3676,6 +3755,70 @@ html {
       .message.assistant .message-text .travel-report-card.budget {
         grid-column: 1 / -1;
       }
+      .message.assistant .message-text .travel-report-card.next {
+        grid-column: 1 / -1;
+        order: 30;
+        background:
+          linear-gradient(135deg, rgba(255, 247, 232, 0.98), rgba(237, 247, 245, 0.96));
+        border-color: rgba(194, 142, 92, 0.22);
+        box-shadow: 0 18px 34px rgba(145, 94, 44, 0.08);
+      }
+      .message.assistant .message-text .travel-report-next-action {
+        margin-top: 18px;
+        padding: 18px;
+        border-radius: 18px;
+        border: 1px solid rgba(194, 142, 92, 0.28);
+        background:
+          linear-gradient(135deg, rgba(255, 248, 235, 0.98), rgba(237, 247, 245, 0.98));
+        box-shadow: 0 18px 34px rgba(145, 94, 44, 0.09);
+      }
+      .message.assistant .message-text .travel-report-next-action-head {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 12px;
+      }
+      .message.assistant .message-text .travel-report-next-action-head > span {
+        width: 42px;
+        height: 42px;
+        border-radius: 14px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: #fff7e8;
+        color: #a15c19;
+      }
+      .message.assistant .message-text .travel-report-next-action-head small {
+        display: block;
+        color: #a15c19;
+        font-size: 11px;
+        font-weight: 900;
+        letter-spacing: 0.06em;
+      }
+      .message.assistant .message-text .travel-report-next-action-head h4 {
+        margin: 3px 0 0;
+        color: var(--primary);
+        font-size: 20px;
+        line-height: 1.25;
+      }
+      .message.assistant .message-text .travel-report-next-action-body {
+        color: var(--text-main);
+        line-height: 1.85;
+      }
+      .message.assistant .message-text .travel-report-next-action-body ul {
+        margin: 0;
+        padding-left: 18px;
+        display: grid;
+        gap: 8px;
+      }
+      .message.assistant .message-text .travel-report-next-action-body li::marker {
+        color: #a15c19;
+      }
+      .message.assistant .message-text .travel-report-card.service {
+        background:
+          linear-gradient(145deg, rgba(246, 252, 250, 0.98), rgba(255, 250, 242, 0.9));
+        border-color: rgba(36, 166, 161, 0.16);
+      }
       .message.assistant .message-text .travel-report-card.confidence,
       .message.assistant .message-text .travel-report-card.handoff,
       .message.assistant .message-text .travel-report-card.governance {
@@ -3723,6 +3866,16 @@ html {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
         gap: 10px;
+      }
+      .message.assistant .message-text .travel-report-budget-gap {
+        margin-top: 10px;
+        padding: 11px 13px;
+        border-radius: 14px;
+        background: rgba(255, 247, 232, 0.94);
+        border: 1px solid rgba(194, 142, 92, 0.18);
+        color: #7a4f22;
+        font-size: 12px;
+        line-height: 1.7;
       }
       .message.assistant .message-text .travel-report-budget-table-wrap {
         display: grid;
@@ -3965,7 +4118,7 @@ html {
       }
       .message.assistant .message-text .travel-report-day {
         display: grid;
-        grid-template-columns: 70px minmax(0, 1fr) minmax(230px, 0.9fr);
+        grid-template-columns: 70px minmax(0, 1fr);
         gap: 12px;
         padding: 14px;
         border-radius: 18px;
@@ -5972,6 +6125,60 @@ html {
         color: #143f46;
       }
 
+      .message.assistant .message-text .journey-map-sidebar-routes.is-collapsed
+        .journey-map-sidebar-day-list {
+        display: none;
+      }
+
+      .message.assistant .message-text .journey-map-day-list-toggle {
+        min-height: 34px;
+        padding: 7px 10px;
+        color: #143f46;
+        white-space: nowrap;
+      }
+
+      .message.assistant .message-text .journey-map-sidebar-routes,
+      .message.assistant .message-text .journey-map-sidebar-day-card {
+        background: rgba(255, 255, 255, 0.96);
+        border-color: rgba(26, 77, 84, 0.14);
+      }
+
+      .message.assistant .message-text .journey-map-sidebar-day-card.active,
+      .message.assistant .message-text .journey-map-sidebar-day-card:has(.journey-map-day-btn.active) {
+        background: rgba(231, 247, 245, 0.98);
+        border-color: rgba(15, 118, 110, 0.44);
+      }
+
+      .message.assistant .message-text .journey-map-sidebar-place-chip {
+        background: rgba(247, 251, 251, 0.98);
+        border-color: rgba(26, 77, 84, 0.16);
+        color: #143f46;
+      }
+
+      .message.assistant .message-text .journey-map-sidebar-place-chip.active {
+        background: rgba(227, 246, 243, 0.98);
+        border-color: rgba(15, 118, 110, 0.44);
+      }
+
+      .message.assistant .message-text .journey-map-sidebar-place-chip span {
+        display: inline-grid;
+        place-items: center;
+        background: #0f766e;
+        color: #ffffff;
+      }
+
+      .message.assistant .message-text .journey-map-sidebar-place-chip strong {
+        color: #143f46;
+      }
+
+      .message.assistant .message-text .journey-map-sidebar-day-head .journey-map-day-btn small {
+        color: #486a70;
+      }
+
+      .message.assistant .message-text .journey-poi-bottom-sheet {
+        display: none !important;
+      }
+
       .message.assistant .message-text .journey-map-day-insight-points li span,
       .message.assistant .message-text .journey-highlight-card-theme,
       .message.assistant .message-text .journey-stop-label,
@@ -6042,9 +6249,7 @@ html {
 
 .visual-journey-workbench .journey-preview-board--immersive .journey-preview-head,
 .visual-journey-workbench .journey-map-studio--immersive .journey-map-studio-brief,
-.visual-journey-workbench .journey-live-map-shell--immersive .journey-live-map-head,
-.visual-journey-workbench .journey-live-map-shell--immersive .journey-map-sidebar,
-.visual-journey-workbench .journey-live-map-shell--immersive .journey-map-sidebar-open {
+.visual-journey-workbench .journey-live-map-shell--immersive .journey-live-map-head {
   display: none !important;
 }
 
