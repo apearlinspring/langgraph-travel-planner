@@ -2608,6 +2608,9 @@ html {
       .message.assistant .message-text .journey-live-map-footer .journey-map-focus-rail {
         display: none;
       }
+      .journey-map-bottom-drawer {
+        display: none !important;
+      }
       .message.assistant .message-text .journey-map-bottom-drawer {
         display: none !important;
         position: absolute;

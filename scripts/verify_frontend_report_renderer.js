@@ -267,6 +267,75 @@ assertExcludes(
   "report-next-action-not-grid-card"
 );
 
+const sparseRouteReportData = JSON.parse(JSON.stringify(fixtures[0][1]));
+sparseRouteReportData.overview.duration = "5 天 4 晚";
+sparseRouteReportData.overview.route_label = "西安 → 杭州 5 天";
+sparseRouteReportData.itinerary = [
+  {
+    day_number: 1,
+    title: "抵达杭州与西湖初见",
+    time_blocks: ["下午抵达杭州东站", "傍晚西湖湖滨散步"],
+    route: { summary: "杭州东站 -> 湖滨银泰 -> 西湖" },
+  },
+  {
+    day_number: 2,
+    title: "灵隐与西湖经典",
+    time_blocks: ["上午灵隐寺", "下午曲院风荷", "傍晚北山街"],
+    route: { summary: "灵隐寺 -> 曲院风荷 -> 北山街" },
+  },
+  {
+    day_number: 3,
+    title: "西溪湿地慢游",
+    time_blocks: ["上午西溪湿地", "下午河坊街", "晚上南宋御街"],
+    route: { summary: "西溪湿地 -> 河坊街 -> 南宋御街" },
+  },
+  {
+    day_number: 4,
+    title: "龙井与九溪",
+    time_blocks: ["上午龙井村", "下午九溪烟树"],
+    route: { summary: "龙井村 -> 九溪烟树" },
+  },
+  {
+    day_number: 5,
+    title: "返程前补漏",
+    time_blocks: ["上午武林广场", "下午杭州东站返程"],
+    route: { summary: "武林广场 -> 杭州东站" },
+  },
+];
+sparseRouteReportData.map_routes = sparseRouteReportData.map_routes.filter((route) =>
+  [1, 4, 5].includes(Number(route.day_number))
+);
+sparseRouteReportData.route_map.days = sparseRouteReportData.route_map.days.filter((day) =>
+  [1, 4, 5].includes(Number(day.day_number))
+);
+const sparseRouteHtml = context.renderAssistantText("", {
+  reportData: sparseRouteReportData,
+});
+assertIncludes(
+  sparseRouteHtml,
+  ["report-day-2", "report-day-3", "灵隐寺", "西溪湿地"],
+  "sparse-route-days"
+);
+
+const bareDailyMarkerHtml = context.renderAssistantText(`
+# 杭州 5 天旅游规划报告
+
+行程概览：西安 → 杭州，5天4晚。
+
+【每日安排】
+
+### Day 1 | 抵达杭州
+下午：杭州东站 → 湖滨银泰 → 西湖。
+
+### Day 2 | 灵隐慢游
+上午：灵隐寺。下午：曲院风荷。
+`);
+assertExcludes(
+  bareDailyMarkerHtml,
+  ["【每日安排】"],
+  "bare-daily-marker-hidden"
+);
+
 const visualJourneyData = {
   version: "journey_plan.v1",
   overview: {

@@ -2193,7 +2193,7 @@
           modalShell.dataset.dayPlans = shell.dataset.dayPlans || "[]";
           modalShell.dataset.routeStops = shell.dataset.routeStops || "[]";
           modalShell.dataset.activeDay = "all";
-          modalShell.dataset.dayMode = "fade";
+          modalShell.dataset.dayMode = "solo";
         }
         if (modalDays) {
           modalDays.innerHTML = `
@@ -5244,9 +5244,21 @@
         return title
           .replace(/^#{1,3}\s+/, "")
           .replace(/^\*\*(.+?)\*\*$/, "$1")
+          .replace(/^【(.+?)】$/, "$1")
           .replace(/^[\u{1F300}-\u{1FAFF}\u2600-\u27BF]+\s*/u, "")
           .replace(/[：:]\s*$/, "")
           .trim();
+      }
+
+      function isReportSummaryMarkerOnly(line = "") {
+        const normalized = normalizeSectionTitle(line)
+          .replace(/^[-*•]\s*/, "")
+          .trim();
+        return /^(?:每日安排|每日行程|分日安排|分日行程)$/u.test(normalized);
+      }
+
+      function filterReportSummaryLines(lines = []) {
+        return lines.filter((line) => !isReportSummaryMarkerOnly(line));
       }
 
       function isEmbeddedSectionHeading(line = "") {
@@ -6958,7 +6970,8 @@
             if (firstDayIndex >= 0) {
               const introLines = lines
                 .slice(0, firstDayIndex)
-                .filter((line) => !looksLikeDecisionPrompt(line));
+                .filter((line) => !looksLikeDecisionPrompt(line))
+                .filter((line) => !isReportSummaryMarkerOnly(line));
               if (introLines.length) {
                 summaryBlocks.push(introLines);
               }
@@ -6973,7 +6986,10 @@
               });
               return;
             }
-            summaryBlocks.push(lines);
+            const cleanSummaryLines = filterReportSummaryLines(lines);
+            if (cleanSummaryLines.length) {
+              summaryBlocks.push(cleanSummaryLines);
+            }
             return;
           }
 
@@ -7472,46 +7488,145 @@
         );
       }
 
-      function buildReportDataJourneyPreviewState(reportData = {}) {
-        const overview = reportData.overview || {};
-        const routeLabel = overview.route_label || "路线总览";
+      function getReportDataDayNumber(day = {}, fallback = 0) {
+        const explicit = Number(day?.day_number || day?.day || 0);
+        if (explicit > 0) return explicit;
+        const parsed = parseJourneyDayNumber(
+          [day?.title, day?.summary, day?.label].filter(Boolean).join(" ")
+        );
+        return parsed || fallback || 0;
+      }
+
+      function normalizeReportRoutePointNames(values = []) {
+        const names = [];
+        const pushName = (value) => {
+          if (value === null || value === undefined) return;
+          if (Array.isArray(value)) {
+            value.forEach(pushName);
+            return;
+          }
+          if (typeof value === "object") {
+            [
+              value.name,
+              value.label,
+              value.title,
+              value.location,
+              value.place,
+              value.address,
+              value.summary,
+              value.description,
+            ].forEach(pushName);
+            if (Array.isArray(value.route_points)) pushName(value.route_points);
+            if (Array.isArray(value.points)) pushName(value.points);
+            return;
+          }
+          const raw = String(value || "").trim();
+          if (!raw) return;
+          const split = splitJourneyWaypoints(raw);
+          const candidates = split.length ? split : [raw];
+          candidates.forEach((candidate) => {
+            const cleaned = cleanJourneyLocationValue(candidate)
+              .replace(/^(?:推荐|建议|可选|可去|前往|游览|参观|观看)\s*/u, "")
+              .replace(/\s+/g, " ")
+              .trim();
+            if (!cleaned || isJourneyNoiseLocation(cleaned)) return;
+            if (!names.includes(cleaned)) names.push(cleaned);
+          });
+        };
+        values.forEach(pushName);
+        return names.slice(0, 8);
+      }
+
+      function extractReportItineraryDayRoutePoints(day = {}) {
+        if (!day || typeof day !== "object") return [];
+        return normalizeReportRoutePointNames([
+          day.route_points,
+          day.points,
+          day.route?.route_points,
+          day.route?.points,
+          day.route?.summary,
+          day.time_blocks,
+          day.activities,
+          day.meals,
+          day.accommodation,
+          day.transport_note,
+          day.route_note,
+          day.title,
+        ]);
+      }
+
+      function buildReportDataJourneyDayPlans(reportData = {}) {
         const routes = Array.isArray(reportData.map_routes) ? reportData.map_routes : [];
         const routeMapDays = Array.isArray(reportData.route_map?.days)
           ? reportData.route_map.days
           : [];
-        const dailyRoutes = routeMapDays.length
-          ? routeMapDays
-          : routes.map((route) => ({
-              day_number: route.day_number,
-              summary: route.summary,
-              route_points: route.route_points || [],
-              points: [],
-            }));
-        const dayPlans = dailyRoutes
-          .map((routeDay, index) => {
-            const matchedRoute =
-              routes.find(
-                (route) =>
-                  Number(route.day_number || 0) === Number(routeDay.day_number || 0)
-              ) || {};
-            const points = normalizeRouteMapDayPoints(routeDay, matchedRoute)
-              .map((point) => cleanJourneyLocationValue(point.name || ""))
-              .filter(Boolean);
-            const filteredPoints = points.filter((point) => !isJourneyNoiseLocation(point));
-            if (!filteredPoints.length) return null;
-            const dayNumber = Number(routeDay.day_number || matchedRoute.day_number || index + 1);
-            return {
-              key: `report-day-${dayNumber}`,
-              dayNumber,
-              label: `Day ${dayNumber}`,
-              title: routeDay.summary || matchedRoute.summary || `Day ${dayNumber}`,
-              waypoints: filteredPoints,
-              highlights: filteredPoints.slice(0, 3),
-              note: routeDay.summary || matchedRoute.summary || filteredPoints.join(" → "),
-            };
-          })
-          .filter(Boolean)
-          .sort((left, right) => left.dayNumber - right.dayNumber);
+        const itineraryDays = Array.isArray(reportData.itinerary)
+          ? reportData.itinerary.filter((day) => !day?.missing)
+          : [];
+        const routeByDay = new Map(
+          routes.map((route, index) => [getReportDataDayNumber(route, index + 1), route])
+        );
+        const routeMapByDay = new Map(
+          routeMapDays.map((day, index) => [getReportDataDayNumber(day, index + 1), day])
+        );
+        const itineraryByDay = new Map(
+          itineraryDays.map((day, index) => [getReportDataDayNumber(day, index + 1), day])
+        );
+        const expectedDays = parseReportDataExpectedDays(reportData);
+        const maxDay = Math.max(
+          expectedDays,
+          ...routeByDay.keys(),
+          ...routeMapByDay.keys(),
+          ...itineraryByDay.keys(),
+          0
+        );
+        if (!maxDay) return [];
+
+        const dayPlans = [];
+        for (let dayNumber = 1; dayNumber <= maxDay; dayNumber += 1) {
+          const routeDay = routeMapByDay.get(dayNumber) || {};
+          const matchedRoute = routeByDay.get(dayNumber) || {};
+          const itineraryDay = itineraryByDay.get(dayNumber) || {};
+          const routePointNames = normalizeRouteMapDayPoints(routeDay, matchedRoute)
+            .map((point) => point.name)
+            .filter(Boolean);
+          const itineraryPointNames = extractReportItineraryDayRoutePoints(itineraryDay);
+          const waypoints = normalizeReportRoutePointNames([
+            routePointNames,
+            itineraryPointNames,
+          ]).filter((item) => !isJourneyNoiseLocation(item));
+          const title =
+            routeDay.title ||
+            routeDay.summary ||
+            matchedRoute.summary ||
+            itineraryDay.title ||
+            `Day ${dayNumber}`;
+          const note =
+            routeDay.route_note ||
+            routeDay.summary ||
+            matchedRoute.route_note ||
+            matchedRoute.summary ||
+            itineraryDay.route_note ||
+            (waypoints.length ? waypoints.join(" → ") : "当天路线待补充具体地点。");
+          dayPlans.push({
+            key: `report-day-${dayNumber}`,
+            dayNumber,
+            label: `Day ${dayNumber}`,
+            title,
+            waypoints,
+            highlights: waypoints.slice(0, 3),
+            note,
+          });
+        }
+        return dayPlans;
+      }
+
+      function buildReportDataJourneyPreviewState(reportData = {}) {
+        const overview = reportData.overview || {};
+        const routeLabel = overview.route_label || "路线总览";
+        const dayPlans = buildReportDataJourneyDayPlans(reportData).sort(
+          (left, right) => left.dayNumber - right.dayNumber
+        );
         const allWaypoints = dayPlans
           .flatMap((day) => day.waypoints || [])
           .filter((item, index, list) => item && list.indexOf(item) === index);
@@ -8303,8 +8418,9 @@
             /预算(?:希望|控制|范围)?[^\d]{0,12}([\d,.]+\s*元)/u,
             "预算已估算"
           );
-        const summaryHtml = summaryBlocks.length
-          ? renderAssistantLines(summaryBlocks.flat())
+        const summaryLines = filterReportSummaryLines(summaryBlocks.flat());
+        const summaryHtml = summaryLines.length
+          ? renderAssistantLines(summaryLines)
           : "";
         const previewState = buildJourneyPreviewState(summaryBlocks, sections);
         const mergedReportSections = mergeTravelReportDailySections(sections);
@@ -8861,8 +8977,9 @@
         if (!shouldRenderTravelCards && !shouldRenderJourneyPreview) {
           return null;
         }
-        const summaryHtml = summaryBlocks.length
-          ? renderAssistantLines(summaryBlocks.flat())
+        const summaryLines = filterReportSummaryLines(summaryBlocks.flat());
+        const summaryHtml = summaryLines.length
+          ? renderAssistantLines(summaryLines)
           : "";
         const journeyPreviewHtml = shouldRenderJourneyPreview
           ? renderJourneyPreview(journeyPreviewState)
