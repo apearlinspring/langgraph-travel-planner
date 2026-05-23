@@ -2,11 +2,16 @@
 用户模型
 """
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
+from typing import TYPE_CHECKING
+
 from sqlalchemy import String, DateTime, JSON, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID
 from app.models.base import Base
+
+if TYPE_CHECKING:
+    from app.models.conversation import Conversation
 
 
 class User(Base):

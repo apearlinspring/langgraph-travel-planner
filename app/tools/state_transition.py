@@ -2352,7 +2352,6 @@ def _build_itinerary_from_journey_plan(
         or "目的地"
     )
     transport_summary = _format_transport_option(selected_transport_option)
-    accommodation_summary = _format_accommodation_option(selected_accommodation)
     food_summary = "、".join(FOOD_LABELS.get(item, item) for item in selected_food_types)
     pending_checks = [
         str(item)

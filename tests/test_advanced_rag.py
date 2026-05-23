@@ -5,7 +5,6 @@ import asyncio
 import time
 
 import pytest
-from langchain_core.documents import Document
 from app.rag.document_loader import DocumentManager
 from app.rag.text_splitter import AdvancedParentDocumentSplitter
 from app.rag.vectorstore import VectorStoreManager
@@ -82,6 +81,7 @@ async def test_full_pipeline():
     cached_elapsed = time.time() - start_time
 
     print(f"缓存查询耗时: {cached_elapsed:.2f}秒")
+    print(f"缓存返回了 {len(cached_results)} 个文档")
     print(f"缓存生效！加速 {(elapsed / cached_elapsed):.1f}x")
 
 

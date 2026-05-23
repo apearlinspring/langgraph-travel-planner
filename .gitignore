@@ -61,3 +61,15 @@ test-results/
 after-login*.png
 home.png
 mobile-home.png
+
+# Local-only presentation/interview preparation artifacts
+docs/前端与演示/ZhiXing_AI_Agent_Interview_Deck.pptx
+docs/前端与演示/ZhiXing_AI_Agent_Project_Deck.pptx
+docs/前端与演示/ZhiXing_AI_Agent_Technical_Deck.pptx
+docs/前端与演示/ZhiXing_AI_Agent_Technical_Deck_Speaker_Guide.md
+
+# Local-only collaboration notes and historical evidence
+docs/历史轮次/
+docs/问题记录/
+docs/项目总览/new-session-knowledge-base.md
+docs/项目总览/project-doc-notes.md

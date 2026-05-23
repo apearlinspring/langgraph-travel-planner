@@ -1,6 +1,27 @@
 # RAG（检索增强生成）演示与评测指南
 
-## 2026-05-17 真实环境刷新结果
+## 2026-05-23 文档校准复跑结果
+
+本轮文档校准只复跑轻量召回评测，不重建向量库，不连接真实模型或外部 API（应用程序接口），也不更新服务器服务。当前仓库资产快照为：`data/evaluation/rag_retrieval_scenarios.json` 包含 17 条召回场景，`data/documents/` 下共有 21 份 Markdown（标记文本）知识文档，其中 `data/documents/internal/products/` 下有 11 份产品/路线样板。
+
+执行命令：
+
+```powershell
+uv run python scripts\evaluate_rag_retrieval.py --json
+uv run python scripts\evaluate_rag_retrieval.py --output docs\RAG与知识库\rag-retrieval-evaluation.md
+```
+
+当前 `metadata_aware_bm25` 在 top-5 下的结果：
+
+- `source_recall`: 91.18%
+- `category_recall`: 94.12%
+- `source_type_recall`: 94.12%
+- `hit_rate`: 94.12%
+- `mrr`: 0.9118
+
+当前主要缺口是 `retrieval_public_xian_culture_food` 被内部产品/规则样板压过，没有召回公开西安目的地文档；后续可以从公开目的地查询的 metadata（元数据）路由和本地知识权重上优化。下方 2026-05-17 结果保留为历史真实环境参考，不代表当前轻量召回报告。
+
+## 2026-05-17 真实环境刷新结果（历史参考）
 
 本轮在 `codex/productized-rag-real-env-refresh` 分支、`origin/main@ea682ff` 基准上复跑。真实 `.env` 仅在本机用于运行；`.env`、`.runtime/`、`.venv/`、`data/vectorstore/` 和 `data/vectorstore_internal/` 均由 Git（版本控制系统）忽略，未写入本文档。
 
@@ -21,13 +42,15 @@
 
 ## 演示口径
 
-本项目的 RAG 不只是“查几段攻略再回答”，而是给旅行顾问流程提供可解释依据：目的地知识、成熟路线样板、报价边界、风险规则、SOP（标准作业流程）和报告交付标准。面试时建议强调三件事：
+本项目的 RAG 不只是“查几段攻略再回答”，而是给旅行顾问流程提供可解释依据：目的地知识、成熟路线样板、报价边界、风险规则、SOP（标准作业流程）和报告交付标准。项目展示时建议强调三件事：
 
 - 检索命中的是“依据”，最终交付仍由状态机、工具调用和 `report_data`（结构化报告数据）共同完成。
 - 产品化路线允许弱匹配：用户只说“想去新疆”，也可以先召回新疆 8 天小团/包车样板，再说明示例价、待核验和自由行替代。
 - 结果不暴露 RAG、工具名、内部知识库或 `product_id`，面向用户只说“成熟路线样板”“合作产品候选”“省心路线方向”。
 
 ## 怎么看评测
+
+当前仓库资产快照：`data/evaluation/rag_retrieval_scenarios.json` 包含 17 条召回场景，`data/documents/` 下共有 21 份 Markdown（标记文本）知识文档，其中 `data/documents/internal/products/` 下有 11 份产品/路线样板。历史运行结果只代表当时知识库与场景规模，实际结论以重新运行脚本输出为准。
 
 运行命令：
 
@@ -41,7 +64,7 @@ uv run python scripts\evaluate_rag_retrieval.py --output docs\RAG与知识库\ra
 
 指标解释：
 
-| 指标 | 面试解释 |
+| 指标 | 项目解释 |
 |---|---|
 | `source recall@K` | 前 K 个结果里是否召回到标注的具体知识文档。 |
 | `category recall@K` | 前 K 个结果里是否覆盖正确知识类别，例如 `products`、`pricing`、`risk`。 |
@@ -74,7 +97,7 @@ uv run python scripts\evaluate_rag_retrieval.py --output docs\RAG与知识库\ra
 
 这些字段为未来真实库存 API（应用程序接口）预留映射点，但本轮不接真实供应链，不写真实库存、真实报价、密钥或供应商资料。
 
-## 面试可说的短句
+## 展示可说的短句
 
 > 我这里看 RAG 不是只看最终回复像不像，而是看它有没有检索到正确产品样板、正确知识类别和可解释依据。比如用户只说想去新疆，系统也能召回新疆 8 天包车小团样板，但对用户表达时会说明这是成熟路线候选、示例价待核验，也可以继续按自由行拆开规划。
 

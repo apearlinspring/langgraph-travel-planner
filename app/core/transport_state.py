@@ -1,7 +1,7 @@
 """
 交通规划专用状态扩展
 """
-from typing import TypedDict, Annotated, Optional, Literal
+from typing import TypedDict, Annotated, Literal
 from typing_extensions import NotRequired
 from operator import add
 

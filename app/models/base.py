@@ -3,7 +3,6 @@ SQLAlchemy 基础配置
 """
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase, declared_attr
-from datetime import datetime
 from app.config import settings
 
 

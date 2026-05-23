@@ -2,7 +2,6 @@
 Main handoff-style travel planning agent.
 """
 import asyncio
-from typing import Optional
 
 from langchain.agents import create_agent
 

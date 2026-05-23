@@ -1,8 +1,6 @@
 """
 Windows-friendly startup script.
 """
-import asyncio
-import selectors
 import sys
 
 import uvicorn
@@ -10,14 +8,19 @@ import uvicorn
 from app.config import settings
 
 
-if sys.platform == "win32":
-    selector = selectors.SelectSelector()
-    loop = asyncio.SelectorEventLoop(selector)
-    asyncio.set_event_loop(loop)
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-
-
 if __name__ == "__main__":
+    import asyncio
+
+    if sys.platform == "win32":
+        import selectors
+
+        selector = selectors.SelectSelector()
+        loop = asyncio.SelectorEventLoop(selector)
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    else:
+        loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
     config = uvicorn.Config(
         "app.main:app",
         host=settings.app_host,
@@ -26,5 +29,7 @@ if __name__ == "__main__":
         loop="none",
     )
     server = uvicorn.Server(config)
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(server.serve())
+    try:
+        loop.run_until_complete(server.serve())
+    finally:
+        loop.close()

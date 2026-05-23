@@ -1,7 +1,7 @@
 """Deterministic quality checks for report evidence and RAG alignment."""
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from typing import Any
 
 from app.evaluation.report_quality import CriterionResult, REQUIRED_AGENCY_CATEGORIES

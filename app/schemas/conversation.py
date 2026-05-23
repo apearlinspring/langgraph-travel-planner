@@ -1,7 +1,7 @@
 """
 会话相关的 Pydantic 模型
 """
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 from typing import Optional
 from datetime import datetime
 import uuid

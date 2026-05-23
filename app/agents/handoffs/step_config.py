@@ -25,16 +25,13 @@ from app.tools.state_transition import (
     go_back_to_accommodation,
     go_back_to_food,
     go_back_to_itinerary,
-    go_back_to_budget,
-    check_current_progress
+    go_back_to_budget
 )
-from app.tools.mcp_tools import get_hotel_followup_tools, get_weather_tools, get_search_tools, get_date_tools
 from app.tools.memory_tools import update_travel_style_tool, update_dietary_restriction_tool, \
     update_food_preference_tool, add_travel_record_tool, update_accommodation_preference_tool
 from app.tools.rag_tools import get_internal_rag_tools
 from app.tools.visual_journey import generate_visual_journey_tool
 from app.core.workflow import AGENCY_STEPS, PLANNING_STEPS
-from app.utils.logger import app_logger
 
 
 async def get_step_config():
@@ -48,7 +45,6 @@ async def get_step_config():
     # 不在阶段配置构建时预加载 MCP 工具；真实查询由高层工具按需唤起。
     hotel_followup_tools = []
     search_tools = []
-    date_tools = []
     internal_rag_tools = get_internal_rag_tools()
 
     step_config = {

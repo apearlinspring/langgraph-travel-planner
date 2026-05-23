@@ -1,7 +1,6 @@
 """Preflight environment checks for live acceptance evaluation."""
 from __future__ import annotations
 
-import os
 import json
 import urllib.error
 import urllib.request
@@ -10,8 +9,6 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from app.config import (
-    DEFAULT_DOTENV_PATH,
-    PROJECT_ROOT,
     dependency_specs_by_key,
     has_real_env_value,
     load_effective_environment,

@@ -174,9 +174,13 @@ async def test_step_config_covers_all_planning_steps(monkeypatch):
     async def empty_tools():
         return []
 
-    monkeypatch.setattr(step_config_module, "get_hotel_followup_tools", empty_tools)
-    monkeypatch.setattr(step_config_module, "get_search_tools", empty_tools)
-    monkeypatch.setattr(step_config_module, "get_date_tools", empty_tools)
+    for tool_loader_name in (
+        "get_hotel_followup_tools",
+        "get_search_tools",
+        "get_date_tools",
+    ):
+        if hasattr(step_config_module, tool_loader_name):
+            monkeypatch.setattr(step_config_module, tool_loader_name, empty_tools)
 
     config = await step_config_module.get_step_config()
 

@@ -425,9 +425,6 @@
           .querySelectorAll(".journey-map-stage-stop.active")
           .forEach((item) => item.classList.remove("active"));
         shell
-          .querySelectorAll(".journey-map-bottom-stop.active")
-          .forEach((item) => item.classList.remove("active"));
-        shell
           .querySelectorAll("[data-journey-day-card].active")
           .forEach((item) => item.classList.remove("active"));
 
@@ -435,18 +432,10 @@
           .find((button) => button.dataset.mapDayStop === targetMeta);
         if (!stopButton) return null;
         stopButton.classList.add("active");
-        const stopRow = stopButton.closest(".journey-map-bottom-stop");
-        stopRow?.classList.add("active");
         const dayCard = stopButton.closest("[data-journey-day-card]");
         dayCard?.classList.add("active");
-
-        const drawer = shell.querySelector(".journey-map-bottom-drawer");
-        if (drawer?.classList.contains("is-collapsed") && options.expandDrawer !== false) {
-          drawer.classList.remove("is-collapsed");
-          syncJourneyMapToggleLabels(shell);
-        }
         if (options.scroll !== false) {
-          (stopRow || stopButton).scrollIntoView({
+          stopButton.scrollIntoView({
             behavior: "smooth",
             block: "nearest",
             inline: "center",
@@ -880,7 +869,7 @@
         }
 
         const activeMeta = parseJourneyStopMeta(
-          shell.querySelector(".journey-map-bottom-stop.active .journey-map-stage-stop")?.dataset
+          shell.querySelector(".journey-map-stage-stop.active[data-map-day-stop]")?.dataset
             ?.mapDayStop || ""
         );
         const activeIndex =
@@ -1269,7 +1258,7 @@
         applyJourneyDayView(entry);
         if (dayKey === "all") {
           entry.shell
-            ?.querySelectorAll(".journey-map-stage-stop.active, .journey-map-bottom-stop.active, [data-journey-day-card].active")
+            ?.querySelectorAll(".journey-map-stage-stop.active, [data-journey-day-card].active")
             .forEach((item) => item.classList.remove("active"));
           fitJourneyMapState(entry, "all");
           return;
@@ -1341,7 +1330,6 @@
             action === "toggle-tools" ||
             action === "toggle-sidebar" ||
             action === "toggle-day-routes" ||
-            action === "toggle-bottom-drawer" ||
             (action === "recommendations" && entry.recommendationPoints?.length > 0) ||
             (action === "route" && entry.routePoints?.length >= 2) ||
             (action === "highlights" && entry.recommendationPoints?.length > 0);
@@ -2392,15 +2380,6 @@
             button.setAttribute("aria-expanded", String(!collapsed));
           });
 
-        const bottomDrawer = shell.querySelector(".journey-map-bottom-drawer");
-        const drawerCollapsed = bottomDrawer?.classList.contains("is-collapsed");
-        shell
-          .querySelectorAll('[data-map-action="toggle-bottom-drawer"]')
-          .forEach((button) => {
-            button.textContent = drawerCollapsed ? "展开" : "收起";
-            button.title = drawerCollapsed ? "展开分日路线" : "收起分日路线";
-            button.setAttribute("aria-expanded", String(!drawerCollapsed));
-          });
       }
 
       function handleJourneyMapAction(button) {
@@ -2424,15 +2403,6 @@
           const routesCard = button.closest(".journey-map-sidebar-routes");
           routesCard?.classList.toggle("is-collapsed");
           syncJourneyMapToggleLabels(shell);
-          return;
-        }
-        if (action === "toggle-bottom-drawer") {
-          const drawer = shell?.querySelector(".journey-map-bottom-drawer");
-          drawer?.classList.toggle("is-collapsed");
-          syncJourneyMapToggleLabels(shell);
-          const mapNode = shell?.querySelector(".journey-live-map[data-map-payload]");
-          const entry = mapNode ? journeyMapInstances.get(mapNode) : null;
-          setTimeout(() => entry?.map?.invalidateSize(), 80);
           return;
         }
         if (action === "expand") {
@@ -2837,68 +2807,6 @@
         if (node) journeyMapInstances.delete(node);
       }
 
-      function renderJourneyBottomDrawerDays(dayPlans = []) {
-        return dayPlans
-          .map(
-            (day, dayIndex) => `
-              <article data-journey-day-card="${escapeHtml(day.key || `day-${dayIndex + 1}`)}">
-                <button
-                  class="journey-map-day-btn"
-                  type="button"
-                  data-map-day="${escapeHtml(day.key)}"
-                  aria-pressed="false"
-                >
-                  <span>${escapeHtml(day.label || `Day ${dayIndex + 1}`)}</span>
-                  <small>${escapeHtml(day.title || day.note || "当天路线")}</small>
-                </button>
-                ${renderJourneyDayStatusChips(day)}
-                <div>
-                  ${(day.waypoints || [])
-                    .slice(0, 6)
-                    .map(
-                      (waypoint, waypointIndex) => `
-                        <div class="journey-map-bottom-stop">
-                          <button
-                            class="journey-map-stage-stop journey-map-stage-stop--inline"
-                            type="button"
-                            data-map-day-stop="${escapeHtml(day.key)}:${waypointIndex}"
-                          >
-                            <span>${waypointIndex + 1}</span>
-                            <strong>${escapeHtml(waypoint)}</strong>
-                          </button>
-                          <div class="journey-map-stop-edit-actions">
-                            <button
-                              type="button"
-                              data-journey-edit-action="up"
-                              data-map-day-stop="${escapeHtml(day.key)}:${waypointIndex}"
-                              title="上移这个地点"
-                              ${waypointIndex === 0 ? "disabled" : ""}
-                            >↑</button>
-                            <button
-                              type="button"
-                              data-journey-edit-action="down"
-                              data-map-day-stop="${escapeHtml(day.key)}:${waypointIndex}"
-                              title="下移这个地点"
-                              ${waypointIndex >= (day.waypoints || []).length - 1 ? "disabled" : ""}
-                            >↓</button>
-                            <button
-                              type="button"
-                              data-journey-edit-action="delete"
-                              data-map-day-stop="${escapeHtml(day.key)}:${waypointIndex}"
-                              title="删除这个地点"
-                            >×</button>
-                          </div>
-                        </div>
-                      `
-                    )
-                    .join("")}
-                </div>
-              </article>
-            `
-          )
-          .join("");
-      }
-
       function renderJourneySidebarDayRoutes(dayPlans = []) {
         if (!Array.isArray(dayPlans) || !dayPlans.length) return "";
         return `
@@ -3010,10 +2918,6 @@
         }));
         shell.dataset.dayPlans = serializeMapPayload(normalizedDayPlans);
         mapNode.dataset.mapPayload = serializeMapPayload(payload);
-        const drawerDays = shell.querySelector(".journey-map-bottom-days");
-        if (drawerDays) {
-          drawerDays.innerHTML = renderJourneyBottomDrawerDays(normalizedDayPlans);
-        }
         const sidebarDays = shell.querySelector(".journey-map-sidebar-day-list");
         if (sidebarDays) {
           const wrapper = document.createElement("div");

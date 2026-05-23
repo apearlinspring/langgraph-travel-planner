@@ -1,56 +1,69 @@
-# Production Deployment Runbook（生产部署运行手册）
+# Deployment Readiness（部署就绪模板）
 
-本文是更新线上服务的唯一部署入口。旧的多轮验收记录不再放在这里；历史证据继续保留在 `docs/评估与验收/acceptance-core-report.md`、`docs/评估与验收/predeploy-runtime-acceptance.md` 和 `docs/评估与验收/live-acceptance-runbook.md`。
+This document is the public deployment template. Real production hostnames, IP addresses, SSH users, private keys, `.env` files and database contents must stay outside Git.
 
-## 当前生产环境
+## Deployment Boundary
 
-- 线上域名：`https://travel.403edr.cn`
-- 公网 IP（互联网协议地址）：`8.145.46.253`
-- SSH（安全外壳协议）用户：`root`
-- 服务器代码目录：`/opt/langgraph-travel-planner`
-- 容器入口：`docker-compose.yml`
-- 快速更新脚本：`deploy/update-runtime-image.sh`
-- 当前服务：`backend`、`caddy`、`postgres`、`redis`
+- Deploy only Git-tracked project files.
+- Do not upload or print `.env`, `.runtime/`, `.venv/`, `data/vectorstore/`, `data/vectorstore_internal/`, logs, real secrets or personal data.
+- Do not delete server database volumes, Redis volumes, `.env`, runtime directories or generated vector stores during a code update.
+- PostgreSQL (关系型数据库) and Redis (缓存数据库) are runtime services. Their data belongs to Docker volumes or managed services, not to the repository.
+- If database schema changes are introduced, prepare a migration and backup plan before deployment.
 
-SSH 主机指纹核验值：
+## Required Private Variables
 
-```text
-RSA     SHA256:gj2kqRfi7OMEufxE1Er0V84cIdU/0Ehk4BWK3oz1smc
-ECDSA   SHA256:f+LO0DfognHXCUHanq5vA/69rO1bWD03TB4qRZHpW3w
-ED25519 SHA256:F7jf3yJ4zU5C9YIqVlsUMKbQOpjJMQkHicF1T3wt+Ac
+Set these locally or in CI（持续集成）secrets before deploying:
+
+```powershell
+$env:ZHIXING_DEPLOY_USER = "<ssh-user>"
+$env:ZHIXING_DEPLOY_HOST = "<server-host>"
+$env:ZHIXING_DEPLOY_DIR = "/opt/langgraph-travel-planner"
+$env:ZHIXING_PUBLIC_BASE_URL = "https://<your-domain>"
 ```
 
-如果 SSH 提示 host key（主机密钥）变化，先用云控制台或可信渠道核验，不要直接绕过。
+The public repository intentionally does not store these values.
 
-## 安全边界
+## Local Gate
 
-- 只发布 Git（版本控制）已跟踪文件。
-- 不上传、不打印、不提交 `.env`、`.runtime/`、`.venv/`、`data/vectorstore/`、`data/vectorstore_internal/`、真实密钥或个人信息。
-- 不删除服务器上的数据库卷、向量库目录、`.env` 或运行时目录。
-- PowerShell（Windows 命令行环境）远程命令统一启用 UTF-8（统一码转换格式）输出，并用单引号包裹远端命令，避免本地提前展开 `$()`。
-- 生产更新默认只做健康检查和轻量 smoke（冒烟验证）；完整 `acceptance-core`（核心验收）只在明确需要时运行。
-
-## 就绪门禁层
-
-- CI（持续集成）默认只跑不依赖真实密钥的单元测试、编译、前端和 readiness（就绪检查）脚本；真实生产更新仍由人工确认。
-- GitHub Actions（GitHub 自动化流水线）可通过 `workflow_dispatch` 手动触发 staging smoke（预生产冒烟），先跑 preflight（预检），再决定是否继续真实链路。
-- 本地开发检查：`uv run python scripts/check_runtime_readiness.py --target development --json`。
-- 本地真实依赖检查：`uv run python scripts/check_runtime_readiness.py --target local --json`。
-- 生产就绪检查：`uv run python scripts/check_runtime_readiness.py --target production --json`。
-- JSON（JavaScript 对象表示法）输出重点看 `component_readiness` 和 `repair_suggestions`，前者定位依赖状态，后者给出修复建议。
-- 数据库结构变更上线前必须先确认迁移计划；如存在 Alembic（数据库迁移工具）版本化迁移，按 runbook 明确执行 `alembic upgrade head`，不要在未备份生产数据时临时改表。
-
-## 一键更新流程
-
-以下命令在本地仓库根目录执行。每次新对话更新服务，都从这组命令开始。
-
-### 1. 对齐主线并生成发布包
+Run the relevant checks before creating a release archive:
 
 ```powershell
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 chcp 65001 | Out-Null
 
+uv run python -m compileall app tests scripts
+node --check frontend\app.js
+node scripts\verify_frontend_report_renderer.js
+node scripts\verify_frontend_browser_regression.js
+uv run python -m pytest -q
+```
+
+Readiness（就绪检查）and preflight（预检）can be run at different layers:
+
+```powershell
+uv run python scripts/check_runtime_readiness.py --target development --json
+uv run python scripts/check_runtime_readiness.py --target local --json
+uv run python scripts/check_runtime_readiness.py --target production --json
+```
+
+In JSON output, `component_readiness` identifies dependency state and `repair_suggestions` describes next recovery actions.
+
+If RAG（检索增强生成）documents, retrieval code or metadata（元数据）contracts changed, also run:
+
+```powershell
+uv run python scripts\evaluate_rag_retrieval.py --json
+```
+
+CI（持续集成）should keep default checks free of real secrets. If a repository uses GitHub Actions（GitHub 自动化流水线）, heavier staging smoke（预生产冒烟）can be exposed through `workflow_dispatch` so maintainers trigger real-link checks manually.
+
+If database schema changes are included and Alembic（数据库迁移工具）versioned migrations exist, run `alembic upgrade head` only after confirming backups and migration ownership.
+
+## Create Release Archive
+
+Start from a clean main branch:
+
+```powershell
 git fetch origin --prune
 git switch main
 git pull --ff-only origin main
@@ -62,164 +75,114 @@ git archive --format=tar -o $archive HEAD
 Get-Item $archive
 ```
 
-`git status --short --branch` 应显示 `## main...origin/main`，且没有未提交文件。若有用户或其他分支未提交改动，先停下来确认，不要回滚。
+`git status --short --branch` should show no uncommitted files.
 
-### 2. 上传发布包
-
-```powershell
-scp $archive root@8.145.46.253:/tmp/zhixing-release-$commit.tar
-```
-
-### 3. 备份旧代码并解包
+## Upload And Extract
 
 ```powershell
-ssh root@8.145.46.253 'set -eu; cd /opt/langgraph-travel-planner; commit_file="$(ls -t /tmp/zhixing-release-*.tar | head -n 1)"; backup="/opt/zhixing-backup-$(date +%Y%m%d%H%M%S)"; mkdir -p "$backup"; cp -a AGENTS.md alembic alembic.ini app deploy docker-compose.yml Dockerfile .dockerignore docs .env.example frontend .github main.py package.json package-lock.json pyproject.toml .python-version README.md requirements.txt scripts tests uv.lock "$backup"/ 2>/dev/null || true; echo "backup=$backup"; tar -xf "$commit_file" -C /opt/langgraph-travel-planner; chmod +x deploy/update-runtime-image.sh; echo "release_extracted"'
+$target = "$env:ZHIXING_DEPLOY_USER@$env:ZHIXING_DEPLOY_HOST"
+scp $archive "${target}:/tmp/zhixing-release-$commit.tar"
 ```
 
-这一步只覆盖代码和文档，不会删除服务器上的 `.env`、`.runtime/`、向量库或 Docker（容器运行工具）卷。
-
-### 4. 刷新运行时镜像
+Backup the old code and extract the new archive:
 
 ```powershell
-ssh root@8.145.46.253 'set -eu; cd /opt/langgraph-travel-planner; sh deploy/update-runtime-image.sh'
+$remoteScript = @'
+set -eu
+cd "$ZHIXING_DEPLOY_DIR"
+commit_file="$(ls -t /tmp/zhixing-release-*.tar | head -n 1)"
+backup="/opt/zhixing-backup-$(date +%Y%m%d%H%M%S)"
+mkdir -p "$backup"
+cp -a AGENTS.md app deploy docker-compose.yml Dockerfile .dockerignore .env.example frontend main.py pyproject.toml README.md scripts tests uv.lock docs "$backup"/ 2>/dev/null || true
+tar -xf "$commit_file" -C "$ZHIXING_DEPLOY_DIR"
+chmod +x deploy/update-runtime-image.sh
+echo "backup=$backup"
+echo "release_extracted"
+'@
+
+$remoteScriptPath = Join-Path $env:TEMP "zhixing-deploy-extract.sh"
+[System.IO.File]::WriteAllText($remoteScriptPath, $remoteScript, [System.Text.UTF8Encoding]::new($false))
+scp $remoteScriptPath "${target}:/tmp/zhixing-deploy-extract.sh"
+ssh $target "ZHIXING_DEPLOY_DIR='$env:ZHIXING_DEPLOY_DIR' sh /tmp/zhixing-deploy-extract.sh"
 ```
 
-脚本会基于服务器现有 `langgraph-travel-planner-backend:latest` 镜像构建运行时叠加镜像，然后执行：
+If the deployment target may contain files that have been removed from the public repository, delete only explicitly approved stale code paths after backup. Never use a broad cleanup that can remove `.env`, `data/`, `logs/` or Docker volumes.
+
+## Refresh Runtime Image
+
+```powershell
+ssh $target "set -eu; cd '$env:ZHIXING_DEPLOY_DIR'; sh deploy/update-runtime-image.sh"
+```
+
+The script builds a runtime overlay image and runs:
 
 ```sh
 docker compose up -d --no-build backend caddy
 docker compose ps
 ```
 
-如果脚本提示 base image（基础镜像）不存在，说明服务器还没有可复用的后端镜像，需要先安排一次完整镜像构建窗口，不要删除现有数据库卷。
+If the base image does not exist, schedule a full Docker build instead of deleting runtime data.
 
-### 5. 刷新 RAG 向量库
+## Rebuild RAG Vector Stores
 
-如果本次发布涉及 `data/documents/`、RAG（检索增强生成）检索逻辑、产品化目录或 metadata（元数据）契约，镜像刷新后必须在服务器容器内重建向量库：
-
-```powershell
-ssh root@8.145.46.253 'set -eu; cd /opt/langgraph-travel-planner; docker compose exec -T backend python -m scripts.init_rag; docker compose restart backend; docker compose ps'
-```
-
-`scripts.init_rag` 会先在 `data/.rag-vectorstore-builds/` 构建新 Chroma（向量库）目录并完成 readiness（就绪检查），再把旧的 `data/vectorstore/` 和 `data/vectorstore_internal/` 移到 `data/.rag-vectorstore-backups/`，最后把新目录替换到正式路径。若替换后检查失败，会把失败目录移入 `data/.rag-vectorstore-faileds/` 并回滚旧库。
-
-这三个隐藏目录都属于生成数据，不要提交。发布确认稳定后，可以在服务器上按需清理较早的备份目录；清理前先确认目标路径位于 `/opt/langgraph-travel-planner/data/.rag-vectorstore-backups/`。
-
-## 发布后验证
-
-### 1. 容器与内部健康检查
+If this release changed `data/documents/`, RAG retrieval logic or product metadata, rebuild vector stores inside the backend container:
 
 ```powershell
-ssh root@8.145.46.253 'set -eu; cd /opt/langgraph-travel-planner; docker compose ps; curl -fsS http://127.0.0.1:8000/health/live; echo; curl -fsS http://127.0.0.1:8000/health/ready | head -c 3000; echo'
+ssh $target "set -eu; cd '$env:ZHIXING_DEPLOY_DIR'; docker compose exec -T backend python -m scripts.init_rag; docker compose restart backend; docker compose ps"
 ```
 
-期望结果：
+The script builds new vector stores under generated data directories and swaps them into `data/vectorstore/` and `data/vectorstore_internal/`. These generated directories are runtime data and should not enter Git.
 
-- `zhixing-backend` 状态为 `healthy`
-- `zhixing-postgres` 状态为 `healthy`
-- `zhixing-redis` 状态为 `healthy`
-- `/health/live` 返回 `{"status":"alive"}`
-- `/health/ready` 返回 `status=ready`，环境为 `production`
+## Health Checks
 
-### 2. 公网健康检查
+Internal server checks:
 
-Windows 自带 `curl.exe` 可能因 Schannel（Windows 安全通道）与服务器 TLS（传输层安全协议）协商失败而误报。优先用 Python（脚本语言运行时）验证：
+```powershell
+ssh $target "set -eu; cd '$env:ZHIXING_DEPLOY_DIR'; docker compose ps; curl -fsS http://127.0.0.1:8000/health/live; echo; curl -fsS http://127.0.0.1:8000/health/ready | head -c 3000; echo"
+```
+
+Public URL checks:
 
 ```powershell
 @'
 import json
+import os
 import urllib.request
 
-for url in [
-    "https://travel.403edr.cn/",
-    "https://travel.403edr.cn/docs",
-    "https://travel.403edr.cn/health/live",
-    "https://travel.403edr.cn/health/ready",
-]:
+base = os.environ["ZHIXING_PUBLIC_BASE_URL"].rstrip("/")
+for path in ["/", "/docs", "/health/live", "/health/ready"]:
+    url = base + path
     with urllib.request.urlopen(url, timeout=30) as resp:
         data = resp.read()
         print(url, resp.status, resp.headers.get("content-type"), len(data))
-        if url.endswith("/health/live") or url.endswith("/health/ready"):
+        if path.startswith("/health/"):
             payload = json.loads(data.decode("utf-8"))
             print("status=", payload.get("status"), "environment=", payload.get("environment"))
-'@ | .\.venv\Scripts\python.exe -
+'@ | python -
 ```
 
-期望结果：
+Expected results:
 
-- 根页面返回 `200 text/html`
-- `/docs` 返回 `200 text/html`
-- `/health/live` 返回 `status=alive`
-- `/health/ready` 返回 `status=ready` 和 `environment=production`
+- Root page and `/docs` return HTTP（超文本传输协议）200.
+- `/health/live` returns `alive`.
+- `/health/ready` returns `ready` or an explicitly understood degraded state.
+- `backend`, `postgres` and `redis` containers are healthy.
 
-如果当前本机网络访问 `http://travel.403edr.cn/...` 返回 `Non-compliance ICP Filing`，或访问 HTTPS（安全超文本传输协议）出现 `UNEXPECTED_EOF_WHILE_READING` / `failed to receive handshake`，但用户浏览器可访问，先不要判定线上不可用。这通常是当前网络路径按 Host/SNI（服务器名称指示）触发了运营商或云侧备案拦截。此时补做服务器侧公网验证：
+## Optional Smoke
+
+For releases touching chat, reports, RAG or MCP:
 
 ```powershell
-ssh root@8.145.46.253 'set -eu; curl -k -fsS https://travel.403edr.cn/health/live; echo; curl -k -fsS https://travel.403edr.cn/health/ready | head -c 3000; echo'
+ssh $target "set -eu; cd '$env:ZHIXING_DEPLOY_DIR'; docker compose exec -T backend python scripts/check_runtime_readiness.py --target production --json | head -c 4000; echo"
+ssh $target "set -eu; cd '$env:ZHIXING_DEPLOY_DIR'; docker compose exec -T backend python scripts/evaluate_rag_retrieval.py --json | head -c 5000; echo"
 ```
 
-若服务器侧公网验证和用户浏览器均正常，且上一节内部健康检查为 `ready`，应记录为“当前验收机网络路径受限”，而不是应用或 Caddy（反向代理服务器）故障。
+Full acceptance runs can call real LLM（大语言模型） and external APIs. Run them only when release risk justifies the cost.
 
-### 3. 日志抽查
+## Rollback
+
+Each deployment should create a code backup. Rollback copies code back and refreshes runtime containers; it must not overwrite `.env`, database volumes or vector stores from a local machine.
 
 ```powershell
-ssh root@8.145.46.253 'set -eu; cd /opt/langgraph-travel-planner; docker compose logs --tail=120 backend; docker compose logs --tail=80 caddy'
+ssh $target "set -eu; backup=/opt/zhixing-backup-YYYYMMDDHHMMSS; cd '$env:ZHIXING_DEPLOY_DIR'; cp -a \"\$backup\"/. '$env:ZHIXING_DEPLOY_DIR'/; chmod +x deploy/update-runtime-image.sh; sh deploy/update-runtime-image.sh"
 ```
-
-允许出现第三方依赖 deprecation warning（弃用警告）。不应出现启动失败、数据库连接失败、MCP（模型上下文协议）全量不可用、密钥原文或异常堆栈刷屏。
-
-## 可选 smoke
-
-如果只是把已验收的 `main` 更新到服务器，健康检查通过即可。若本次改动涉及聊天链路、报告、RAG（检索增强生成）或 MCP，可额外执行轻量 smoke：
-
-```powershell
-ssh root@8.145.46.253 'set -eu; cd /opt/langgraph-travel-planner; docker compose exec -T backend python scripts/check_runtime_readiness.py --target production --json | head -c 4000; echo'
-```
-
-若本次改动涉及 RAG 文档或产品化目录，还要执行离线召回评测：
-
-```powershell
-ssh root@8.145.46.253 'set -eu; cd /opt/langgraph-travel-planner; docker compose exec -T backend python scripts/evaluate_rag_retrieval.py --json | head -c 5000; echo'
-```
-
-完整 9 场景 `acceptance-core` 会消耗真实 LLM（大语言模型）和外部 API（应用程序接口）预算，只有发布前需要重新证明核心验收时再运行。
-
-## 常见问题
-
-### SSH host key 变化
-
-不要直接 `ssh-keygen -R` 后重连。先执行：
-
-```powershell
-ssh-keyscan -t rsa,ecdsa,ed25519 8.145.46.253
-```
-
-再与本文记录的指纹或云控制台指纹比对。确认是同一台服务器后，才更新本机 `known_hosts`。
-
-### 发布脚本出现 `set: -^M: invalid option`
-
-这是 shell 脚本以 CRLF（Windows 换行）上传到 Linux（类 Unix 操作系统）导致。仓库已通过 `.gitattributes` 固定 `*.sh` 为 LF（Unix 换行）。若服务器上仍遇到旧文件，可临时处理：
-
-```powershell
-$src = Join-Path (Get-Location) 'deploy\update-runtime-image.sh'
-$tmp = Join-Path $env:TEMP 'update-runtime-image.lf.sh'
-$text = [System.IO.File]::ReadAllText($src, [System.Text.UTF8Encoding]::new($false))
-$text = $text -replace "`r`n", "`n" -replace "`r", "`n"
-[System.IO.File]::WriteAllText($tmp, $text, [System.Text.UTF8Encoding]::new($false))
-scp $tmp root@8.145.46.253:/opt/langgraph-travel-planner/deploy/update-runtime-image.sh
-ssh root@8.145.46.253 'set -eu; cd /opt/langgraph-travel-planner; chmod +x deploy/update-runtime-image.sh; sh deploy/update-runtime-image.sh'
-```
-
-### 公网 HTTP 自动跳转 HTTPS
-
-Caddy（反向代理服务器）会把 HTTP（超文本传输协议）跳转到 HTTPS（安全超文本传输协议），看到 `308 Permanent Redirect` 是正常现象。公网验收以 `https://travel.403edr.cn/...` 为准。
-
-### 回滚
-
-服务器每次发布会在 `/opt/zhixing-backup-YYYYMMDDHHMMSS` 留一份代码备份。回滚只覆盖代码并重跑镜像刷新，不操作数据库卷：
-
-```powershell
-ssh root@8.145.46.253 'set -eu; backup=/opt/zhixing-backup-YYYYMMDDHHMMSS; cd /opt/langgraph-travel-planner; cp -a "$backup"/. /opt/langgraph-travel-planner/; chmod +x deploy/update-runtime-image.sh; sh deploy/update-runtime-image.sh'
-```
-
-回滚前先确认备份目录名，且不要把 `.env`、`.runtime/` 或向量库从本地覆盖到服务器。

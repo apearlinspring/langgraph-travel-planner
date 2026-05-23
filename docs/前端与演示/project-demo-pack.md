@@ -49,10 +49,10 @@ chcp 65001 | Out-Null
 
 ## 当前可展示状态
 
-- 线上入口最近一次部署到 `https://travel.403edr.cn`，但展示时不要只依赖网页观感，要同时展示健康检查、验收摘要和代码定位。
+- 如果存在公开部署实例，展示时不要只依赖网页观感，要同时展示健康检查、验收摘要和代码定位；真实部署地址应由本地或 CI（持续集成）私有配置提供，不写入公开仓库。
 - `docs/评估与验收/acceptance-core-report.md` 保留完整 9 场景核心验收证据；部署前 1 场景 smoke 记录在 `docs/评估与验收/predeploy-runtime-acceptance.md`，不能替代 core。
 - `docs/RAG与知识库/rag-demo-evaluation-guide.md` 可用于回答“RAG 怎么验证”：重点看是否召回正确产品样板、知识类别和依据来源。
-- `docs/RAG与知识库/rag-retrieval-evaluation.md` 记录 15 条标注查询、19 份本地知识文档；metadata-aware BM25（元数据感知 BM25）在 Top-5 的 category recall 和 source type recall 均为 100%。
+- `docs/RAG与知识库/rag-retrieval-evaluation.md` 记录当前轻量标注查询和本地知识文档规模；实际指标以重新运行 `scripts/evaluate_rag_retrieval.py --json` 的输出为准。
 - 前端展示面已经把技术缩写和“机器人式”语言收敛为旅行顾问工作台、服务治理、审批记录和脱敏运行摘要，更适合现场给审阅者看。
 
 ## 三条演示路径
