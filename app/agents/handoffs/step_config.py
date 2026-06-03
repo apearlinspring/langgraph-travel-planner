@@ -810,8 +810,13 @@ async def get_step_config():
 - 费用说明：先复述用户预算，再按大交通、住宿、门票/体验、当地交通、餐饮和服务/机动拆分；如果样板价与用户预算不一致，说明需要调整哪些档位，不能直接输出与用户预算冲突的人均价
 - 涵盖服务：接送、预约、应急、人工确认和不包含项边界
 - 下一步：请用户评价满意/想改哪里
+
+如果用户明确要求“生成并记录结构化行程/Day 1-Day N/路线和 Plan B”，必须调用 generate_itinerary_tool，把结构化 itinerary 写入状态后，再基于工具结果做简短说明。
+如果用户在这个阶段明确要求“汇总预算/看报价/解释费用包含与不包含/列出估算项和待核验项”，必须调用 summarize_budget_tool，先写入结构化 budget，再按“预算明细、预算匹配、费用依据、关键假设、预算置信度、出发前待核验”输出。
 """,
                 "tools": [
+                    generate_itinerary_tool,
+                    summarize_budget_tool,
                     scenic_price_lookup_tool,
                     record_evidence_bundle_tool,
                     *internal_rag_tools,
@@ -825,8 +830,12 @@ async def get_step_config():
 
 如果用户说满意、没问题、就按这个，简短确认并准备生成报告。
 如果用户提出修改意见，记录修改点并输出修订版方案；不要改走自由规划交通/住宿阶段。
+如果用户要求把当前方案正式落成结构化行程，必须调用 generate_itinerary_tool；不要只保留自然语言方案。
+如果用户要求先看预算、报价说明、费用包含/不包含、估算项或待核验项，必须调用 summarize_budget_tool；不要只手写一段预算口语说明。
 """,
                 "tools": [
+                    generate_itinerary_tool,
+                    summarize_budget_tool,
                     record_requirement_tool,
                     record_evidence_bundle_tool,
                     scenic_price_lookup_tool,
@@ -841,8 +850,12 @@ async def get_step_config():
 
 用户要求正式报告时，调用 generate_order_tool。报告要是用户交付视图，默认不展示预算置信度详情、工具审计、交付清单或治理边界。
 如果还有出发地、出发日期、人数、预算这类基础事实缺失，先补问关键事实，不要生成伪报告。
+如果结构化 itinerary 还没写入，而用户本轮要求的是“生成并记录行程/最终报告/report_data”，必须先调用 generate_itinerary_tool。
+如果用户要求最终报告，但结构化 budget 还没写入，必须先调用 summarize_budget_tool，再调用 generate_order_tool；不要跳过预算阶段直接手写最终报告。
 """,
                 "tools": [
+                    generate_itinerary_tool,
+                    summarize_budget_tool,
                     generate_order_tool,
                     record_evidence_bundle_tool,
                     *internal_rag_tools,

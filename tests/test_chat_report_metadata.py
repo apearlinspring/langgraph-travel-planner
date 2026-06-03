@@ -49,6 +49,25 @@ def test_report_extra_info_from_command_output():
     assert extra_info["report_data"]["traveler"]["email"] == "[REDACTED]"
 
 
+def test_report_extra_info_from_top_level_dict_output():
+    report_data = {
+        "version": "travel_report.v1",
+        "overview": {"route_label": "成都 -> 重庆"},
+        "agency_context": {"mode": "agency_plan"},
+    }
+    output = {
+        "order_id": "ORDER-5678",
+        "report_data": report_data,
+        "messages": [],
+    }
+
+    extra_info = _report_extra_info_from_tool_output(output)
+
+    assert extra_info["message_type"] == "travel_report"
+    assert extra_info["order_id"] == "ORDER-5678"
+    assert extra_info["report_data"]["agency_context"]["mode"] == "agency_plan"
+
+
 def test_report_extra_info_ignores_non_report_tool_output():
     assert _report_extra_info_from_tool_output(SimpleNamespace(update={})) == {}
     assert _report_extra_info_from_tool_output({"content": "plain text"}) == {}
@@ -110,6 +129,29 @@ def test_fast_split_month_day_date_does_not_fall_back_to_weekday():
     assert facts["departure_date"] == "2026-06-10"
     assert facts["departure_city"] == "西安"
     assert facts["destination"] == "杭州"
+
+
+def test_fast_split_prefers_explicit_labeled_route_fields():
+    facts = extract_fast_split_facts(
+        "目的地确认重庆，出发地成都，2026-06-20出发，3天2晚，4个大人，继续下一阶段。"
+    )
+
+    assert facts["departure_city"] == "成都"
+    assert facts["destination"] == "重庆"
+    assert facts["departure_date"] == "2026-06-20"
+    assert facts["travel_days"] == 3
+    assert facts["adult_count"] == 4
+
+
+def test_fast_split_final_report_request_does_not_mutate_trip_facts():
+    facts = extract_fast_split_facts(
+        "请直接生成最终旅行规划报告和report_data，保留预算置信度、风险、待核验项和旅行社业务证据。"
+    )
+
+    assert facts == {
+        "raw_text": "请直接生成最终旅行规划报告和report_data，保留预算置信度、风险、待核验项和旅行社业务证据。",
+        "source": "first_turn_fast_split",
+    }
 
 
 def test_fast_split_state_seed_carries_facts_into_agency_mode():

@@ -210,6 +210,24 @@ def _clean_fast_place_candidate(value: str) -> str:
     return candidate
 
 
+def _extract_fast_labeled_place(text: str, label: str) -> str:
+    normalized = " ".join(str(text or "").split())
+    if not normalized:
+        return ""
+    patterns = (
+        rf"{label}(?:确认|定为|就是|是|为|[:：])\s*([一-龥]{{2,12}})",
+        rf"{label}\s*([一-龥]{{2,12}})",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, normalized)
+        if not match:
+            continue
+        candidate = _clean_fast_place_candidate(match.group(1))
+        if candidate:
+            return candidate
+    return ""
+
+
 def _extract_fast_route_places(text: str) -> tuple[str, str]:
     normalized = " ".join(str(text or "").split())
     if not normalized:
@@ -322,7 +340,10 @@ def _extract_fast_budget(text: str) -> str:
         normalized,
     )
     if not match:
-        match = re.search(r"预算\s*([^\s，,。；;]{1,12})", normalized)
+        match = re.search(
+            r"((?:预算\s*(?:人均|每人)?|(?:人均|每人)\s*预算?)\s*[约大概左右]*\s*[一二两三四五六七八九十百千万\d]+(?:\.\d+)?\s*(?:万|千)?\s*元?(?:左右|以内|上下)?)",
+            normalized,
+        )
     if not match:
         return ""
     budget = re.sub(r"\s+", "", match.group(1)).strip("，,。；;")
@@ -341,22 +362,24 @@ def extract_fast_split_facts(text: str, *, today: date | None = None) -> dict:
         return {}
 
     departure_city, destination = _extract_fast_route_places(normalized)
+    labeled_departure_city = _extract_fast_labeled_place(normalized, "出发地")
+    labeled_destination = _extract_fast_labeled_place(normalized, "目的地")
+    if labeled_departure_city:
+        departure_city = labeled_departure_city
+    if labeled_destination:
+        destination = labeled_destination
     if not destination:
         for known_destination in _FAST_DESTINATION_COPY:
             if known_destination in normalized:
                 destination = known_destination
                 break
     if not destination:
-        patterns = (
-            r"(?:想去|计划去|打算去|去|目的地是|目的地[:：]?)\s*([一-龥]{2,12}?)(?=玩|旅游|旅行|游|，|,|。|$)",
-            r"([一-龥]{2,12}?)(?:玩|旅游|旅行|游)",
+        match = re.search(
+            r"(?:想去|计划去|打算去|准备去|去|到|前往)\s*([一-龥]{2,12}?)(?=玩|旅游|旅行|游|出发|，|,|。|$)",
+            normalized,
         )
-        for pattern in patterns:
-            match = re.search(pattern, normalized)
-            if match:
-                destination = _clean_fast_place_candidate(match.group(1))
-                if destination:
-                    break
+        if match:
+            destination = _clean_fast_place_candidate(match.group(1))
 
     date_text, departure_date = _extract_fast_date(normalized, today=today)
     facts = {
@@ -893,13 +916,54 @@ def _session_busy_payload(
 
 def _extract_command_update(output) -> dict:
     """Extract LangGraph Command.update from a tool event output."""
+    state_like_keys = {
+        "messages",
+        "current_step",
+        "planning_mode",
+        "active_workflow",
+        "agency_step",
+        "user_requirement",
+        "confirmed_facts",
+        "selected_destination",
+        "selected_transport",
+        "selected_transport_option",
+        "selected_accommodation_types",
+        "selected_accommodation_option",
+        "selected_food_types",
+        "selected_food_pois",
+        "itinerary",
+        "journey_plan",
+        "planning_trace",
+        "budget",
+        "budget_confidence",
+        "report",
+        "report_data",
+        "order_id",
+        "evidence_bundle",
+    }
+
+    def _looks_like_state_update(candidate) -> bool:
+        return isinstance(candidate, dict) and any(
+            key in candidate for key in state_like_keys
+        )
+
     update = getattr(output, "update", None)
     if isinstance(update, dict):
         return update
+    model_dump = getattr(output, "model_dump", None)
+    if callable(model_dump):
+        dumped = model_dump()
+        if _looks_like_state_update(dumped):
+            return dumped
+        nested_update = dumped.get("update") if isinstance(dumped, dict) else None
+        if isinstance(nested_update, dict):
+            return nested_update
     if isinstance(output, dict):
         nested_update = output.get("update")
         if isinstance(nested_update, dict):
             return nested_update
+        if _looks_like_state_update(output):
+            return output
     return {}
 
 
