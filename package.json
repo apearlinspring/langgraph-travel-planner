@@ -2,7 +2,8 @@
   "private": true,
   "scripts": {
     "prepare:frontend-browser": "playwright install chromium",
-    "verify:frontend": "npm run verify:frontend-renderer && npm run verify:frontend-visual-journey && npm run verify:frontend-browser",
+    "verify:frontend": "npm run verify:frontend-renderer && npm run verify:frontend-visual-journey && npm run verify:frontend-browser && npm run verify:admin-browser",
+    "verify:admin-browser": "node scripts/verify_admin_dashboard_browser.js",
     "verify:frontend-renderer": "node scripts/verify_frontend_report_renderer.js",
     "verify:frontend-visual-journey": "node scripts/verify_frontend_visual_journey_browser.js",
     "verify:frontend-browser": "node scripts/verify_frontend_browser_regression.js"

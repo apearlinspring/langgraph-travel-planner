@@ -25,6 +25,7 @@ This directory contains formal project documentation for the public repository. 
 - Evaluation system: `评估与验收/evaluation-system.md`
 - Deployment template: `部署与运行/deployment-readiness.md`
 - Frontend report experience: `前端与演示/frontend-report-experience.md`
+- Stage change summary: `前端与演示/stage-change-summary-2026-06-03.md`
 
 ## Public Documentation Boundary
 

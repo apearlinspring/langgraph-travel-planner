@@ -1,8 +1,8 @@
 ﻿// === 逻辑代码保持不变，仅适配样式类名 ===
 
       let state = {
-        token: localStorage.getItem("token") || "",
-        user: JSON.parse(localStorage.getItem("user") || "null"),
+        token: "",
+        user: null,
         currentConversationId: null,
         conversations: [],
         isLoading: false,
@@ -29,6 +29,17 @@
         editingConversationId: null,
         renamingConversationId: null,
       };
+      const sessionApi = window.ZhiXingSessionApi;
+      const conversationApi = window.ZhiXingConversationApi;
+      const governanceApi = window.ZhiXingGovernanceApi;
+      const journeyApi = window.ZhiXingJourneyApi;
+      const journeyEditorFactory = window.ZhiXingJourneyEditor;
+      const journeyOverlayFactory = window.ZhiXingJourneyOverlay;
+      const mapControlsFactory = window.ZhiXingMapControls;
+      const reportBudgetFactory = window.ZhiXingReportBudget;
+      const reportExportFactory = window.ZhiXingReportExport;
+      const reportRendererFactory = window.ZhiXingReportRenderer;
+      const reportActionsFactory = window.ZhiXingReportActions;
       let toastTimer = null;
       let streamingScrollFrame = null;
       const composerDraftKey = "zhixing-composer-draft";
@@ -69,6 +80,25 @@
 
       const getApiBase = () =>
         document.getElementById("apiBase").value || getDefaultApiBase();
+      const buildApiRequestOptions = (options = {}) =>
+        sessionApi.buildApiRequestOptions(state.token, options);
+
+      async function restoreSessionFromCookie() {
+        const result = await sessionApi.restoreSessionFromCookie({
+          apiBase: getApiBase(),
+          stateToken: state.token,
+        });
+        if (result.ok) {
+          state.user = result.user;
+          return true;
+        }
+        if (result.error) {
+          console.warn("Session restore failed", result.error);
+        }
+        state.token = "";
+        state.user = null;
+        return false;
+      }
 
       const shouldShowApiConfig = () =>
         window.location.protocol === "file:" ||
@@ -78,14 +108,123 @@
         state.conversations.find((conv) => conv.id === state.currentConversationId);
 
       const isMobileViewport = () => window.innerWidth <= 900;
-      let journeyMapAssetsPromise = null;
-      let journeyAmapAssetsPromise = null;
-      let journeyMapConfigPromise = null;
-      let journeyMapRuntimeConfig = null;
       const journeyMapInstances = new WeakMap();
-      const journeyMapPreviewCache = new Map();
       const JOURNEY_MAP_DEGRADE_AFTER_MS = 180000;
       const DEFAULT_CONVERSATION_TITLE = "新行程";
+      const journeyEditor = journeyEditorFactory?.createJourneyEditor?.({
+        parseJourneyStopMeta: (...args) => parseJourneyStopMeta(...args),
+        getJourneyMapShellFromControl: (...args) => getJourneyMapShellFromControl(...args),
+        cloneJourneyDayPlans: (...args) => cloneJourneyDayPlans(...args),
+        normalizeJourneyDayPlanStops: (...args) => normalizeJourneyDayPlanStops(...args),
+        updateVisualJourneyPoiCards: (...args) => updateVisualJourneyPoiCards(...args),
+        refreshJourneyMapAfterEdit: (...args) => refreshJourneyMapAfterEdit(...args),
+        saveEditedJourneyDraft: (...args) => saveEditedJourneyDraft(...args),
+        showToast: (...args) => showToast(...args),
+        getVisualJourneyMapEntry: (...args) => getVisualJourneyMapEntry(...args),
+        setJourneyMapDaySelection: (...args) => setJourneyMapDaySelection(...args),
+        focusJourneyDayStop: (...args) => focusJourneyDayStop(...args),
+      });
+      const reportExport = reportExportFactory?.createReportExport?.({
+        getCurrentConversationTitle: () => getCurrentConversation()?.title || "",
+        escapeHtml: (...args) => escapeHtml(...args),
+      });
+      const reportActions = reportActionsFactory?.createReportActions?.({
+        appendToComposer: (...args) => appendToComposer(...args),
+        setRuntimeStatus: (...args) => setRuntimeStatus(...args),
+        showToast: (...args) => showToast(...args),
+        exportTravelReport: (...args) => reportExport?.exportTravelReport?.(...args),
+        focusJourneyMapTarget: (...args) => focusJourneyMapTarget(...args),
+        getJourneyMapEntry: (node) => journeyMapInstances.get(node) || null,
+        setJourneyMapDaySelection: (...args) => setJourneyMapDaySelection(...args),
+      });
+      const reportBudget = reportBudgetFactory?.createReportBudget?.({
+        normalizeSectionTitle: (...args) => normalizeSectionTitle(...args),
+        getMarkdownTableSpan: (...args) => getMarkdownTableSpan(...args),
+        splitTableCells: (...args) => splitTableCells(...args),
+        isMeaningfulBudgetAmount: (...args) => isMeaningfulBudgetAmount(...args),
+        renderAssistantLines: (...args) => renderAssistantLines(...args),
+        formatInlineText: (...args) => formatInlineText(...args),
+        escapeHtml: (...args) => escapeHtml(...args),
+      });
+      const reportRenderer = reportRendererFactory?.createReportRenderer?.({
+        escapeHtml: (...args) => escapeHtml(...args),
+        normalizeReportDataList: (...args) => normalizeReportDataList(...args),
+        renderTravelReportNextAction: (...args) => renderTravelReportNextAction(...args),
+        isStructuredTravelReportData: (...args) => isStructuredTravelReportData(...args),
+        buildReportDataViewModel: (...args) => buildReportDataViewModel(...args),
+        parseReportDataExpectedDays: (...args) => parseReportDataExpectedDays(...args),
+        formatReportDataMoney: (...args) => formatReportDataMoney(...args),
+        buildReportDataJourneyPreviewState: (...args) =>
+          buildReportDataJourneyPreviewState(...args),
+        renderJourneyPreview: (...args) => renderJourneyPreview(...args),
+        renderReportDataList: (...args) => renderReportDataList(...args),
+        renderReportDataDailyItinerary: (...args) => renderReportDataDailyItinerary(...args),
+        renderReportDataBudgetItems: (...args) => renderReportDataBudgetItems(...args),
+        renderReportDataBudgetConfidence: (...args) =>
+          renderReportDataBudgetConfidence(...args),
+        renderReportDataHandoffPanel: (...args) => renderReportDataHandoffPanel(...args),
+        renderReportDataGovernancePanel: (...args) =>
+          renderReportDataGovernancePanel(...args),
+        extractReportDayGroups: (...args) => extractReportDayGroups(...args),
+        parseJourneyDayNumber: (...args) => parseJourneyDayNumber(...args),
+        renderReportDailyNotReadyState: (...args) => renderReportDailyNotReadyState(...args),
+        renderAssistantLines: (...args) => renderAssistantLines(...args),
+        formatInlineText: (...args) => formatInlineText(...args),
+        renderReportBudgetBreakdown: (...args) => renderReportBudgetBreakdown(...args),
+        expandStructuredTravelBlocks: (...args) => expandStructuredTravelBlocks(...args),
+        hasTravelReportSignal: (...args) => hasTravelReportSignal(...args),
+        extractTravelReportSections: (...args) => extractTravelReportSections(...args),
+        extractJourneyCityPair: (...args) => extractJourneyCityPair(...args),
+        extractJourneyCityPairFromConversationTitle: (...args) =>
+          extractJourneyCityPairFromConversationTitle(...args),
+        getCurrentConversationTitle: () => getCurrentConversation()?.title || "",
+        extractReportExpectedDayCount: (...args) => extractReportExpectedDayCount(...args),
+        filterReportSummaryLines: (...args) => filterReportSummaryLines(...args),
+        buildJourneyPreviewState: (...args) => buildJourneyPreviewState(...args),
+        dedupeTravelReportSections: (...args) => dedupeTravelReportSections(...args),
+        mergeTravelReportDailySections: (...args) => mergeTravelReportDailySections(...args),
+        shouldRenderJourneyPreviewBlock: (...args) => shouldRenderJourneyPreviewBlock(...args),
+        inferTextTravelReportMode: (...args) => inferTextTravelReportMode(...args),
+        getReportPlanningModeMeta: (...args) => getReportPlanningModeMeta(...args),
+        reportBudget,
+      });
+      const journeyOverlayActions = journeyOverlayFactory?.createJourneyOverlayActions?.({
+        parseMapPayload: (...args) => parseMapPayload(...args),
+        mergeJourneyDayPlanSources: (...args) => mergeJourneyDayPlanSources(...args),
+        mergeMapPayloadWithDayPlans: (...args) => mergeMapPayloadWithDayPlans(...args),
+        serializeMapPayload: (...args) => serializeMapPayload(...args),
+        hydrateJourneyMap: (...args) => hydrateJourneyMap(...args),
+        getJourneyMapEntry: (node) => journeyMapInstances.get(node) || null,
+        escapeHtml: (...args) => escapeHtml(...args),
+        cloneJourneyDayPlans: (...args) => cloneJourneyDayPlans(...args),
+        normalizeJourneyDayPlanStops: (...args) => normalizeJourneyDayPlanStops(...args),
+        getJourneyReplacementCandidates: (...args) =>
+          getJourneyReplacementCandidates(...args),
+        normalizeJourneyPoiAsStop: (...args) => normalizeJourneyPoiAsStop(...args),
+        updateVisualJourneyPoiCards: (...args) => updateVisualJourneyPoiCards(...args),
+        refreshJourneyMapAfterEdit: (...args) => refreshJourneyMapAfterEdit(...args),
+        saveEditedJourneyDraft: (...args) => saveEditedJourneyDraft(...args),
+        showToast: (...args) => showToast(...args),
+        focusJourneyDayStop: (...args) => focusJourneyDayStop(...args),
+        parseJourneyStopMeta: (...args) => parseJourneyStopMeta(...args),
+        appendToComposer: (...args) => appendToComposer(...args),
+        setRuntimeStatus: (...args) => setRuntimeStatus(...args),
+      });
+      const mapControls = mapControlsFactory?.createMapControls?.({
+        getJourneyMapEntry: (node) => journeyMapInstances.get(node) || null,
+        syncJourneyMapToggleLabels: (...args) => syncJourneyMapToggleLabels(...args),
+        fitJourneyMapState: (...args) => fitJourneyMapState(...args),
+        toggleJourneyRecommendations: (...args) => toggleJourneyRecommendations(...args),
+        applyJourneyDayView: (...args) => applyJourneyDayView(...args),
+        setJourneyMapStyle: (...args) => setJourneyMapStyle(...args),
+        focusJourneyMapTarget: (...args) => focusJourneyMapTarget(...args),
+        setJourneyMapDaySelection: (...args) => setJourneyMapDaySelection(...args),
+        setJourneyMapDayMode: (...args) => setJourneyMapDayMode(...args),
+        activateJourneyBottomStop: (...args) => activateJourneyBottomStop(...args),
+        focusJourneyDayStop: (...args) => focusJourneyDayStop(...args),
+        openJourneyMapModalFromButton: (...args) =>
+          journeyOverlayActions?.openJourneyMapModalFromButton?.(...args),
+      });
 
       function serializeMapPayload(payload) {
         return encodeURIComponent(JSON.stringify(payload));
@@ -97,169 +236,6 @@
         } catch (error) {
           return null;
         }
-      }
-
-      function loadScriptOnce(src) {
-        return new Promise((resolve, reject) => {
-          const existing = document.querySelector(`script[data-src="${src}"]`);
-          if (existing) {
-            existing.addEventListener("load", () => resolve(), { once: true });
-            existing.addEventListener("error", reject, { once: true });
-            if (existing.dataset.loaded === "1") resolve();
-            return;
-          }
-
-          const script = document.createElement("script");
-          script.src = src;
-          script.async = true;
-          script.dataset.src = src;
-          script.onload = () => {
-            script.dataset.loaded = "1";
-            resolve();
-          };
-          script.onerror = reject;
-          document.head.appendChild(script);
-        });
-      }
-
-      function ensureStylesheet(href) {
-        if (document.querySelector(`link[data-href="${href}"]`)) return;
-        const link = document.createElement("link");
-        link.rel = "stylesheet";
-        link.href = href;
-        link.dataset.href = href;
-        document.head.appendChild(link);
-      }
-
-      async function loadJourneyMapAssets() {
-        if (window.L) return window.L;
-        if (!journeyMapAssetsPromise) {
-          journeyMapAssetsPromise = (async () => {
-            ensureStylesheet(
-              "https://cdn.bootcdn.net/ajax/libs/leaflet/1.9.4/leaflet.min.css"
-            );
-            await loadScriptOnce(
-              "https://cdn.bootcdn.net/ajax/libs/leaflet/1.9.4/leaflet.js"
-            );
-            return window.L;
-          })().catch((error) => {
-            journeyMapAssetsPromise = null;
-            throw error;
-          });
-        }
-        return journeyMapAssetsPromise;
-      }
-
-      function getFallbackJourneyMapConfig() {
-        return {
-          preferred_provider: "leaflet-osm",
-          amap_web_js_key: "",
-          amap_web_js_key_configured: false,
-          fallback_provider: "leaflet-osm",
-        };
-      }
-
-      async function fetchJourneyMapConfig() {
-        if (journeyMapRuntimeConfig) return journeyMapRuntimeConfig;
-        if (!journeyMapConfigPromise) {
-          journeyMapConfigPromise = (async () => {
-            try {
-              const response = await fetch(`${getApiBase()}/api/v1/maps/config`, {
-                headers: state.token ? { Authorization: `Bearer ${state.token}` } : {},
-              });
-              if (!response.ok) throw new Error(`map-config-${response.status}`);
-              const data = await response.json();
-              journeyMapRuntimeConfig = {
-                ...getFallbackJourneyMapConfig(),
-                ...(data || {}),
-              };
-            } catch (error) {
-              journeyMapRuntimeConfig = getFallbackJourneyMapConfig();
-            }
-            return journeyMapRuntimeConfig;
-          })().finally(() => {
-            journeyMapConfigPromise = null;
-          });
-        }
-        return journeyMapConfigPromise;
-      }
-
-      async function loadAmapJourneyMapAssets(webKey = "") {
-        const key = String(webKey || "").trim();
-        if (!key) return null;
-        if (window.AMap) return window.AMap;
-        if (!journeyAmapAssetsPromise) {
-          journeyAmapAssetsPromise = loadScriptOnce(
-            `https://webapi.amap.com/maps?v=2.0&key=${encodeURIComponent(
-              key
-            )}&plugin=AMap.Scale,AMap.ToolBar`
-          )
-            .then(() => window.AMap || null)
-            .catch((error) => {
-              journeyAmapAssetsPromise = null;
-              throw error;
-            });
-        }
-        return journeyAmapAssetsPromise;
-      }
-
-      async function fetchJourneyMapPreview(payload) {
-        const cacheKey = JSON.stringify(payload || {});
-        const cached = journeyMapPreviewCache.get(cacheKey);
-        const now = Date.now();
-        if (cached?.data && now - cached.timestamp < 10 * 60 * 1000) {
-          return JSON.parse(JSON.stringify(cached.data));
-        }
-        if (cached?.promise) {
-          return cached.promise;
-        }
-        const requestPromise = (async () => {
-          const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 12000);
-          const startedAt = performance.now();
-          let response;
-          try {
-            response = await fetch(`${getApiBase()}/api/v1/maps/preview`, {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                ...(state.token ? { Authorization: `Bearer ${state.token}` } : {}),
-              },
-              body: JSON.stringify(payload),
-              signal: controller.signal,
-            });
-            if (!response.ok) {
-              throw new Error(`map-preview-${response.status}`);
-            }
-          } finally {
-            clearTimeout(timeoutId);
-          }
-          const data = await response.json();
-          data.client_elapsed_seconds = Number(((performance.now() - startedAt) / 1000).toFixed(3));
-          if (data.status === "degraded") {
-            console.warn("Map preview degraded", {
-              elapsedSeconds: data.client_elapsed_seconds,
-              serverElapsedSeconds: data.elapsed_seconds,
-              message: data.message,
-            });
-          }
-          journeyMapPreviewCache.set(cacheKey, {
-            data,
-            timestamp: Date.now(),
-          });
-          return data;
-        })().catch((error) => {
-          journeyMapPreviewCache.delete(cacheKey);
-          if (error?.name === "AbortError") {
-            console.warn("Map preview aborted after 12s", { payload });
-          }
-          throw error;
-        });
-        journeyMapPreviewCache.set(cacheKey, {
-          promise: requestPromise,
-          timestamp: now,
-        });
-        return requestPromise;
       }
 
       function buildBoundsFromPoints(L, points = []) {
@@ -812,121 +788,6 @@
         }
         sheet.hidden = false;
         requestAnimationFrame(() => sheet.classList.add("show"));
-      }
-
-      function replaceJourneyPoiFromSheet(sheet, button) {
-        const shell = sheet?.closest(".journey-live-map-shell");
-        const workbench = sheet?.closest(".visual-journey-workbench");
-        const dayKey = sheet?.dataset?.poiDayKey || "";
-        const stopIndex = Number(sheet?.dataset?.poiStopIndex || "-1");
-        if (!shell || !workbench || !dayKey || !Number.isInteger(stopIndex)) return false;
-        const dayPlans = cloneJourneyDayPlans(shell).map(normalizeJourneyDayPlanStops);
-        const day = dayPlans.find((item) => item.key === dayKey);
-        if (!day || !Array.isArray(day.stops) || !day.stops[stopIndex]) return false;
-        const candidates = getJourneyReplacementCandidates(workbench, dayPlans, dayKey, stopIndex);
-        const candidateId = button?.dataset?.replacementPoiId || "";
-        const candidate =
-          candidates.find((poi) => poi.id && poi.id === candidateId) || candidates[0];
-        if (!candidate) return false;
-        const previousName = day.stops[stopIndex].name || "当前地点";
-        day.stops[stopIndex] = normalizeJourneyPoiAsStop(candidate, day.stops[stopIndex]);
-        const normalizedDayPlans = dayPlans.map(normalizeJourneyDayPlanStops);
-        updateVisualJourneyPoiCards(workbench, normalizedDayPlans);
-        refreshJourneyMapAfterEdit(shell, normalizedDayPlans);
-        saveEditedJourneyDraft(workbench, normalizedDayPlans);
-        showToast(`已将 ${previousName} 替换为 ${candidate.name}`);
-        return true;
-      }
-
-      function applyJourneyRecommendationFromSheet(sheet, options = {}) {
-        const shell = sheet?.closest(".journey-live-map-shell");
-        const workbench = sheet?.closest(".visual-journey-workbench");
-        const dayKey = sheet?.dataset?.recommendationDayKey || "";
-        const candidate = parseMapPayload(sheet?.dataset?.recommendationPoi || "");
-        if (!shell || !workbench || !dayKey || !candidate?.name) return false;
-
-        const dayPlans = cloneJourneyDayPlans(shell).map(normalizeJourneyDayPlanStops);
-        const day = dayPlans.find((item) => item.key === dayKey);
-        if (!day || !Array.isArray(day.stops)) return false;
-
-        const normalizedCandidate = normalizeJourneyPoiAsStop(candidate, {
-          city: day.city || "",
-        });
-        const duplicateIndex = day.stops.findIndex(
-          (stop) =>
-            (normalizedCandidate.id && stop.id === normalizedCandidate.id) ||
-            normalizeJourneyMatchText(stop.name || "") ===
-              normalizeJourneyMatchText(normalizedCandidate.name || "")
-        );
-        if (duplicateIndex >= 0) {
-          focusJourneyDayStop(
-            journeyMapInstances.get(shell.querySelector(".journey-live-map[data-map-payload]")),
-            dayKey,
-            duplicateIndex
-          );
-          showToast(`${normalizedCandidate.name} 已在当天路线中`);
-          return true;
-        }
-
-        const activeMeta = parseJourneyStopMeta(
-          shell.querySelector(".journey-map-stage-stop.active[data-map-day-stop]")?.dataset
-            ?.mapDayStop || ""
-        );
-        const activeIndex =
-          activeMeta?.dayKey === dayKey && Number.isInteger(activeMeta.stopIndex)
-            ? activeMeta.stopIndex
-            : -1;
-
-        if (options.replace) {
-          const replaceIndex = activeIndex >= 0 ? activeIndex : 0;
-          if (!day.stops[replaceIndex]) return false;
-          const previousName = day.stops[replaceIndex].name || "当天首点";
-          day.stops[replaceIndex] = normalizedCandidate;
-          showToast(`已将 ${previousName} 替换为 ${normalizedCandidate.name}`);
-        } else {
-          const insertIndex = activeIndex >= 0 ? activeIndex + 1 : day.stops.length;
-          day.stops.splice(insertIndex, 0, normalizedCandidate);
-          showToast(`已把 ${normalizedCandidate.name} 加入 ${day.label || "当天"}`);
-        }
-
-        const normalizedDayPlans = dayPlans.map(normalizeJourneyDayPlanStops);
-        updateVisualJourneyPoiCards(workbench, normalizedDayPlans);
-        refreshJourneyMapAfterEdit(shell, normalizedDayPlans);
-        saveEditedJourneyDraft(workbench, normalizedDayPlans);
-        return true;
-      }
-
-      function handleJourneyPoiSheetAction(button) {
-        const action = button?.dataset?.poiSheetAction || "";
-        const sheet = button?.closest(".journey-poi-bottom-sheet");
-        const title = sheet?.dataset?.poiTitle || "这个地点";
-        const dayLabel = sheet?.dataset?.poiDayLabel || "当天";
-        if (action === "replace" && replaceJourneyPoiFromSheet(sheet, button)) {
-          return;
-        }
-        if (
-          action === "add-recommendation" &&
-          applyJourneyRecommendationFromSheet(sheet, { replace: false })
-        ) {
-          return;
-        }
-        if (
-          action === "replace-recommendation" &&
-          applyJourneyRecommendationFromSheet(sheet, { replace: true })
-        ) {
-          return;
-        }
-        const prompts = {
-          replace: `把${dayLabel}的「${title}」替换成同片区、更适合当前节奏的备选地点，并同步刷新地图路线。`,
-          "add-recommendation": `把推荐点「${title}」加入${dayLabel}，并同步刷新地图路线。`,
-          "replace-recommendation": `用推荐点「${title}」替换${dayLabel}当前不合适的地点，并同步刷新地图路线。`,
-          verify: `继续核验「${title}」的开放时间、门票/预约，以及它和前后地点之间的交通距离与时长。`,
-          keep: `我想保留「${title}」，请基于当前可视化旅程继续补交通、酒店、预算和最终报告所需信息。`,
-        };
-        const prompt = prompts[action];
-        if (!prompt) return;
-        appendToComposer(prompt, "replace");
-        setRuntimeStatus("已把地点调整请求填入输入框", "online");
       }
 
       function renderJourneyDayInsight(entry) {
@@ -1660,7 +1521,9 @@
       }
 
       async function renderAmapJourneyMap(node, payload, preview, mapConfig) {
-        const AMap = await loadAmapJourneyMapAssets(mapConfig?.amap_web_js_key);
+        const AMap = await journeyApi.loadAmapJourneyMapAssets(
+          mapConfig?.amap_web_js_key
+        );
         if (!AMap) throw new Error("amap-sdk-unavailable");
         const points = Array.isArray(preview?.points) ? preview.points : [];
         if (!points.length) throw new Error("map-preview-empty");
@@ -1878,7 +1741,11 @@
         }, JOURNEY_MAP_DEGRADE_AFTER_MS);
 
         try {
-          const preview = await fetchJourneyMapPreview(payload);
+          const preview = await journeyApi.fetchJourneyMapPreview({
+            apiBase: getApiBase(),
+            stateToken: state.token,
+            payload,
+          });
           if (node.dataset.mapDegraded === "timeout") {
             return;
           }
@@ -1889,8 +1756,11 @@
 
           const mapConfig =
             preview?.provider === "amap-js"
-              ? await fetchJourneyMapConfig()
-              : getFallbackJourneyMapConfig();
+              ? await journeyApi.fetchJourneyMapConfig({
+                  apiBase: getApiBase(),
+                  stateToken: state.token,
+                })
+              : journeyApi.getFallbackJourneyMapConfig();
           if (shouldUseAmapJourneyMap(preview, mapConfig)) {
             try {
               await renderAmapJourneyMap(node, payload, preview, mapConfig);
@@ -1901,7 +1771,7 @@
             }
           }
 
-          const L = await loadJourneyMapAssets();
+          const L = await journeyApi.loadJourneyMapAssets();
           node.innerHTML = "";
           node.classList.remove("journey-live-map--amap");
           const map = L.map(node, {
@@ -2157,14 +2027,6 @@
         requestAnimationFrame(() => hydrateJourneyMaps(root));
       }
 
-      function closeJourneyMapModal() {
-        const modal = document.getElementById("journeyMapModal");
-        if (!modal) return;
-        modal.classList.remove("show");
-        modal.setAttribute("aria-hidden", "true");
-        document.body.classList.remove("journey-map-modal-open");
-      }
-
       function getJourneyPlanDayNumber(day = {}, fallback = 0) {
         const explicit = Number(day.dayNumber || day.day_number || day.day || 0);
         if (explicit > 0) return explicit;
@@ -2290,64 +2152,6 @@
         return payload;
       }
 
-      function openJourneyMapModalFromButton(button) {
-        const shell = button.closest(".journey-live-map-shell");
-        const sourceMap = shell?.querySelector(".journey-live-map[data-map-payload]");
-        const modal = document.getElementById("journeyMapModal");
-        const modalShell = document.getElementById("journeyMapModalShell");
-        const modalDays = document.getElementById("journeyMapModalDays");
-        if (!shell || !sourceMap || !modal) return;
-        const sourcePayload = parseMapPayload(sourceMap.dataset.mapPayload || "") || {};
-        const sourceEntry = journeyMapInstances.get(sourceMap);
-        const title = shell.dataset.mapTitle || "路线地图";
-        const dayPlans = mergeJourneyDayPlanSources(
-          shell.dataset.dayPlans || "",
-          sourceEntry?.dayPlans || [],
-          sourcePayload?.days || []
-        );
-        const modalPayload = mergeMapPayloadWithDayPlans(sourcePayload, dayPlans);
-        const modalTitle = modal.querySelector(".journey-map-modal-title");
-        const modalMap = modal.querySelector(".journey-live-map-modal-canvas");
-        if (!modalTitle || !modalMap) return;
-        modalTitle.textContent = title;
-        if (modalShell) {
-          modalShell.dataset.mapTitle = title;
-          modalShell.dataset.dayPlans = serializeMapPayload(dayPlans);
-          modalShell.dataset.routeStops = shell.dataset.routeStops || "[]";
-          modalShell.dataset.activeDay = "all";
-          modalShell.dataset.dayMode = "solo";
-        }
-        if (modalDays) {
-          modalDays.innerHTML = `
-            <button class="journey-map-day-btn active" type="button" data-map-day="all" aria-pressed="true" title="查看全程总览">
-              <span>总览</span><small>全程</small>
-            </button>
-            ${dayPlans
-              .map(
-                (day, index) => `
-                  <button class="journey-map-day-btn" type="button" data-map-day="${escapeHtml(
-                    day.key || `day-${index + 1}`
-                  )}" aria-pressed="false" title="${escapeHtml(day.label || `Day ${index + 1}`)}">
-                    <span>${escapeHtml(day.label || `Day ${index + 1}`)}</span>
-                    <small>单日</small>
-                  </button>
-                `
-              )
-              .join("")}
-          `;
-        }
-        modalMap.dataset.mapPayload = serializeMapPayload(modalPayload);
-        modalMap.dataset.dayPlans = serializeMapPayload(dayPlans);
-        modalMap.dataset.routeStops = shell.dataset.routeStops || "[]";
-        modalMap.dataset.mapReady = "";
-        modalMap.innerHTML =
-          '<div class="journey-live-map-state loading">正在准备大图地图…</div>';
-        modal.classList.add("show");
-        modal.setAttribute("aria-hidden", "false");
-        document.body.classList.add("journey-map-modal-open");
-        hydrateJourneyMap(modalMap);
-      }
-
       function syncJourneyMapToggleLabels(shell) {
         if (!shell) return;
         const toolsCollapsed = shell.classList.contains("journey-map-tools-collapsed");
@@ -2380,158 +2184,6 @@
             button.setAttribute("aria-expanded", String(!collapsed));
           });
 
-      }
-
-      function handleJourneyMapAction(button) {
-        if (button.disabled) return;
-        const action = button.dataset.mapAction || "";
-        const shell = button.closest(".journey-live-map-shell");
-        if (action === "toggle-tools") {
-          shell?.classList.toggle("journey-map-tools-collapsed");
-          syncJourneyMapToggleLabels(shell);
-          return;
-        }
-        if (action === "toggle-sidebar") {
-          shell?.classList.toggle("journey-map-sidebar-collapsed");
-          syncJourneyMapToggleLabels(shell);
-          const mapNode = shell?.querySelector(".journey-live-map[data-map-payload]");
-          const entry = mapNode ? journeyMapInstances.get(mapNode) : null;
-          setTimeout(() => entry?.map?.invalidateSize(), 80);
-          return;
-        }
-        if (action === "toggle-day-routes") {
-          const routesCard = button.closest(".journey-map-sidebar-routes");
-          routesCard?.classList.toggle("is-collapsed");
-          syncJourneyMapToggleLabels(shell);
-          return;
-        }
-        if (action === "expand") {
-          openJourneyMapModalFromButton(button);
-          return;
-        }
-
-        const node = shell?.querySelector(".journey-live-map[data-map-payload]");
-        if (!node) return;
-        const entry = journeyMapInstances.get(node);
-        if (action === "recommendations") {
-          toggleJourneyRecommendations(entry);
-          return;
-        }
-        if (action === "highlights") {
-          entry.recommendationsVisible = true;
-          applyJourneyDayView(entry);
-        }
-        fitJourneyMapState(entry, action === "highlights" ? "highlights" : "route");
-
-        shell.querySelectorAll(".journey-map-action-btn").forEach((btn) => {
-          const shouldActivate =
-            btn.dataset.mapAction === action &&
-            (action === "route" || action === "highlights");
-          btn.classList.toggle("active", shouldActivate);
-          if (
-            btn.dataset.mapAction === "route" ||
-            btn.dataset.mapAction === "highlights"
-          ) {
-            btn.setAttribute("aria-pressed", String(shouldActivate));
-          }
-        });
-      }
-
-      function handleJourneyMapStyle(button) {
-        if (button.disabled) return;
-        const style = button.dataset.mapStyle || "standard";
-        const shell = button.closest(".journey-live-map-shell");
-        const node = shell?.querySelector(".journey-live-map[data-map-payload]");
-        if (!node) return;
-        const entry = journeyMapInstances.get(node);
-        setJourneyMapStyle(entry, style);
-
-        shell.querySelectorAll(".journey-map-style-btn").forEach((btn) => {
-          const isActive = btn === button;
-          btn.classList.toggle("active", isActive);
-          btn.setAttribute("aria-pressed", String(isActive));
-        });
-      }
-
-      function handleJourneyMapFocus(button) {
-        if (button.disabled) return;
-        const focus = button.dataset.mapFocus || "destination";
-        const shell = button.closest(".journey-live-map-shell");
-        const node = shell?.querySelector(".journey-live-map[data-map-payload]");
-        if (!node) return;
-        const entry = journeyMapInstances.get(node);
-        focusJourneyMapTarget(entry, focus);
-
-        shell.querySelectorAll(".journey-map-focus-btn").forEach((btn) => {
-          btn.classList.toggle("active", btn === button);
-        });
-      }
-
-      function handleJourneyMapDay(button) {
-        if (button.disabled) return;
-        const dayKey = button.dataset.mapDay || "all";
-        const shell = button.closest(".journey-live-map-shell");
-        const node = shell?.querySelector(".journey-live-map[data-map-payload]");
-        if (!node) return;
-        const entry = journeyMapInstances.get(node);
-        setJourneyMapDaySelection(entry, dayKey);
-      }
-
-      function handleJourneyMapDayMode(button) {
-        if (button.disabled) return;
-        const mode = button.dataset.mapDayMode || "solo";
-        const shell = button.closest(".journey-live-map-shell");
-        const node = shell?.querySelector(".journey-live-map[data-map-payload]");
-        if (!node) return;
-        const entry = journeyMapInstances.get(node);
-        setJourneyMapDayMode(entry, mode);
-      }
-
-      function handleJourneyMapStageStop(button) {
-        const stopMeta = button.dataset.mapDayStop || "";
-        const shell = button.closest(".journey-live-map-shell");
-        const node = shell?.querySelector(".journey-live-map[data-map-payload]");
-        if (!node) return;
-        const entry = journeyMapInstances.get(node);
-
-        if (stopMeta.includes(":")) {
-          const [dayKey, stopIndexText] = stopMeta.split(":");
-          const stopIndex = Number(stopIndexText);
-          activateJourneyBottomStop(shell, dayKey, Number.isNaN(stopIndex) ? 0 : stopIndex);
-          focusJourneyDayStop(entry, dayKey, Number.isNaN(stopIndex) ? 0 : stopIndex);
-          return;
-        }
-
-        const focusTarget = button.dataset.mapFocus || "";
-        if (focusTarget) {
-          focusJourneyMapTarget(entry, focusTarget);
-        }
-      }
-
-      function focusJourneyMapFromPlan(button, target = "destination") {
-        const plan = button.closest(".travel-plan");
-        const shell = plan?.querySelector(".journey-live-map-shell");
-        const node = plan?.querySelector(".journey-live-map[data-map-payload]");
-        if (!node) return;
-        shell?.scrollIntoView({ behavior: "smooth", block: "start" });
-        const entry = journeyMapInstances.get(node);
-        focusJourneyMapTarget(entry, target);
-        if (target === "stay") {
-          showToast("已定位到落脚点和周边参考");
-        } else if (target === "highlights") {
-          showToast("已定位到沿途看点");
-        } else {
-          showToast("已定位到路线地图");
-        }
-      }
-
-      function focusJourneyMapDayFromPlan(button) {
-        const dayKey = button.dataset.mapDayFocus || "all";
-        const plan = button.closest(".travel-plan");
-        const node = plan?.querySelector(".journey-live-map[data-map-payload]");
-        if (!node) return;
-        const entry = journeyMapInstances.get(node);
-        setJourneyMapDaySelection(entry, dayKey);
       }
 
       function getVisualJourneyMapEntry(control) {
@@ -3026,95 +2678,23 @@
       }
 
       async function saveEditedJourneyDraft(workbench, dayPlans) {
-        if (!state.token || !state.currentConversationId || !workbench) return;
+        if (!state.user || !state.currentConversationId || !workbench) return;
         const journeyData = buildJourneyDataFromEditedPlans(workbench, dayPlans);
         if (!journeyData) return;
         workbench.dataset.journeyData = serializeMapPayload(journeyData);
         try {
-          const response = await fetch(
-            `${getApiBase()}/api/v1/chat/journey/${state.currentConversationId}`,
-            {
-              method: "PATCH",
-              headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${state.token}`,
-              },
-              body: JSON.stringify({
-                journey_data: journeyData,
-                source: "frontend_visual_editor",
-              }),
-            }
-          );
+          const { response } = await journeyApi.saveJourneyDraft({
+            apiBase: getApiBase(),
+            stateToken: state.token,
+            conversationId: state.currentConversationId,
+            journeyData,
+          });
           if (!response.ok) throw new Error(`journey-save-${response.status}`);
           showToast("路线草案已保存");
         } catch (error) {
           console.error(error);
           showToast("路线已本地更新，保存到会话失败", true);
         }
-      }
-
-      function handleJourneyEditAction(button) {
-        if (button.disabled) return;
-        const action = button.dataset.journeyEditAction || "";
-        const meta = parseJourneyStopMeta(button.dataset.mapDayStop || "");
-        const shell = getJourneyMapShellFromControl(button);
-        if (!action || !meta || !shell) return;
-        const dayPlans = cloneJourneyDayPlans(shell).map(normalizeJourneyDayPlanStops);
-        const day = dayPlans.find((item) => item.key === meta.dayKey);
-        if (!day || !Array.isArray(day.stops)) return;
-        const index = meta.stopIndex;
-        if (index < 0 || index >= day.stops.length) return;
-
-        if (action === "delete") {
-          if (day.stops.length <= 1) {
-            showToast("当天至少保留一个地点", true);
-            return;
-          }
-          day.stops.splice(index, 1);
-        } else if (action === "up" && index > 0) {
-          [day.stops[index - 1], day.stops[index]] = [day.stops[index], day.stops[index - 1]];
-        } else if (action === "down" && index < day.stops.length - 1) {
-          [day.stops[index], day.stops[index + 1]] = [day.stops[index + 1], day.stops[index]];
-        } else {
-          return;
-        }
-        const normalizedDayPlans = dayPlans.map(normalizeJourneyDayPlanStops);
-        updateVisualJourneyPoiCards(
-          button.closest(".visual-journey-workbench"),
-          normalizedDayPlans
-        );
-        refreshJourneyMapAfterEdit(shell, normalizedDayPlans);
-        saveEditedJourneyDraft(
-          button.closest(".visual-journey-workbench"),
-          normalizedDayPlans
-        );
-        showToast("已更新当天路线顺序");
-      }
-
-      function handleVisualJourneyDayFocus(button) {
-        const dayKey = button.dataset.mapDayFocus || "all";
-        const entry = getVisualJourneyMapEntry(button);
-        if (!entry) return;
-        setJourneyMapDaySelection(entry, dayKey);
-        button
-          .closest(".visual-journey-workbench")
-          ?.querySelector(".journey-live-map-shell")
-          ?.scrollIntoView({ behavior: "smooth", block: "center" });
-      }
-
-      function handleVisualJourneyPoiFocus(button) {
-        const stopMeta = button.dataset.mapDayStop || "";
-        const entry = getVisualJourneyMapEntry(button);
-        if (!entry) return;
-        if (stopMeta.includes(":")) {
-          const [dayKey, stopIndexText] = stopMeta.split(":");
-          const stopIndex = Number(stopIndexText);
-          focusJourneyDayStop(entry, dayKey, Number.isNaN(stopIndex) ? 0 : stopIndex);
-        }
-        button
-          .closest(".visual-journey-workbench")
-          ?.querySelector(".journey-live-map-shell")
-          ?.scrollIntoView({ behavior: "smooth", block: "center" });
       }
 
       function showIntroOverlay() {
@@ -3239,7 +2819,7 @@
       }
 
       function setMobileChatFocus(enabled) {
-        const shouldFocus = Boolean(enabled && isMobileViewport() && state.token);
+        const shouldFocus = Boolean(enabled && isMobileViewport() && state.user);
         state.mobileChatFocus = shouldFocus;
         document.body.classList.toggle("mobile-chat-focus", shouldFocus);
       }
@@ -3657,6 +3237,12 @@
 
       function canRequestAllApprovals() {
         return ["approver", "admin"].includes(getCurrentUserRole());
+      }
+
+      function syncAdminPortalVisibility() {
+        const link = document.getElementById("adminPortalLink");
+        if (!link) return;
+        link.hidden = !canRequestAllApprovals();
       }
 
       function redactClientText(value = "", maxLength = 180) {
@@ -4219,7 +3805,7 @@
           btn.classList.toggle("active", btn.dataset.approvalFilter === filter);
         });
 
-        if (!state.token) {
+        if (!state.user) {
           list.innerHTML = '<div class="governance-empty">登录后展示人工确认记录。</div>';
           return;
         }
@@ -4340,20 +3926,18 @@
       }
 
       async function loadApprovalEvents(approvalId) {
-        if (!approvalId || !state.token || !isServiceUsable()) {
+        if (!approvalId || !state.user || !isServiceUsable()) {
           state.governance.approvalEvents = [];
           renderApprovalEvents();
           return;
         }
         try {
-          const response = await fetch(
-            `${getApiBase()}/api/v1/approvals/${encodeURIComponent(approvalId)}/events`,
-            {
-              headers: { Authorization: `Bearer ${state.token}` },
-            }
-          );
+          const { response, data } = await governanceApi.fetchApprovalEvents({
+            apiBase: getApiBase(),
+            stateToken: state.token,
+            approvalId,
+          });
           if (!response.ok) throw new Error(`HTTP ${response.status}`);
-          const data = await response.json();
           state.governance.approvalEvents = Array.isArray(data.events)
             ? data.events
             : [];
@@ -4365,7 +3949,7 @@
       }
 
       async function loadApprovals({ silent = true } = {}) {
-        if (!state.token || !isServiceUsable()) {
+        if (!state.user || !isServiceUsable()) {
           state.governance.approvals = [];
           state.governance.approvalEvents = [];
           renderApprovalList();
@@ -4376,16 +3960,14 @@
         syncUiAvailability();
         renderApprovalList();
         const params = new URLSearchParams();
-        if (canRequestAllApprovals()) params.set("scope", "all");
-        if (state.governance.approvalFilter === "pending") {
-          params.set("status", "pending");
-        }
         try {
-          const response = await fetch(`${getApiBase()}/api/v1/approvals?${params}`, {
-            headers: { Authorization: `Bearer ${state.token}` },
+          const { response, data } = await governanceApi.fetchApprovals({
+            apiBase: getApiBase(),
+            stateToken: state.token,
+            filter: state.governance.approvalFilter,
+            canRequestAll: canRequestAllApprovals(),
           });
           if (!response.ok) throw new Error(`HTTP ${response.status}`);
-          const data = await response.json();
           state.governance.approvals = Array.isArray(data.approvals)
             ? data.approvals
             : [];
@@ -4433,31 +4015,18 @@
 
       async function createDemoApproval() {
         if (!(await ensureServiceReady("创建人工确认记录"))) return;
-        if (!state.token) {
+        if (!state.user) {
           showToast("请先登录后再创建人工确认记录。", true);
           return;
         }
         state.governance.isApprovalLoading = true;
         syncUiAvailability();
         try {
-          const response = await fetch(`${getApiBase()}/api/v1/approvals`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${state.token}`,
-            },
-            body: JSON.stringify({
-              action: "real_payment",
-              reason: "未来真实支付接入前必须经过人工确认",
-              conversation_id: state.currentConversationId,
-              metadata: {
-                source: "frontend_governance_console",
-                demo: true,
-              },
-              expires_in_seconds: 3600,
-            }),
+          const { response, data } = await governanceApi.createDemoApproval({
+            apiBase: getApiBase(),
+            stateToken: state.token,
+            conversationId: state.currentConversationId,
           });
-          const data = await response.json().catch(() => ({}));
           if (!response.ok) {
             throw new Error(data?.detail?.message || `HTTP ${response.status}`);
           }
@@ -4484,23 +4053,13 @@
           expire: "",
         };
         try {
-          const response = await fetch(
-            `${getApiBase()}/api/v1/approvals/${encodeURIComponent(
-              approvalId
-            )}/${decisionPath}`,
-            {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${state.token}`,
-              },
-              body:
-                decision === "expire"
-                  ? undefined
-                  : JSON.stringify({ reason: decisionCopy[decision] }),
-            }
-          );
-          const data = await response.json().catch(() => ({}));
+          const { response, data } = await governanceApi.submitApprovalDecision({
+            apiBase: getApiBase(),
+            stateToken: state.token,
+            approvalId,
+            decisionPath,
+            reason: decision === "expire" ? "" : decisionCopy[decision],
+          });
           if (!response.ok) {
             const message =
               data?.detail?.message ||
@@ -4553,11 +4112,12 @@
         }
         if (createDemoApprovalBtn) {
           createDemoApprovalBtn.disabled =
-            !healthy || !state.token || state.governance.isApprovalLoading;
+            !healthy || !state.user || state.governance.isApprovalLoading;
         }
         document.querySelectorAll("[data-planner-control='true']").forEach((el) => {
           el.disabled = !healthy;
         });
+        syncAdminPortalVisibility();
         updateEndpointUI();
       }
 
@@ -4591,13 +4151,11 @@
         try {
           const controller = new AbortController();
           const timeoutId = setTimeout(() => controller.abort(), 8000);
-          const response = await fetch(`${getApiBase()}/health/ready`, {
+          const { response, data } = await governanceApi.fetchReadiness({
+            apiBase: getApiBase(),
             signal: controller.signal,
-            headers: { Accept: "application/json" },
           });
           clearTimeout(timeoutId);
-
-          const data = await response.json().catch(() => null);
           if (!data?.status) {
             throw new Error(`HTTP ${response.status}`);
           }
@@ -4612,7 +4170,7 @@
           if (data.status === "ready" && data.startup_complete) {
             state.serviceStatus = "ready";
             state.lastHealthCheckAt = Date.now();
-            setRuntimeStatus(state.token ? "已连接" : "服务就绪", "online");
+          setRuntimeStatus(state.user ? "已连接" : "服务就绪", "online");
             updateEndpointTone("idle");
             setAuthServiceHint(
               "服务已就绪，可以登录、创建会话并开始规划行程。",
@@ -4632,7 +4190,7 @@
           if (data.status === "degraded" && data.startup_complete) {
             state.serviceStatus = "degraded";
             state.lastHealthCheckAt = Date.now();
-            setRuntimeStatus(state.token ? "已连接 · 降级" : "服务降级可用", "online");
+          setRuntimeStatus(state.user ? "已连接 · 降级" : "服务降级可用", "online");
             updateEndpointTone("warning");
             setAuthServiceHint(
               "核心服务可用，但部分外部能力降级；聊天、人工确认和报告边界仍可继续查看。",
@@ -5083,18 +4641,15 @@
       async function updateConversationTitle(id, title, options = {}) {
         const nextTitle = (title || "").trim();
         if (!id || !nextTitle) return false;
-        const response = await fetch(`${getApiBase()}/api/v1/conversations/${id}`, {
-          method: "PATCH",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${state.token}`,
-          },
-          body: JSON.stringify({ title: nextTitle }),
+        const { response, data } = await conversationApi.updateConversation({
+          apiBase: getApiBase(),
+          stateToken: state.token,
+          id,
+          payload: { title: nextTitle },
         });
         if (!response.ok) {
           throw new Error(`conversation-title-${response.status}`);
         }
-        const data = await response.json();
         const current = state.conversations.find((conv) => conv.id === id);
         if (current) current.title = data.title || nextTitle;
         if (state.editingConversationId === id) {
@@ -7157,7 +6712,7 @@
                 reportLabel: "每日行程",
                 title: "每日安排",
                 rawLines: dayLines,
-                bodyHtml: renderReportSectionBody("daily", dayLines),
+                bodyHtml: reportRenderer?.renderReportSectionBody?.("daily", dayLines),
               });
               return;
             }
@@ -7170,7 +6725,7 @@
                 reportLabel: "需要你确认",
                 title: "下一步",
                 rawLines: nextLines,
-                bodyHtml: renderReportSectionBody("next", nextLines),
+                bodyHtml: reportRenderer?.renderReportSectionBody?.("next", nextLines),
               });
             }
             const cleanSummaryLines = filterReportSummaryLines(
@@ -7197,7 +6752,7 @@
               reportLabel: meta.label || normalizeSectionTitle(sectionTitle),
               title: normalizeSectionTitle(sectionTitle),
               rawLines: mainLines,
-              bodyHtml: renderReportSectionBody(meta.tone, mainLines),
+              bodyHtml: reportRenderer?.renderReportSectionBody?.(meta.tone, mainLines),
             });
           }
           if (nextLines.length) {
@@ -7207,7 +6762,7 @@
               reportLabel: "需要你确认",
               title: "下一步",
               rawLines: nextLines,
-              bodyHtml: renderReportSectionBody("next", nextLines),
+              bodyHtml: reportRenderer?.renderReportSectionBody?.("next", nextLines),
             });
           }
           if (mainLines.length || nextLines.length) {
@@ -7219,7 +6774,7 @@
             reportLabel: meta.label || normalizeSectionTitle(sectionTitle),
             title: normalizeSectionTitle(sectionTitle),
             rawLines: bodyLines,
-            bodyHtml: renderReportSectionBody(meta.tone, bodyLines),
+            bodyHtml: reportRenderer?.renderReportSectionBody?.(meta.tone, bodyLines),
           });
         });
 
@@ -7245,7 +6800,7 @@
           title: "每日安排",
           reportLabel: "每日行程",
           rawLines: mergedLines,
-          bodyHtml: renderReportSectionBody("daily", mergedLines),
+          bodyHtml: reportRenderer?.renderReportSectionBody?.("daily", mergedLines),
         };
         let inserted = false;
         return sections
@@ -8342,291 +7897,6 @@
         `;
       }
 
-      function renderReportDataMapDigest(reportData = {}) {
-        const previewState = buildReportDataJourneyPreviewState(reportData);
-        if (!previewState.shouldRender) return "";
-        return renderJourneyPreview(previewState);
-      }
-
-      function renderReportDataCard({
-        tone = "summary",
-        icon = "fa-file-lines",
-        label = "",
-        title = "",
-        body = "",
-      }) {
-        return `
-          <section class="travel-report-card ${tone}">
-            <div class="travel-report-card-head">
-              <span class="travel-report-card-icon">
-                <i class="fa-solid ${icon}"></i>
-              </span>
-              <div>
-                <div class="travel-report-card-label">${escapeHtml(label || title)}</div>
-                <h4>${escapeHtml(title)}</h4>
-              </div>
-            </div>
-            <div class="travel-report-card-body">${body}</div>
-          </section>
-        `;
-      }
-
-      function renderStructuredReportNextAction(reportData = {}) {
-        const explicitLines = normalizeReportDataList([
-          reportData.next_action,
-          reportData.next_steps,
-          reportData.follow_up,
-        ]);
-        const lines = explicitLines.length
-          ? explicitLines
-          : [
-              "请评价这版方案：",
-              "如果满意，我将按此结构生成最终可导出的旅行规划报告。",
-              "如果想调整，请告诉我具体想改哪里（例如：节奏太快/太慢、想替换景点、住宿想换区域或预算想压缩等）。",
-            ];
-        return renderTravelReportNextAction([
-          {
-            tone: "next",
-            reportTone: "next",
-            rawLines: lines,
-          },
-        ]);
-      }
-
-      function renderTravelReportFromData(reportData, options = {}) {
-        if (!isStructuredTravelReportData(reportData)) return null;
-
-        const viewMode = options.view || reportData.default_view || "customer";
-        const showAdvisorSections = viewMode === "advisor" || viewMode === "debug";
-        const overview = reportData.overview || {};
-        const budget = reportData.budget || {};
-        const viewModel = buildReportDataViewModel(reportData);
-        const routeLabel = overview.route_label || "专属旅程";
-        const dayCount = overview.duration || "分日规划";
-        const expectedDayCount = parseReportDataExpectedDays(reportData);
-        const budgetLabel =
-          formatReportDataMoney(budget.total) ||
-          reportData.budget_confidence?.level ||
-          "预算已估算";
-        const mapDigest = !options?.suppressJourneyPreview
-          ? renderReportDataMapDigest(reportData)
-          : "";
-
-        return `
-          <div class="travel-report travel-report--${escapeHtml(
-            viewModel.mode.tone
-          )}" data-report-source="structured" data-planning-mode="${escapeHtml(
-            viewModel.mode.mode
-          )}">
-            <div class="travel-report-hero">
-              <div class="travel-report-kicker">
-                <i class="fa-solid ${escapeHtml(viewModel.mode.icon)}"></i>
-                ${escapeHtml(viewModel.mode.label)}
-              </div>
-              <h3>${escapeHtml(routeLabel)}</h3>
-              <p>${escapeHtml(viewModel.mode.copy)}</p>
-              <div class="travel-report-metrics">
-                <span><i class="fa-solid ${escapeHtml(
-                  viewModel.mode.icon
-                )}"></i>${escapeHtml(viewModel.mode.shortLabel)}</span>
-                <span><i class="fa-solid fa-route"></i>${escapeHtml(routeLabel)}</span>
-                <span><i class="fa-regular fa-calendar"></i>${escapeHtml(dayCount)}</span>
-                <span><i class="fa-solid fa-wallet"></i>${escapeHtml(budgetLabel)}</span>
-              </div>
-              <div class="travel-report-actions">
-                <button type="button" data-report-action="tweak">
-                  <i class="fa-solid fa-pen-nib"></i> 继续微调
-                </button>
-                <button type="button" data-report-action="map">
-                  <i class="fa-solid fa-map-location-dot"></i> 查看路线地图
-                </button>
-                <button type="button" data-report-action="export">
-                  <i class="fa-solid fa-file-export"></i> 导出报告
-                </button>
-              </div>
-            </div>
-            <div class="travel-report-grid">
-              ${renderReportDataCard({
-                tone: "summary",
-                icon: "fa-compass",
-                label: "行程概览",
-                title: "你的旅行骨架",
-                body: renderReportDataList([
-                  overview.people ? `出行人数：${overview.people}` : "",
-                  overview.travel_styles?.length
-                    ? `主题偏好：${overview.travel_styles.join("、")}`
-                    : "",
-                  overview.special_needs
-                    ? `特殊需求：${overview.special_needs}`
-                    : "",
-                ]),
-              })}
-              ${renderReportDataCard({
-                tone: "transport",
-                icon: "fa-train-subway",
-                label: "交通与住宿",
-                title: "出行与落脚建议",
-                body: renderReportDataList([
-                  reportData.transport?.summary
-                    ? `交通：${reportData.transport.summary}`
-                    : "",
-                  reportData.accommodation?.summary
-                    ? `住宿：${reportData.accommodation.summary}`
-                    : "",
-                  reportData.food_preferences?.summary
-                    ? `餐饮：${reportData.food_preferences.summary}`
-                    : "",
-                ]),
-              })}
-              ${renderReportDataCard({
-                tone: "daily",
-                icon: "fa-calendar-days",
-                label: "每日行程",
-                title: "按天执行",
-                body: renderReportDataDailyItinerary(
-                  reportData.itinerary,
-                  reportData.map_routes,
-                  reportData.route_map,
-                  expectedDayCount
-                ),
-              })}
-              ${renderReportDataCard({
-                tone: "budget",
-                icon: "fa-wallet",
-                label: "费用拆分",
-                title: "预算明细与依据",
-                body: renderReportDataBudgetItems(budget),
-              })}
-              ${renderReportDataCard({
-                tone: "warning",
-                icon: "fa-triangle-exclamation",
-                label: "风险提醒",
-                title: "重要提醒",
-                body: `
-                  ${renderReportDataList(reportData.risks, "风险提醒待补充")}
-                `,
-              })}
-              ${renderReportDataCard({
-                tone: "summary",
-                icon: "fa-shield-heart",
-                label: "方案依据",
-                title:
-                  viewModel.mode.mode === "free_planning"
-                    ? "规划依据与执行提醒"
-                    : "服务标准与交付依据",
-                body: renderReportDataList([
-                  viewModel.agency.summary || "",
-                  viewModel.agency.modeReason
-                    ? `模式依据：${viewModel.agency.modeReason}`
-                    : "",
-                  ...viewModel.agency.highlights,
-                ]),
-              })}
-              ${
-                showAdvisorSections
-                  ? `
-                    ${renderReportDataCard({
-                      tone: "confidence",
-                      icon: "fa-gauge-high",
-                      label: "预算核验",
-                      title: "置信度与价格边界",
-                      body: renderReportDataBudgetConfidence(viewModel),
-                    })}
-                    ${renderReportDataCard({
-                      tone: "handoff",
-                      icon: "fa-list-check",
-                      label: "交付清单",
-                      title: "顾问核验与下一步",
-                      body: renderReportDataHandoffPanel(viewModel),
-                    })}
-                    ${renderReportDataCard({
-                      tone: "governance",
-                      icon: "fa-shield-halved",
-                      label: "治理边界",
-                      title: "人工确认与不可承诺项",
-                      body: renderReportDataGovernancePanel(viewModel),
-                    })}
-                  `
-                  : ""
-              }
-            </div>
-            ${mapDigest ? `<div class="travel-report-map">${mapDigest}</div>` : ""}
-            ${renderStructuredReportNextAction(reportData)}
-          </div>
-        `;
-      }
-
-      function buildReportDayEntries(lines = [], previewState = {}, expectedDayCount = 0) {
-        const groups = extractReportDayGroups(lines);
-        const planMap = new Map(
-          (previewState.dayPlans || []).map((plan) => [plan.dayNumber, plan])
-        );
-        const entries = [];
-        groups.forEach((group, index) => {
-          const dayNumber =
-            parseJourneyDayNumber(group.label) ||
-            parseJourneyDayNumber(group.title) ||
-            index + 1;
-          const plan = planMap.get(dayNumber);
-          entries.push({
-            ...group,
-            dayNumber,
-            label: `Day ${dayNumber}`,
-            title: group.title || plan?.title || "当天安排",
-            lines: group.lines,
-            plan,
-            missing: false,
-          });
-        });
-
-        return entries.sort((left, right) => left.dayNumber - right.dayNumber);
-      }
-
-      function renderReportDayTimeline(lines = [], options = {}) {
-        const { previewState = {}, expectedDayCount = 0, routeLabel = "" } = options;
-        const entries = buildReportDayEntries(lines, previewState, expectedDayCount);
-
-        if (!entries.length) {
-          if (/待补齐当天安排|这一天还没有|待补齐路线|行程明细待补充/u.test(lines.join(" "))) {
-            return renderReportDailyNotReadyState();
-          }
-          return renderAssistantLines(lines);
-        }
-
-        return `<div class="travel-report-days">${entries
-          .map(
-            (day) => `
-              <article class="travel-report-day ${day.missing ? "missing" : ""}">
-                <div class="travel-report-day-badge">${formatInlineText(day.label)}</div>
-                <div class="travel-report-day-main">
-                  <h5>${formatInlineText(day.title)}</h5>
-                  ${
-                    day.lines.length
-                      ? `<div class="travel-report-day-copy">${renderAssistantLines(
-                          day.lines
-                        )}</div>`
-                      : ""
-                  }
-                </div>
-              </article>
-            `
-          )
-          .join("")}</div>`;
-      }
-
-      function renderReportSectionBody(tone, lines = [], options = {}) {
-        if (tone === "daily") return renderReportDayTimeline(lines, options);
-        if (tone === "budget") {
-          return renderReportBudgetBreakdown(lines, options.combinedText || "");
-        }
-        return renderAssistantLines(lines);
-      }
-
-      function extractReportMetric(text = "", pattern, fallback = "待补充") {
-        const match = String(text || "").match(pattern);
-        return match?.[1] || fallback;
-      }
-
       function buildReportDefaultWarningSection(combinedText = "") {
         const hasWeatherHint = /雨|雪|热|冷|高温|台风|天气|温差|端午|暑期|节假日/u.test(
           combinedText
@@ -8646,540 +7916,6 @@
           title: "天气与风险提醒",
           rawLines: lines,
         };
-      }
-
-      function renderTravelReportMapDigest(previewState = {}, routeLabel = "") {
-        if (!previewState?.shouldRender) return "";
-        return renderJourneyPreview(previewState);
-      }
-
-      function renderTravelReport(blocks, options = {}) {
-        const expandedBlocks = expandStructuredTravelBlocks(blocks);
-        const combinedText = expandedBlocks.join("\n\n");
-        if (!hasTravelReportSignal(combinedText)) return null;
-
-        const { summaryBlocks, sections } = extractTravelReportSections(expandedBlocks);
-        if (sections.length < 2) return null;
-
-        const cityPair =
-          extractJourneyCityPair(combinedText) ||
-          extractJourneyCityPairFromConversationTitle(getCurrentConversation()?.title || "");
-        const routeLabel =
-          cityPair?.origin && cityPair?.destination
-            ? `${cityPair.origin} → ${cityPair.destination}`
-            : cityPair?.destination || "专属旅程";
-        const expectedDayCount = extractReportExpectedDayCount(combinedText);
-        const dayCount = extractReportMetric(
-          combinedText,
-          /(\d+\s*天\s*\d*\s*[晚夜]?|[一二三四五六七八九十]\s*天\s*[一二三四五六七八九十]?\s*[晚夜]?)/u,
-          "分日规划"
-        );
-        const budgetLabel =
-          extractReportMetric(
-            combinedText,
-            /(?:总计|总预算|合计)[^\d]{0,12}([\d,.]+\s*元)/u,
-            ""
-          ) ||
-          extractReportMetric(
-            combinedText,
-            /预算(?:希望|控制|范围)?[^\d]{0,12}([\d,.]+\s*元)/u,
-            "预算已估算"
-          );
-        const summaryLines = filterReportSummaryLines(summaryBlocks.flat());
-        const summaryHtml = summaryLines.length
-          ? renderAssistantLines(summaryLines)
-          : "";
-        const previewState = buildJourneyPreviewState(summaryBlocks, sections);
-        const mergedReportSections = dedupeTravelReportSections(
-          mergeTravelReportDailySections(sections)
-        );
-        const nextActionHtml = renderTravelReportNextAction(mergedReportSections);
-        const reportSections = mergedReportSections.filter(
-          (section) => (section.reportTone || section.tone) !== "next"
-        );
-        const renderOptions = {
-          combinedText,
-          expectedDayCount,
-          previewState,
-          routeLabel,
-        };
-        const shouldRenderMap =
-          !options?.suppressJourneyPreview &&
-          (Boolean(renderTravelReportMapDigest(previewState, routeLabel)) ||
-            shouldRenderJourneyPreviewBlock(previewState, sections));
-        const textReportMode = inferTextTravelReportMode(combinedText);
-        const textReportMeta = getReportPlanningModeMeta({
-          agency_context: { mode: textReportMode },
-        });
-
-        return `
-          <div class="travel-report travel-report--${escapeHtml(
-            textReportMeta.tone
-          )}" data-planning-mode="${escapeHtml(textReportMeta.mode)}">
-            <div class="travel-report-hero">
-              <div class="travel-report-kicker">
-                <i class="fa-solid ${escapeHtml(textReportMeta.icon)}"></i> ${escapeHtml(
-                  textReportMeta.label
-                )}报告
-              </div>
-              <h3>${escapeHtml(routeLabel)}</h3>
-              <p>${escapeHtml(textReportMeta.copy)}</p>
-              <div class="travel-report-metrics">
-                <span><i class="fa-solid fa-route"></i>${escapeHtml(routeLabel)}</span>
-                <span><i class="fa-regular fa-calendar"></i>${escapeHtml(dayCount)}</span>
-                <span><i class="fa-solid fa-wallet"></i>${escapeHtml(budgetLabel)}</span>
-              </div>
-              <div class="travel-report-actions">
-                <button type="button" data-report-action="tweak">
-                  <i class="fa-solid fa-pen-nib"></i> 继续微调
-                </button>
-                <button type="button" data-report-action="map">
-                  <i class="fa-solid fa-map-location-dot"></i> 查看路线地图
-                </button>
-                <button type="button" data-report-action="export">
-                  <i class="fa-solid fa-file-export"></i> 导出报告
-                </button>
-              </div>
-            </div>
-            ${
-              summaryHtml
-                ? `<div class="travel-report-summary">${summaryHtml}</div>`
-                : ""
-            }
-            <div class="travel-report-grid">
-              ${reportSections
-                .filter((section) => (section.reportTone || section.tone) !== "map")
-                .map(
-                  (section) => {
-                    const sectionTone = section.reportTone || section.tone;
-                    const sectionTitle =
-                      sectionTone === "budget"
-                        ? "费用说明"
-                        : sectionTone === "service"
-                          ? "涵盖服务"
-                        : section.title;
-                    const sectionLabel =
-                      sectionTone === "budget"
-                        ? "预算拆分"
-                        : sectionTone === "service"
-                          ? "服务范围"
-                        : section.reportLabel || section.title;
-                    return `
-                    <section class="travel-report-card ${section.reportTone || section.tone}">
-                      <div class="travel-report-card-head">
-                        <span class="travel-report-card-icon">
-                          <i class="fa-solid ${section.icon}"></i>
-                        </span>
-                        <div>
-                          <div class="travel-report-card-label">${escapeHtml(sectionLabel)}</div>
-                          <h4>${escapeHtml(sectionTitle)}</h4>
-                        </div>
-                      </div>
-                      <div class="travel-report-card-body">${renderReportSectionBody(
-                        sectionTone,
-                        section.rawLines,
-                        renderOptions
-                      )}</div>
-                    </section>
-                  `;
-                  }
-                )
-                .join("")}
-            </div>
-            ${
-              shouldRenderMap
-                ? `<div class="travel-report-map">${renderTravelReportMapDigest(
-                    previewState,
-                    routeLabel
-                  )}</div>`
-                : ""
-            }
-            ${nextActionHtml}
-          </div>
-        `;
-      }
-
-      function buildTravelReportFilename(report) {
-        const title =
-          report.querySelector(".travel-report-hero h3")?.textContent?.trim() ||
-          getCurrentConversation()?.title ||
-          "专属旅程";
-        const safeTitle = title
-          .replace(/[\\/:*?"<>|]/g, "-")
-          .replace(/\s+/g, " ")
-          .trim()
-          .slice(0, 40);
-        return `知行-${safeTitle || "专属旅程"}-旅游报告.html`;
-      }
-
-      function collectLoadedExportStyles() {
-        const chunks = [];
-        Array.from(document.styleSheets || []).forEach((sheet) => {
-          try {
-            const rules = Array.from(sheet.cssRules || []);
-            if (rules.length) {
-              chunks.push(rules.map((rule) => rule.cssText).join("\n"));
-            }
-          } catch (error) {
-            // 跨域图标样式可能不可读；导出只需要保留本地报告样式。
-          }
-        });
-        return chunks.join("\n");
-      }
-
-      async function loadExportStyles() {
-        const loadedStyles = collectLoadedExportStyles();
-        if (loadedStyles) return loadedStyles;
-        if (window.location.protocol === "file:") return "";
-        try {
-          const response = await fetch("./styles.css", { cache: "no-store" });
-          if (response.ok) {
-            return await response.text();
-          }
-        } catch (error) {
-          console.warn("Failed to load export styles", error);
-        }
-        return "";
-      }
-
-      function prepareReportCloneForExport(report) {
-        const clone = report.cloneNode(true);
-        clone
-          .querySelectorAll(
-            [
-              ".travel-report-actions",
-              ".journey-map-action-btn",
-              ".journey-map-style-btn",
-              ".journey-map-focus-btn",
-              ".journey-map-day-btn",
-              ".journey-map-day-mode-btn",
-              ".travel-card-link-btn",
-              "button",
-            ].join(",")
-          )
-          .forEach((node) => node.remove());
-        return clone;
-      }
-
-      function buildStandaloneReportHtml(report, stylesText = "") {
-        const reportClone = prepareReportCloneForExport(report);
-        const title =
-          reportClone.querySelector(".travel-report-hero h3")?.textContent?.trim() ||
-          "知行旅游报告";
-        const generatedAt = new Date().toLocaleString("zh-CN", {
-          hour12: false,
-        });
-        const stylesheetLinks = stylesText
-          ? ""
-          : Array.from(document.querySelectorAll('link[rel="stylesheet"]'))
-              .map((link) => link.href)
-              .filter((href) => href && /styles\.css|font-awesome|fontawesome/i.test(href))
-              .map((href) => `<link rel="stylesheet" href="${escapeHtml(href)}" />`)
-              .join("\n");
-
-        return `<!DOCTYPE html>
-<html lang="zh-CN">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>${escapeHtml(title)} - 知行旅游报告</title>
-    <link rel="stylesheet" href="https://cdn.bootcdn.net/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
-    ${stylesheetLinks}
-    <style>
-      ${stylesText}
-      body {
-        margin: 0;
-        min-height: 100vh;
-        padding: 34px;
-        background:
-          radial-gradient(circle at top left, rgba(194, 142, 92, 0.14), transparent 34%),
-          linear-gradient(135deg, #f7f3ea, #eef6f3);
-        color: #2c3e50;
-      }
-      .report-export-shell {
-        max-width: 1120px;
-        margin: 0 auto;
-      }
-      .report-export-meta {
-        display: flex;
-        justify-content: space-between;
-        gap: 12px;
-        align-items: center;
-        margin-bottom: 16px;
-        color: rgba(26, 77, 84, 0.72);
-        font-size: 13px;
-      }
-      .message.assistant .message-text {
-        max-width: none;
-      }
-      .travel-report-actions,
-      button {
-        display: none !important;
-      }
-      @media print {
-        body {
-          background: #fff;
-          padding: 0;
-        }
-        .report-export-meta {
-          padding: 16px 18px 0;
-        }
-      }
-    </style>
-  </head>
-  <body>
-    <main class="report-export-shell">
-      <div class="report-export-meta">
-        <strong>知行 ZhiXing 旅游报告</strong>
-        <span>导出时间：${escapeHtml(generatedAt)}</span>
-      </div>
-      <section class="message assistant">
-        <div class="message-text">
-          ${reportClone.outerHTML}
-        </div>
-      </section>
-    </main>
-  </body>
-</html>`;
-      }
-
-      async function exportTravelReport(report) {
-        const stylesText = await loadExportStyles();
-        const html = buildStandaloneReportHtml(report, stylesText);
-        const blob = new Blob([html], { type: "text/html;charset=utf-8" });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement("a");
-        link.href = url;
-        link.download = buildTravelReportFilename(report);
-        document.body.appendChild(link);
-        link.click();
-        link.remove();
-        setTimeout(() => URL.revokeObjectURL(url), 1000);
-      }
-
-      function handleTravelReportAction(button) {
-        const report = button.closest(".travel-report");
-        const action = button.dataset.reportAction || "";
-        if (!report || !action) return;
-
-        if (action === "tweak") {
-          appendToComposer(
-            "我想基于这份旅游报告继续微调：请先帮我列出可以调整的方向，比如交通、住宿、每日行程顺序、预算或景点取舍。",
-            "replace"
-          );
-          setRuntimeStatus("已准备继续微调报告", "online");
-          showToast("已把微调指令放到输入框");
-          return;
-        }
-
-        if (action === "map") {
-          const map = report.querySelector(".travel-report-map, .journey-live-map-shell");
-          if (!map) {
-            showToast("这份报告暂时还没有可视化路线地图。", true);
-            return;
-          }
-          map.scrollIntoView({ behavior: "smooth", block: "start" });
-          showToast("已定位到路线地图");
-          return;
-        }
-
-        if (action === "export") {
-          exportTravelReport(report)
-            .then(() => showToast("旅游报告文件已开始导出"))
-            .catch((error) => {
-              console.error(error);
-              showToast("导出失败，请稍后重试。", true);
-          });
-        }
-      }
-
-      function normalizeTravelBudgetTitle(title = "") {
-        return /预算|费用|花费|价格|成本/u.test(title) ? "预算参考" : normalizeSectionTitle(title);
-      }
-
-      function stripDisplayListPrefix(line = "") {
-        return String(line || "")
-          .replace(/^[-*•]\s*/, "")
-          .replace(/^\d+\.\s*/, "")
-          .trim();
-      }
-
-      function extractTravelBudgetRows(lines = []) {
-        const compactLines = lines
-          .map((line) => line.trim())
-          .filter((line) => line && !/^-{1,3}$/.test(line));
-
-        const tableStart = compactLines.findIndex((_, index) =>
-          Boolean(getMarkdownTableSpan(compactLines, index))
-        );
-        const tableSpan =
-          tableStart >= 0 ? getMarkdownTableSpan(compactLines, tableStart) : 0;
-        if (tableStart >= 0 && tableSpan) {
-          const tableLines = compactLines.slice(tableStart, tableStart + tableSpan);
-          const rows = tableLines
-            .slice(2)
-            .map(splitTableCells)
-            .filter((cells) => cells.some(Boolean))
-            .map((cells) => ({
-              label: stripDisplayListPrefix(cells[0] || "费用项"),
-              amount: (cells[1] || cells[cells.length - 1] || "待核验").trim(),
-              note: cells.slice(2).filter(Boolean).join("；"),
-            }));
-          return rows.filter(
-            (row) => row.label && row.amount && isMeaningfulBudgetAmount(row.amount)
-          );
-        }
-
-        const joined = compactLines.join("；");
-        const rows = [];
-        const pattern =
-          /(交通|大交通|往返|住宿|酒店|民宿|餐饮|美食|门票|游船|景点|体验|市内交通|服务\/预留|服务|预留|伴手礼|其他|机动|合计|总计)[^~￥¥\d]{0,14}([~约￥¥]?\s*\d[\d,.]*(?:\s*[-~]\s*\d[\d,.]*)?\s*元?)/gu;
-        let match;
-        while ((match = pattern.exec(joined))) {
-          const label = match[1].replace(/往返$/, "交通");
-          const amount = match[2].replace(/\s+/g, "");
-          if (!isMeaningfulBudgetAmount(amount)) continue;
-          const key = `${label}-${amount}`;
-          if (!amount || rows.some((row) => `${row.label}-${row.amount}` === key)) continue;
-          rows.push({ label, amount, note: "" });
-        }
-        return rows.slice(0, 8);
-      }
-
-      function getTravelBudgetIcon(label = "") {
-        if (/交通|往返|高铁|火车|航班|机票|车/u.test(label)) return "fa-train-subway";
-        if (/住宿|酒店|民宿|房/u.test(label)) return "fa-bed";
-        if (/餐|美食|吃/u.test(label)) return "fa-utensils";
-        if (/门票|景点|游船|体验/u.test(label)) return "fa-ticket";
-        if (/服务|预留|机动|缓冲/u.test(label)) return "fa-shield-heart";
-        if (/合计|总计|预算/u.test(label)) return "fa-calculator";
-        return "fa-wallet";
-      }
-
-      function parseBudgetAmountRange(amount = "") {
-        const raw = String(amount || "").replace(/,/g, "");
-        const matches = Array.from(raw.matchAll(/(\d+(?:\.\d+)?)/g)).map((item) =>
-          Number(item[1])
-        );
-        const values = matches.filter((value) => Number.isFinite(value) && value > 0);
-        if (!values.length) return null;
-        if (values.length >= 2 && /[-~到至]/u.test(raw)) {
-          return { min: Math.min(values[0], values[1]), max: Math.max(values[0], values[1]) };
-        }
-        return { min: values[0], max: values[0] };
-      }
-
-      function formatBudgetAmountRange(range) {
-        if (!range || !Number.isFinite(range.min) || !Number.isFinite(range.max)) return "待核验";
-        const min = Math.round(range.min);
-        const max = Math.round(range.max);
-        return min === max ? `${min}元` : `${min}-${max}元`;
-      }
-
-      function estimateBudgetTotalRow(rows = []) {
-        const explicit = rows.find((row) => /合计|总计|总预算/u.test(row.label));
-        if (explicit) return { row: explicit, synthetic: false };
-        const subtotalRows = rows.filter(
-          (row) => !/当前估算|预算参考|预算|人均|每人/u.test(row.label)
-        );
-        const ranges = subtotalRows
-          .map((row) => parseBudgetAmountRange(row.amount))
-          .filter(Boolean);
-        if (!ranges.length) {
-          return { row: rows[rows.length - 1], synthetic: false };
-        }
-        const total = ranges.reduce(
-          (sum, range) => ({
-            min: sum.min + range.min,
-            max: sum.max + range.max,
-          }),
-          { min: 0, max: 0 }
-        );
-        return {
-          row: { label: "估算合计", amount: formatBudgetAmountRange(total), note: "按分项加总，待出发前核验" },
-          synthetic: true,
-        };
-      }
-
-      function renderTravelBudgetCardBody(lines = [], reminderLines = []) {
-        const rows = extractTravelBudgetRows(lines);
-        const reminders = reminderLines
-          .map(stripDisplayListPrefix)
-          .filter(Boolean)
-          .slice(0, 4);
-        if (!rows.length) {
-          return `
-            <div class="travel-budget-layout">
-              <div class="travel-budget-main">${renderAssistantLines(lines)}</div>
-              ${
-                reminders.length
-                  ? `<aside class="travel-budget-reminders">
-                      <span>出发前确认</span>
-                      <ul>${reminders
-                        .map((item) => `<li>${formatInlineText(item)}</li>`)
-                        .join("")}</ul>
-                    </aside>`
-                  : ""
-              }
-            </div>
-          `;
-        }
-
-        const totalInfo = estimateBudgetTotalRow(rows);
-        const totalRow = totalInfo.row;
-        return `
-          <div class="travel-budget-layout">
-            <div class="travel-budget-main">
-              <div class="travel-budget-total">
-                <span>当前估算</span>
-                <strong>${escapeHtml(totalRow.amount || "待核验")}</strong>
-              </div>
-              <div class="travel-budget-rows">
-                ${rows
-                  .filter((row) => totalInfo.synthetic || row !== totalRow || rows.length === 1)
-                  .map(
-                    (row) => `
-                      <div class="travel-budget-row">
-                        <span class="travel-budget-row-icon">
-                          <i class="fa-solid ${getTravelBudgetIcon(row.label)}"></i>
-                        </span>
-                        <div>
-                          <strong>${escapeHtml(row.label)}</strong>
-                          ${row.note ? `<small>${formatInlineText(row.note)}</small>` : ""}
-                        </div>
-                        <em>${escapeHtml(row.amount || "待核验")}</em>
-                      </div>
-                    `
-                  )
-                  .join("")}
-              </div>
-            </div>
-            <aside class="travel-budget-reminders">
-              <span>出发前确认</span>
-              ${
-                reminders.length
-                  ? `<ul>${reminders
-                      .map((item) => `<li>${formatInlineText(item)}</li>`)
-                      .join("")}</ul>`
-                  : `<p>交通票价、住宿价格和热门项目名额会随日期变化，正式出发前再核验一次。</p>`
-              }
-            </aside>
-          </div>
-        `;
-      }
-
-      function isPrematureTravelBudgetSection(section = {}) {
-        if (section.tone !== "budget") return false;
-        const rows = extractTravelBudgetRows(section.rawLines || []);
-        if (!rows.length) return false;
-        const labels = rows.map((row) => String(row.label || ""));
-        const hasTripCostItem = labels.some((label) =>
-          /交通|大交通|机票|高铁|酒店|住宿|门票|景点|服务|地接|专车|合计|总计|总预算/u.test(label)
-        );
-        const onlyMealEstimate = labels.every((label) =>
-          /美食|餐饮|餐厅|吃|用餐/u.test(label)
-        );
-        return rows.length <= 1 && (!hasTripCostItem || onlyMealEstimate);
       }
 
       function renderStructuredTravelPlan(blocks, options = {}) {
@@ -9238,7 +7974,7 @@
         const dedupedSections = dedupeTravelReportSections(sections);
         const journeyPreviewState = buildJourneyPreviewState(summaryBlocks, dedupedSections);
         const visibleSections = dedupedSections.filter(
-          (section) => !isPrematureTravelBudgetSection(section)
+          (section) => !reportBudget?.isPrematureTravelBudgetSection?.(section)
         );
         const shouldRenderTravelCards = visibleSections.length >= 2;
         const shouldRenderJourneyPreview =
@@ -9277,10 +8013,13 @@
                           );
                           const isBudgetSection = section.tone === "budget";
                           const sectionTitle = isBudgetSection
-                            ? normalizeTravelBudgetTitle(section.title)
+                            ? reportBudget?.normalizeTravelBudgetTitle?.(section.title)
                             : section.title;
                           const sectionBodyHtml = isBudgetSection
-                            ? renderTravelBudgetCardBody(section.rawLines, budgetReminderLines)
+                            ? reportBudget?.renderTravelBudgetCardBody?.(
+                                section.rawLines,
+                                budgetReminderLines
+                              )
                             : section.bodyHtml;
                           const mapButtonLabel =
                             sectionMapFocus === "stay" ? "看周边" : "看地图";
@@ -9647,7 +8386,7 @@
       }
 
       function renderAssistantText(text, options = {}) {
-        const structuredReport = renderTravelReportFromData(
+        const structuredReport = reportRenderer?.renderTravelReportFromData?.(
           getReportDataFromOptions(options),
           options
         );
@@ -9661,7 +8400,7 @@
         if (!text) return "";
         const blocks = splitAssistantBlocks(text);
         return (
-          renderTravelReport(blocks, options) ||
+          reportRenderer?.renderTravelReport?.(blocks, options) ||
           renderStructuredTravelPlan(blocks, options) ||
           renderAssistantFallback(blocks)
         );
@@ -9705,114 +8444,26 @@
           checkServiceHealth({ silent: true, reason: "browser-online" })
         );
         document.addEventListener("click", (event) => {
-          const reportActionBtn = event.target.closest("[data-report-action]");
-          if (reportActionBtn) {
-            handleTravelReportAction(reportActionBtn);
+          if (reportActions?.handleReportClick?.(event)) {
             return;
           }
 
-          const actionBtn = event.target.closest(".journey-map-action-btn");
-          if (actionBtn) {
-            handleJourneyMapAction(actionBtn);
+          if (mapControls?.handleMapClick?.(event)) {
             return;
           }
 
-          const styleBtn = event.target.closest(".journey-map-style-btn");
-          if (styleBtn) {
-            handleJourneyMapStyle(styleBtn);
+          if (journeyEditor?.handleWorkbenchClick?.(event)) {
             return;
           }
 
-          const focusBtn = event.target.closest(".journey-map-focus-btn");
-          if (focusBtn) {
-            handleJourneyMapFocus(focusBtn);
+          if (journeyOverlayActions?.handleOverlayClick?.(event)) {
             return;
           }
 
-          const dayBtn = event.target.closest(".journey-map-day-btn");
-          if (dayBtn) {
-            handleJourneyMapDay(dayBtn);
-            return;
-          }
-
-          const dayModeBtn = event.target.closest(".journey-map-day-mode-btn");
-          if (dayModeBtn) {
-            handleJourneyMapDayMode(dayModeBtn);
-            return;
-          }
-
-          const cardLinkBtn = event.target.closest(".travel-card-link-btn");
-          if (cardLinkBtn) {
-            focusJourneyMapFromPlan(
-              cardLinkBtn,
-              cardLinkBtn.dataset.mapFocus || "destination"
-            );
-            return;
-          }
-
-          const rhythmFocusBtn = event.target.closest(".journey-rhythm-focus-btn");
-          if (rhythmFocusBtn) {
-            focusJourneyMapFromPlan(
-              rhythmFocusBtn,
-              rhythmFocusBtn.dataset.mapFocus || "destination"
-            );
-            return;
-          }
-
-          const dayFocusBtn = event.target.closest(".journey-day-map-btn");
-          if (dayFocusBtn) {
-            focusJourneyMapDayFromPlan(dayFocusBtn);
-            return;
-          }
-
-          const visualDayFocusBtn = event.target.closest(".visual-day-focus-btn");
-          if (visualDayFocusBtn) {
-            handleVisualJourneyDayFocus(visualDayFocusBtn);
-            return;
-          }
-
-          const visualPoiFocusBtn = event.target.closest(".visual-poi-focus-btn");
-          if (visualPoiFocusBtn) {
-            handleVisualJourneyPoiFocus(visualPoiFocusBtn);
-            return;
-          }
-
-          const journeyEditBtn = event.target.closest("[data-journey-edit-action]");
-          if (journeyEditBtn) {
-            handleJourneyEditAction(journeyEditBtn);
-            return;
-          }
-
-          const stageStopBtn = event.target.closest(
-            ".journey-map-stage-stop, .journey-live-marker[data-map-day-stop], .journey-live-marker [data-map-day-stop]"
-          );
-          if (stageStopBtn) {
-            handleJourneyMapStageStop(stageStopBtn);
-            return;
-          }
-
-          const poiSheetCloseBtn = event.target.closest("[data-poi-sheet-close='true']");
-          if (poiSheetCloseBtn) {
-            hideJourneyPoiSheet(poiSheetCloseBtn.closest(".journey-live-map-shell"));
-            return;
-          }
-
-          const poiSheetActionBtn = event.target.closest("[data-poi-sheet-action]");
-          if (poiSheetActionBtn) {
-            handleJourneyPoiSheetAction(poiSheetActionBtn);
-            return;
-          }
-
-          if (
-            event.target.id === "journeyMapModal" ||
-            event.target.closest("[data-map-modal-close='true']")
-          ) {
-            closeJourneyMapModal();
-          }
         });
         document.addEventListener("keydown", (event) => {
           if (event.key === "Escape") {
-            closeJourneyMapModal();
+            journeyOverlayActions?.closeJourneyMapModal?.();
           }
         });
         document.addEventListener("visibilitychange", () => {
@@ -9832,7 +8483,8 @@
         renderTurnObservability();
         applyPlannerPanelState();
         await checkServiceHealth({ silent: false, reason: "startup" });
-        if (state.token && state.user) {
+        const restoredSession = await restoreSessionFromCookie();
+        if (state.user && restoredSession) {
           hideIntroOverlay();
           hideAuthOverlay();
           updateUserInfo();
@@ -9952,19 +8604,16 @@
             ? { username, email, password }
             : { username, password };
 
-          response = await fetch(`${getApiBase()}${endpoint}`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(body),
-          });
-
-          const data = await response.json();
+          ({ response, data } = await sessionApi.submitAuthForm({
+            apiBase: getApiBase(),
+            endpoint,
+            body,
+            stateToken: state.token,
+          }));
 
           if (response.ok) {
-            state.token = data.access_token;
+            state.token = data.access_token || "";
             state.user = data.user;
-            localStorage.setItem("token", state.token);
-            localStorage.setItem("user", JSON.stringify(state.user));
             setAuthFeedback(
               isRegister
                 ? "账号创建成功，正在进入你的旅行工作台。"
@@ -10016,7 +8665,9 @@
         }
       }
 
-      function logout() {
+      function clearClientSession(options = {}) {
+        const showToastMessage =
+          typeof options === "boolean" ? options : options?.showToastMessage !== false;
         resetConversationDrafts({ silent: true });
         state.token = "";
         state.user = null;
@@ -10027,14 +8678,14 @@
         state.governance.selectedApprovalId = null;
         state.governance.toolAuditEvents = [];
         state.governance.turnObservability = null;
-        localStorage.removeItem("token");
-        localStorage.removeItem("user");
         resetPlannerDraft({ silent: true });
         showIntroOverlay();
         hideAuthOverlay();
         clearChatMessages();
         document.getElementById("conversationsList").innerHTML = "";
         document.getElementById("chatTitle").textContent = "行程助手";
+        document.getElementById("userName").textContent = "访客";
+        document.getElementById("userAvatar").textContent = "U";
         setMobileChatFocus(false);
         setRuntimeStatus("等待登录", "idle");
         updateSessionOverview();
@@ -10042,7 +8693,22 @@
         renderApprovalEvents();
         renderToolAuditList();
         renderTurnObservability();
-        showToast("已登出账号");
+        if (showToastMessage) {
+          showToast("已登出账号");
+        }
+      }
+
+      async function logout() {
+        try {
+          await sessionApi.remoteLogout({
+            apiBase: getApiBase(),
+            stateToken: state.token,
+          });
+        } catch (error) {
+          console.warn("Remote logout failed", error);
+        } finally {
+          clearClientSession({ showToastMessage: true });
+        }
       }
 
       async function loadConversations(options = {}) {
@@ -10051,11 +8717,11 @@
           options?.preserveCurrentConversationId
         );
         try {
-          const response = await fetch(`${getApiBase()}/api/v1/conversations`, {
-            headers: { Authorization: `Bearer ${state.token}` },
+          const { response, data } = await conversationApi.fetchConversations({
+            apiBase: getApiBase(),
+            stateToken: state.token,
           });
           if (response.ok) {
-            const data = await response.json();
             state.conversations = Array.isArray(data)
               ? data
               : data.conversations || [];
@@ -10074,7 +8740,7 @@
             }
             renderConversationsList();
             setRuntimeStatus("已连接", "online");
-          } else if (response.status === 401) logout();
+          } else if (response.status === 401) clearClientSession({ showToastMessage: false });
         } catch (error) {
           console.error(error);
           renderConversationsList();
@@ -10221,9 +8887,10 @@
         if (!(await ensureServiceReady("删除行程"))) return;
 
         try {
-          const response = await fetch(`${getApiBase()}/api/v1/conversations/${id}`, {
-            method: "DELETE",
-            headers: { Authorization: `Bearer ${state.token}` },
+          const { response } = await conversationApi.deleteConversation({
+            apiBase: getApiBase(),
+            stateToken: state.token,
+            id,
           });
           if (!response.ok) {
             throw new Error(`HTTP ${response.status}`);
@@ -10383,16 +9050,12 @@
       async function createNewConversation() {
         if (!(await ensureServiceReady("创建新行程"))) return;
         try {
-          const response = await fetch(`${getApiBase()}/api/v1/conversations`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${state.token}`,
-            },
-            body: JSON.stringify({ title: "新行程" }),
+          const { response, data } = await conversationApi.createConversation({
+            apiBase: getApiBase(),
+            stateToken: state.token,
+            title: "新行程",
           });
           if (response.ok) {
-            const data = await response.json();
             state.currentConversationId = data.id;
             if (!state.conversations.some((item) => item.id === data.id)) {
               state.conversations = [data, ...state.conversations];
@@ -10426,14 +9089,12 @@
 
         // 获取标题
         try {
-          const res = await fetch(
-            `${getApiBase()}/api/v1/conversations/${id}`,
-            {
-              headers: { Authorization: `Bearer ${state.token}` },
-            }
-          );
+          const { response: res, data } = await conversationApi.fetchConversationDetail({
+            apiBase: getApiBase(),
+            stateToken: state.token,
+            id,
+          });
           if (res.ok) {
-            const data = await res.json();
             document.getElementById("chatTitle").textContent = data.title;
             const current = state.conversations.find((conv) => conv.id === id);
             if (current) current.title = data.title;
@@ -10443,11 +9104,12 @@
 
         // 获取历史
         try {
-          const res = await fetch(`${getApiBase()}/api/v1/chat/history/${id}`, {
-            headers: { Authorization: `Bearer ${state.token}` },
+          const { response: res, data } = await conversationApi.fetchChatHistory({
+            apiBase: getApiBase(),
+            stateToken: state.token,
+            id,
           });
           if (res.ok) {
-            const data = await res.json();
             const msgs = Array.isArray(data) ? data : data.messages || [];
             renderMessages(msgs);
             setRuntimeStatus("历史会话已就绪", "online");
@@ -10654,17 +9316,12 @@
         }, 45000);
 
         try {
-          const res = await fetch(
-            `${getApiBase()}/api/v1/chat/stream/${state.currentConversationId}`,
-            {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${state.token}`,
-              },
-              body: JSON.stringify({ content }),
-            }
-          );
+          const res = await conversationApi.openChatStream({
+            apiBase: getApiBase(),
+            stateToken: state.token,
+            conversationId: state.currentConversationId,
+            content,
+          });
 
           if (
             res.ok &&

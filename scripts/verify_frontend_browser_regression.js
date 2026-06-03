@@ -161,6 +161,28 @@ async function installNetworkStubs(context) {
       const rawUrl = typeof input === "string" ? input : input?.url || "";
       const url = String(rawUrl);
       if (url.includes("/health/ready")) return json(payload.readiness);
+      if (url.includes("/api/v1/users/me")) {
+        const hasMockSession =
+          window.localStorage.getItem("browser-regression-session") === "1";
+        if (!hasMockSession) {
+          return json(
+            {
+              detail: {
+                code: "auth_required",
+                message: "缺少认证令牌",
+              },
+            },
+            401
+          );
+        }
+        return json({
+          id: "browser-regression-user",
+          username: "browser-regression",
+          email: "browser@example.com",
+          preferences: { role: "user" },
+          created_at: "2026-05-11T14:00:00Z",
+        });
+      }
       if (url.includes("/api/v1/conversations")) {
         return json({
           conversations: [
@@ -308,15 +330,9 @@ async function checkAuthSurface(page) {
 
 async function seedLoggedInState(page) {
   await page.addInitScript(() => {
-    window.localStorage.setItem("token", "browser-regression-token");
-    window.localStorage.setItem(
-      "user",
-      JSON.stringify({
-        id: "browser-regression-user",
-        username: "browser-regression",
-        role: "user",
-      })
-    );
+    window.localStorage.removeItem("token");
+    window.localStorage.removeItem("user");
+    window.localStorage.setItem("browser-regression-session", "1");
   });
 }
 

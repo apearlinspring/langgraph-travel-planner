@@ -65,6 +65,44 @@
 
 导出的 HTML（超文本标记语言）报告会克隆当前结构化报告节点，因此会保留这些章节；导出时会移除按钮、地图切换控件等交互元素。地图定位入口只保留在整份报告、住宿周边和景点路线等适合地图的位置；每日行程卡保持纯文字节奏，不再嵌入小地图，交通卡和预算卡也不显示地图按钮。
 
+## 前端模块拆分说明
+
+当前前台仍然是静态单页，不引入构建链路，但 `frontend/app.js` 不再承担全部网络、地图、报告和治理逻辑。为了降低回归成本，主链路已经按“请求边界 / 交互边界 / 渲染边界”拆成以下模块：
+
+- `frontend/session-api.js`：登录、登出、Cookie 会话恢复、统一请求凭据。
+- `frontend/conversation-api.js`：会话列表、历史消息、流式聊天、旅程草案保存。
+- `frontend/governance-api.js`：ready check（就绪检查）、审批列表、审批事件和审批决策。
+- `frontend/journey-api.js`：地图依赖加载、地图配置请求、地图预览请求。
+- `frontend/journey-editor.js`：可视化旅程工作台里的 POI（兴趣点/地点）聚焦、分日聚焦和顺序编辑。
+- `frontend/journey-overlay.js`：大图地图弹层、POI 底部面板动作、推荐点加入/替换。
+- `frontend/map-controls.js`：地图工具条、风格切换、焦点切换、分日切换、路线节点点击。
+- `frontend/report-actions.js`：报告内导出、报告内地图定位、报告卡片跳转地图。
+- `frontend/report-budget.js`：预算标题归一化、预算表格提取、预算总额估算、预算卡片渲染、过早预算段落抑制。
+- `frontend/report-renderer.js`：结构化报告主干、文本报告主干、报告分段渲染入口。
+- `frontend/admin-api.js`、`frontend/admin.js`：独立后台管理台的数据请求和展示逻辑。
+
+当前推荐的维护方式：
+
+- `frontend/app.js` 主要保留全局状态、页面初始化、基础工具函数和模块接线，不再继续堆叠新的请求函数或大段渲染主干。
+- 新增前台能力时，优先判断它属于请求层、交互层还是渲染层，再放进现有模块；不要把新逻辑直接塞回 `app.js`。
+- 如果某个模块继续膨胀到接近 1000 行，优先再做一次局部拆分，而不是恢复“单文件全包”。
+
+当前脚本加载顺序也有依赖关系：
+
+1. `session-api.js`
+2. `conversation-api.js`
+3. `journey-api.js`
+4. `journey-editor.js`
+5. `journey-overlay.js`
+6. `map-controls.js`
+7. `report-budget.js`
+8. `report-renderer.js`
+9. `report-actions.js`
+10. `governance-api.js`
+11. `app.js`
+
+这组顺序已经同步写入 `frontend/zhixing.html` 和 `scripts/verify_frontend_report_renderer.js`。如果后续新增模块，必须同时更新这两个位置，否则静态回归会出现“浏览器能跑、Node 拼接校验失败”或反过来的漂移。
+
 ## 单页治理台
 
 第三批前端在 `frontend/zhixing.html` 中新增右侧治理台，不引入大型前端框架，仍然复用现有静态单页结构。

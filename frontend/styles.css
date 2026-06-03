@@ -5499,11 +5499,20 @@ html {
           padding: 14px;
         }
         .toast {
-          top: 14px;
-          right: 14px;
-          left: 14px;
-          max-width: none;
-          border-radius: 18px;
+          top: max(10px, env(safe-area-inset-top, 0px) + 6px);
+          left: 50%;
+          right: auto;
+          width: min(320px, calc(100vw - 28px));
+          max-width: min(320px, calc(100vw - 28px));
+          padding: 10px 14px;
+          border-radius: 16px;
+          font-size: 13px;
+          justify-content: center;
+          text-align: center;
+          transform: translate(-50%, -120px);
+        }
+        .toast.show {
+          transform: translate(-50%, 0);
         }
         .chat-input-wrapper {
           padding: 8px 8px 8px 12px;

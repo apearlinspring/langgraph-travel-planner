@@ -3,12 +3,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.permissions import UserRole, get_user_role
+from app.config import settings
 from app.models.base import get_db
 from app.models.user import User
 from app.utils.security import decode_access_token, redact_sensitive_data, redact_sensitive_text
@@ -62,12 +63,17 @@ def api_error(
 
 
 async def get_current_user(
+    request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(security),
     db: AsyncSession = Depends(get_db),
 ) -> User:
     """获取当前登录用户（依赖注入）。"""
 
-    if credentials is None:
+    token = credentials.credentials if credentials is not None else request.cookies.get(
+        settings.auth_cookie_name
+    )
+
+    if not token:
         raise api_error(
             status_code=status.HTTP_401_UNAUTHORIZED,
             code="auth_required",
@@ -75,7 +81,7 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    payload = decode_access_token(credentials.credentials)
+    payload = decode_access_token(token)
 
     if payload is None:
         raise api_error(

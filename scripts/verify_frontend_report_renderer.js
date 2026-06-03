@@ -3,7 +3,21 @@ const path = require("path");
 const vm = require("vm");
 
 const repoRoot = path.resolve(__dirname, "..");
-const appScript = fs.readFileSync(path.join(repoRoot, "frontend", "app.js"), "utf8");
+const frontendScriptBundle = [
+  "session-api.js",
+  "conversation-api.js",
+  "journey-api.js",
+  "journey-editor.js",
+  "journey-overlay.js",
+  "map-controls.js",
+  "report-budget.js",
+  "report-renderer.js",
+  "report-export.js",
+  "report-actions.js",
+  "app.js",
+]
+  .map((name) => fs.readFileSync(path.join(repoRoot, "frontend", name), "utf8"))
+  .join("\n");
 const fixtureDir = path.join(repoRoot, "tests", "fixtures", "report_data");
 
 function loadReportFixture(fileName) {
@@ -52,7 +66,7 @@ function createRenderContext() {
     Blob,
   };
   vm.createContext(context);
-  vm.runInContext(appScript, context);
+  vm.runInContext(frontendScriptBundle, context);
   return context;
 }
 
@@ -530,9 +544,9 @@ assertExcludes(
   ["规划过程", "journey-map-bottom-drawer"],
   "visual-journey-customer-view"
 );
-assertIncludes(appScript, ["/api/v1/chat/journey/"], "journey-draft-save-api");
+assertIncludes(frontendScriptBundle, ["/api/v1/chat/journey/"], "journey-draft-save-api");
 assertIncludes(
-  appScript,
+  frontendScriptBundle,
   [
     "amap-journey-day-badge",
     "leaflet-journey-day-badge",
