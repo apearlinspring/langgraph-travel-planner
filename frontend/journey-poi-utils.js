@@ -1,5 +1,16 @@
 (function (global) {
-  function createJourneyPoiUtils() {
+  function createJourneyPoiUtils(options = {}) {
+    const parseMapPayload =
+      typeof options.parseMapPayload === "function" ? options.parseMapPayload : () => null;
+    const normalizeJourneyMatchText =
+      typeof options.normalizeJourneyMatchText === "function"
+        ? options.normalizeJourneyMatchText
+        : (value = "") =>
+            String(value || "")
+              .toLowerCase()
+              .replace(/[^\p{L}\p{N}]+/gu, "")
+              .trim();
+
     function getPoiVerificationText(stop = {}, point = {}) {
       if (stop?.map_verified || /amap/i.test(String(stop?.verification_status || ""))) {
         return "高德地点已核验";
@@ -66,12 +77,93 @@
       return { tone: "pending", label: "待核验" };
     }
 
+    function getJourneyPoiPool(workbench) {
+      const original = parseMapPayload(workbench?.dataset.journeyData || "") || {};
+      return [
+        ...(Array.isArray(original.alternative_pois) ? original.alternative_pois : []),
+        ...(Array.isArray(original.pois) ? original.pois : []),
+      ].filter((poi) => poi && typeof poi === "object");
+    }
+
+    function getJourneyReplacementCandidates(workbench, dayPlans, dayKey, stopIndex) {
+      const allPois = getJourneyPoiPool(workbench);
+      const day = (dayPlans || []).find((item) => item.key === dayKey);
+      const current = day?.stops?.[stopIndex];
+      if (!current || !allPois.length) return [];
+      const activeIds = new Set(
+        (dayPlans || []).flatMap((item) =>
+          (item.stops || []).map((stop) => stop.id).filter(Boolean)
+        )
+      );
+      const currentName = normalizeJourneyMatchText(current.name || "");
+      const currentCity = normalizeJourneyMatchText(current.city || day?.city || "");
+      const currentType = normalizeJourneyMatchText(current.type_label || current.type || "");
+      return allPois
+        .filter((poi) => {
+          const poiName = normalizeJourneyMatchText(poi.name || "");
+          if (!poiName || poiName === currentName) return false;
+          if (poi.id && activeIds.has(poi.id)) return false;
+          return true;
+        })
+        .map((poi) => {
+          const city = normalizeJourneyMatchText(poi.city || "");
+          const type = normalizeJourneyMatchText(poi.type_label || poi.type || "");
+          const score =
+            (city && currentCity && city === currentCity ? 4 : 0) +
+            (type && currentType && type === currentType ? 3 : 0) +
+            (poi.map_verified ? 2 : 0) +
+            (poi.coordinate_estimated ? 1 : 0);
+          return { poi, score };
+        })
+        .sort((left, right) => right.score - left.score)
+        .map((item) => item.poi);
+    }
+
+    function resolveJourneyRecommendationPoi(workbench, point = {}) {
+      const targetName = normalizeJourneyMatchText(point.name || point.label || "");
+      const matched = getJourneyPoiPool(workbench).find((poi) => {
+        const poiName = normalizeJourneyMatchText(poi.name || "");
+        return (
+          poiName &&
+          targetName &&
+          (poiName === targetName || poiName.includes(targetName) || targetName.includes(poiName))
+        );
+      });
+      const fallback = {
+        name: point.name || point.label || "推荐点",
+        city: point.address || "",
+        type_label: point.kind === "recommendation" ? "推荐点" : "看点",
+        description: point.address || "推荐点详情待补充。",
+        map_query: [point.address, point.name || point.label].filter(Boolean).join(" "),
+        lng: typeof point.lng === "number" ? point.lng : null,
+        lat: typeof point.lat === "number" ? point.lat : null,
+        verification_status: "map_preview_point",
+        reservation_note: "开放、预约、票价和道路情况出发前二次核验。",
+      };
+      return normalizeJourneyPoiAsStop(matched || fallback, fallback);
+    }
+
+    function getJourneyRecommendationTargetDay(entry) {
+      const activeDayKey = entry?.activeDayKey && entry.activeDayKey !== "all"
+        ? entry.activeDayKey
+        : "";
+      return (
+        entry?.dayPlans?.find((day) => day.key === activeDayKey) ||
+        entry?.dayPlans?.[0] ||
+        null
+      );
+    }
+
     return {
       getPoiVerificationText,
       getPoiVerificationTone,
       normalizeJourneyPoiAsStop,
       getVisualPoiInitial,
       getVisualPoiVerificationBadge,
+      getJourneyPoiPool,
+      getJourneyReplacementCandidates,
+      resolveJourneyRecommendationPoi,
+      getJourneyRecommendationTargetDay,
     };
   }
 
