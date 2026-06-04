@@ -2997,6 +2997,22 @@
         redactClientText,
         normalizeToolAuditEvent,
       } = governanceTools;
+      const governanceRenderer = window.ZhiXingGovernanceRenderer?.createGovernanceRenderer?.({
+        escapeHtml,
+        redactClientText,
+        getStatusLabel,
+        formatEpochSeconds,
+      });
+      if (!governanceRenderer) {
+        throw new Error("ZhiXingGovernanceRenderer is not loaded.");
+      }
+      const {
+        renderReadinessServiceGrid,
+        renderToolAuditListHtml,
+        renderTurnObservabilityGridHtml,
+        renderApprovalListHtml,
+        renderApprovalEventList,
+      } = governanceRenderer;
 
       function getReadinessStatusCopy(status = "") {
         if (status === "ready") return "对话、报告和行程进度都可演示。";
@@ -3208,17 +3224,9 @@
         }
 
         if (grid) {
-          grid.innerHTML = summarizeReadinessServices(data.services || {})
-            .map(
-              (item) => `
-                <div class="readiness-service-item">
-                  <span>${escapeHtml(item.label)}</span>
-                  <strong>${escapeHtml(getStatusLabel(item.status))}</strong>
-                  <small>${escapeHtml(item.description)}</small>
-                </div>
-              `
-            )
-            .join("");
+          grid.innerHTML = renderReadinessServiceGrid(
+            summarizeReadinessServices(data.services || {})
+          );
         }
         syncGovernanceDebugVisibility();
       }
@@ -3551,44 +3559,7 @@
         const events = state.governance.toolAuditEvents;
         if (count) count.textContent = String(events.length);
         if (!list) return;
-        if (!events.length) {
-          list.innerHTML =
-            '<div class="governance-empty">本轮还没有工具记录。</div>';
-          return;
-        }
-        list.innerHTML = events
-          .map((event) => {
-            const elapsed = Number.isFinite(event.elapsedSeconds)
-              ? `${event.elapsedSeconds.toFixed(2)}s`
-              : "未记录";
-            return `
-              <article class="tool-audit-card">
-                <div class="tool-audit-card-head">
-                  <strong>${escapeHtml(event.tool)}</strong>
-                  <span class="governance-status-pill ${escapeHtml(
-                    event.semanticStatus
-                  )}">${escapeHtml(event.statusLabel)}</span>
-                </div>
-                <div class="tool-audit-raw-name">
-                  原始工具名：<code>${escapeHtml(event.rawTool)}</code>
-                </div>
-                <p>${escapeHtml(event.statusExplanation)}</p>
-                <div class="tool-audit-meta">
-                  <span><i class="fa-regular fa-clock"></i>${escapeHtml(elapsed)}</span>
-                  <span><i class="fa-solid fa-rotate"></i>${event.retryCount} 次重试</span>
-                  <span><i class="fa-solid fa-file-shield"></i>${escapeHtml(event.evidenceLabel)}</span>
-                  ${
-                    event.reasonLabel
-                      ? `<span><i class="fa-solid fa-triangle-exclamation"></i>${escapeHtml(
-                          event.reasonLabel
-                        )}</span>`
-                      : ""
-                  }
-                </div>
-              </article>
-            `;
-          })
-          .join("");
+        list.innerHTML = renderToolAuditListHtml(events);
       }
 
       function renderTurnObservability() {
@@ -3598,41 +3569,11 @@
         if (!grid) return;
         if (!item) {
           setPillStatus(pill, "idle", "待开始");
-          grid.innerHTML = `
-            <div class="governance-empty">
-              完成一轮聊天后展示脱敏运行摘要，不展示个人敏感信息、密钥或完整工具输入输出。
-            </div>
-          `;
+          grid.innerHTML = renderTurnObservabilityGridHtml(null);
           return;
         }
         setPillStatus(pill, item.degradationStatus, item.degradationLabel);
-        const metrics = [
-          ["状态", item.statusLabel],
-          ["阶段", item.stepLabel],
-          ["模式", item.planningModeLabel],
-          ["首个响应片段", item.firstTokenSeconds == null ? "未记录" : `${item.firstTokenSeconds}s`],
-          ["总耗时", item.totalElapsedSeconds == null ? "未记录" : `${item.totalElapsedSeconds}s`],
-          ["工具调用", `${item.toolCallCount} 次`],
-          ["需复查工具", `${item.toolFailureCount} 个`],
-          ["兜底次数", `${item.fallbackCount} 次`],
-          ["文本量估算", `${item.estimatedTotalTokens}`],
-        ];
-        const metricsHtml = metrics
-          .map(
-            ([label, value]) => `
-              <div class="turn-observability-item">
-                <span>${escapeHtml(label)}</span>
-                <strong>${escapeHtml(value)}</strong>
-              </div>
-            `
-          )
-          .join("");
-        const traceHtml = item.turnId
-          ? `<div class="turn-observability-footnote">追踪码（排查用）：${escapeHtml(
-              item.turnId.slice(0, 12)
-            )}</div>`
-          : "";
-        grid.innerHTML = `${metricsHtml}${traceHtml}`;
+        grid.innerHTML = renderTurnObservabilityGridHtml(item);
       }
 
       function renderApprovalList() {
@@ -3646,124 +3587,25 @@
           btn.classList.toggle("active", btn.dataset.approvalFilter === filter);
         });
 
-        if (!state.user) {
-          list.innerHTML = '<div class="governance-empty">登录后展示人工确认记录。</div>';
-          return;
-        }
-        if (state.governance.isApprovalLoading) {
-          list.innerHTML = '<div class="governance-empty">正在同步人工确认记录…</div>';
-          return;
-        }
-        if (!approvals.length) {
-          list.innerHTML = `
-            <div class="governance-empty">
-              当前没有${filter === "pending" ? "待人工确认" : "可展示"}记录。演示记录只说明未来真实支付、短信或客户资料导出前需要人工确认，不会真实下单。
-            </div>
-          `;
-          return;
-        }
-
-        list.innerHTML = approvals
-          .map((approval) => {
-            const id = approval.approval_id || "";
-            const status = approval.status || "none";
-            const isPending = status === "pending";
-            const isActive = state.governance.selectedApprovalId === id;
-            return `
-              <article
-                class="approval-card ${isActive ? "active" : ""}"
-                onclick="selectApprovalRecord('${escapeHtml(id)}')"
-              >
-                <div class="approval-card-head">
-                  <strong>${escapeHtml(redactClientText(approval.label || approval.action || "需确认动作"))}</strong>
-                  <span class="governance-status-pill ${escapeHtml(status)}">${escapeHtml(
-                    getStatusLabel(status)
-                  )}</span>
-                </div>
-                <p>${escapeHtml(redactClientText(approval.reason || "未填写确认理由"))}</p>
-                <div class="approval-card-meta">
-                  <span><i class="fa-solid fa-shield-halved"></i>${approval.requires_approval ? "需人工确认" : "边界记录"}</span>
-                  <span><i class="fa-regular fa-clock"></i>${escapeHtml(
-                    formatEpochSeconds(approval.created_at)
-                  )}</span>
-                  <span><i class="fa-regular fa-hourglass-half"></i>${escapeHtml(
-                    approval.expires_at ? formatEpochSeconds(approval.expires_at) : "无过期时间"
-                  )}</span>
-                </div>
-                <div class="approval-actions">
-                  <button
-                    class="approval-action-btn approve"
-                    type="button"
-                    ${isPending ? "" : "disabled"}
-                    onclick="decideApproval('${escapeHtml(id)}', 'approve', event)"
-                  >
-                    批准
-                  </button>
-                  <button
-                    class="approval-action-btn reject"
-                    type="button"
-                    ${isPending ? "" : "disabled"}
-                    onclick="decideApproval('${escapeHtml(id)}', 'reject', event)"
-                  >
-                    拒绝
-                  </button>
-                  <button
-                    class="approval-action-btn expire"
-                    type="button"
-                    ${isPending ? "" : "disabled"}
-                    onclick="decideApproval('${escapeHtml(id)}', 'expire', event)"
-                  >
-                    过期
-                  </button>
-                </div>
-              </article>
-            `;
-          })
-          .join("");
+        list.innerHTML = renderApprovalListHtml({
+          approvals,
+          filter,
+          selectedApprovalId: state.governance.selectedApprovalId,
+          userPresent: Boolean(state.user),
+          loading: state.governance.isApprovalLoading,
+        });
       }
 
       function renderApprovalEvents() {
         const list = document.getElementById("approvalEventsList");
         if (!list) return;
         const events = state.governance.approvalEvents || [];
-        if (!state.governance.selectedApprovalId) {
-          list.className = "governance-empty";
-          list.innerHTML = "选择一条人工确认记录后展示状态变化。";
-          return;
-        }
-        if (!events.length) {
-          list.className = "governance-empty";
-          list.innerHTML = "这条记录还没有返回事件。";
-          return;
-        }
-        list.className = "approval-event-list";
-        const formatApprovalEventType = (type = "") => {
-          const labels = {
-            created: "创建",
-            approved: "批准",
-            rejected: "拒绝",
-            expired: "过期",
-            updated: "更新",
-          };
-          return labels[type] || type || "事件";
-        };
-        list.innerHTML = events
-          .map(
-            (event) => `
-              <div class="approval-event-item">
-                <strong>${escapeHtml(formatApprovalEventType(event.event_type))} · ${escapeHtml(
-                  getStatusLabel(event.from_status || "none")
-                )} → ${escapeHtml(getStatusLabel(event.to_status || "unknown"))}</strong>
-                <span>${escapeHtml(formatEpochSeconds(event.created_at))}</span>
-                ${
-                  event.reason
-                    ? `<p>${escapeHtml(redactClientText(event.reason, 120))}</p>`
-                    : ""
-                }
-              </div>
-            `
-          )
-          .join("");
+        const rendered = renderApprovalEventList({
+          selectedApprovalId: state.governance.selectedApprovalId,
+          events,
+        });
+        list.className = rendered.className;
+        list.innerHTML = rendered.html;
       }
 
       async function loadApprovalEvents(approvalId) {
