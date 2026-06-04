@@ -109,6 +109,7 @@
 
       const isMobileViewport = () => window.innerWidth <= 900;
       const journeyMapInstances = new WeakMap();
+      const scheduledJourneyMapHydrationRoots = new WeakSet();
       const JOURNEY_MAP_DEGRADE_AFTER_MS = 180000;
       const DEFAULT_CONVERSATION_TITLE = "新行程";
       const journeyTextUtils = window.ZhiXingJourneyTextUtils?.createJourneyTextUtils?.({
@@ -1623,14 +1624,36 @@
         }
       }
 
-      function hydrateJourneyMaps(root = document) {
+      function getHydratableJourneyMapNodes(root = document) {
+        if (!root) return [];
+        const nodes = [];
+        if (root.matches?.(".journey-live-map[data-map-payload]")) {
+          nodes.push(root);
+        }
         root
-          .querySelectorAll(".journey-live-map[data-map-payload]")
-          .forEach((node) => hydrateJourneyMap(node));
+          .querySelectorAll?.(".journey-live-map[data-map-payload]")
+          .forEach((node) => {
+            if (node !== root) nodes.push(node);
+          });
+        return nodes;
+      }
+
+      function hydrateJourneyMaps(root = document) {
+        getHydratableJourneyMapNodes(root).forEach((node) => hydrateJourneyMap(node));
       }
 
       function scheduleJourneyMapHydration(root = document) {
-        requestAnimationFrame(() => hydrateJourneyMaps(root));
+        if (
+          !getHydratableJourneyMapNodes(root).length ||
+          scheduledJourneyMapHydrationRoots.has(root)
+        ) {
+          return;
+        }
+        scheduledJourneyMapHydrationRoots.add(root);
+        requestAnimationFrame(() => {
+          scheduledJourneyMapHydrationRoots.delete(root);
+          hydrateJourneyMaps(root);
+        });
       }
 
       function getJourneyDayRouteStatus(day = {}) {
