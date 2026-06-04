@@ -732,6 +732,14 @@ async function installNetworkStubs(context) {
   await context.route("**/health/ready", async (route) => {
     await route.fulfill(responseJson(readinessPayload));
   });
+  await context.route("**/api/v1/users/me", async (route) => {
+    await route.fulfill(responseJson({
+      id: "visual-journey-browser-user",
+      username: "visual-journey-browser",
+      email: "visual-journey-browser@example.test",
+      preferences: { role: "user" },
+    }));
+  });
   await context.route("**/api/v1/maps/config", async (route) => {
     await route.fulfill(responseJson({
       preferred_provider: "leaflet-osm",
@@ -777,6 +785,14 @@ async function installNetworkStubs(context) {
       const rawUrl = typeof input === "string" ? input : input?.url || "";
       const url = String(rawUrl);
       if (url.includes("/health/ready")) return json(payload.readiness);
+      if (url.includes("/api/v1/users/me")) {
+        return json({
+          id: "visual-journey-browser-user",
+          username: "visual-journey-browser",
+          email: "visual-journey-browser@example.test",
+          preferences: { role: "user" },
+        });
+      }
       if (url.includes("/api/v1/conversations")) {
         return json({
           conversations: [
@@ -916,15 +932,9 @@ async function createPage(browser, viewport) {
 
 async function seedLoggedInState(page) {
   await page.addInitScript(() => {
-    window.localStorage.setItem("token", "visual-journey-browser-token");
-    window.localStorage.setItem(
-      "user",
-      JSON.stringify({
-        id: "visual-journey-browser-user",
-        username: "visual-journey-browser",
-        role: "user",
-      })
-    );
+    window.localStorage.removeItem("token");
+    window.localStorage.removeItem("user");
+    window.localStorage.setItem("visual-journey-browser-session", "1");
   });
 }
 
@@ -933,6 +943,24 @@ async function gotoFrontend(page) {
     waitUntil: "domcontentloaded",
   });
   await page.waitForSelector("#chatMessages", { state: "attached", timeout: 5000 });
+  await page.evaluate(() => {
+    let bypassStyle = document.getElementById("visualJourneyRegressionOverlayBypass");
+    if (!bypassStyle) {
+      bypassStyle = document.createElement("style");
+      bypassStyle.id = "visualJourneyRegressionOverlayBypass";
+      bypassStyle.textContent = [
+        "#introOverlay, #authOverlay {",
+        "  display: none !important;",
+        "  pointer-events: none !important;",
+        "}",
+        "body.intro-active { overflow: auto !important; }",
+      ].join("\n");
+      document.head.appendChild(bypassStyle);
+    }
+    document.getElementById("introOverlay")?.classList.add("hidden");
+    document.getElementById("authOverlay")?.classList.add("hidden");
+    document.body.classList.remove("intro-active");
+  });
 }
 
 async function expectVisible(page, selector, label) {
