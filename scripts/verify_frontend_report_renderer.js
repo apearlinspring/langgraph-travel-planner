@@ -15,6 +15,7 @@ const frontendScriptBundle = [
   "report-export.js",
   "report-actions.js",
   "governance-tools.js",
+  "governance-progress.js",
   "governance-renderer.js",
   "app.js",
 ]
