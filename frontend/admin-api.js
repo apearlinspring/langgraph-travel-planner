@@ -28,11 +28,13 @@
     apiBase,
     stateToken = "",
     limit = 20,
+    offset = 0,
     queryText = "",
     role = "all",
   }) {
     const params = new URLSearchParams({
       limit: String(limit),
+      offset: String(offset),
       role,
     });
     if (queryText.trim()) params.set("q", queryText.trim());
@@ -50,12 +52,14 @@
     apiBase,
     stateToken = "",
     limit = 30,
+    offset = 0,
     status = "active",
     queryText = "",
     role = "all",
   }) {
     const params = new URLSearchParams({
       limit: String(limit),
+      offset: String(offset),
       status,
       role,
     });

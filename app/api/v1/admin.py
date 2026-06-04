@@ -94,30 +94,40 @@ async def _list_admin_users(
     db: AsyncSession,
     *,
     limit: int,
+    offset: int,
     query_text: str | None,
     role_filter: str | None,
 ) -> AdminUserListResponse:
-    query = (
-        select(
-            User,
-            func.count(Conversation.id).label("conversation_count"),
-        )
-        .outerjoin(Conversation, Conversation.user_id == User.id)
-        .group_by(User.id)
-        .order_by(User.created_at.desc())
-        .limit(limit)
-    )
+    filters = []
     normalized_role = normalize_user_role(role_filter) if role_filter and role_filter != "all" else None
     if query_text:
         keyword = f"%{query_text.strip()}%"
-        query = query.where(
+        filters.append(
             or_(
                 User.username.ilike(keyword),
                 User.email.ilike(keyword),
             )
         )
     if normalized_role:
-        query = query.where(User.preferences["role"].as_string() == normalized_role)
+        filters.append(User.preferences["role"].as_string() == normalized_role)
+
+    total_query = select(func.count(User.id))
+    if filters:
+        total_query = total_query.where(*filters)
+    total = (await db.execute(total_query)).scalar_one()
+
+    query = (
+        select(
+            User,
+            func.count(Conversation.id).label("conversation_count"),
+        )
+        .outerjoin(Conversation, Conversation.user_id == User.id)
+        .where(*filters)
+        .group_by(User.id)
+        .order_by(User.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+    )
 
     rows = (await db.execute(query)).all()
     users = [
@@ -131,13 +141,19 @@ async def _list_admin_users(
         )
         for user, conversation_count in rows
     ]
-    return AdminUserListResponse(users=users, total=len(users))
+    return AdminUserListResponse(
+        users=users,
+        total=int(total or 0),
+        offset=offset,
+        limit=limit,
+    )
 
 
 async def _list_admin_conversations(
     db: AsyncSession,
     *,
     limit: int,
+    offset: int,
     status_filter: str | None,
     query_text: str | None,
     role_filter: str | None,
@@ -150,6 +166,30 @@ async def _list_admin_conversations(
         .group_by(Message.conversation_id)
         .subquery()
     )
+
+    filters = []
+    if status_filter and status_filter != "all":
+        filters.append(Conversation.status == status_filter)
+    if query_text:
+        keyword = f"%{query_text.strip()}%"
+        filters.append(
+            or_(
+                Conversation.title.ilike(keyword),
+                User.username.ilike(keyword),
+                User.email.ilike(keyword),
+            )
+        )
+    normalized_role = normalize_user_role(role_filter) if role_filter and role_filter != "all" else None
+    if normalized_role:
+        filters.append(User.preferences["role"].as_string() == normalized_role)
+
+    total_query = select(func.count(Conversation.id)).join(
+        User,
+        User.id == Conversation.user_id,
+    )
+    if filters:
+        total_query = total_query.where(*filters)
+    total = (await db.execute(total_query)).scalar_one()
 
     query = (
         select(
@@ -164,23 +204,11 @@ async def _list_admin_conversations(
             message_count_subquery,
             message_count_subquery.c.conversation_id == Conversation.id,
         )
+        .where(*filters)
         .order_by(Conversation.updated_at.desc())
+        .offset(offset)
         .limit(limit)
     )
-    if status_filter and status_filter != "all":
-        query = query.where(Conversation.status == status_filter)
-    if query_text:
-        keyword = f"%{query_text.strip()}%"
-        query = query.where(
-            or_(
-                Conversation.title.ilike(keyword),
-                User.username.ilike(keyword),
-                User.email.ilike(keyword),
-            )
-        )
-    normalized_role = normalize_user_role(role_filter) if role_filter and role_filter != "all" else None
-    if normalized_role:
-        query = query.where(User.preferences["role"].as_string() == normalized_role)
 
     rows = (await db.execute(query)).all()
     conversations = [
@@ -195,7 +223,9 @@ async def _list_admin_conversations(
     ]
     return AdminConversationListResponse(
         conversations=conversations,
-        total=len(conversations),
+        total=int(total or 0),
+        offset=offset,
+        limit=limit,
     )
 
 
@@ -471,6 +501,7 @@ async def get_admin_overview(
 @router.get("/users", response_model=AdminUserListResponse)
 async def list_admin_users(
     limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
     query_text: str | None = Query(default=None, alias="q"),
     role_filter: str | None = Query(default="all", alias="role"),
     _: User = Depends(require_user_role("approver", "admin")),
@@ -479,6 +510,7 @@ async def list_admin_users(
     return await _list_admin_users(
         db,
         limit=limit,
+        offset=offset,
         query_text=query_text,
         role_filter=role_filter,
     )
@@ -487,6 +519,7 @@ async def list_admin_users(
 @router.get("/conversations", response_model=AdminConversationListResponse)
 async def list_admin_conversations(
     limit: int = Query(default=30, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
     status_filter: str | None = Query(default="active", alias="status"),
     query_text: str | None = Query(default=None, alias="q"),
     role_filter: str | None = Query(default="all", alias="role"),
@@ -496,6 +529,7 @@ async def list_admin_conversations(
     return await _list_admin_conversations(
         db,
         limit=limit,
+        offset=offset,
         status_filter=status_filter,
         query_text=query_text,
         role_filter=role_filter,

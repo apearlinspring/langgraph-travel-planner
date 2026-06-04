@@ -71,8 +71,9 @@ def test_admin_overview_returns_summary(monkeypatch):
 def test_admin_users_and_conversations_return_payloads(monkeypatch):
     client = _build_client(role="admin")
 
-    async def _fake_users(_db, *, limit, query_text, role_filter):
+    async def _fake_users(_db, *, limit, offset, query_text, role_filter):
         assert limit == 20
+        assert offset == 0
         assert query_text is None
         assert role_filter == "all"
         return AdminUserListResponse(
@@ -87,10 +88,13 @@ def test_admin_users_and_conversations_return_payloads(monkeypatch):
                 )
             ],
             total=1,
+            offset=offset,
+            limit=limit,
         )
 
-    async def _fake_conversations(_db, *, limit, status_filter, query_text, role_filter):
+    async def _fake_conversations(_db, *, limit, offset, status_filter, query_text, role_filter):
         assert limit == 10
+        assert offset == 2
         assert status_filter == "active"
         assert query_text is None
         assert role_filter == "all"
@@ -110,6 +114,8 @@ def test_admin_users_and_conversations_return_payloads(monkeypatch):
                 )
             ],
             total=1,
+            offset=offset,
+            limit=limit,
         )
 
     monkeypatch.setattr(admin_api, "_list_admin_users", _fake_users)
@@ -118,13 +124,15 @@ def test_admin_users_and_conversations_return_payloads(monkeypatch):
     users_response = client.get("/api/v1/admin/users")
     conversations_response = client.get(
         "/api/v1/admin/conversations",
-        params={"limit": 10, "status": "active"},
+        params={"limit": 10, "offset": 2, "status": "active"},
     )
 
     assert users_response.status_code == 200
     assert users_response.json()["users"][0]["conversation_count"] == 5
+    assert users_response.json()["offset"] == 0
     assert conversations_response.status_code == 200
     assert conversations_response.json()["conversations"][0]["message_count"] == 8
+    assert conversations_response.json()["offset"] == 2
 
 
 def test_admin_filters_pass_query_params(monkeypatch):
@@ -132,17 +140,19 @@ def test_admin_filters_pass_query_params(monkeypatch):
 
     captured = {}
 
-    async def _fake_users(_db, *, limit, query_text, role_filter):
+    async def _fake_users(_db, *, limit, offset, query_text, role_filter):
         captured["users"] = {
             "limit": limit,
+            "offset": offset,
             "query_text": query_text,
             "role_filter": role_filter,
         }
         return AdminUserListResponse(users=[], total=0)
 
-    async def _fake_conversations(_db, *, limit, status_filter, query_text, role_filter):
+    async def _fake_conversations(_db, *, limit, offset, status_filter, query_text, role_filter):
         captured["conversations"] = {
             "limit": limit,
+            "offset": offset,
             "status_filter": status_filter,
             "query_text": query_text,
             "role_filter": role_filter,
@@ -154,22 +164,24 @@ def test_admin_filters_pass_query_params(monkeypatch):
 
     users_response = client.get(
         "/api/v1/admin/users",
-        params={"limit": 8, "q": "alice", "role": "admin"},
+        params={"limit": 8, "offset": 16, "q": "alice", "role": "admin"},
     )
     conversations_response = client.get(
         "/api/v1/admin/conversations",
-        params={"limit": 6, "status": "all", "q": "川西", "role": "approver"},
+        params={"limit": 6, "offset": 12, "status": "all", "q": "川西", "role": "approver"},
     )
 
     assert users_response.status_code == 200
     assert conversations_response.status_code == 200
     assert captured["users"] == {
         "limit": 8,
+        "offset": 16,
         "query_text": "alice",
         "role_filter": "admin",
     }
     assert captured["conversations"] == {
         "limit": 6,
+        "offset": 12,
         "status_filter": "all",
         "query_text": "川西",
         "role_filter": "approver",

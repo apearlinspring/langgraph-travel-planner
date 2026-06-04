@@ -261,6 +261,26 @@ body {
   border: 1px solid rgba(23, 59, 66, 0.08);
 }
 
+.list-pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 38px;
+  margin-top: 12px;
+}
+
+.pager-summary {
+  color: var(--admin-muted);
+  font-size: 13px;
+}
+
+.pager-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .row-action-btn {
   appearance: none;
   border: 0;
@@ -272,6 +292,11 @@ body {
   font-size: 12px;
   font-weight: 700;
   cursor: pointer;
+}
+
+.row-action-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.46;
 }
 
 table {
@@ -514,5 +539,10 @@ td strong {
   .conversation-detail-grid,
   .detail-runtime-grid {
     grid-template-columns: 1fr;
+  }
+
+  .list-pager {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }

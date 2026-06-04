@@ -26,6 +26,8 @@ class AdminUserSummary(BaseModel):
 class AdminUserListResponse(BaseModel):
     users: list[AdminUserSummary]
     total: int
+    offset: int = 0
+    limit: int = 0
 
 
 class AdminConversationSummary(BaseModel):
@@ -44,6 +46,8 @@ class AdminConversationSummary(BaseModel):
 class AdminConversationListResponse(BaseModel):
     conversations: list[AdminConversationSummary]
     total: int
+    offset: int = 0
+    limit: int = 0
 
 
 class AdminConversationMessageSummary(BaseModel):

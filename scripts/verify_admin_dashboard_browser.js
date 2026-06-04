@@ -143,21 +143,28 @@ async function main() {
         }
         const parsed = new URL(url);
         const keyword = parsed.searchParams.get("q");
+        const offset = Number(parsed.searchParams.get("offset") || 0);
+        const limit = Number(parsed.searchParams.get("limit") || 12);
         return json({
           users:
             keyword === "bob"
               ? []
               : [
                   {
-                    id: "00000000-0000-0000-0000-000000000001",
-                    username: xssProbeUsername,
-                    email: "alice@example.com",
+                    id:
+                      offset >= 12
+                        ? "00000000-0000-0000-0000-000000000002"
+                        : "00000000-0000-0000-0000-000000000001",
+                    username: offset >= 12 ? "page-two-user" : xssProbeUsername,
+                    email: offset >= 12 ? "page2@example.com" : "alice@example.com",
                     role: "admin",
                     created_at: "2026-06-03T09:00:00Z",
-                    conversation_count: 5,
+                    conversation_count: offset >= 12 ? 1 : 5,
                   },
                 ],
-          total: keyword === "bob" ? 0 : 1,
+          total: keyword === "bob" ? 0 : 13,
+          offset,
+          limit,
         });
       }
       if (url.includes("/api/v1/admin/conversations")) {
@@ -206,22 +213,30 @@ async function main() {
             ],
           });
         }
+        const parsed = new URL(url);
+        const offset = Number(parsed.searchParams.get("offset") || 0);
+        const limit = Number(parsed.searchParams.get("limit") || 12);
         return json({
           conversations: [
             {
-              id: "00000000-0000-0000-0000-000000000011",
+              id:
+                offset >= 12
+                  ? "00000000-0000-0000-0000-000000000013"
+                  : "00000000-0000-0000-0000-000000000011",
               user_id: "00000000-0000-0000-0000-000000000001",
-              username: xssProbeUsername,
+              username: offset >= 12 ? "page-two-user" : xssProbeUsername,
               email: "alice@example.com",
               role: "admin",
-              title: xssProbeTitle,
+              title: offset >= 12 ? "第二页会话样例" : xssProbeTitle,
               status: "active",
               created_at: "2026-06-03T09:00:00Z",
               updated_at: "2026-06-03T10:00:00Z",
               message_count: 8,
             },
           ],
-          total: 1,
+          total: 13,
+          offset,
+          limit,
         });
       }
       if (url.includes("/api/v1/approvals?")) {
@@ -306,6 +321,22 @@ async function main() {
       return document
         .querySelector("#adminUsersTable")
         ?.textContent?.includes("<img src=x onerror=");
+    });
+    await page.click("#adminUsersPager [data-page-direction='next']");
+    await page.waitForFunction(() => {
+      return document.querySelector("#adminUsersTable")?.textContent?.includes("page-two-user");
+    });
+    await page.click("#adminUsersPager [data-page-direction='prev']");
+    await page.waitForFunction(() => {
+      return document
+        .querySelector("#adminUsersTable")
+        ?.textContent?.includes("<img src=x onerror=");
+    });
+    await page.click("#adminConversationsPager [data-page-direction='next']");
+    await page.waitForFunction(() => {
+      return document
+        .querySelector("#adminConversationsTable")
+        ?.textContent?.includes("第二页会话样例");
     });
     const injectedNodeCount = await page
       .locator("#adminUsersTable script, #adminUsersTable img, #adminUsersTable svg, #adminApprovalsList script, #adminApprovalsList img, #adminApprovalsList svg, #adminConversationMessages script, #adminConversationMessages img, #adminConversationMessages svg")

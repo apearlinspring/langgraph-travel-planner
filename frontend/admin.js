@@ -9,8 +9,22 @@
     selectedUserId: "",
     selectedConversationId: "",
     selectedApprovalId: "",
+    selectedUserDetail: null,
     approvalEvents: [],
+    approvals: [],
     approvalActionPendingId: "",
+    pagination: {
+      users: {
+        limit: 12,
+        offset: 0,
+        total: 0,
+      },
+      conversations: {
+        limit: 12,
+        offset: 0,
+        total: 0,
+      },
+    },
     filters: {
       userQuery: "",
       userRole: "all",
@@ -138,10 +152,77 @@
       data?.pending_approvals ?? "-";
   }
 
+  function renderListPager(elementId, pagination, itemCount, itemLabel, target) {
+    const container = document.getElementById(elementId);
+    if (!container) return;
+    const total = Number(pagination?.total || 0);
+    const limit = Math.max(1, Number(pagination?.limit || 1));
+    const offset = Math.max(0, Number(pagination?.offset || 0));
+    if (!total) {
+      container.innerHTML = `
+        <span class="pager-summary">共 0 条${safeText(itemLabel)}</span>
+        <div class="pager-actions">
+          <button class="row-action-btn" type="button" disabled>上一页</button>
+          <button class="row-action-btn" type="button" disabled>下一页</button>
+        </div>
+      `;
+      return;
+    }
+    const start = offset + 1;
+    const end = Math.min(offset + itemCount, total);
+    const page = Math.floor(offset / limit) + 1;
+    const pageCount = Math.max(1, Math.ceil(total / limit));
+    const prevDisabled = offset <= 0 ? "disabled" : "";
+    const nextDisabled = offset + itemCount >= total ? "disabled" : "";
+    container.innerHTML = `
+      <span class="pager-summary">
+        第 ${start}-${end} 条，共 ${total} 条${safeText(itemLabel)} · 第 ${page}/${pageCount} 页
+      </span>
+      <div class="pager-actions">
+        <button
+          class="row-action-btn"
+          type="button"
+          data-page-target="${safeAttr(target)}"
+          data-page-direction="prev"
+          ${prevDisabled}
+        >
+          上一页
+        </button>
+        <button
+          class="row-action-btn"
+          type="button"
+          data-page-target="${safeAttr(target)}"
+          data-page-direction="next"
+          ${nextDisabled}
+        >
+          下一页
+        </button>
+      </div>
+    `;
+  }
+
+  function renderUsersLoading() {
+    document.getElementById("adminUsersTable").innerHTML =
+      '<tr><td colspan="6" class="empty-state">正在加载用户数据…</td></tr>';
+  }
+
+  function renderConversationsLoading() {
+    document.getElementById("adminConversationsTable").innerHTML =
+      '<tr><td colspan="7" class="empty-state">正在加载会话数据…</td></tr>';
+  }
+
+  function resetListPagination() {
+    state.pagination.users.offset = 0;
+    state.pagination.users.total = 0;
+    state.pagination.conversations.offset = 0;
+    state.pagination.conversations.total = 0;
+  }
+
   function renderUsers(users = []) {
     const tbody = document.getElementById("adminUsersTable");
     if (!users.length) {
       tbody.innerHTML = '<tr><td colspan="6" class="empty-state">当前没有可展示的用户记录。</td></tr>';
+      renderListPager("adminUsersPager", state.pagination.users, 0, "用户", "users");
       renderUserDetailEmpty("当前筛选结果里没有可展开的用户。");
       return;
     }
@@ -167,9 +248,17 @@
         `
       )
       .join("");
+    renderListPager(
+      "adminUsersPager",
+      state.pagination.users,
+      users.length,
+      "用户",
+      "users"
+    );
   }
 
   function renderUserDetailEmpty(message) {
+    state.selectedUserDetail = null;
     document.getElementById("adminUserDetailHint").textContent = message;
     document.getElementById("adminUserRuntime").innerHTML =
       '<div class="empty-state">还没有选中用户。</div>';
@@ -302,6 +391,13 @@
     if (!conversations.length) {
       tbody.innerHTML =
         '<tr><td colspan="7" class="empty-state">当前没有可展示的会话记录。</td></tr>';
+      renderListPager(
+        "adminConversationsPager",
+        state.pagination.conversations,
+        0,
+        "会话",
+        "conversations"
+      );
       renderConversationDetailEmpty("当前筛选结果里没有可展开的会话。");
       return;
     }
@@ -328,6 +424,13 @@
         `
       )
       .join("");
+    renderListPager(
+      "adminConversationsPager",
+      state.pagination.conversations,
+      conversations.length,
+      "会话",
+      "conversations"
+    );
   }
 
   function renderConversationDetailEmpty(message) {
@@ -613,6 +716,7 @@
           result.data?.detail?.message || `user-detail-${result.response.status}`
         );
       }
+      state.selectedUserDetail = result.data;
       renderUserDetail(result.data);
     } catch (error) {
       console.error(error);
@@ -705,6 +809,165 @@
     }
   }
 
+  async function loadAdminUsers({ resetOffset = false } = {}) {
+    syncFiltersFromUi();
+    if (resetOffset) {
+      state.pagination.users.offset = 0;
+    }
+    renderUsersLoading();
+    try {
+      const result = await adminApi.fetchAdminUsers({
+        apiBase: getApiBase(),
+        stateToken: state.token,
+        limit: state.pagination.users.limit,
+        offset: state.pagination.users.offset,
+        queryText: state.filters.userQuery,
+        role: state.filters.userRole,
+      });
+      if (!result.response.ok) {
+        throw new Error(
+          result.data?.detail?.message || `users-${result.response.status}`
+        );
+      }
+      const users = result.data?.users || [];
+      state.pagination.users.total = Number(result.data?.total || 0);
+      state.pagination.users.offset = Number(result.data?.offset || 0);
+      state.pagination.users.limit = Number(
+        result.data?.limit || state.pagination.users.limit
+      );
+      if (
+        !users.length &&
+        state.pagination.users.total > 0 &&
+        state.pagination.users.offset > 0
+      ) {
+        state.pagination.users.offset =
+          Math.floor((state.pagination.users.total - 1) / state.pagination.users.limit) *
+          state.pagination.users.limit;
+        await loadAdminUsers();
+        return;
+      }
+      renderUsers(users);
+      const hasSelectedUser = users.some((item) => item.id === state.selectedUserId);
+      if (hasSelectedUser) {
+        await loadUserDetail(state.selectedUserId);
+      } else if (users[0]?.id) {
+        await loadUserDetail(users[0].id);
+      } else {
+        state.selectedUserId = "";
+      }
+    } catch (error) {
+      console.error(error);
+      state.pagination.users.total = 0;
+      renderUsers([]);
+      renderUserDetailEmpty(`用户列表加载失败：${error.message || "请稍后再试。"}`);
+    }
+  }
+
+  async function loadAdminConversations({ resetOffset = false } = {}) {
+    syncFiltersFromUi();
+    if (resetOffset) {
+      state.pagination.conversations.offset = 0;
+    }
+    renderConversationsLoading();
+    try {
+      const result = await adminApi.fetchAdminConversations({
+        apiBase: getApiBase(),
+        stateToken: state.token,
+        limit: state.pagination.conversations.limit,
+        offset: state.pagination.conversations.offset,
+        status: state.filters.conversationStatus,
+        queryText: state.filters.conversationQuery,
+        role: state.filters.conversationRole,
+      });
+      if (!result.response.ok) {
+        throw new Error(
+          result.data?.detail?.message ||
+            `conversations-${result.response.status}`
+        );
+      }
+      const conversations = result.data?.conversations || [];
+      state.pagination.conversations.total = Number(result.data?.total || 0);
+      state.pagination.conversations.offset = Number(result.data?.offset || 0);
+      state.pagination.conversations.limit = Number(
+        result.data?.limit || state.pagination.conversations.limit
+      );
+      if (
+        !conversations.length &&
+        state.pagination.conversations.total > 0 &&
+        state.pagination.conversations.offset > 0
+      ) {
+        state.pagination.conversations.offset =
+          Math.floor(
+            (state.pagination.conversations.total - 1) /
+              state.pagination.conversations.limit
+          ) * state.pagination.conversations.limit;
+        await loadAdminConversations();
+        return;
+      }
+      renderConversations(conversations);
+      const hasSelectedConversation = conversations.some(
+        (item) => item.id === state.selectedConversationId
+      );
+      if (hasSelectedConversation) {
+        await loadConversationDetail(state.selectedConversationId);
+      } else if (conversations[0]?.id) {
+        await loadConversationDetail(conversations[0].id);
+      } else {
+        state.selectedConversationId = "";
+      }
+    } catch (error) {
+      console.error(error);
+      state.pagination.conversations.total = 0;
+      renderConversations([]);
+      renderConversationDetailEmpty(
+        `会话列表加载失败：${error.message || "请稍后再试。"}`
+      );
+    }
+  }
+
+  async function loadAdminApprovals() {
+    syncFiltersFromUi();
+    try {
+      const result = await governanceApi.fetchApprovals({
+        apiBase: getApiBase(),
+        stateToken: state.token,
+        filter:
+          state.filters.approvalStatus === "all"
+            ? "all"
+            : state.filters.approvalStatus,
+        canRequestAll: true,
+      });
+      if (!result.response.ok) {
+        throw new Error(
+          result.data?.detail?.message ||
+            result.data?.detail ||
+            `approvals-${result.response.status}`
+        );
+      }
+      state.approvals = result.data?.approvals || [];
+      renderApprovals(state.approvals);
+      if (
+        state.selectedApprovalId &&
+        state.approvals.some((item) => item.approval_id === state.selectedApprovalId)
+      ) {
+        await loadApprovalEvents(state.selectedApprovalId);
+      } else {
+        state.selectedApprovalId = "";
+        state.approvalEvents = [];
+        renderApprovalEvents();
+      }
+    } catch (error) {
+      console.error(error);
+      state.approvals = [];
+      renderApprovals([]);
+      state.selectedApprovalId = "";
+      state.approvalEvents = [];
+      document.getElementById("adminApprovalEvents").innerHTML = `
+        <div class="empty-state">审批记录加载失败：${safeText(error.message || "请稍后再试。")}</div>
+      `;
+    }
+  }
+
   async function loadDashboard() {
     const refreshBtn = document.getElementById("refreshDashboardBtn");
     refreshBtn.disabled = true;
@@ -721,10 +984,12 @@
         "未检测到登录会话",
         "请先在旅行工作台登录，再返回这里查看后台数据。"
       );
+      resetListPagination();
       renderOverview(null);
       renderUsers([]);
       renderConversations([]);
       renderApprovals([]);
+      renderUserDetailEmpty("请先登录旅行工作台，再查看后台用户详情。");
       renderConversationDetailEmpty("请先登录旅行工作台，再查看后台会话详情。");
       refreshBtn.disabled = false;
       return;
@@ -736,10 +1001,12 @@
         `${state.user.username || "当前账号"} 无后台权限`,
         "当前账号不是审批员或管理员，因此不会加载后台管理数据。"
       );
+      resetListPagination();
       renderOverview(null);
       renderUsers([]);
       renderConversations([]);
       renderApprovals([]);
+      renderUserDetailEmpty("当前账号没有后台权限，无法查看用户详情。");
       renderConversationDetailEmpty("当前账号没有后台权限，无法查看会话详情。");
       refreshBtn.disabled = false;
       return;
@@ -750,38 +1017,11 @@
       "后台管理台已连接，下面展示脱敏后的内部管理摘要。"
     );
 
-      try {
-      const [overviewResult, usersResult, conversationsResult, approvalsResult] =
-        await Promise.all([
-          adminApi.fetchAdminOverview({
-            apiBase: getApiBase(),
-            stateToken: state.token,
-          }),
-          adminApi.fetchAdminUsers({
-            apiBase: getApiBase(),
-            stateToken: state.token,
-            limit: 12,
-            queryText: state.filters.userQuery,
-            role: state.filters.userRole,
-          }),
-          adminApi.fetchAdminConversations({
-            apiBase: getApiBase(),
-            stateToken: state.token,
-            limit: 12,
-            status: state.filters.conversationStatus,
-            queryText: state.filters.conversationQuery,
-            role: state.filters.conversationRole,
-          }),
-          governanceApi.fetchApprovals({
-            apiBase: getApiBase(),
-            stateToken: state.token,
-            filter:
-              state.filters.approvalStatus === "all"
-                ? "all"
-                : state.filters.approvalStatus,
-            canRequestAll: true,
-          }),
-        ]);
+    try {
+      const overviewResult = await adminApi.fetchAdminOverview({
+        apiBase: getApiBase(),
+        stateToken: state.token,
+      });
 
       if (!overviewResult.response.ok) {
         throw new Error(
@@ -789,59 +1029,13 @@
             `overview-${overviewResult.response.status}`
         );
       }
-      if (!usersResult.response.ok) {
-        throw new Error(
-          usersResult.data?.detail?.message || `users-${usersResult.response.status}`
-        );
-      }
-      if (!conversationsResult.response.ok) {
-        throw new Error(
-          conversationsResult.data?.detail?.message ||
-            `conversations-${conversationsResult.response.status}`
-        );
-      }
-      if (!approvalsResult.response.ok) {
-        throw new Error(
-          approvalsResult.data?.detail?.message ||
-            `approvals-${approvalsResult.response.status}`
-        );
-      }
 
       renderOverview(overviewResult.data);
-      const users = usersResult.data?.users || [];
-      renderUsers(users);
-      const conversations = conversationsResult.data?.conversations || [];
-      renderConversations(conversations);
-      renderApprovals(approvalsResult.data?.approvals || []);
-      const hasSelectedUser = users.some((item) => item.id === state.selectedUserId);
-      if (hasSelectedUser) {
-        await loadUserDetail(state.selectedUserId);
-      } else if (users[0]?.id) {
-        await loadUserDetail(users[0].id);
-      } else {
-        state.selectedUserId = "";
-      }
-      const hasSelectedConversation = conversations.some(
-        (item) => item.id === state.selectedConversationId
-      );
-      if (hasSelectedConversation) {
-        await loadConversationDetail(state.selectedConversationId);
-      } else if (conversations[0]?.id) {
-        await loadConversationDetail(conversations[0].id);
-      } else {
-        state.selectedConversationId = "";
-      }
-      const approvals = approvalsResult.data?.approvals || [];
-      if (
-        state.selectedApprovalId &&
-        approvals.some((item) => item.approval_id === state.selectedApprovalId)
-      ) {
-        await loadApprovalEvents(state.selectedApprovalId);
-      } else {
-        state.selectedApprovalId = "";
-        state.approvalEvents = [];
-        renderApprovalEvents();
-      }
+      await Promise.all([
+        loadAdminUsers(),
+        loadAdminConversations(),
+        loadAdminApprovals(),
+      ]);
     } catch (error) {
       console.error(error);
       setAdminState(
@@ -852,6 +1046,7 @@
       renderConversationDetailEmpty("后台主数据加载失败，详情区域暂不可用。");
       state.selectedApprovalId = "";
       state.approvalEvents = [];
+      state.approvals = [];
       renderApprovalEvents();
     } finally {
       refreshBtn.disabled = false;
@@ -862,22 +1057,58 @@
     document
       .getElementById("refreshDashboardBtn")
       .addEventListener("click", loadDashboard);
+    function bindScopedFilter(id, refreshHandler) {
+      const element = document.getElementById(id);
+      if (!element) return;
+      element.addEventListener("change", refreshHandler);
+      element.addEventListener("input", (event) => {
+        if (!event.target.matches("input[type='search']")) return;
+        window.clearTimeout(event.target._refreshTimer);
+        event.target._refreshTimer = window.setTimeout(refreshHandler, 220);
+      });
+    }
+
+    ["adminUserSearch", "adminUserRoleFilter"].forEach((id) => {
+      bindScopedFilter(id, () => loadAdminUsers({ resetOffset: true }));
+    });
     [
-      "adminUserSearch",
-      "adminUserRoleFilter",
-      "adminUserConversationSearch",
-      "adminUserConversationStatusFilter",
       "adminConversationSearch",
       "adminConversationRoleFilter",
       "adminConversationStatusFilter",
-      "adminApprovalSearch",
-      "adminApprovalStatusFilter",
     ].forEach((id) => {
-      document.getElementById(id)?.addEventListener("change", loadDashboard);
-      document.getElementById(id)?.addEventListener("input", (event) => {
-        if (event.target.matches("input[type='search']")) {
-          window.clearTimeout(event.target._refreshTimer);
-          event.target._refreshTimer = window.setTimeout(loadDashboard, 220);
+      bindScopedFilter(id, () => loadAdminConversations({ resetOffset: true }));
+    });
+    ["adminUserConversationSearch", "adminUserConversationStatusFilter"].forEach((id) => {
+      bindScopedFilter(id, () => {
+        syncFiltersFromUi();
+        if (state.selectedUserDetail) {
+          renderUserDetail(state.selectedUserDetail);
+        }
+      });
+    });
+    bindScopedFilter("adminApprovalSearch", () => {
+      syncFiltersFromUi();
+      renderApprovals(state.approvals);
+    });
+    bindScopedFilter("adminApprovalStatusFilter", loadAdminApprovals);
+    ["adminUsersPager", "adminConversationsPager"].forEach((id) => {
+      document.getElementById(id)?.addEventListener("click", async (event) => {
+        const button = event.target.closest("[data-page-target]");
+        if (!button || button.disabled) return;
+        const target = button.dataset.pageTarget;
+        const direction = button.dataset.pageDirection;
+        const pagination = state.pagination[target];
+        if (!pagination) return;
+        const nextOffset =
+          direction === "prev"
+            ? Math.max(0, pagination.offset - pagination.limit)
+            : pagination.offset + pagination.limit;
+        if (nextOffset < 0 || nextOffset >= Math.max(pagination.total, 1)) return;
+        pagination.offset = nextOffset;
+        if (target === "users") {
+          await loadAdminUsers();
+        } else if (target === "conversations") {
+          await loadAdminConversations();
         }
       });
     });
@@ -899,13 +1130,13 @@
       .getElementById("adminApprovalQuickAll")
       .addEventListener("click", async () => {
         document.getElementById("adminApprovalStatusFilter").value = "all";
-        await loadDashboard();
+        await loadAdminApprovals();
       });
     document
       .getElementById("adminApprovalQuickPending")
       .addEventListener("click", async () => {
         document.getElementById("adminApprovalStatusFilter").value = "pending";
-        await loadDashboard();
+        await loadAdminApprovals();
       });
     document.body.addEventListener("click", async (event) => {
       const decisionButton = event.target.closest("[data-approval-decision]");
