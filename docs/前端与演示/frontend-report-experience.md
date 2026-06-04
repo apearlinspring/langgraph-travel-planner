@@ -71,14 +71,26 @@
 
 - `frontend/session-api.js`：登录、登出、Cookie 会话恢复、统一请求凭据。
 - `frontend/conversation-api.js`：会话列表、历史消息、流式聊天、旅程草案保存。
-- `frontend/governance-api.js`：ready check（就绪检查）、审批列表、审批事件和审批决策。
 - `frontend/journey-api.js`：地图依赖加载、地图配置请求、地图预览请求。
 - `frontend/journey-editor.js`：可视化旅程工作台里的 POI（兴趣点/地点）聚焦、分日聚焦和顺序编辑。
 - `frontend/journey-overlay.js`：大图地图弹层、POI 底部面板动作、推荐点加入/替换。
 - `frontend/map-controls.js`：地图工具条、风格切换、焦点切换、分日切换、路线节点点击。
-- `frontend/report-actions.js`：报告内导出、报告内地图定位、报告卡片跳转地图。
+- `frontend/journey-text-utils.js`：旅程文本摘要、短标签和说明文案归一化。
+- `frontend/journey-map-data.js`：路线天数、POI（兴趣点/地点）和地图数据的提取与归一化。
+- `frontend/journey-map-view.js`：地图实例、路线图层、点位图层和降级地图视图。
+- `frontend/journey-map-focus.js`：Day（日期）聚焦、POI 聚焦和地图视图同步。
+- `frontend/journey-map-shell.js`：圆周旅迹工作台外壳、路线列表和地图容器渲染。
+- `frontend/journey-poi-utils.js`：推荐 POI 合并、排序、标签和匹配辅助逻辑。
+- `frontend/journey-poi-renderer.js`：推荐 POI 卡片、列表和加入/替换入口渲染。
 - `frontend/report-budget.js`：预算标题归一化、预算表格提取、预算总额估算、预算卡片渲染、过早预算段落抑制。
 - `frontend/report-renderer.js`：结构化报告主干、文本报告主干、报告分段渲染入口。
+- `frontend/report-export.js`：HTML（超文本标记语言）导出、导出内容清理和文件生成。
+- `frontend/report-actions.js`：报告内导出、报告内地图定位、报告卡片跳转地图。
+- `frontend/governance-api.js`：ready check（就绪检查）、审批列表、审批事件和审批决策。
+- `frontend/governance-tools.js`：工具审计展示语义、风险摘要和脱敏字段处理。
+- `frontend/governance-progress.js`：前台进度台阶段、事实和偏好展示逻辑。
+- `frontend/governance-renderer.js`：右侧治理台卡片、审批记录和运行摘要渲染。
+- `frontend/governance.css`：前台治理台和进度台样式。
 - `frontend/admin-api.js`、`frontend/admin.js`：独立后台管理台的数据请求和展示逻辑。
 
 当前推荐的维护方式：
@@ -87,7 +99,7 @@
 - 新增前台能力时，优先判断它属于请求层、交互层还是渲染层，再放进现有模块；不要把新逻辑直接塞回 `app.js`。
 - 如果某个模块继续膨胀到接近 1000 行，优先再做一次局部拆分，而不是恢复“单文件全包”。
 
-当前脚本加载顺序也有依赖关系：
+`frontend/zhixing.html` 当前脚本加载顺序也有依赖关系：
 
 1. `session-api.js`
 2. `conversation-api.js`
@@ -95,13 +107,24 @@
 4. `journey-editor.js`
 5. `journey-overlay.js`
 6. `map-controls.js`
-7. `report-budget.js`
-8. `report-renderer.js`
-9. `report-actions.js`
-10. `governance-api.js`
-11. `app.js`
+7. `journey-text-utils.js`
+8. `journey-map-data.js`
+9. `journey-map-view.js`
+10. `journey-map-focus.js`
+11. `journey-map-shell.js`
+12. `journey-poi-utils.js`
+13. `journey-poi-renderer.js`
+14. `report-budget.js`
+15. `report-renderer.js`
+16. `report-export.js`
+17. `report-actions.js`
+18. `governance-api.js`
+19. `governance-tools.js`
+20. `governance-progress.js`
+21. `governance-renderer.js`
+22. `app.js`
 
-这组顺序已经同步写入 `frontend/zhixing.html` 和 `scripts/verify_frontend_report_renderer.js`。如果后续新增模块，必须同时更新这两个位置，否则静态回归会出现“浏览器能跑、Node 拼接校验失败”或反过来的漂移。
+`scripts/verify_frontend_report_renderer.js` 会按报告渲染所需的依赖子集拼接这些模块。后续新增模块时，必须同时检查 `frontend/zhixing.html` 和该校验脚本是否需要同步，否则静态回归会出现“浏览器能跑、Node 拼接校验失败”或反过来的漂移。
 
 ## 单页治理台
 

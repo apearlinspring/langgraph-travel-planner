@@ -17,40 +17,50 @@
 
 - `frontend/session-api.js`
 - `frontend/conversation-api.js`
-- `frontend/governance-api.js`
 - `frontend/journey-api.js`
 - `frontend/journey-editor.js`
 - `frontend/journey-overlay.js`
 - `frontend/map-controls.js`
-- `frontend/report-actions.js`
+- `frontend/journey-text-utils.js`
+- `frontend/journey-map-data.js`
+- `frontend/journey-map-view.js`
+- `frontend/journey-map-focus.js`
+- `frontend/journey-map-shell.js`
+- `frontend/journey-poi-utils.js`
+- `frontend/journey-poi-renderer.js`
 - `frontend/report-budget.js`
 - `frontend/report-renderer.js`
 - `frontend/report-export.js`
+- `frontend/report-actions.js`
+- `frontend/governance-api.js`
+- `frontend/governance-tools.js`
+- `frontend/governance-progress.js`
+- `frontend/governance-renderer.js`
 
-当前 [frontend/app.js](C:/Users/Administrator/.codex/worktrees/6710/langgraph-travel-planner/frontend/app.js) 的职责已明显收缩，主要保留：
+当前 `frontend/app.js` 的职责已明显收缩，主要保留：
 
 - 全局状态
 - 页面初始化
 - 模块接线
 - 基础工具函数
 
-对应脚本加载顺序已同步写入：
+页面加载顺序和报告渲染校验依赖已在以下位置维护：
 
-- [frontend/zhixing.html](C:/Users/Administrator/.codex/worktrees/6710/langgraph-travel-planner/frontend/zhixing.html)
-- [scripts/verify_frontend_report_renderer.js](C:/Users/Administrator/.codex/worktrees/6710/langgraph-travel-planner/scripts/verify_frontend_report_renderer.js)
+- `frontend/zhixing.html`
+- `scripts/verify_frontend_report_renderer.js`
 
 相关维护说明已补充到：
 
-- [frontend-report-experience.md](C:/Users/Administrator/.codex/worktrees/6710/langgraph-travel-planner/docs/%E5%89%8D%E7%AB%AF%E4%B8%8E%E6%BC%94%E7%A4%BA/frontend-report-experience.md)
+- `docs/前端与演示/frontend-report-experience.md`
 
 ## 后台完成情况
 
 后台已从单页治理区升级为独立管理台，核心文件包括：
 
-- [app/api/v1/admin.py](C:/Users/Administrator/.codex/worktrees/6710/langgraph-travel-planner/app/api/v1/admin.py)
-- [frontend/admin.html](C:/Users/Administrator/.codex/worktrees/6710/langgraph-travel-planner/frontend/admin.html)
-- [frontend/admin.js](C:/Users/Administrator/.codex/worktrees/6710/langgraph-travel-planner/frontend/admin.js)
-- [frontend/admin-api.js](C:/Users/Administrator/.codex/worktrees/6710/langgraph-travel-planner/frontend/admin-api.js)
+- `app/api/v1/admin.py`
+- `frontend/admin.html`
+- `frontend/admin.js`
+- `frontend/admin-api.js`
 
 当前后台已具备：
 
@@ -72,9 +82,9 @@
 
 相关核心文件：
 
-- [app/config.py](C:/Users/Administrator/.codex/worktrees/6710/langgraph-travel-planner/app/config.py)
-- [app/main.py](C:/Users/Administrator/.codex/worktrees/6710/langgraph-travel-planner/app/main.py)
-- [app/api/v1/users.py](C:/Users/Administrator/.codex/worktrees/6710/langgraph-travel-planner/app/api/v1/users.py)
+- `app/config.py`
+- `app/main.py`
+- `app/api/v1/users.py`
 
 ## 本轮验证结果
 
