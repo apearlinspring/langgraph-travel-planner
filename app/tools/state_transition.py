@@ -730,6 +730,25 @@ def _confirmation_history_with_entries(
     return merged[-40:]
 
 
+def _merge_evidence_bundle(
+    existing: Any,
+    incoming: Any,
+) -> dict[str, Any]:
+    if not isinstance(existing, dict):
+        existing = {}
+    if not isinstance(incoming, dict):
+        incoming = {}
+
+    merged: dict[str, Any] = dict(existing)
+    for key, value in incoming.items():
+        previous = merged.get(key)
+        if isinstance(previous, dict) and isinstance(value, dict):
+            merged[key] = _merge_evidence_bundle(previous, value)
+        else:
+            merged[key] = value
+    return merged
+
+
 def _confirmed_fact_entries(
     facts: dict[str, Any],
     *,
@@ -882,10 +901,12 @@ def record_evidence_bundle_tool(
 
     if not isinstance(evidence_bundle, dict) or not evidence_bundle:
         return _command_with_message("证据包为空，未写入状态。", runtime)
+    state = _runtime_state(runtime)
+    merged_bundle = _merge_evidence_bundle(state.get("evidence_bundle"), evidence_bundle)
     return _command_with_message(
         "证据包已记录，后续方案会优先引用这些依据。",
         runtime,
-        evidence_bundle=evidence_bundle,
+        evidence_bundle=merged_bundle,
     )
 
 
@@ -2484,6 +2505,8 @@ def _agency_workflow_transition_guard(
     state = _runtime_state(runtime)
     if _state_planning_mode(state) != "agency_plan":
         return None
+    if attempted_tool in {"generate_itinerary_tool", "summarize_budget_tool"}:
+        return None
     agency_step = str(state.get("agency_step") or "agency_product_match")
     return _command_with_message(
         (
@@ -2719,6 +2742,74 @@ def _has_confirmed_accommodation_state(state: TravelState) -> bool:
     )
 
 
+def _budget_from_confirmed_evidence_bundle(
+    state: TravelState,
+    requirement: dict[str, Any],
+) -> dict[str, Any]:
+    evidence_bundle = state.get("evidence_bundle") or {}
+    if not isinstance(evidence_bundle, dict):
+        return {}
+    if not evidence_bundle.get("budget_summary_confirmed"):
+        return {}
+
+    total_people = (
+        (requirement.get("adult_count") or 0)
+        + (requirement.get("children_count") or 0)
+        or 1
+    )
+    breakdown = evidence_bundle.get("budget_breakdown") or {}
+    if not isinstance(breakdown, dict):
+        breakdown = {}
+
+    def _as_amount(key: str) -> float | None:
+        value = _coerce_float(breakdown.get(key))
+        if value is None or value < 0:
+            return None
+        return value
+
+    transport = (_as_amount("transport_est") or 0.0) + (_as_amount("local_transport_est") or 0.0)
+    accommodation = _as_amount("accommodation_est") or 0.0
+    food = _as_amount("dining_est") or 0.0
+    attractions = _as_amount("activities_est") or 0.0
+    misc = _as_amount("service_buffer_est") or 0.0
+
+    total = _coerce_float(evidence_bundle.get("budget_total"))
+    if total is None or total <= 0:
+        total = transport + accommodation + food + attractions + misc
+    per_person = _coerce_float(evidence_bundle.get("budget_per_capita"))
+    if per_person is None or per_person <= 0:
+        per_person = _safe_per_person(total, total_people)
+
+    estimated_items = []
+    for label, value in (
+        ("大交通", _as_amount("transport_est")),
+        ("当地交通", _as_amount("local_transport_est")),
+        ("住宿", _as_amount("accommodation_est")),
+        ("餐饮", _as_amount("dining_est")),
+        ("景点/体验", _as_amount("activities_est")),
+        ("服务与机动", _as_amount("service_buffer_est")),
+    ):
+        if value is not None and value > 0:
+            estimated_items.append(f"{label}：已在预算证据包中记录估算口径。")
+
+    return {
+        "transport": transport,
+        "accommodation": accommodation,
+        "food": food,
+        "attractions": attractions,
+        "misc": misc,
+        "total": total,
+        "per_person": per_person,
+        "total_people": total_people,
+        "travel_days": _get_expected_travel_days(requirement, 0) or 1,
+        "assumptions": ["预算来自已确认的结构化 evidence_bundle（证据包）。"],
+        "confirmed_items": ["预算总览已由用户确认，可用于最终报告生成。"],
+        "estimated_items": estimated_items,
+        "verification_items": list(evidence_bundle.get("verification_items") or []),
+        "confidence_level": str(evidence_bundle.get("confidence_level") or "中"),
+    }
+
+
 def _normalize_accommodation_type_for_state(value: Any) -> str | None:
     raw = str(value or "").strip()
     if not raw:
@@ -2762,6 +2853,82 @@ def _infer_selected_accommodation_types_for_state(state: TravelState) -> list[st
                 return [normalized]
     if accommodation_sources:
         return ["star_hotel"]
+    return ["star_hotel"]
+
+
+def _infer_agency_transport_fallback(
+    runtime: Optional[ToolRuntime],
+    requirement: dict[str, Any],
+) -> tuple[str, dict[str, Any]]:
+    recent_human_text = _runtime_recent_human_text(runtime)
+    requirement_hints = " ".join(
+        str(value)
+        for value in (
+            requirement.get("special_needs"),
+            requirement.get("transport_preferences"),
+            requirement.get("transport_note"),
+        )
+        if value not in (None, "", [], {})
+    )
+    combined_text = f"{recent_human_text}\n{requirement_hints}".strip()
+
+    if any(keyword in combined_text for keyword in ("高铁", "火车", "铁路", "12306")):
+        return (
+            "train",
+            {
+                "transport_type": "train",
+                "details": "省心方案产品口径：大交通按高铁优先安排；真实车次、余票和票价待二次核验。",
+                "source": "agency_plan_productized_policy",
+            },
+        )
+    if any(keyword in combined_text for keyword in ("自驾", "开车")):
+        return (
+            "driving",
+            {
+                "transport_type": "driving",
+                "details": "省心方案产品口径：按自驾衔接主要动线；真实路况、停车和通行成本待二次核验。",
+                "source": "agency_plan_productized_policy",
+            },
+        )
+    return (
+        "flight",
+        {
+            "transport_type": "flight",
+            "details": "省心方案产品口径：大交通按航班/高铁择优，目的地当地以接送或包车衔接；正式出票前待核验。",
+            "source": "agency_plan_productized_policy",
+        },
+    )
+
+
+def _seed_agency_productized_selection_state(
+    state: TravelState,
+    requirement: dict[str, Any],
+    *,
+    runtime: Optional[ToolRuntime] = None,
+) -> None:
+    if _state_planning_mode(state) != "agency_plan":
+        return
+
+    selected_destination = state.get("selected_destination") or requirement.get("destination")
+    if selected_destination and not state.get("selected_destination"):
+        state["selected_destination"] = selected_destination
+
+    if not state.get("selected_transport") and not state.get("selected_transport_option"):
+        transport_type, transport_option = _infer_agency_transport_fallback(runtime, requirement)
+        state["selected_transport"] = transport_type
+        state["selected_transport_option"] = transport_option
+
+    if not state.get("selected_accommodation_types"):
+        state["selected_accommodation_types"] = _infer_selected_accommodation_types_for_state(state)
+
+    if not state.get("selected_accommodation_option") and state.get("selected_accommodation_types"):
+        state["selected_accommodation_option"] = _build_fallback_accommodation_option(
+            state,
+            requirement,
+        )
+
+    if not state.get("selected_food_types"):
+        state["selected_food_types"] = ["local", "specialty"]
     return []
 
 
@@ -3339,13 +3506,10 @@ def select_food_tool(
         )
 
     selected_labels = [FOOD_LABELS[item] for item in food_types]
-    selected_accommodation_types = _infer_selected_accommodation_types_for_state(state)
     state_update = {
         "selected_food_types": food_types,
         "current_step": "itinerary_generation",
     }
-    if selected_accommodation_types and not state.get("selected_accommodation_types"):
-        state_update["selected_accommodation_types"] = selected_accommodation_types
     if food_pois:
         state_update["selected_food_pois"] = [
             poi for poi in (_normalize_food_poi(item) for item in food_pois) if poi.get("name")
@@ -3358,6 +3522,10 @@ def select_food_tool(
     )
     if duplicate_command is not None:
         return duplicate_command
+
+    selected_accommodation_types = _infer_selected_accommodation_types_for_state(state)
+    if selected_accommodation_types and not state.get("selected_accommodation_types"):
+        state_update["selected_accommodation_types"] = selected_accommodation_types
 
     return _command_with_message(
         f"餐饮偏好已确认：{', '.join(selected_labels)}",
@@ -3381,6 +3549,14 @@ def generate_itinerary_tool(
 
     app_logger.info("开始生成行程")
     state = _runtime_state(runtime)
+    requirement = state.get("user_requirement")
+    if not isinstance(requirement, dict):
+        requirement = {}
+    _seed_agency_productized_selection_state(
+        state,
+        requirement,
+        runtime=runtime,
+    )
     selected_accommodation_types = _infer_selected_accommodation_types_for_state(state)
     if selected_accommodation_types and not state.get("selected_accommodation_types"):
         state["selected_accommodation_types"] = selected_accommodation_types
@@ -3407,6 +3583,7 @@ def generate_itinerary_tool(
     weather_plan_b = _format_weather_plan_b(destination_context.get("weather_info"))
     destination_pois = _get_destination_pois(destination_context)
     selected_transport_option = state.get("selected_transport_option") or {}
+    selected_transport = state.get("selected_transport")
     selected_accommodation = state.get("selected_accommodation_option") or {}
     transport_summary = _format_transport_option(selected_transport_option)
     accommodation_summary = _format_accommodation_option(selected_accommodation)
@@ -3435,6 +3612,9 @@ def generate_itinerary_tool(
             itinerary=itinerary,
             journey_plan=journey_plan,
             selected_destination=destination,
+            selected_transport=selected_transport,
+            selected_transport_option=selected_transport_option,
+            selected_accommodation_option=selected_accommodation,
             selected_food_types=selected_food_types,
             selected_accommodation_types=selected_accommodation_types,
             current_step="budget_summarization",
@@ -3569,6 +3749,10 @@ def generate_itinerary_tool(
         f"已生成 {travel_days} 天的行程草案。",
         runtime,
         itinerary=itinerary,
+        selected_destination=destination,
+        selected_transport=selected_transport,
+        selected_transport_option=selected_transport_option,
+        selected_accommodation_option=selected_accommodation,
         selected_food_types=selected_food_types,
         selected_accommodation_types=selected_accommodation_types,
         current_step="budget_summarization",
@@ -3598,8 +3782,10 @@ def summarize_budget_tool(
             runtime,
         )
 
-    total_people = requirement["adult_count"] + requirement["children_count"]
-    travel_days = requirement["travel_days"]
+    total_people = (requirement.get("adult_count") or 0) + (
+        requirement.get("children_count") or 0
+    )
+    travel_days = requirement.get("travel_days") or 1
     destination = state.get("selected_destination") or requirement.get("destination") or ""
     destination_context = _get_destination_context(state, destination)
     selected_accommodation = state.get("selected_accommodation_option") or {}
@@ -3720,12 +3906,16 @@ def generate_order_tool(
         or (state.get("budget") or {}).get("total_people")
         or 0
     )
+    evidence_budget = _budget_from_confirmed_evidence_bundle(state, requirement)
     has_budget_hint = (
         bool(state.get("budget"))
+        or bool(evidence_budget)
         or requirement.get("budget_min") is not None
         or requirement.get("budget_max") is not None
         or bool(requirement.get("budget_level"))
     )
+    if not state.get("budget") and evidence_budget:
+        state["budget"] = evidence_budget
     planning_mode = _state_planning_mode(state)
     if planning_mode == "agency_plan":
         if selected_destination and not state.get("selected_destination"):
@@ -3751,7 +3941,7 @@ def generate_order_tool(
             state["budget"] = _ensure_budget_quality_contract(
                 state,
                 requirement,
-                {},
+                evidence_budget or {},
                 state.get("itinerary") or [],
             )
 

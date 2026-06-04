@@ -8,6 +8,7 @@ import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Literal, Mapping
+from urllib.parse import urlparse
 
 from dotenv import dotenv_values
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -558,6 +559,7 @@ class Settings(BaseSettings):
     app_port: int = Field(default=8000, alias="APP_PORT")
     debug: bool = Field(default=False, alias="DEBUG")
     sql_echo: bool = Field(default=False, alias="SQL_ECHO")
+    cors_allowed_origins_raw: str = Field(default="", alias="CORS_ALLOWED_ORIGINS")
 
     # ============== Runtime 启动韧性配置 ==============
     runtime_startup_dependency_timeout_seconds: float = Field(
@@ -683,6 +685,11 @@ class Settings(BaseSettings):
     jwt_secret_key: str = Field(default="dev-only-jwt-secret-change-me", alias="JWT_SECRET_KEY")
     jwt_algorithm: str = Field(default="HS256", alias="JWT_ALGORITHM")
     access_token_expire_minutes: int = Field(default=60 * 24 * 7, alias="ACCESS_TOKEN_EXPIRE_MINUTES")
+    auth_cookie_name: str = Field(default="zhixing_access_token", alias="AUTH_COOKIE_NAME")
+    auth_cookie_secure: bool = Field(default=False, alias="AUTH_COOKIE_SECURE")
+    auth_cookie_samesite: str = Field(default="lax", alias="AUTH_COOKIE_SAMESITE")
+    auth_rate_limit_max_attempts: int = Field(default=5, alias="AUTH_RATE_LIMIT_MAX_ATTEMPTS")
+    auth_rate_limit_window_seconds: int = Field(default=600, alias="AUTH_RATE_LIMIT_WINDOW_SECONDS")
 
     model_config = SettingsConfigDict(
         env_file=os.path.join(BASE_DIR, ".env"),     # 自动拼接路径，不管代码在哪运行都能找到
@@ -710,6 +717,77 @@ class Settings(BaseSettings):
     def runtime_environment(self) -> RuntimeEnvironment:
         """当前运行环境档位。"""
         return normalize_runtime_environment(self.app_env)
+
+    @property
+    def cors_allowed_origins(self) -> list[str]:
+        """Return an explicit CORS allowlist instead of using wildcard origins."""
+
+        if self.cors_allowed_origins_raw.strip():
+            origins = [
+                value.strip()
+                for value in self.cors_allowed_origins_raw.split(",")
+                if value.strip()
+            ]
+            return list(dict.fromkeys(origins))
+
+        if self.runtime_environment in {"development", "test"}:
+            return [
+                "http://localhost:8000",
+                "http://127.0.0.1:8000",
+                "http://localhost:3000",
+                "http://127.0.0.1:3000",
+                "null",
+            ]
+
+        return []
+
+    @property
+    def allow_origin_regex(self) -> str | None:
+        """Allow localhost/dev ports without reopening wildcard access."""
+
+        if self.runtime_environment in {"development", "test"}:
+            return r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$"
+        return None
+
+    @property
+    def auth_cookie_secure_resolved(self) -> bool:
+        """Secure cookies are mandatory outside local development/test."""
+
+        if self.auth_cookie_secure:
+            return True
+        return self.runtime_environment in {"staging", "production"}
+
+    @property
+    def auth_cookie_samesite_resolved(self) -> str:
+        raw = str(self.auth_cookie_samesite or "lax").strip().lower()
+        if raw in {"lax", "strict", "none"}:
+            return raw
+        return "lax"
+
+    def validate_security_baseline(self) -> None:
+        """Fail fast when a production-like environment keeps unsafe auth defaults."""
+
+        if self.runtime_environment not in {"staging", "production"}:
+            return
+
+        findings: list[str] = []
+        if not has_real_env_value(self.jwt_secret_key):
+            findings.append("JWT_SECRET_KEY must be a real non-placeholder secret")
+        if self.auth_cookie_samesite_resolved == "none" and not self.auth_cookie_secure_resolved:
+            findings.append("AUTH_COOKIE_SAMESITE=none requires AUTH_COOKIE_SECURE=true")
+
+        invalid_origins = [
+            origin
+            for origin in self.cors_allowed_origins
+            if origin != "null" and not urlparse(origin).scheme
+        ]
+        if invalid_origins:
+            findings.append(
+                "CORS_ALLOWED_ORIGINS contains invalid origins: " + ", ".join(invalid_origins)
+            )
+
+        if findings:
+            raise ValueError("; ".join(findings))
 
 
 @lru_cache

@@ -12,7 +12,8 @@
       href="https://cdn.bootcdn.net/ajax/libs/font-awesome/6.4.0/css/all.min.css"
     />
 
-        <link rel="stylesheet" href="./styles.css?v=20260515-feedback-a" />
+        <link rel="stylesheet" href="./styles.css?v=20260604-main-css-split" />
+        <link rel="stylesheet" href="./governance.css?v=20260604-main-css-split" />
   </head>
   <body>
     <div
@@ -213,6 +214,16 @@
         <button class="logout-btn" onclick="logout()">
           <i class="fa-solid fa-power-off"></i> 结束本次旅程（登出账号）
         </button>
+        <a
+          class="logout-btn"
+          id="adminPortalLink"
+          href="./admin.html"
+          target="_blank"
+          hidden
+          style="margin-top: 10px; text-decoration: none; justify-content: center;"
+        >
+          <i class="fa-solid fa-chart-column"></i> 打开后台管理台
+        </a>
       </aside>
 
       <!-- 聊天主窗口 -->
@@ -741,7 +752,28 @@
       <i class="fa-solid fa-info-circle"></i> <span id="toastMsg"></span>
     </div>
 
-        <script src="./app.js?v=20260515-feedback-a"></script>
+        <script src="./session-api.js?v=20260603-auth-split"></script>
+        <script src="./conversation-api.js?v=20260603-conversation-split"></script>
+        <script src="./journey-api.js?v=20260603-journey-split"></script>
+        <script src="./journey-editor.js?v=20260603-journey-editor-split"></script>
+        <script src="./journey-overlay.js?v=20260603-journey-overlay-split"></script>
+        <script src="./map-controls.js?v=20260603-map-controls-split"></script>
+        <script src="./journey-text-utils.js?v=20260604-journey-text-utils-split"></script>
+        <script src="./journey-map-data.js?v=20260604-journey-map-data-split"></script>
+        <script src="./journey-map-view.js?v=20260604-journey-map-view-split"></script>
+        <script src="./journey-map-focus.js?v=20260604-journey-map-focus-split"></script>
+        <script src="./journey-map-shell.js?v=20260604-journey-map-shell-split"></script>
+        <script src="./journey-poi-utils.js?v=20260604-journey-poi-utils-split"></script>
+        <script src="./journey-poi-renderer.js?v=20260604-journey-poi-renderer-split"></script>
+        <script src="./report-budget.js?v=20260603-report-budget-split"></script>
+        <script src="./report-renderer.js?v=20260603-report-renderer-split"></script>
+        <script src="./report-export.js?v=20260603-report-export-split"></script>
+        <script src="./report-actions.js?v=20260603-report-actions-split"></script>
+        <script src="./governance-api.js?v=20260603-governance-split"></script>
+        <script src="./governance-tools.js?v=20260604-governance-tools-split"></script>
+        <script src="./governance-progress.js?v=20260604-governance-progress-split"></script>
+        <script src="./governance-renderer.js?v=20260604-governance-renderer-split"></script>
+        <script src="./app.js?v=20260604-journey-poi-renderer-split"></script>
   </body>
 </html>
 

@@ -300,6 +300,57 @@ def test_approval_api_limits_cross_user_visibility_and_list_scope():
     assert all_records.json()["total"] == 1
 
 
+def test_approval_api_returns_paginated_and_searchable_lists():
+    service = ApprovalStore()
+    user_client = _approval_client("user-1", service=service)
+
+    for action, reason in [
+        ("real_payment", "未来真实支付占位审批"),
+        ("real_booking", "未来真实预订占位审批"),
+        ("send_sms", "短信通知占位审批"),
+    ]:
+        response = user_client.post(
+            "/api/v1/approvals",
+            json={
+                "action": action,
+                "reason": reason,
+                "expires_in_seconds": 60,
+            },
+        )
+        assert response.status_code == 201
+
+    full_response = user_client.get(
+        "/api/v1/approvals",
+        params={"limit": 10, "offset": 0},
+    )
+    assert full_response.status_code == 200
+    full_payload = full_response.json()
+
+    page_response = user_client.get(
+        "/api/v1/approvals",
+        params={"limit": 1, "offset": 1},
+    )
+    assert page_response.status_code == 200
+    page_payload = page_response.json()
+    assert page_payload["total"] == 3
+    assert page_payload["offset"] == 1
+    assert page_payload["limit"] == 1
+    assert len(page_payload["approvals"]) == 1
+    assert (
+        page_payload["approvals"][0]["approval_id"]
+        == full_payload["approvals"][1]["approval_id"]
+    )
+
+    search_response = user_client.get(
+        "/api/v1/approvals",
+        params={"q": "短信", "limit": 10, "offset": 0},
+    )
+    assert search_response.status_code == 200
+    search_payload = search_response.json()
+    assert search_payload["total"] == 1
+    assert search_payload["approvals"][0]["action"] == "send_sms"
+
+
 def test_generate_order_tool_records_non_blocking_governance_boundary():
     state = create_initial_state(user_id="user-1", session_id="session-1")
     state.update(

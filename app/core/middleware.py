@@ -266,6 +266,8 @@ AGENCY_PLAN_ALLOWED_TOOL_NAMES = frozenset(
         "confirm_planning_mode_tool",
         "record_evidence_bundle_tool",
         "scenic_price_lookup_tool",
+        "generate_itinerary_tool",
+        "summarize_budget_tool",
         "generate_order_tool",
         "search_agency_product_templates",
         "search_agency_service_sop",
@@ -3026,7 +3028,8 @@ class StepConfigMiddleware(AgentMiddleware):
                 override_kwargs["system_prompt"] = (
                     f"{override_kwargs['system_prompt']}\n\n"
                     "本轮按省心方案白名单收口：只能记录基础需求、检索产品/报价/风险/报告资料、"
-                    "查询景点票价参考、整理证据或生成报告；不得调用自由规划的交通/酒店查询或选择工具。"
+                    "查询景点票价参考、生成结构化行程、汇总结构化预算、整理证据或生成报告；"
+                    "不得调用自由规划的交通/酒店查询或选择工具。"
                 )
 
             filtered_tools = _keep_tools_by_name(

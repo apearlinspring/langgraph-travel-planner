@@ -8,11 +8,11 @@ from contextlib import asynccontextmanager, suppress
 from copy import deepcopy
 from typing import Any, Awaitable, Callable
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api.v1 import approvals, chat, conversations, maps, users
+from app.api.v1 import admin, approvals, chat, conversations, maps, users
 from app.config import (
     RUNTIME_READINESS_VERSION,
     runtime_configuration_snapshot,
@@ -489,6 +489,7 @@ async def _close_runtime_manager_singletons() -> None:
 async def lifespan(app: FastAPI):
     """Manage core dependency startup and shutdown."""
     app.state.startup_complete = False
+    settings.validate_security_baseline()
 
     loop = asyncio.get_running_loop()
     app_logger.info(f"FastAPI event loop: {type(loop).__name__}")
@@ -522,16 +523,36 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.cors_allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept", "Cache-Control"],
+    allow_origin_regex=settings.allow_origin_regex,
 )
+
+
+@app.middleware("http")
+async def append_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault(
+        "Permissions-Policy",
+        "camera=(), microphone=(), geolocation=()",
+    )
+    if request.url.scheme == "https" or settings.auth_cookie_secure_resolved:
+        response.headers.setdefault(
+            "Strict-Transport-Security",
+            "max-age=31536000; includeSubDomains",
+        )
+    return response
 
 app.include_router(users.router, prefix="/api/v1")
 app.include_router(conversations.router, prefix="/api/v1")
 app.include_router(maps.router, prefix="/api/v1")
 app.include_router(approvals.router, prefix="/api/v1")
+app.include_router(admin.router, prefix="/api/v1")
 app.include_router(chat.router, prefix="/api/v1")
 
 

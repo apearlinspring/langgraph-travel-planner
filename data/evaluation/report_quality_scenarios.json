@@ -287,11 +287,6 @@
         "stage": {
           "strict": false,
           "expected_transition_tools": [
-            "record_requirement_tool",
-            "select_destination_tool",
-            "select_transport_tool",
-            "select_accommodation_tool",
-            "select_food_tool",
             "generate_itinerary_tool",
             "summarize_budget_tool",
             "generate_order_tool"

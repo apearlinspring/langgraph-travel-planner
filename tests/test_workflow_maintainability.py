@@ -230,6 +230,12 @@ async def test_step_config_covers_all_planning_steps(monkeypatch):
     assert "query_hotel_options" not in agency_tool_names
     assert "select_transport_tool" not in agency_tool_names
     assert "search_agency_product_templates" in agency_tool_names
+    assert "generate_itinerary_tool" in {tool.name for tool in config["agency_plan_draft"]["tools"]}
+    assert "generate_itinerary_tool" in {tool.name for tool in config["agency_feedback"]["tools"]}
+    assert "generate_itinerary_tool" in {tool.name for tool in config["agency_report"]["tools"]}
+    assert "summarize_budget_tool" in {tool.name for tool in config["agency_plan_draft"]["tools"]}
+    assert "summarize_budget_tool" in {tool.name for tool in config["agency_feedback"]["tools"]}
+    assert "summarize_budget_tool" in {tool.name for tool in config["agency_report"]["tools"]}
     assert all(tool.name != "add_travel_record_tool" for tool in config["order_generation"]["tools"])
 
 
@@ -348,6 +354,162 @@ def test_record_evidence_bundle_tool_persists_structured_bundle():
     )
 
     assert command.update["evidence_bundle"]["pricing"][0]["source"] == "pricing_rules"
+
+
+def test_record_evidence_bundle_tool_merges_existing_categories():
+    state = create_initial_state(user_id="user-1", session_id="session-1")
+    state["evidence_bundle"] = {
+        "transport": {
+            "mode": "flight",
+            "summary": "去程航班待二次核验",
+        },
+        "pricing": [{"source": "pricing_rules", "summary": "旧报价依据"}],
+    }
+
+    command = record_evidence_bundle_tool.invoke(
+        {
+            "evidence_bundle": {
+                "pricing": [{"source": "pricing_rules", "summary": "新报价依据"}],
+                "budget_summary": {
+                    "budget_summary_confirmed": True,
+                    "budget_total": "¥6800-7600",
+                },
+            },
+            "runtime": _build_runtime(state),
+        }
+    )
+
+    merged = command.update["evidence_bundle"]
+    assert merged["transport"]["mode"] == "flight"
+    assert merged["pricing"][0]["summary"] == "新报价依据"
+    assert merged["budget_summary"]["budget_summary_confirmed"] is True
+
+
+def test_generate_order_tool_accepts_confirmed_budget_from_evidence_bundle():
+    state = create_initial_state(user_id="user-1", session_id="session-1")
+    state.update(
+        {
+            "planning_mode": "agency_plan",
+            "active_workflow": "agency_plan",
+            "planning_mode_confirmed": True,
+            "current_step": "requirement_collection",
+            "agency_step": "agency_product_match",
+            "user_requirement": {
+                "departure_city": "成都",
+                "destination": "重庆",
+                "departure_date": "2026-06-20",
+                "departure_date_confirmed": True,
+                "travel_days": 3,
+                "adult_count": 4,
+                "children_count": 0,
+                "budget_min": 1500.0,
+                "budget_max": 2500.0,
+                "travel_styles": ["culture", "food"],
+                "special_needs": "省心方案",
+            },
+            "selected_destination": "重庆",
+            "selected_transport": "train",
+            "selected_transport_option": {
+                "transport_type": "train",
+                "details": "成都东 -> 重庆北 高铁往返待核验",
+                "source": "agency_plan_productized_policy",
+            },
+            "selected_accommodation_types": ["star_hotel"],
+            "selected_accommodation_option": {
+                "name": "重庆核心商圈舒适型酒店",
+                "type": "star_hotel",
+                "location": "解放碑",
+            },
+            "selected_food_types": ["local", "specialty"],
+            "itinerary": [
+                {
+                    "day_number": 1,
+                    "theme": "抵达与夜景",
+                    "activities": ["解放碑", "洪崖洞"],
+                    "meals": ["本地小吃"],
+                    "accommodation": "重庆核心商圈舒适型酒店",
+                },
+                {
+                    "day_number": 2,
+                    "theme": "经典地标",
+                    "activities": ["磁器口", "长江索道"],
+                    "meals": ["火锅"],
+                    "accommodation": "重庆核心商圈舒适型酒店",
+                },
+                {
+                    "day_number": 3,
+                    "theme": "返程",
+                    "activities": ["黄桷坪", "返程"],
+                    "meals": ["重庆小面"],
+                    "accommodation": "返程日不住宿",
+                },
+            ],
+            "evidence_bundle": {
+                "budget_summary_confirmed": True,
+                "budget_per_capita": 1850,
+                "budget_total": 7400,
+                "budget_breakdown": {
+                    "transport_est": 1200,
+                    "accommodation_est": 1500,
+                    "activities_est": 400,
+                    "local_transport_est": 600,
+                    "dining_est": 1700,
+                    "service_buffer_est": 2000,
+                },
+                "verification_items": [
+                    "高铁班次与票价",
+                    "酒店房价与库存",
+                    "接送车档期",
+                ],
+                "confidence_level": "high",
+            },
+        }
+    )
+
+    command = generate_order_tool.invoke({"runtime": _build_runtime(state)})
+
+    assert "report_data" in command.update
+    assert command.update["budget"]["per_person"] == 1850
+    assert command.update["budget"]["budget_confidence"]["verification_items"]
+    assert command.update["report_data"]["budget"]["per_person"] == 1850
+
+
+def test_agency_guard_allows_itinerary_and_budget_tools():
+    state = create_initial_state(user_id="user-1", session_id="session-1")
+    state.update(
+        {
+            "planning_mode": "agency_plan",
+            "active_workflow": "agency_plan",
+            "planning_mode_confirmed": True,
+            "agency_step": "agency_plan_draft",
+            "current_step": "requirement_collection",
+            "user_requirement": {
+                "departure_city": "成都",
+                "destination": "重庆",
+                "departure_date": "2026-06-20",
+                "travel_days": 3,
+                "adult_count": 4,
+                "children_count": 0,
+                "budget_min": 1500,
+                "budget_max": 2500,
+                "travel_styles": ["文化探索"],
+            },
+            "selected_destination": "重庆",
+            "selected_transport": "train",
+            "selected_transport_option": {"transport_type": "train", "details": "高铁往返"},
+            "selected_accommodation_types": ["star_hotel"],
+            "selected_accommodation_option": {"name": "解放碑舒适型酒店", "location": "解放碑"},
+        }
+    )
+
+    itinerary_command = generate_itinerary_tool.invoke({"runtime": _build_runtime(state)})
+    assert itinerary_command.update.get("itinerary")
+    assert itinerary_command.update.get("current_step") == "budget_summarization"
+
+    state.update(itinerary_command.update)
+    budget_command = summarize_budget_tool.invoke({"runtime": _build_runtime(state)})
+    assert budget_command.update.get("budget")
+    assert budget_command.update.get("current_step") == "order_generation"
 
 
 def test_scenic_price_lookup_persists_ticket_evidence_with_sources():
@@ -1525,6 +1687,102 @@ def test_final_report_prefers_persisted_planning_mode_over_recent_messages():
     assert report_data["agency_context"]["mode"] == "agency_plan"
     assert report_data["agency_context"]["mode_reason"] == "用户已确认按旅行社顾问方案交付"
     assert report_data["agency_context"]["mode_confirmed"] is True
+
+
+def test_agency_itinerary_auto_seeds_productized_selection_state():
+    state = create_initial_state(user_id="user-1", session_id="session-1")
+    state.update(
+        {
+            "current_step": "requirement_collection",
+            "planning_mode": "agency_plan",
+            "active_workflow": "agency_plan",
+            "planning_mode_confirmed": True,
+            "agency_step": "agency_report",
+            "user_requirement": {
+                "departure_city": "成都",
+                "destination": "重庆",
+                "departure_date": "2026-06-20",
+                "travel_days": 3,
+                "adult_count": 4,
+                "children_count": 0,
+                "budget_min": 1500.0,
+                "budget_max": 2500.0,
+                "budget_level": "comfort",
+                "special_needs": "交通确认按高铁省心优先记录推荐方式；住宿确认按重庆核心商圈、干净省心、动线方便的舒适型酒店记录。",
+                "planning_mode": "agency_plan",
+                "planning_mode_confirmed": True,
+            },
+            "messages": [
+                HumanMessage(content="交通确认按高铁省心优先记录推荐方式；真实班次和价格没有锁定时写待二次核验。"),
+                HumanMessage(content="住宿确认按重庆核心商圈、干净省心、动线方便的舒适型酒店记录；真实酒店价格没有锁定时写待二次核验。"),
+            ],
+        }
+    )
+
+    command = generate_itinerary_tool.invoke({"runtime": _build_runtime(state)})
+
+    assert command.update["selected_destination"] == "重庆"
+    assert command.update["selected_food_types"] == ["local", "specialty"]
+    assert command.update["selected_accommodation_types"]
+    assert command.update["current_step"] == "budget_summarization"
+    assert len(command.update["itinerary"]) == 3
+    assert state["selected_transport"] == "train"
+    assert state["selected_transport_option"]["transport_type"] == "train"
+
+
+def test_summarize_budget_tolerates_missing_children_count():
+    state = create_initial_state(user_id="user-1", session_id="session-1")
+    state.update(
+        {
+            "current_step": "budget_summarization",
+            "active_workflow": "agency_plan",
+            "planning_mode": "agency_plan",
+            "agency_step": "agency_report",
+            "user_requirement": {
+                "departure_city": "成都",
+                "destination": "重庆",
+                "departure_date": "2026-06-20",
+                "travel_days": 3,
+                "adult_count": 4,
+                "budget_min": 1500.0,
+                "budget_max": 2500.0,
+                "budget_level": "comfort",
+                "travel_styles": ["relaxation"],
+                "special_needs": "省心方案",
+            },
+            "selected_destination": "重庆",
+            "selected_transport": "train",
+            "selected_transport_option": {
+                "transport_type": "train",
+                "price": 280.0,
+                "details": "成都东 -> 重庆北",
+            },
+            "selected_accommodation_option": {
+                "name": "解放碑商圈酒店",
+                "price_per_night": 420.0,
+                "room_count": 2,
+            },
+            "selected_food_types": ["local"],
+            "selected_accommodation_types": ["star_hotel"],
+            "itinerary": [
+                {
+                    "day_number": 1,
+                    "theme": "抵达重庆",
+                    "activities": ["抵达解放碑", "洪崖洞夜景"],
+                    "time_blocks": ["上午/交通：高铁抵达", "晚上/夜景：洪崖洞"],
+                    "meals": ["午餐：重庆小面", "晚餐：火锅"],
+                    "accommodation": "解放碑商圈酒店",
+                    "route_note": "首日以市区轻松适应为主。",
+                }
+            ],
+        }
+    )
+
+    budget_command = summarize_budget_tool.invoke({"runtime": _build_runtime(state)})
+
+    assert budget_command.update["budget"]["travel_days"] == 3
+    assert budget_command.update["budget"]["per_person"] > 0
+    assert budget_command.update["current_step"] == "order_generation"
 
 
 def test_final_report_keeps_budget_confidence_contract_when_prices_are_missing():

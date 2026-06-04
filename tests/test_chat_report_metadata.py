@@ -49,6 +49,25 @@ def test_report_extra_info_from_command_output():
     assert extra_info["report_data"]["traveler"]["email"] == "[REDACTED]"
 
 
+def test_report_extra_info_from_top_level_dict_output():
+    report_data = {
+        "version": "travel_report.v1",
+        "overview": {"route_label": "成都 -> 重庆"},
+        "agency_context": {"mode": "agency_plan"},
+    }
+    output = {
+        "order_id": "ORDER-5678",
+        "report_data": report_data,
+        "messages": [],
+    }
+
+    extra_info = _report_extra_info_from_tool_output(output)
+
+    assert extra_info["message_type"] == "travel_report"
+    assert extra_info["order_id"] == "ORDER-5678"
+    assert extra_info["report_data"]["agency_context"]["mode"] == "agency_plan"
+
+
 def test_report_extra_info_ignores_non_report_tool_output():
     assert _report_extra_info_from_tool_output(SimpleNamespace(update={})) == {}
     assert _report_extra_info_from_tool_output({"content": "plain text"}) == {}
@@ -110,6 +129,38 @@ def test_fast_split_month_day_date_does_not_fall_back_to_weekday():
     assert facts["departure_date"] == "2026-06-10"
     assert facts["departure_city"] == "西安"
     assert facts["destination"] == "杭州"
+
+
+def test_fast_split_prefers_explicit_labeled_route_fields():
+    facts = extract_fast_split_facts(
+        "目的地确认重庆，出发地成都，2026-06-20出发，3天2晚，4个大人，继续下一阶段。"
+    )
+
+    assert facts["departure_city"] == "成都"
+    assert facts["destination"] == "重庆"
+    assert facts["departure_date"] == "2026-06-20"
+    assert facts["travel_days"] == 3
+    assert facts["adult_count"] == 4
+
+
+def test_fast_split_extracts_unlabeled_chinese_destination():
+    facts = extract_fast_split_facts("计划去成都旅游，三天，两个人，预算5000左右")
+
+    assert facts["destination"] == "成都"
+    assert facts["travel_days"] == 3
+    assert facts["adult_count"] == 2
+    assert "口径待确认" in facts["budget_text"]
+
+
+def test_fast_split_final_report_request_does_not_mutate_trip_facts():
+    facts = extract_fast_split_facts(
+        "请直接生成最终旅行规划报告和report_data，保留预算置信度、风险、待核验项和旅行社业务证据。"
+    )
+
+    assert facts == {
+        "raw_text": "请直接生成最终旅行规划报告和report_data，保留预算置信度、风险、待核验项和旅行社业务证据。",
+        "source": "first_turn_fast_split",
+    }
 
 
 def test_fast_split_state_seed_carries_facts_into_agency_mode():
@@ -274,6 +325,76 @@ async def test_chat_stream_fast_mode_split_skips_full_agent(monkeypatch):
     ]
     assert events[1]["observability"]["planning_mode"] == "pending_confirmation"
     assert events[1]["observability"]["progress_snapshot"]["confirmed_facts"]
+
+
+@pytest.mark.asyncio
+async def test_fast_mode_split_allows_one_user_retry_without_assistant(monkeypatch):
+    async def fake_role_counts(db, conversation_id):
+        return {"user": 2, "assistant": 0}
+
+    monkeypatch.setattr(chat, "_conversation_role_counts", fake_role_counts)
+
+    should_split = await chat._should_use_fast_mode_split(
+        SimpleNamespace(),
+        "conversation-fast-retry",
+        "我想去杭州，两个人，四天左右，人均预算3500，请你帮我规划一下",
+    )
+
+    assert should_split is True
+
+
+@pytest.mark.asyncio
+async def test_fast_mode_split_allows_persisted_welcome_assistant(monkeypatch):
+    async def fake_role_counts(db, conversation_id):
+        return {"user": 1, "assistant": 1}
+
+    monkeypatch.setattr(chat, "_conversation_role_counts", fake_role_counts)
+
+    should_split = await chat._should_use_fast_mode_split(
+        SimpleNamespace(),
+        "conversation-welcome",
+        "我想去杭州，两个人，四天左右，人均预算3500，请你帮我规划一下",
+    )
+
+    assert should_split is True
+
+
+@pytest.mark.asyncio
+async def test_fast_mode_split_blocks_previous_fast_split_question(monkeypatch):
+    async def fake_role_counts(db, conversation_id):
+        return {"user": 1, "assistant": 1}
+
+    monkeypatch.setattr(chat, "_conversation_role_counts", fake_role_counts)
+
+    should_split = await chat._should_use_fast_mode_split(
+        SimpleNamespace(),
+        "conversation-fast-already-asked",
+        "我想去杭州，两个人，四天左右，人均预算3500，请你帮我规划一下",
+        latest_fast_split_facts={"destination": "杭州", "adult_count": 2},
+    )
+
+    assert should_split is False
+
+
+@pytest.mark.asyncio
+async def test_fast_mode_split_blocks_confirmed_planning_state(monkeypatch):
+    async def fail_role_counts(db, conversation_id):
+        raise AssertionError("confirmed mode should short-circuit before role counts")
+
+    monkeypatch.setattr(chat, "_conversation_role_counts", fail_role_counts)
+
+    should_split = await chat._should_use_fast_mode_split(
+        SimpleNamespace(),
+        "conversation-confirmed-mode",
+        "我想去杭州，两个人，四天左右，人均预算3500，请你帮我规划一下",
+        state={
+            "planning_mode": "agency_plan",
+            "active_workflow": "agency_plan",
+            "planning_mode_confirmed": True,
+        },
+    )
+
+    assert should_split is False
 
 
 @pytest.mark.asyncio
