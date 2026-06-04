@@ -18,15 +18,15 @@ QWEN_MODEL_NAME=qwen3.6-plus
 
 ### 1. 配置默认值
 
-[app/config.py](D:/Users/Administrator/PycharmProjects/ZhiXing/langgraph-travel-planner/app/config.py)
+`app/config.py`
 
 - 这里定义了 `qwen_model_name` 的默认值。
 - 如果某些环境没有正确加载 `.env`，项目会回退到这里的默认模型。
 - 所以当你希望“默认行为”也切过去时，需要同步核对这个文件。
 
-### 2. 统一的 LLM 工厂
+### 2. 统一的 LLM（大语言模型）工厂
 
-[app/utils/llm_factory.py](D:/Users/Administrator/PycharmProjects/ZhiXing/langgraph-travel-planner/app/utils/llm_factory.py)
+`app/utils/llm_factory.py`
 
 - 项目现在要求主要运行链路统一通过 `build_chat_model(...)` 创建模型。
 - 这里集中管理：
@@ -42,10 +42,10 @@ QWEN_MODEL_NAME=qwen3.6-plus
 
 以下入口也容易被忽略：
 
-- [scripts/test_llm.py](D:/Users/Administrator/PycharmProjects/ZhiXing/langgraph-travel-planner/scripts/test_llm.py)
-- [test1.py](D:/Users/Administrator/PycharmProjects/ZhiXing/langgraph-travel-planner/test1.py)
-- [test2.py](D:/Users/Administrator/PycharmProjects/ZhiXing/langgraph-travel-planner/test2.py)
-- [tests/test_rag_agent_autonomous.py](D:/Users/Administrator/PycharmProjects/ZhiXing/langgraph-travel-planner/tests/test_rag_agent_autonomous.py)
+- `scripts/test_llm.py`
+- `test1.py`
+- `test2.py`
+- `tests/test_rag_agent_autonomous.py`
 
 这些文件现在也已经统一走 `build_chat_model(...)`。以后如果新增新的调试脚本或联调脚本，也建议沿用同一工厂。
 
@@ -105,4 +105,4 @@ asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 ## 一句话原则
 
-以后切模型，先改 `.env`，再确认关键入口都通过 [app/utils/llm_factory.py](D:/Users/Administrator/PycharmProjects/ZhiXing/langgraph-travel-planner/app/utils/llm_factory.py) 创建模型，不要让项目重新回到“两套模型接法并存”的状态。
+以后切模型，先改 `.env`，再确认关键入口都通过 `app/utils/llm_factory.py` 创建模型，不要让项目重新回到“两套模型接法并存”的状态。
