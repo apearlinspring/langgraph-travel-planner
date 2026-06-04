@@ -52,9 +52,34 @@
     return date.toLocaleString("zh-CN", { hour12: false });
   }
 
+  function escapeHtml(value) {
+    if (value === null || value === undefined) return "";
+    const div = document.createElement("div");
+    div.textContent = String(value);
+    return div.innerHTML;
+  }
+
+  function safeText(value, fallback = "-") {
+    const raw = value === null || value === undefined || value === "" ? fallback : value;
+    return escapeHtml(raw);
+  }
+
+  function safeAttr(value) {
+    return escapeHtml(value ?? "");
+  }
+
+  function safeStatusClass(value) {
+    const normalized = String(value || "unknown")
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9_-]+/g, "-")
+      .replace(/^-+|-+$/g, "");
+    return normalized || "unknown";
+  }
+
   function renderStatusChip(status = "") {
-    const normalized = String(status || "unknown").toLowerCase();
-    return `<span class="status-chip ${normalized}">${status || "unknown"}</span>`;
+    const label = status || "unknown";
+    return `<span class="status-chip ${safeStatusClass(label)}">${safeText(label)}</span>`;
   }
 
   function renderApprovalDecisionActions(approval) {
@@ -65,7 +90,7 @@
           class="row-action-btn"
           type="button"
           data-approval-decision="approve"
-          data-approval-id="${approval.approval_id || ""}"
+          data-approval-id="${safeAttr(approval.approval_id)}"
         >
           批准
         </button>
@@ -73,7 +98,7 @@
           class="row-action-btn"
           type="button"
           data-approval-decision="reject"
-          data-approval-id="${approval.approval_id || ""}"
+          data-approval-id="${safeAttr(approval.approval_id)}"
         >
           拒绝
         </button>
@@ -81,7 +106,7 @@
           class="row-action-btn"
           type="button"
           data-approval-decision="expire"
-          data-approval-id="${approval.approval_id || ""}"
+          data-approval-id="${safeAttr(approval.approval_id)}"
         >
           过期
         </button>
@@ -124,8 +149,8 @@
       .map(
         (user) => `
           <tr>
-            <td><strong>${user.username || "-"}</strong></td>
-            <td>${user.email || "-"}</td>
+            <td><strong>${safeText(user.username)}</strong></td>
+            <td>${safeText(user.email)}</td>
             <td>${renderStatusChip(user.role || "user")}</td>
             <td>${user.conversation_count ?? 0}</td>
             <td>${formatDate(user.created_at)}</td>
@@ -133,7 +158,7 @@
               <button
                 class="row-action-btn"
                 type="button"
-                data-user-detail-id="${user.id}"
+                data-user-detail-id="${safeAttr(user.id)}"
               >
                 查看用户
               </button>
@@ -176,7 +201,7 @@
       <div class="detail-runtime-grid">
         <div class="detail-pill">
           <strong>用户角色</strong>
-          <span>${user.role || "user"}</span>
+          <span>${safeText(user.role || "user")}</span>
         </div>
         <div class="detail-pill">
           <strong>总会话数</strong>
@@ -209,9 +234,9 @@
           .map(
             (approval) => `
               <div class="detail-approval-card">
-                <strong>${approval.label || approval.action || "审批记录"}</strong>
-                <p>${approval.reason || "未填写审批原因。"}</p>
-                <small>${approval.approval_id} · ${formatDate(approval.created_at)}</small>
+                <strong>${safeText(approval.label || approval.action || "审批记录")}</strong>
+                <p>${safeText(approval.reason || "未填写审批原因。")}</p>
+                <small>${safeText(approval.approval_id, "")} · ${formatDate(approval.created_at)}</small>
                 <div class="detail-badges">
                   ${renderStatusChip(approval.status || "none")}
                 </div>
@@ -219,7 +244,7 @@
                   <button
                     class="row-action-btn"
                     type="button"
-                    data-approval-events-id="${approval.approval_id || ""}"
+                    data-approval-events-id="${safeAttr(approval.approval_id)}"
                   >
                     查看轨迹
                   </button>
@@ -247,10 +272,10 @@
           .map(
             (conversation) => `
               <div class="detail-message">
-                <strong>${conversation.title || "未命名会话"} · ${formatDate(
+                <strong>${safeText(conversation.title || "未命名会话")} · ${formatDate(
                   conversation.updated_at
                 )}</strong>
-                <p>状态：${conversation.status || "unknown"} / 消息数：${
+                <p>状态：${safeText(conversation.status || "unknown")} / 消息数：${
                   conversation.message_count ?? 0
                 }</p>
                 <div class="detail-badges">
@@ -260,7 +285,7 @@
                   <button
                     class="row-action-btn"
                     type="button"
-                    data-conversation-detail-id="${conversation.id}"
+                    data-conversation-detail-id="${safeAttr(conversation.id)}"
                   >
                     打开会话详情
                   </button>
@@ -284,8 +309,8 @@
       .map(
         (conversation) => `
           <tr>
-            <td><strong>${conversation.title || "未命名会话"}</strong></td>
-            <td>${conversation.username || "-"}</td>
+            <td><strong>${safeText(conversation.title || "未命名会话")}</strong></td>
+            <td>${safeText(conversation.username)}</td>
             <td>${renderStatusChip(conversation.role || "user")}</td>
             <td>${renderStatusChip(conversation.status || "unknown")}</td>
             <td>${conversation.message_count ?? 0}</td>
@@ -294,7 +319,7 @@
               <button
                 class="row-action-btn"
                 type="button"
-                data-conversation-detail-id="${conversation.id}"
+                data-conversation-detail-id="${safeAttr(conversation.id)}"
               >
                 查看详情
               </button>
@@ -342,10 +367,10 @@
       .map(
         (event) => `
           <div class="detail-approval-card">
-            <strong>${formatApprovalEventType(event.event_type)} · ${
-              event.from_status || "none"
-            } → ${event.to_status || "unknown"}</strong>
-            <p>${event.reason || "这一步没有附加说明。"}</p>
+            <strong>${safeText(formatApprovalEventType(event.event_type))} · ${
+              safeText(event.from_status || "none")
+            } → ${safeText(event.to_status || "unknown")}</strong>
+            <p>${safeText(event.reason || "这一步没有附加说明。")}</p>
             <small>${formatDate((event.created_at || 0) * 1000)}</small>
           </div>
         `
@@ -375,11 +400,11 @@
       <div class="detail-runtime-grid">
         <div class="detail-pill">
           <strong>当前工作流</strong>
-          <span>${runtime.active_workflow || "-"}</span>
+          <span>${safeText(runtime.active_workflow)}</span>
         </div>
         <div class="detail-pill">
           <strong>当前阶段</strong>
-          <span>${runtime.current_step || "-"}</span>
+          <span>${safeText(runtime.current_step)}</span>
         </div>
         <div class="detail-pill">
           <strong>消息分布</strong>
@@ -404,11 +429,11 @@
         }
         ${
           runtime.latest_report_title
-            ? `<span class="status-chip approved">报告：${runtime.latest_report_title}</span>`
+            ? `<span class="status-chip approved">报告：${safeText(runtime.latest_report_title)}</span>`
             : ""
         }
-        <span class="status-chip ${conversation.status || "unknown"}">${
-          conversation.status || "unknown"
+        <span class="status-chip ${safeStatusClass(conversation.status)}">${
+          safeText(conversation.status || "unknown")
         }</span>
       </div>
     `;
@@ -419,10 +444,10 @@
           .map(
             (approval) => `
               <div class="detail-approval-card">
-                <strong>${approval.label || approval.action || "审批记录"}</strong>
-                <p>${approval.reason || "未填写审批原因。"}</p>
+                <strong>${safeText(approval.label || approval.action || "审批记录")}</strong>
+                <p>${safeText(approval.reason || "未填写审批原因。")}</p>
                 <small>
-                  ${approval.approval_id} · ${approval.action || "-"} · ${formatDate(
+                  ${safeText(approval.approval_id, "")} · ${safeText(approval.action)} · ${formatDate(
                     approval.created_at
                   )}
                 </small>
@@ -433,7 +458,7 @@
                   <button
                     class="row-action-btn"
                     type="button"
-                    data-approval-events-id="${approval.approval_id || ""}"
+                    data-approval-events-id="${safeAttr(approval.approval_id)}"
                   >
                     查看轨迹
                   </button>
@@ -451,8 +476,8 @@
           .map(
             (message) => `
               <div class="detail-message">
-                <strong>${message.role || "unknown"} · ${formatDate(message.created_at)}</strong>
-                <p>${message.content_preview || "无摘要"}</p>
+                <strong>${safeText(message.role || "unknown")} · ${formatDate(message.created_at)}</strong>
+                <p>${safeText(message.content_preview || "无摘要")}</p>
                 <div class="detail-badges">
                   ${message.has_journey_data ? '<span class="status-chip ready">含旅程草案</span>' : ""}
                   ${message.has_report_data ? '<span class="status-chip approved">含最终报告</span>' : ""}
@@ -486,18 +511,18 @@
       .map(
         (approval) => `
           <div class="approval-item">
-            <h4>${approval.label || approval.action || "审批记录"}</h4>
-            <p>${approval.reason || "未填写审批原因。"}</p>
+            <h4>${safeText(approval.label || approval.action || "审批记录")}</h4>
+            <p>${safeText(approval.reason || "未填写审批原因。")}</p>
             <div class="approval-meta">
               <span>${renderStatusChip(approval.status || "none")}</span>
-              <span>动作：${approval.action || "-"}</span>
+              <span>动作：${safeText(approval.action)}</span>
               <span>创建时间：${formatDate(approval.created_at)}</span>
             </div>
             <div class="approval-item-actions">
               <button
                 class="row-action-btn"
                 type="button"
-                data-approval-events-id="${approval.approval_id || ""}"
+                data-approval-events-id="${safeAttr(approval.approval_id)}"
               >
                 查看轨迹
               </button>
@@ -506,7 +531,7 @@
                   ? `<button
                       class="row-action-btn"
                       type="button"
-                      data-approval-conversation-id="${approval.conversation_id}"
+                      data-approval-conversation-id="${safeAttr(approval.conversation_id)}"
                     >
                       打开关联会话
                     </button>`
@@ -625,7 +650,7 @@
       console.error(error);
       state.approvalEvents = [];
       document.getElementById("adminApprovalEvents").innerHTML = `
-        <div class="empty-state">审批事件加载失败：${error.message || "请稍后再试。"}</div>
+        <div class="empty-state">审批事件加载失败：${safeText(error.message || "请稍后再试。")}</div>
       `;
     }
   }
@@ -673,7 +698,7 @@
     } catch (error) {
       console.error(error);
       document.getElementById("adminApprovalEvents").innerHTML = `
-        <div class="empty-state">审批处理失败：${error.message || "请稍后再试。"}</div>
+        <div class="empty-state">审批处理失败：${safeText(error.message || "请稍后再试。")}</div>
       `;
     } finally {
       state.approvalActionPendingId = "";

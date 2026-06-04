@@ -13,6 +13,10 @@ try {
 const repoRoot = path.resolve(__dirname, "..");
 const adminPath = path.join(repoRoot, "frontend", "admin.html");
 const runtimeDir = path.join(repoRoot, ".runtime");
+const xssProbeUsername = 'alice <img src=x onerror="window.__adminDashboardXss=1">';
+const xssProbeTitle = '川西 3 天 2 晚 <svg onload="window.__adminDashboardXss=1"></svg>';
+const xssProbeReason = '验证后台审批卡片渲染。<img src=x onerror="window.__adminDashboardXss=1">';
+const xssProbeMessage = '这里是最近一条助手消息摘要。<script>window.__adminDashboardXss=1</script>';
 
 async function main() {
   fs.mkdirSync(runtimeDir, { recursive: true });
@@ -37,7 +41,8 @@ async function main() {
     });
   });
 
-  await context.addInitScript(() => {
+  await context.addInitScript(
+    ({ xssProbeUsername, xssProbeTitle, xssProbeReason, xssProbeMessage }) => {
     window.localStorage.setItem("browser-regression-admin-session", "1");
     const originalFetch = window.fetch.bind(window);
     let approvalStatus = "pending";
@@ -87,7 +92,7 @@ async function main() {
           return json({
             user: {
               id: "00000000-0000-0000-0000-000000000001",
-              username: "alice",
+              username: xssProbeUsername,
               email: "alice@example.com",
               role: "admin",
               created_at: "2026-06-03T09:00:00Z",
@@ -102,10 +107,10 @@ async function main() {
               {
                 id: "00000000-0000-0000-0000-000000000011",
                 user_id: "00000000-0000-0000-0000-000000000001",
-                username: "alice",
+                username: xssProbeUsername,
                 email: "alice@example.com",
                 role: "admin",
-                title: "川西 3 天 2 晚",
+                title: xssProbeTitle,
                 status: "active",
                 created_at: "2026-06-03T09:00:00Z",
                 updated_at: "2026-06-03T10:00:00Z",
@@ -130,7 +135,7 @@ async function main() {
                 action: "real_payment",
                 label: "真实支付审批",
                 status: approvalStatus,
-                reason: "未来真实支付接入前必须经过人工确认。",
+                reason: xssProbeReason,
                 created_at: "2026-06-03T10:00:00Z",
               },
             ],
@@ -145,7 +150,7 @@ async function main() {
               : [
                   {
                     id: "00000000-0000-0000-0000-000000000001",
-                    username: "alice",
+                    username: xssProbeUsername,
                     email: "alice@example.com",
                     role: "admin",
                     created_at: "2026-06-03T09:00:00Z",
@@ -161,10 +166,10 @@ async function main() {
             conversation: {
               id: "00000000-0000-0000-0000-000000000011",
               user_id: "00000000-0000-0000-0000-000000000001",
-              username: "alice",
+              username: xssProbeUsername,
               email: "alice@example.com",
               role: "admin",
-              title: "川西 3 天 2 晚",
+              title: xssProbeTitle,
               status: "active",
               created_at: "2026-06-03T09:00:00Z",
               updated_at: "2026-06-03T10:00:00Z",
@@ -183,7 +188,7 @@ async function main() {
               {
                 id: "00000000-0000-0000-0000-000000000021",
                 role: "assistant",
-                content_preview: "这里是最近一条助手消息摘要。",
+                content_preview: xssProbeMessage,
                 created_at: "2026-06-03T10:00:00Z",
                 has_journey_data: true,
                 has_report_data: true,
@@ -195,7 +200,7 @@ async function main() {
                 action: "real_payment",
                 label: "真实支付审批",
                 status: approvalStatus,
-                reason: "未来真实支付接入前必须经过人工确认。",
+                reason: xssProbeReason,
                 created_at: "2026-06-03T10:00:00Z",
               },
             ],
@@ -206,10 +211,10 @@ async function main() {
             {
               id: "00000000-0000-0000-0000-000000000011",
               user_id: "00000000-0000-0000-0000-000000000001",
-              username: "alice",
+              username: xssProbeUsername,
               email: "alice@example.com",
               role: "admin",
-              title: "川西 3 天 2 晚",
+              title: xssProbeTitle,
               status: "active",
               created_at: "2026-06-03T09:00:00Z",
               updated_at: "2026-06-03T10:00:00Z",
@@ -226,7 +231,7 @@ async function main() {
               approval_id: "approval-1",
               action: "real_payment",
               label: "真实支付审批",
-              reason: "验证后台审批卡片渲染。",
+              reason: xssProbeReason,
               status: approvalStatus,
               conversation_id: "00000000-0000-0000-0000-000000000011",
               created_at: "2026-06-03T10:00:00Z",
@@ -262,7 +267,14 @@ async function main() {
       }
       return originalFetch(input, init);
     };
-  });
+  },
+    {
+      xssProbeUsername,
+      xssProbeTitle,
+      xssProbeReason,
+      xssProbeMessage,
+    }
+  );
 
   const page = await context.newPage();
   try {
@@ -290,6 +302,17 @@ async function main() {
     await page.waitForFunction(() => {
       return document.querySelector("#adminUsersTable")?.textContent?.includes("alice");
     });
+    await page.waitForFunction(() => {
+      return document
+        .querySelector("#adminUsersTable")
+        ?.textContent?.includes("<img src=x onerror=");
+    });
+    const injectedNodeCount = await page
+      .locator("#adminUsersTable script, #adminUsersTable img, #adminUsersTable svg, #adminApprovalsList script, #adminApprovalsList img, #adminApprovalsList svg, #adminConversationMessages script, #adminConversationMessages img, #adminConversationMessages svg")
+      .count();
+    if (injectedNodeCount > 0 || (await page.evaluate(() => window.__adminDashboardXss === 1))) {
+      throw new Error("Admin dashboard rendered or executed unsafe HTML from API payloads.");
+    }
     await page.click("[data-user-detail-id]");
     await page.waitForFunction(() => {
       return document
@@ -321,6 +344,12 @@ async function main() {
         .querySelector("#adminConversationMessages")
         ?.textContent?.includes("这里是最近一条助手消息摘要。");
     });
+    const unsafeDetailNodeCount = await page
+      .locator("#adminUserDetail script, #adminUserDetail img, #adminUserDetail svg, #adminConversationDetail script, #adminConversationDetail img, #adminConversationDetail svg, #adminApprovalEvents script, #adminApprovalEvents img, #adminApprovalEvents svg")
+      .count();
+    if (unsafeDetailNodeCount > 0 || (await page.evaluate(() => window.__adminDashboardXss === 1))) {
+      throw new Error("Admin dashboard detail panels rendered or executed unsafe HTML.");
+    }
     await page.click("[data-approval-events-id='approval-1']");
     await page.waitForFunction(() => {
       return document
