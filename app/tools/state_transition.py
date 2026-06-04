@@ -3506,13 +3506,10 @@ def select_food_tool(
         )
 
     selected_labels = [FOOD_LABELS[item] for item in food_types]
-    selected_accommodation_types = _infer_selected_accommodation_types_for_state(state)
     state_update = {
         "selected_food_types": food_types,
         "current_step": "itinerary_generation",
     }
-    if selected_accommodation_types and not state.get("selected_accommodation_types"):
-        state_update["selected_accommodation_types"] = selected_accommodation_types
     if food_pois:
         state_update["selected_food_pois"] = [
             poi for poi in (_normalize_food_poi(item) for item in food_pois) if poi.get("name")
@@ -3525,6 +3522,10 @@ def select_food_tool(
     )
     if duplicate_command is not None:
         return duplicate_command
+
+    selected_accommodation_types = _infer_selected_accommodation_types_for_state(state)
+    if selected_accommodation_types and not state.get("selected_accommodation_types"):
+        state_update["selected_accommodation_types"] = selected_accommodation_types
 
     return _command_with_message(
         f"餐饮偏好已确认：{', '.join(selected_labels)}",
