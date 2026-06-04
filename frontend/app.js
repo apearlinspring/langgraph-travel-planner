@@ -1643,14 +1643,16 @@
       }
 
       function scheduleJourneyMapHydration(root = document) {
-        const nodes = getHydratableJourneyMapNodes(root);
-        if (!nodes.length || scheduledJourneyMapHydrationRoots.has(root)) {
+        if (
+          !getHydratableJourneyMapNodes(root).length ||
+          scheduledJourneyMapHydrationRoots.has(root)
+        ) {
           return;
         }
         scheduledJourneyMapHydrationRoots.add(root);
         requestAnimationFrame(() => {
           scheduledJourneyMapHydrationRoots.delete(root);
-          nodes.forEach((node) => hydrateJourneyMap(node));
+          hydrateJourneyMaps(root);
         });
       }
 
