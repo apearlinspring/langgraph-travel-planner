@@ -12,6 +12,7 @@ const frontendScriptBundle = [
   "map-controls.js",
   "journey-text-utils.js",
   "journey-map-data.js",
+  "journey-map-view.js",
   "report-budget.js",
   "report-renderer.js",
   "report-export.js",
