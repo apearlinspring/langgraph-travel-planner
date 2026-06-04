@@ -156,10 +156,26 @@ async function installNetworkStubs(context) {
         status,
         headers: { "content-type": "application/json; charset=utf-8" },
       });
+    const sse = (chunks) => {
+      const encoder = new TextEncoder();
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            chunks.forEach((chunk) => controller.enqueue(encoder.encode(chunk)));
+            controller.close();
+          },
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "text/event-stream; charset=utf-8" },
+        }
+      );
+    };
 
     window.fetch = async (input, init) => {
       const rawUrl = typeof input === "string" ? input : input?.url || "";
       const url = String(rawUrl);
+      const method = String(init?.method || "GET").toUpperCase();
       if (url.includes("/health/ready")) return json(payload.readiness);
       if (url.includes("/api/v1/users/me")) {
         const hasMockSession =
@@ -183,7 +199,44 @@ async function installNetworkStubs(context) {
           created_at: "2026-05-11T14:00:00Z",
         });
       }
+      if (url.includes("/api/v1/chat/stream/")) {
+        return sse([
+          'data: {"content":"流式回复"}\n\n',
+          'data: {"content":"第一段"}\n\n',
+          'data: {"content":"第二段"}\n\n',
+          'data: {"content":"第三段完成"}\n\n',
+          "data: [DONE]\n\n",
+        ]);
+      }
+      if (url.includes("/api/v1/chat/history/browser-regression-trip")) {
+        return json({
+          messages: [
+            {
+              role: "assistant",
+              content: "这是一段可继续追问的历史行程。",
+              created_at: "2026-05-11T14:01:00Z",
+              extra_info: {},
+            },
+          ],
+        });
+      }
+      if (url.includes("/api/v1/conversations/browser-regression-trip")) {
+        return json({
+          id: "browser-regression-trip",
+          title: "浏览器回归行程",
+          created_at: "2026-05-11T14:00:00Z",
+          updated_at: "2026-05-11T14:30:00Z",
+        });
+      }
       if (url.includes("/api/v1/conversations")) {
+        if (method === "POST") {
+          return json({
+            id: "browser-regression-new-trip",
+            title: "新行程",
+            created_at: "2026-05-11T15:00:00Z",
+            updated_at: "2026-05-11T15:00:00Z",
+          });
+        }
         return json({
           conversations: [
             {
@@ -531,6 +584,44 @@ async function checkMapPreviewEntry(page) {
   await expectVisible(page, ".travel-report-map .journey-live-map-shell", "map after map action");
 }
 
+async function checkStreamingChatSurface(page, viewport) {
+  await page
+    .locator(".conversation-item", { hasText: "浏览器回归行程" })
+    .first()
+    .click();
+  await page.waitForFunction(
+    () =>
+      document
+        .getElementById("chatMessages")
+        ?.textContent?.includes("这是一段可继续追问的历史行程。"),
+    null,
+    { timeout: 5000 }
+  );
+  await expectContainsText(
+    page,
+    "#chatMessages",
+    ["这是一段可继续追问的历史行程。"],
+    `${viewport.name} loaded chat history`
+  );
+  await page.locator("#chatInput").fill("请生成一段浏览器流式回归回复");
+  await page.locator("#sendBtn").click();
+  await page.waitForFunction(
+    () =>
+      Array.from(document.querySelectorAll(".message.assistant .message-text")).some(
+        (node) =>
+          (node.textContent || "").includes("流式回复第一段第二段第三段完成")
+      ),
+    null,
+    { timeout: 5000 }
+  );
+  await expectContainsText(
+    page,
+    "#chatMessages",
+    ["请生成一段浏览器流式回归回复", "流式回复第一段第二段第三段完成"],
+    `${viewport.name} streaming chat response`
+  );
+}
+
 async function checkReportExport(page, viewport) {
   const [download] = await Promise.all([
     page.waitForEvent("download"),
@@ -742,6 +833,16 @@ async function runViewport(browser, viewport) {
     assertNoConsoleErrors(viewport, auth.consoleErrors, auth.pageErrors);
   } finally {
     await auth.context.close();
+  }
+
+  const streaming = await createPage(browser, viewport);
+  try {
+    await seedLoggedInState(streaming.page);
+    await gotoFrontend(streaming.page);
+    await checkStreamingChatSurface(streaming.page, viewport);
+    assertNoConsoleErrors(viewport, streaming.consoleErrors, streaming.pageErrors);
+  } finally {
+    await streaming.context.close();
   }
 
   const main = await createPage(browser, viewport);
