@@ -45,6 +45,9 @@
       const composerDraftKey = "zhixing-composer-draft";
       const plannerDraftKey = "zhixing-planner-draft";
       const plannerCollapseKey = "zhixing-planner-collapsed";
+      const DRAFT_STORAGE_WRITE_DELAY_MS = 250;
+      const draftStorageWriteTimers = new Map();
+      const pendingDraftStorageValues = new Map();
 
       function getDraftStorageScope() {
         return state.user?.id || state.user?.username || "guest";
@@ -61,12 +64,50 @@
         );
       }
 
-      function writeDraftStorage(baseKey, value) {
-        localStorage.setItem(getScopedStorageKey(baseKey), value);
+      function commitDraftStorage(storageKey, value) {
+        localStorage.setItem(storageKey, value);
+      }
+
+      function flushDraftStorageWrite(storageKey) {
+        if (!pendingDraftStorageValues.has(storageKey)) return;
+        const value = pendingDraftStorageValues.get(storageKey);
+        pendingDraftStorageValues.delete(storageKey);
+        const timer = draftStorageWriteTimers.get(storageKey);
+        if (timer) {
+          clearTimeout(timer);
+          draftStorageWriteTimers.delete(storageKey);
+        }
+        commitDraftStorage(storageKey, value);
+      }
+
+      function flushAllDraftStorageWrites() {
+        Array.from(pendingDraftStorageValues.keys()).forEach((storageKey) =>
+          flushDraftStorageWrite(storageKey)
+        );
+      }
+
+      function writeDraftStorage(baseKey, value, options = {}) {
+        const storageKey = getScopedStorageKey(baseKey);
+        if (options.immediate) {
+          pendingDraftStorageValues.set(storageKey, value);
+          flushDraftStorageWrite(storageKey);
+          return;
+        }
+        pendingDraftStorageValues.set(storageKey, value);
+        if (draftStorageWriteTimers.has(storageKey)) return;
+        const timer = setTimeout(() => {
+          flushDraftStorageWrite(storageKey);
+        }, DRAFT_STORAGE_WRITE_DELAY_MS);
+        draftStorageWriteTimers.set(storageKey, timer);
       }
 
       function clearDraftStorage(baseKey) {
-        localStorage.removeItem(getScopedStorageKey(baseKey));
+        const storageKey = getScopedStorageKey(baseKey);
+        const timer = draftStorageWriteTimers.get(storageKey);
+        if (timer) clearTimeout(timer);
+        draftStorageWriteTimers.delete(storageKey);
+        pendingDraftStorageValues.delete(storageKey);
+        localStorage.removeItem(storageKey);
         localStorage.removeItem(baseKey);
       }
 
@@ -2109,10 +2150,10 @@
         }
       }
 
-      function persistComposerDraft() {
+      function persistComposerDraft(options = {}) {
         const input = document.getElementById("chatInput");
         if (!input) return;
-        writeDraftStorage(composerDraftKey, input.value || "");
+        writeDraftStorage(composerDraftKey, input.value || "", options);
       }
 
       function persistPlannerDraft() {
@@ -3307,7 +3348,7 @@
         input.style.height = "auto";
         input.style.height = Math.min(input.scrollHeight, 120) + "px";
         input.focus();
-        persistComposerDraft();
+        persistComposerDraft({ immediate: true });
       }
 
       function applySuggestion(text) {
@@ -7121,6 +7162,7 @@
         document
           .getElementById("chatInput")
           ?.addEventListener("input", persistComposerDraft);
+        window.addEventListener("pagehide", flushAllDraftStorageWrites);
         document
           .getElementById("chatTitle")
           ?.addEventListener("dblclick", () => renameCurrentConversation());
@@ -7887,7 +7929,7 @@
         }
         input.value = "";
         input.style.height = "auto";
-        persistComposerDraft();
+        persistComposerDraft({ immediate: true });
 
         // 助手Loading
         const loadingId = addLoading();
