@@ -14,6 +14,7 @@ const frontendScriptBundle = [
   "report-renderer.js",
   "report-export.js",
   "report-actions.js",
+  "governance-tools.js",
   "app.js",
 ]
   .map((name) => fs.readFileSync(path.join(repoRoot, "frontend", name), "utf8"))
