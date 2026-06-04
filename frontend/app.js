@@ -7941,6 +7941,9 @@
         let streamingReportData = null;
         let streamingJourneyData = null;
         let streamingPlanningTrace = [];
+        let pendingStreamingChunk = "";
+        let streamingRenderFrame = null;
+        let flushPendingVisibleChunks = () => {};
         const streamingThinkingFilter = createAssistantThinkingFilter();
         const slowHintTimer = setTimeout(() => {
           reachedSlowStage = true;
@@ -7975,30 +7978,57 @@
             const decoder = new TextDecoder();
             let buffer = "";
 
-            const appendVisibleChunk = (chunk) => {
+            const buildStreamingRenderOptions = (overrides = {}) => ({
+              suppressJourneyPreview: true,
+              pinToTop: true,
+              reportData: streamingReportData,
+              journeyData: streamingJourneyData,
+              planningTrace: streamingPlanningTrace,
+              ...overrides,
+            });
+
+            const renderVisibleChunk = (chunk) => {
               if (!chunk) return;
               if (!streamingMessageId) {
                 streamingFullText = chunk;
                 streamingMessageId = convertLoadingToAssistant(
                   loadingId,
                   streamingFullText,
-                  {
-                    suppressJourneyPreview: true,
-                    pinToTop: true,
-                    reportData: streamingReportData,
-                    journeyData: streamingJourneyData,
-                    planningTrace: streamingPlanningTrace,
-                  }
+                  buildStreamingRenderOptions()
                 );
                 return;
               }
               streamingFullText += chunk;
-              updateMessage(streamingMessageId, streamingFullText, {
-                suppressJourneyPreview: true,
-                pinToTop: true,
-                reportData: streamingReportData,
-                journeyData: streamingJourneyData,
-                planningTrace: streamingPlanningTrace,
+              updateMessage(
+                streamingMessageId,
+                streamingFullText,
+                buildStreamingRenderOptions()
+              );
+            };
+
+            flushPendingVisibleChunks = () => {
+              if (streamingRenderFrame) {
+                cancelAnimationFrame(streamingRenderFrame);
+                streamingRenderFrame = null;
+              }
+              const chunk = pendingStreamingChunk;
+              pendingStreamingChunk = "";
+              renderVisibleChunk(chunk);
+            };
+
+            const appendVisibleChunk = (chunk) => {
+              if (!chunk) return;
+              if (!streamingMessageId) {
+                renderVisibleChunk(chunk);
+                return;
+              }
+              pendingStreamingChunk += chunk;
+              if (streamingRenderFrame) return;
+              streamingRenderFrame = requestAnimationFrame(() => {
+                streamingRenderFrame = null;
+                const nextChunk = pendingStreamingChunk;
+                pendingStreamingChunk = "";
+                renderVisibleChunk(nextChunk);
               });
             };
             const applyChunk = (chunk) => {
@@ -8058,6 +8088,7 @@
             if (visibleTail) {
               appendVisibleChunk(visibleTail);
             }
+            flushPendingVisibleChunks();
 
             if (!streamingMessageId) {
               streamingMessageId = convertLoadingToAssistant(
@@ -8103,6 +8134,7 @@
           const elapsedMs = Date.now() - requestStartedAt;
           clearTimeout(slowHintTimer);
           clearTimeout(verySlowHintTimer);
+          flushPendingVisibleChunks();
           if (streamingMessageId && streamingFullText.trim()) {
             updateMessage(
               streamingMessageId,
