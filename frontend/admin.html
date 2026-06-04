@@ -8,7 +8,7 @@
       rel="stylesheet"
       href="https://cdn.bootcdn.net/ajax/libs/font-awesome/6.4.0/css/all.min.css"
     />
-    <link rel="stylesheet" href="./admin.css?v=20260604-admin-pagination" />
+    <link rel="stylesheet" href="./admin.css?v=20260604-approval-pagination" />
   </head>
   <body>
     <div class="admin-shell">
@@ -274,6 +274,7 @@
           <div class="approval-list" id="adminApprovalsList">
             <div class="empty-state">正在加载审批记录…</div>
           </div>
+          <div class="list-pager" id="adminApprovalsPager"></div>
           <div class="detail-section approval-events-section">
             <h5>审批事件轨迹</h5>
             <div class="detail-approvals" id="adminApprovalEvents">
@@ -285,8 +286,8 @@
     </div>
 
     <script src="./session-api.js?v=20260603-auth-split"></script>
-    <script src="./governance-api.js?v=20260603-governance-split"></script>
-    <script src="./admin-api.js?v=20260604-admin-pagination"></script>
-    <script src="./admin.js?v=20260604-admin-pagination"></script>
+    <script src="./governance-api.js?v=20260604-approval-pagination"></script>
+    <script src="./admin-api.js?v=20260604-approval-pagination"></script>
+    <script src="./admin.js?v=20260604-approval-pagination"></script>
   </body>
 </html>

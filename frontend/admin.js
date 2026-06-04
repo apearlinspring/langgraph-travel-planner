@@ -24,6 +24,11 @@
         offset: 0,
         total: 0,
       },
+      approvals: {
+        limit: 12,
+        offset: 0,
+        total: 0,
+      },
     },
     filters: {
       userQuery: "",
@@ -216,6 +221,8 @@
     state.pagination.users.total = 0;
     state.pagination.conversations.offset = 0;
     state.pagination.conversations.total = 0;
+    state.pagination.approvals.offset = 0;
+    state.pagination.approvals.total = 0;
   }
 
   function renderUsers(users = []) {
@@ -594,23 +601,18 @@
 
   function renderApprovals(approvals = []) {
     const container = document.getElementById("adminApprovalsList");
-    const filteredApprovals = approvals.filter((approval) => {
-      const statusMatch =
-        state.filters.approvalStatus === "all" ||
-        String(approval.status || "").toLowerCase() === state.filters.approvalStatus;
-      const keyword = state.filters.approvalQuery.trim().toLowerCase();
-      const keywordMatch =
-        !keyword ||
-        [approval.label, approval.action, approval.reason]
-          .filter(Boolean)
-          .some((value) => String(value).toLowerCase().includes(keyword));
-      return statusMatch && keywordMatch;
-    });
-    if (!filteredApprovals.length) {
+    if (!approvals.length) {
       container.innerHTML = '<div class="empty-state">当前没有审批记录。</div>';
+      renderListPager(
+        "adminApprovalsPager",
+        state.pagination.approvals,
+        0,
+        "审批",
+        "approvals"
+      );
       return;
     }
-    container.innerHTML = filteredApprovals
+    container.innerHTML = approvals
       .map(
         (approval) => `
           <div class="approval-item">
@@ -646,6 +648,13 @@
         `
       )
       .join("");
+    renderListPager(
+      "adminApprovalsPager",
+      state.pagination.approvals,
+      approvals.length,
+      "审批",
+      "approvals"
+    );
   }
 
   function syncFiltersFromUi() {
@@ -797,8 +806,8 @@
         );
       }
       state.selectedApprovalId = result.data?.approval_id || approvalId;
-      await loadDashboard();
-      await loadApprovalEvents(state.selectedApprovalId);
+      await loadAdminApprovals();
+      await loadApprovalEvents(result.data?.approval_id || approvalId);
     } catch (error) {
       console.error(error);
       document.getElementById("adminApprovalEvents").innerHTML = `
@@ -925,8 +934,11 @@
     }
   }
 
-  async function loadAdminApprovals() {
+  async function loadAdminApprovals({ resetOffset = false } = {}) {
     syncFiltersFromUi();
+    if (resetOffset) {
+      state.pagination.approvals.offset = 0;
+    }
     try {
       const result = await governanceApi.fetchApprovals({
         apiBase: getApiBase(),
@@ -936,6 +948,9 @@
             ? "all"
             : state.filters.approvalStatus,
         canRequestAll: true,
+        limit: state.pagination.approvals.limit,
+        offset: state.pagination.approvals.offset,
+        queryText: state.filters.approvalQuery,
       });
       if (!result.response.ok) {
         throw new Error(
@@ -945,6 +960,24 @@
         );
       }
       state.approvals = result.data?.approvals || [];
+      state.pagination.approvals.total = Number(result.data?.total || 0);
+      state.pagination.approvals.offset = Number(result.data?.offset || 0);
+      state.pagination.approvals.limit = Number(
+        result.data?.limit || state.pagination.approvals.limit
+      );
+      if (
+        !state.approvals.length &&
+        state.pagination.approvals.total > 0 &&
+        state.pagination.approvals.offset > 0
+      ) {
+        state.pagination.approvals.offset =
+          Math.floor(
+            (state.pagination.approvals.total - 1) /
+              state.pagination.approvals.limit
+          ) * state.pagination.approvals.limit;
+        await loadAdminApprovals();
+        return;
+      }
       renderApprovals(state.approvals);
       if (
         state.selectedApprovalId &&
@@ -959,6 +992,7 @@
     } catch (error) {
       console.error(error);
       state.approvals = [];
+      state.pagination.approvals.total = 0;
       renderApprovals([]);
       state.selectedApprovalId = "";
       state.approvalEvents = [];
@@ -1048,6 +1082,7 @@
       state.approvalEvents = [];
       state.approvals = [];
       renderApprovalEvents();
+      renderApprovals([]);
     } finally {
       refreshBtn.disabled = false;
     }
@@ -1086,12 +1121,13 @@
         }
       });
     });
-    bindScopedFilter("adminApprovalSearch", () => {
-      syncFiltersFromUi();
-      renderApprovals(state.approvals);
-    });
-    bindScopedFilter("adminApprovalStatusFilter", loadAdminApprovals);
-    ["adminUsersPager", "adminConversationsPager"].forEach((id) => {
+    bindScopedFilter("adminApprovalSearch", () =>
+      loadAdminApprovals({ resetOffset: true })
+    );
+    bindScopedFilter("adminApprovalStatusFilter", () =>
+      loadAdminApprovals({ resetOffset: true })
+    );
+    ["adminUsersPager", "adminConversationsPager", "adminApprovalsPager"].forEach((id) => {
       document.getElementById(id)?.addEventListener("click", async (event) => {
         const button = event.target.closest("[data-page-target]");
         if (!button || button.disabled) return;
@@ -1109,6 +1145,8 @@
           await loadAdminUsers();
         } else if (target === "conversations") {
           await loadAdminConversations();
+        } else if (target === "approvals") {
+          await loadAdminApprovals();
         }
       });
     });
@@ -1130,13 +1168,13 @@
       .getElementById("adminApprovalQuickAll")
       .addEventListener("click", async () => {
         document.getElementById("adminApprovalStatusFilter").value = "all";
-        await loadAdminApprovals();
+        await loadAdminApprovals({ resetOffset: true });
       });
     document
       .getElementById("adminApprovalQuickPending")
       .addEventListener("click", async () => {
         document.getElementById("adminApprovalStatusFilter").value = "pending";
-        await loadAdminApprovals();
+        await loadAdminApprovals({ resetOffset: true });
       });
     document.body.addEventListener("click", async (event) => {
       const decisionButton = event.target.closest("[data-approval-decision]");

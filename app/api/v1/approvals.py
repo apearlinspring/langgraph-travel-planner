@@ -46,6 +46,25 @@ def _event_response(event) -> ApprovalEventResponse:
     return ApprovalEventResponse.model_validate(event.to_dict())
 
 
+def _approval_matches_query(record, query_text: str | None) -> bool:
+    keyword = str(query_text or "").strip().lower()
+    if not keyword:
+        return True
+    searchable_values = [
+        record.approval_id,
+        record.action,
+        record.label,
+        record.status,
+        record.reason,
+        record.user_id,
+        record.conversation_id,
+    ]
+    return any(
+        keyword in str(value or "").lower()
+        for value in searchable_values
+    )
+
+
 async def _maybe_await(value):
     if inspect.isawaitable(value):
         return await value
@@ -164,6 +183,9 @@ async def list_approvals(
     action: str | None = None,
     conversation_id: str | None = None,
     scope: str = Query(default="mine", pattern="^(mine|all)$"),
+    query_text: str | None = Query(default=None, alias="q"),
+    limit: int = Query(default=30, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
     user: User = Depends(get_current_user),
     approval_service: DatabaseApprovalStore | ApprovalStore = Depends(
         get_approval_service
@@ -194,8 +216,19 @@ async def list_approvals(
         )
     except (ValueError, ApprovalPersistenceError) as error:
         raise _approval_error_to_http(error) from error
-    approvals = [_record_response(record) for record in records]
-    return ApprovalListResponse(approvals=approvals, total=len(approvals))
+    filtered_records = [
+        record
+        for record in records
+        if _approval_matches_query(record, query_text)
+    ]
+    page_records = filtered_records[offset : offset + limit]
+    approvals = [_record_response(record) for record in page_records]
+    return ApprovalListResponse(
+        approvals=approvals,
+        total=len(filtered_records),
+        offset=offset,
+        limit=limit,
+    )
 
 
 @router.get("/{approval_id}", response_model=ApprovalResponse)

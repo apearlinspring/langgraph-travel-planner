@@ -69,6 +69,8 @@ class ApprovalEventResponse(BaseModel):
 class ApprovalListResponse(BaseModel):
     approvals: list[ApprovalResponse]
     total: int
+    offset: int = 0
+    limit: int = 0
 
 
 class ApprovalEventListResponse(BaseModel):

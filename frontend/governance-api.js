@@ -40,10 +40,16 @@
     stateToken = "",
     filter = "all",
     canRequestAll = false,
+    limit = 30,
+    offset = 0,
+    queryText = "",
   }) {
     const params = new URLSearchParams();
     if (canRequestAll) params.set("scope", "all");
     if (filter && filter !== "all") params.set("status", filter);
+    params.set("limit", String(limit));
+    params.set("offset", String(offset));
+    if (queryText.trim()) params.set("q", queryText.trim());
     const response = await fetch(
       `${apiBase}/api/v1/approvals?${params}`,
       buildOptions(stateToken)

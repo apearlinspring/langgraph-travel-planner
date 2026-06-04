@@ -240,19 +240,53 @@ async function main() {
         });
       }
       if (url.includes("/api/v1/approvals?")) {
+        const parsed = new URL(url);
+        const statusFilter = parsed.searchParams.get("status");
+        const queryText = (parsed.searchParams.get("q") || "").toLowerCase();
+        const offset = Number(parsed.searchParams.get("offset") || 0);
+        const limit = Number(parsed.searchParams.get("limit") || 12);
+        if (statusFilter === "pending" && approvalStatus !== "pending") {
+          return json({
+            approvals: [],
+            total: 0,
+            offset,
+            limit,
+          });
+        }
+        const firstApproval = {
+          approval_id: "approval-1",
+          action: "real_payment",
+          label: "真实支付审批",
+          reason: xssProbeReason,
+          status: approvalStatus,
+          conversation_id: "00000000-0000-0000-0000-000000000011",
+          created_at: "2026-06-03T10:00:00Z",
+        };
+        const secondPageApproval = {
+          approval_id: "approval-page-2",
+          action: "send_sms",
+          label: "第二页短信审批",
+          reason: "第二页审批记录，用于验证后台审批分页。",
+          status: "approved",
+          conversation_id: "00000000-0000-0000-0000-000000000013",
+          created_at: "2026-06-02T10:00:00Z",
+        };
+        const candidateApprovals =
+          statusFilter === "pending" ? [firstApproval] : [firstApproval, secondPageApproval];
+        const queryMatches = queryText
+          ? candidateApprovals.filter((approval) =>
+              JSON.stringify(approval).toLowerCase().includes(queryText)
+            )
+          : null;
         return json({
-          approvals: [
-            {
-              approval_id: "approval-1",
-              action: "real_payment",
-              label: "真实支付审批",
-              reason: xssProbeReason,
-              status: approvalStatus,
-              conversation_id: "00000000-0000-0000-0000-000000000011",
-              created_at: "2026-06-03T10:00:00Z",
-            },
-          ],
-          total: 1,
+          approvals: queryMatches
+            ? queryMatches.slice(offset, offset + limit)
+            : offset >= 12
+              ? [secondPageApproval]
+              : [firstApproval],
+          total: queryMatches?.length ?? (statusFilter === "pending" ? 1 : 13),
+          offset,
+          limit,
         });
       }
       if (url.includes("/api/v1/approvals/approval-1/approve")) {
@@ -309,6 +343,18 @@ async function main() {
       timeout: 5000,
     });
     await page.waitForSelector(".approval-item", { state: "visible", timeout: 5000 });
+    await page.click("#adminApprovalsPager [data-page-direction='next']");
+    await page.waitForFunction(() => {
+      return document
+        .querySelector("#adminApprovalsList")
+        ?.textContent?.includes("第二页短信审批");
+    });
+    await page.click("#adminApprovalsPager [data-page-direction='prev']");
+    await page.waitForFunction(() => {
+      return document
+        .querySelector("#adminApprovalsList")
+        ?.textContent?.includes("真实支付审批");
+    });
     await page.fill("#adminUserSearch", "bob");
     await page.waitForFunction(() => {
       return document.querySelector("#adminUsersTable")?.textContent?.includes("当前没有可展示的用户记录。");
