@@ -10,12 +10,18 @@ from urllib.parse import urlparse
 import httpx
 
 from app.config import has_real_env_value, settings
+from app.journey.route_preferences import (
+    normalize_route_segment_mode,
+    route_segment_mode_label,
+)
 from app.utils.logger import app_logger
 
 
 AMAP_PLACE_TEXT_URL = "https://restapi.amap.com/v3/place/text"
 AMAP_GEOCODE_URL = "https://restapi.amap.com/v3/geocode/geo"
 AMAP_DRIVING_URL = "https://restapi.amap.com/v3/direction/driving"
+AMAP_WALKING_URL = "https://restapi.amap.com/v3/direction/walking"
+AMAP_TRANSIT_URL = "https://restapi.amap.com/v3/direction/transit/integrated"
 AMAP_WEATHER_URL = "https://restapi.amap.com/v3/weather/weatherInfo"
 TAVILY_SEARCH_URL = "https://api.tavily.com/search"
 
@@ -250,25 +256,141 @@ def merge_amap_candidate_into_poi(poi: dict[str, Any], candidate: dict[str, Any]
     return True
 
 
-def apply_route_payload_to_segment(segment: dict[str, Any], payload: dict[str, Any]) -> bool:
-    """Merge AMap driving route metrics into one journey segment."""
+def _segment_selected_mode(segment: dict[str, Any], mode: Any = None) -> str:
+    return normalize_route_segment_mode(
+        mode
+        or segment.get("selected_mode")
+        or segment.get("mode")
+        or segment.get("transport_mode")
+        or ""
+    )
 
+
+def _route_verification_label(status: str) -> str:
+    if status == "verified":
+        return "已核验"
+    if status == "estimated":
+        return "估算"
+    return "待高德路线核验"
+
+
+def _apply_route_contract_fields(
+    segment: dict[str, Any],
+    *,
+    selected_mode: str,
+    confidence: str,
+    source: str,
+    verification_status: str,
+    verification_note: str,
+) -> None:
+    segment["selected_mode"] = selected_mode
+    segment.setdefault("recommended_mode", selected_mode)
+    segment["mode_label"] = route_segment_mode_label(selected_mode)
+    segment["confidence"] = confidence
+    segment["source"] = source
+    segment["verification_status"] = verification_status
+    segment["verification_label"] = _route_verification_label(verification_status)
+    segment["verification_note"] = verification_note
+
+
+def mark_route_segment_pending(
+    segment: dict[str, Any],
+    *,
+    reason: str,
+    mode: Any = None,
+) -> bool:
+    selected_mode = _segment_selected_mode(segment, mode)
+    segment["distance_text"] = "待高德路线核验"
+    segment["duration_text"] = "待高德路线核验"
+    _apply_route_contract_fields(
+        segment,
+        selected_mode=selected_mode,
+        confidence="needs_live_route",
+        source="route_mode_pending_amap_live_enrichment",
+        verification_status="needs_live_route",
+        verification_note=(
+            f"已收到{route_segment_mode_label(selected_mode)}偏好，{reason}"
+        ),
+    )
+    return True
+
+
+def _first_route_path(payload: dict[str, Any]) -> dict[str, Any]:
+    paths = payload.get("paths") if isinstance(payload, dict) else None
     route = payload.get("route") if isinstance(payload, dict) else None
-    paths = route.get("paths") if isinstance(route, dict) else None
-    if not isinstance(paths, list) or not paths:
-        return False
-    path = paths[0] if isinstance(paths[0], dict) else {}
-    distance = _as_float(path.get("distance"))
-    duration = _as_float(path.get("duration"))
-    if not distance or not duration:
+    if not paths and isinstance(route, dict):
+        paths = route.get("paths")
+    if isinstance(paths, list) and paths and isinstance(paths[0], dict):
+        return paths[0]
+    return {}
+
+
+def _first_transit_route(payload: dict[str, Any]) -> dict[str, Any]:
+    transits = payload.get("transits") if isinstance(payload, dict) else None
+    route = payload.get("route") if isinstance(payload, dict) else None
+    if not transits and isinstance(route, dict):
+        transits = route.get("transits")
+    if isinstance(transits, list) and transits and isinstance(transits[0], dict):
+        return transits[0]
+    return {}
+
+
+def _route_distance_from_payload(payload: dict[str, Any], route_item: dict[str, Any]) -> float | None:
+    route = payload.get("route") if isinstance(payload, dict) else None
+    return _as_float(
+        route_item.get("distance")
+        or payload.get("distance")
+        or (route.get("distance") if isinstance(route, dict) else None)
+    )
+
+
+def apply_route_payload_to_segment(
+    segment: dict[str, Any],
+    payload: dict[str, Any],
+    *,
+    mode: Any = None,
+) -> bool:
+    """Merge AMap route metrics into one journey segment by selected route mode."""
+
+    selected_mode = _segment_selected_mode(segment, mode)
+    if selected_mode == "transit":
+        transit = _first_transit_route(payload)
+        distance = _route_distance_from_payload(payload, transit)
+        duration = _as_float(transit.get("duration"))
+        if not distance or not duration:
+            return False
+        confidence = "amap_transit"
+        source = "amap_direction_transit_integrated"
+        note = "已用高德公交/地铁综合路线核验距离和用时；班次、末班车、换乘、票价和临时运营调整仍需行前确认。"
+    elif selected_mode in {"taxi", "walking"}:
+        path = _first_route_path(payload)
+        distance = _as_float(path.get("distance"))
+        duration = _as_float(path.get("duration"))
+        if not distance or not duration:
+            return False
+        if selected_mode == "walking":
+            confidence = "amap_walking"
+            source = "amap_direction_walking"
+            note = "已用高德步行路线核验距离和用时；实际体力、天气、临时封路和夜间安全仍需行前确认。"
+        else:
+            confidence = "amap_driving"
+            source = "amap_direction_driving"
+            note = "已用高德驾车路线核验距离和用时；票价、路况和叫车费用仍需行前确认。"
+    else:
         return False
 
     segment["distance_meters"] = distance
     segment["duration_seconds"] = duration
     segment["distance_text"] = _format_distance(distance)
     segment["duration_text"] = _format_duration(duration)
-    segment["confidence"] = "amap_driving"
-    segment["source"] = "amap_direction_driving"
+    _apply_route_contract_fields(
+        segment,
+        selected_mode=selected_mode,
+        confidence=confidence,
+        source=source,
+        verification_status="verified",
+        verification_note=note,
+    )
     return True
 
 
@@ -306,10 +428,20 @@ def apply_estimated_route_to_segment(
     segment["duration_seconds"] = round(duration, 1)
     segment["distance_text"] = f"约 {_format_distance(distance)}"
     segment["duration_text"] = f"约 {_format_duration(duration)}"
-    segment["confidence"] = "estimated_straight_line"
-    segment["source"] = "coordinate_estimate"
-    segment["verification_note"] = "按两点坐标直线估算，真实驾车/步行路线待高德二次核验。"
+    selected_mode = _segment_selected_mode(segment)
+    _apply_route_contract_fields(
+        segment,
+        selected_mode=selected_mode,
+        confidence="estimated_straight_line",
+        source="coordinate_estimate",
+        verification_status="estimated",
+        verification_note="按两点坐标直线估算，真实驾车路线、路况和费用待高德二次核验。",
+    )
     return True
+
+
+def _route_segment_allows_coordinate_estimate(segment: dict[str, Any]) -> bool:
+    return _segment_selected_mode(segment) == "taxi"
 
 
 def weather_summary_from_amap_payload(
@@ -420,7 +552,13 @@ def estimate_remaining_route_segments(plan: dict[str, Any]) -> int:
     _pois, segments = _flatten_days(plan)
     estimated = 0
     for segment in segments:
-        if segment.get("confidence") == "amap_driving":
+        verification_status = str(segment.get("verification_status") or "").strip().lower()
+        confidence = str(segment.get("confidence") or "").strip()
+        if verification_status == "verified" or confidence.startswith("amap_"):
+            continue
+        if confidence == "estimated_straight_line":
+            continue
+        if not _route_segment_allows_coordinate_estimate(segment):
             continue
         metric_text = f"{segment.get('distance_text') or ''} {segment.get('duration_text') or ''}"
         if metric_text.strip() and "待" not in metric_text and "needs" not in metric_text:
@@ -572,6 +710,14 @@ async def _lookup_poi_candidate(
     return amap_place_candidate_from_payload(geocode_payload)
 
 
+def _route_city_param(poi: dict[str, Any]) -> str:
+    city = _clean_text(
+        poi.get("amap_city") or poi.get("cityname") or poi.get("city"),
+        limit=40,
+    )
+    return resolve_city_adcode(city) or city
+
+
 async def _enrich_pois_with_amap(
     plan: dict[str, Any],
     trace: list[dict[str, Any]],
@@ -636,7 +782,7 @@ async def _lookup_route_segment(
     left = poi_lookup.get(str(segment.get("from_poi_id")))
     right = poi_lookup.get(str(segment.get("to_poi_id")))
     if not left or not right:
-        return False
+        return "missing"
     left_lng = _as_float(left.get("lng"))
     left_lat = _as_float(left.get("lat"))
     right_lng = _as_float(right.get("lng"))
@@ -644,19 +790,54 @@ async def _lookup_route_segment(
     if None in {left_lng, left_lat, right_lng, right_lat}:
         return "missing"
 
+    selected_mode = _segment_selected_mode(segment)
+    if selected_mode not in {"taxi", "walking", "transit"}:
+        mark_route_segment_pending(
+            segment,
+            mode=selected_mode,
+            reason="该交通方式暂未接入实时路线工具，真实路线、用时和费用待二次核验。",
+        )
+        return "pending"
+
+    url = AMAP_DRIVING_URL
+    params: dict[str, Any] = {
+        "key": api_key,
+        "origin": f"{left_lng},{left_lat}",
+        "destination": f"{right_lng},{right_lat}",
+        "output": "JSON",
+    }
+    if selected_mode == "walking":
+        url = AMAP_WALKING_URL
+    elif selected_mode == "transit":
+        url = AMAP_TRANSIT_URL
+        city = _route_city_param(left)
+        cityd = _route_city_param(right)
+        if not city or not cityd:
+            mark_route_segment_pending(
+                segment,
+                mode=selected_mode,
+                reason="公交/地铁路线核验需要起点城市和终点城市，当前城市信息不足。",
+            )
+            return "pending"
+        params["city"] = city
+        params["cityd"] = cityd
+    else:
+        params["extensions"] = "base"
+
     payload = await _get_json(
         client,
-        AMAP_DRIVING_URL,
-        {
-            "key": api_key,
-            "origin": f"{left_lng},{left_lat}",
-            "destination": f"{right_lng},{right_lat}",
-            "extensions": "base",
-            "output": "JSON",
-        },
+        url,
+        params,
     )
-    if apply_route_payload_to_segment(segment, payload):
+    if apply_route_payload_to_segment(segment, payload, mode=selected_mode):
         return "amap"
+    if selected_mode in {"walking", "transit"}:
+        mark_route_segment_pending(
+            segment,
+            mode=selected_mode,
+            reason="高德对应路线工具暂未返回可靠距离和用时，保留为待路线核验。",
+        )
+        return "pending"
     if apply_estimated_route_to_segment(segment, left, right):
         return "estimated"
     return "missing"
@@ -690,11 +871,20 @@ async def _enrich_routes_with_amap(
                 )
                 left = poi_lookup.get(str(segment.get("from_poi_id"))) or {}
                 right = poi_lookup.get(str(segment.get("to_poi_id"))) or {}
+                selected_mode = _segment_selected_mode(segment)
+                if selected_mode in {"walking", "transit"}:
+                    mark_route_segment_pending(
+                        segment,
+                        mode=selected_mode,
+                        reason="实时路线工具调用异常，真实路线和用时待二次核验。",
+                    )
+                    return "pending"
                 return "estimated" if apply_estimated_route_to_segment(segment, left, right) else "missing"
 
     results = await asyncio.gather(*(_lookup(segment) for segment in target_segments))
     verified = sum(1 for status in results if status == "amap")
     estimated = sum(1 for status in results if status == "estimated")
+    pending = sum(1 for status in results if status == "pending")
     estimated += estimate_remaining_route_segments(plan)
     if verified:
         trace.append(
@@ -702,8 +892,8 @@ async def _enrich_routes_with_amap(
                 phase="route",
                 title="高德路线距离已回填",
                 detail=(
-                    f"已用高德驾车路线核验 {verified} 段相邻 POI 距离和时长；"
-                    f"另有 {estimated} 段按坐标估算并保留待核验标记。"
+                    f"已用高德路线工具核验 {verified} 段相邻 POI 距离和时长；"
+                    f"另有 {estimated} 段按坐标估算，{pending} 段保留待对应交通方式核验。"
                 ),
                 count=verified,
                 evidence_type="amap_direction",
@@ -714,7 +904,7 @@ async def _enrich_routes_with_amap(
             _trace(
                 phase="route",
                 title="路线距离已估算",
-                detail=f"本轮高德驾车路线未返回可用结果，已按坐标为 {estimated} 段路程估算距离/时长，并标注待核验。",
+                detail=f"本轮部分高德路线未返回可用结果，已按坐标为 {estimated} 段打车/驾车路程估算距离/时长，并标注待核验。",
                 status="degraded",
                 count=estimated,
                 evidence_type="route_coordinate_estimate",
@@ -725,7 +915,7 @@ async def _enrich_routes_with_amap(
             _trace(
                 phase="route",
                 title="路线距离回填降级",
-                detail="本轮未取得可用高德驾车路线，地图仍显示点位连线，距离和时长待二次核验。",
+                detail="本轮未取得可用高德路线，地图仍显示点位连线，距离和时长待二次核验。",
                 status="degraded",
                 evidence_type="amap_direction",
             )

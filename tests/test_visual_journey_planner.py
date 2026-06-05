@@ -1,6 +1,7 @@
 from copy import deepcopy
 from datetime import date
 
+import pytest
 from langchain.tools import ToolRuntime
 from langgraph.types import Command
 
@@ -12,7 +13,10 @@ from app.api.v1.chat import (
 from app.core.middleware import _format_visual_journey_summary, _looks_like_visual_journey_request
 from app.journey.enrichment import (
     MAX_POI_LOOKUPS,
+    AMAP_TRANSIT_URL,
+    AMAP_WALKING_URL,
     _refresh_flattened_sections,
+    _lookup_route_segment,
     amap_place_candidate_from_payload,
     apply_estimated_route_to_segment,
     apply_route_payload_to_segment,
@@ -243,6 +247,7 @@ def test_amap_route_payload_updates_segment_metrics():
         "distance_text": "待高德路线核验",
         "duration_text": "待高德路线核验",
         "confidence": "needs_live_route",
+        "mode": "driving",
     }
     payload = {
         "status": "1",
@@ -263,6 +268,206 @@ def test_amap_route_payload_updates_segment_metrics():
     assert segment["duration_text"] == "15分钟"
     assert segment["confidence"] == "amap_driving"
     assert segment["source"] == "amap_direction_driving"
+    assert segment["selected_mode"] == "taxi"
+    assert segment["mode_label"] == "打车"
+    assert segment["verification_status"] == "verified"
+
+
+def test_amap_walking_route_payload_updates_segment_metrics():
+    segment = {
+        "from_name": "西湖",
+        "to_name": "断桥残雪",
+        "selected_mode": "walking",
+        "distance_text": "待高德路线核验",
+        "duration_text": "待高德路线核验",
+        "confidence": "needs_live_route",
+    }
+    payload = {
+        "status": "1",
+        "route": {
+            "paths": [
+                {
+                    "distance": "1074",
+                    "duration": "859",
+                }
+            ]
+        },
+    }
+
+    updated = apply_route_payload_to_segment(segment, payload)
+
+    assert updated
+    assert segment["distance_text"] == "1.1 公里"
+    assert segment["duration_text"] == "14分钟"
+    assert segment["confidence"] == "amap_walking"
+    assert segment["source"] == "amap_direction_walking"
+    assert segment["mode_label"] == "步行"
+    assert segment["verification_status"] == "verified"
+
+
+def test_amap_transit_route_payload_updates_segment_metrics():
+    segment = {
+        "from_name": "西湖",
+        "to_name": "良渚古城遗址公园",
+        "selected_mode": "transit",
+        "distance_text": "待高德路线核验",
+        "duration_text": "待高德路线核验",
+        "confidence": "needs_live_route",
+    }
+    payload = {
+        "status": "1",
+        "route": {
+            "distance": "19354",
+            "transits": [
+                {
+                    "duration": "7397",
+                    "segments": [{}, {}],
+                }
+            ],
+        },
+    }
+
+    updated = apply_route_payload_to_segment(segment, payload)
+
+    assert updated
+    assert segment["distance_text"] == "19.4 公里"
+    assert segment["duration_text"] == "2小时3分钟"
+    assert segment["confidence"] == "amap_transit"
+    assert segment["source"] == "amap_direction_transit_integrated"
+    assert segment["mode_label"] == "公交/地铁"
+    assert segment["verification_status"] == "verified"
+
+
+class _FakeAmapResponse:
+    status_code = 200
+
+    def __init__(self, payload):
+        self._payload = payload
+
+    def json(self):
+        return self._payload
+
+
+class _RecordingAmapClient:
+    def __init__(self, payload):
+        self.payload = payload
+        self.calls = []
+
+    async def get(self, url, params):
+        self.calls.append({"url": url, "params": dict(params)})
+        return _FakeAmapResponse(self.payload)
+
+
+@pytest.mark.asyncio
+async def test_lookup_route_segment_uses_walking_endpoint_for_walking_mode():
+    segment = {
+        "from_poi_id": "p1",
+        "to_poi_id": "p2",
+        "selected_mode": "walking",
+        "distance_text": "待高德路线核验",
+        "duration_text": "待高德路线核验",
+        "confidence": "needs_live_route",
+    }
+    client = _RecordingAmapClient(
+        {
+            "route": {
+                "paths": [
+                    {
+                        "distance": "1074",
+                        "duration": "859",
+                    }
+                ]
+            }
+        }
+    )
+
+    status = await _lookup_route_segment(
+        client,
+        segment,
+        poi_lookup={
+            "p1": {"lng": 120.1489, "lat": 30.2596, "city": "杭州"},
+            "p2": {"lng": 120.1482, "lat": 30.2631, "city": "杭州"},
+        },
+        api_key="amap-key",
+    )
+
+    assert status == "amap"
+    assert client.calls[0]["url"] == AMAP_WALKING_URL
+    assert client.calls[0]["params"]["origin"] == "120.1489,30.2596"
+    assert "city" not in client.calls[0]["params"]
+    assert segment["confidence"] == "amap_walking"
+    assert segment["verification_status"] == "verified"
+
+
+@pytest.mark.asyncio
+async def test_lookup_route_segment_uses_transit_endpoint_and_city_context():
+    segment = {
+        "from_poi_id": "p1",
+        "to_poi_id": "p2",
+        "selected_mode": "transit",
+        "distance_text": "待高德路线核验",
+        "duration_text": "待高德路线核验",
+        "confidence": "needs_live_route",
+    }
+    client = _RecordingAmapClient(
+        {
+            "route": {
+                "distance": "19354",
+                "transits": [
+                    {
+                        "duration": "7397",
+                        "segments": [{}, {}],
+                    }
+                ],
+            }
+        }
+    )
+
+    status = await _lookup_route_segment(
+        client,
+        segment,
+        poi_lookup={
+            "p1": {"lng": 120.1489, "lat": 30.2596, "city": "杭州"},
+            "p2": {"lng": 119.9907, "lat": 30.3927, "city": "杭州"},
+        },
+        api_key="amap-key",
+    )
+
+    assert status == "amap"
+    assert client.calls[0]["url"] == AMAP_TRANSIT_URL
+    assert client.calls[0]["params"]["city"] == "330100"
+    assert client.calls[0]["params"]["cityd"] == "330100"
+    assert segment["confidence"] == "amap_transit"
+    assert segment["verification_status"] == "verified"
+
+
+@pytest.mark.asyncio
+async def test_lookup_route_segment_keeps_transit_pending_without_city_context():
+    segment = {
+        "from_poi_id": "p1",
+        "to_poi_id": "p2",
+        "selected_mode": "transit",
+        "distance_text": "待高德路线核验",
+        "duration_text": "待高德路线核验",
+        "confidence": "needs_live_route",
+    }
+    client = _RecordingAmapClient({})
+
+    status = await _lookup_route_segment(
+        client,
+        segment,
+        poi_lookup={
+            "p1": {"lng": 120.1489, "lat": 30.2596},
+            "p2": {"lng": 119.9907, "lat": 30.3927},
+        },
+        api_key="amap-key",
+    )
+
+    assert status == "pending"
+    assert client.calls == []
+    assert segment["confidence"] == "needs_live_route"
+    assert segment["verification_status"] == "needs_live_route"
+    assert "城市信息不足" in segment["verification_note"]
 
 
 def test_estimated_route_payload_keeps_visible_distance_with_pending_note():
@@ -303,6 +508,45 @@ def test_remaining_route_segments_are_estimated_from_existing_coordinates():
         for segment in plan["segments"]
     )
     assert all("待高德路线核验" not in segment["distance_text"] for segment in plan["segments"][:estimated])
+
+
+def test_remaining_route_segments_keeps_walking_and_transit_pending():
+    plan = {
+        "days": [
+            {
+                "pois": [
+                    {"id": "p1", "name": "西湖", "lng": 120.1489, "lat": 30.2596},
+                    {"id": "p2", "name": "断桥残雪", "lng": 120.1482, "lat": 30.2631},
+                    {"id": "p3", "name": "良渚古城遗址公园", "lng": 119.9907, "lat": 30.3927},
+                ],
+                "segments": [
+                    {
+                        "from_poi_id": "p1",
+                        "to_poi_id": "p2",
+                        "selected_mode": "walking",
+                        "distance_text": "待高德路线核验",
+                        "duration_text": "待高德路线核验",
+                        "confidence": "needs_live_route",
+                    },
+                    {
+                        "from_poi_id": "p2",
+                        "to_poi_id": "p3",
+                        "selected_mode": "transit",
+                        "distance_text": "待高德路线核验",
+                        "duration_text": "待高德路线核验",
+                        "confidence": "needs_live_route",
+                    },
+                ],
+            }
+        ]
+    }
+
+    estimated = estimate_remaining_route_segments(plan)
+    segments = plan["days"][0]["segments"]
+
+    assert estimated == 0
+    assert all(segment["confidence"] == "needs_live_route" for segment in segments)
+    assert all(segment["distance_text"] == "待高德路线核验" for segment in segments)
 
 
 def test_missing_same_day_poi_coordinates_use_verified_anchor_estimate():
