@@ -1220,6 +1220,12 @@ async function checkVisualJourneyEditing(page, viewport) {
     ["路线编辑", "分日地点顺序"],
     `${viewport.name} route editor labels`
   );
+  await expectContainsText(
+    page,
+    ".visual-route-editor",
+    ["1.1公里", "步行18分钟", "已核验"],
+    `${viewport.name} route segment metrics`
+  );
 
   const day1Before = await getVisualRouteDayNames(page, "visual-day-1");
   if (day1Before.length < 2) {
@@ -1257,6 +1263,12 @@ async function checkVisualJourneyEditing(page, viewport) {
     },
     firstStop,
     { timeout: 5000 }
+  );
+  await expectContainsText(
+    page,
+    ".visual-route-editor",
+    ["待高德路线核验"],
+    `${viewport.name} edited route segment pending metrics`
   );
 
   const day1AfterDown = await getVisualRouteDayNames(page, "visual-day-1");
