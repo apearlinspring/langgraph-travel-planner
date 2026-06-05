@@ -26,6 +26,26 @@ from app.core.store import StoreManager
 from app.mcp_core.client import MCPClientManager
 from app.utils.logger import app_logger
 
+CSP_REPORT_ONLY_HEADER = "Content-Security-Policy-Report-Only"
+CSP_REPORT_ONLY_POLICY = "; ".join(
+    [
+        "default-src 'self'",
+        "base-uri 'self'",
+        "object-src 'none'",
+        "frame-ancestors 'none'",
+        "form-action 'self'",
+        "script-src 'self' https://cdn.bootcdn.net https://webapi.amap.com",
+        "style-src 'self' https://cdn.bootcdn.net",
+        (
+            "img-src 'self' data: https://images.unsplash.com "
+            "https://*.tile.openstreetmap.org https://*.tile.opentopomap.org "
+            "https://*.basemaps.cartocdn.com"
+        ),
+        "font-src 'self' data: https://cdn.bootcdn.net",
+        "connect-src 'self' http://localhost:8000 http://127.0.0.1:8000",
+    ]
+)
+
 if sys.platform == "win32":
     # Keep psycopg-compatible event loops even when the app is imported directly
     # by tools such as FastAPI TestClient instead of going through app.run.
@@ -537,6 +557,7 @@ async def append_security_headers(request: Request, call_next):
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault(CSP_REPORT_ONLY_HEADER, CSP_REPORT_ONLY_POLICY)
     response.headers.setdefault(
         "Permissions-Policy",
         "camera=(), microphone=(), geolocation=()",
