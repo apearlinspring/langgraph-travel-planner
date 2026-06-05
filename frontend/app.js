@@ -777,6 +777,52 @@
         }
       }
 
+      function getJourneyLayerElement(layer) {
+        return (
+          layer?.getElement?.() ||
+          layer?._icon ||
+          layer?._path ||
+          layer?._element ||
+          null
+        );
+      }
+
+      function setJourneyLayerZIndex(layer, zIndex = 0) {
+        if (!layer || !Number.isFinite(Number(zIndex))) return;
+        const normalizedZIndex = Number(zIndex);
+        if (typeof layer.setZIndex === "function") {
+          layer.setZIndex(normalizedZIndex);
+        }
+        if (typeof layer.setZIndexOffset === "function") {
+          layer.setZIndexOffset(normalizedZIndex);
+        }
+        if (normalizedZIndex >= 700 && typeof layer.bringToFront === "function") {
+          layer.bringToFront();
+        } else if (normalizedZIndex <= 380 && typeof layer.bringToBack === "function") {
+          layer.bringToBack();
+        }
+        const element = getJourneyLayerElement(layer);
+        if (element?.style) {
+          element.style.zIndex = String(normalizedZIndex);
+        }
+      }
+
+      function setJourneyLayerVisualState(
+        layer,
+        role = "route",
+        state = "overview",
+        zIndex = 0
+      ) {
+        if (!layer) return;
+        setJourneyLayerZIndex(layer, zIndex);
+        const element = getJourneyLayerElement(layer);
+        if (!element?.classList) return;
+        element.classList.add(`journey-map-layer--${role}`);
+        ["overview", "foreground", "background", "hidden"].forEach((item) => {
+          element.classList.toggle(`journey-map-layer--${item}`, item === state);
+        });
+      }
+
       function updateJourneyDayButtons(shell, activeDay = "all", activeMode = "fade") {
         shell?.querySelectorAll(".journey-map-day-btn").forEach((btn) => {
           const isActive = (btn.dataset.mapDay || "all") === activeDay;
@@ -796,6 +842,10 @@
         const activeMode = entry.dayDisplayMode || "solo";
         const isOverview = activeDayKey === "all";
         const isCompactMapDensity = applyJourneyMapDensityState(entry);
+        const mapNode =
+          entry.mapNode || entry.shell?.querySelector?.(".journey-live-map") || null;
+        mapNode?.classList?.toggle("journey-live-map--day-focused", !isOverview);
+        entry.shell?.classList?.toggle("journey-map-shell--day-focused", !isOverview);
         let compactOverviewLabelCount = 0;
         const dayLayers = Array.isArray(entry.dayLayers) ? entry.dayLayers : [];
         const selectedPlan = entry.dayPlans?.find((day) => day.key === activeDayKey);
@@ -803,14 +853,49 @@
           resolveJourneyPlanHighlightIndexes(selectedPlan, entry.highlightPoints)
         );
 
-        dayLayers.forEach((layer) => {
+        dayLayers.forEach((layer, layerIndex) => {
           const isSelected = layer.key === activeDayKey;
+          const layerState = isOverview
+            ? "overview"
+            : isSelected
+              ? "foreground"
+              : activeMode === "solo"
+                ? "hidden"
+                : "background";
+          const layerZ = isOverview
+            ? {
+                route: 430 + layerIndex,
+                marker: 540 + layerIndex,
+                badge: 560 + layerIndex,
+                label: 570 + layerIndex,
+              }
+            : isSelected
+              ? {
+                  route: 720,
+                  marker: 790,
+                  badge: 780,
+                  label: 800,
+                }
+              : {
+                  route: 320 + layerIndex,
+                  marker: 350 + layerIndex,
+                  badge: 360 + layerIndex,
+                  label: 310 + layerIndex,
+                };
           const opacity = isOverview
             ? 0.92
             : activeMode === "solo"
               ? (isSelected ? 0.96 : 0)
               : (isSelected ? 0.98 : 0.18);
-          layer.markers.forEach((marker) => setJourneyLayerOpacity(marker, opacity));
+          layer.markers.forEach((marker, markerIndex) => {
+            setJourneyLayerOpacity(marker, opacity);
+            setJourneyLayerVisualState(
+              marker,
+              "day-marker",
+              layerState,
+              layerZ.marker + markerIndex
+            );
+          });
           (layer.segmentLabels || []).forEach((label, labelIndex) => {
             let labelOpacity = getJourneySegmentLabelViewOpacity({
               isOverview,
@@ -822,25 +907,56 @@
               labelOpacity = compactOverviewLabelCount < 2 ? labelOpacity : 0;
               compactOverviewLabelCount += 1;
             }
+            if (
+              !isOverview &&
+              isCompactMapDensity &&
+              isSelected &&
+              labelOpacity > 0.5 &&
+              labelIndex > 0
+            ) {
+              labelOpacity = 0;
+            }
             setJourneyLayerOpacity(label, labelOpacity);
+            setJourneyLayerVisualState(
+              label,
+              "segment-label",
+              layerState,
+              layerZ.label + labelIndex
+            );
           });
           setJourneyLayerOpacity(layer.dayBadge, opacity);
+          setJourneyLayerVisualState(layer.dayBadge, "day-badge", layerState, layerZ.badge);
           setJourneyLayerOpacity(layer.polyline, opacity);
+          setJourneyLayerVisualState(layer.polyline, "day-route", layerState, layerZ.route);
           if (typeof layer.polyline?.setStyle === "function") {
             layer.polyline.setStyle({
-              weight: isOverview ? 6 : isSelected ? 8 : 4,
+              weight: isOverview ? 6 : isSelected ? 9 : 3,
             });
           }
         });
 
         const baseOpacity = isOverview ? 1 : activeMode === "solo" ? 0 : 0.32;
-        entry.markers.forEach((marker) => setJourneyLayerOpacity(marker, baseOpacity));
+        entry.markers.forEach((marker, markerIndex) => {
+          setJourneyLayerOpacity(marker, baseOpacity);
+          setJourneyLayerVisualState(
+            marker,
+            "overview-marker",
+            isOverview ? "overview" : activeMode === "solo" ? "hidden" : "background",
+            isOverview ? 500 + markerIndex : 300 + markerIndex
+          );
+        });
         if (entry.routeLine?.setStyle) {
           entry.routeLine.setStyle({
             opacity: baseOpacity,
             weight: isOverview ? 6 : 4,
           });
         }
+        setJourneyLayerVisualState(
+          entry.routeLine,
+          "overview-route",
+          isOverview ? "overview" : activeMode === "solo" ? "hidden" : "background",
+          isOverview ? 420 : 280
+        );
         getJourneyRecommendationMarkers(entry).forEach((marker, index) => {
           const opacity = isOverview
             ? 0.95
@@ -854,6 +970,12 @@
                 ? 0.18
                 : 0.38;
           setJourneyLayerOpacity(marker, opacity);
+          setJourneyLayerVisualState(
+            marker,
+            "recommendation-marker",
+            opacity > 0.7 ? "foreground" : opacity <= 0.1 ? "hidden" : "background",
+            opacity > 0.7 ? 760 + index : 390 + index
+          );
         });
         if (entry.recommendationsVisible === false) {
           getJourneyRecommendationMarkers(entry).forEach((marker) =>
@@ -919,7 +1041,9 @@
             padding: [30, 30],
             animate: true,
           });
-          selectedLayer.markers?.[0]?.openPopup?.();
+          if (!isJourneyMapCompactDensity(entry)) {
+            selectedLayer.markers?.[0]?.openPopup?.();
+          }
         }
       }
 
@@ -1069,6 +1193,19 @@
               strokeWeight: style.weight,
               strokeColor: style.color,
             });
+          },
+          setZIndex(zIndex = 0) {
+            const normalizedZIndex = Number(zIndex);
+            if (!Number.isFinite(normalizedZIndex)) return;
+            overlay?.setzIndex?.(normalizedZIndex);
+            overlay?.setZIndex?.(normalizedZIndex);
+            overlay?.setOptions?.({ zIndex: normalizedZIndex });
+            if (contentNode?.style) {
+              contentNode.style.zIndex = String(normalizedZIndex);
+            }
+          },
+          getElement() {
+            return contentNode || null;
           },
           openPopup() {
             if (infoWindow && map && point) {
@@ -1583,6 +1720,7 @@
               weight: 6,
               opacity: 0.95,
               dashArray: "10 8",
+              className: "leaflet-journey-overview-route",
             }).addTo(map);
           }
 
@@ -1633,6 +1771,7 @@
                       color,
                       weight: 7,
                       opacity: 1,
+                      className: "leaflet-journey-day-route",
                     }).addTo(map)
                   : null;
               const firstPoint = dayPoints[0];
