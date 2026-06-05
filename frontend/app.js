@@ -2031,24 +2031,29 @@
           .filter(Boolean)
           .join(" ");
         if (/预约|限流|名额|博物馆|展馆/u.test(combined)) {
-          return { tone: "pending", label: "预约核验" };
+          return { tone: "pending", label: "预约核验", requiresCheck: true };
         }
         if (/门票|票价|香花券|购票/u.test(combined)) {
-          return { tone: "pending", label: "票务核验" };
+          return { tone: "pending", label: "票务核验", requiresCheck: true };
         }
         if (/游船|体验|演出|项目/u.test(combined)) {
-          return { tone: "pending", label: "活动核验" };
+          return { tone: "pending", label: "活动核验", requiresCheck: true };
         }
         if (/餐饮|茶饮|购物|消费自理|自理/u.test(combined)) {
-          return { tone: "neutral", label: "消费自理" };
+          return { tone: "neutral", label: "消费自理", requiresCheck: false };
         }
         if (/免费|无需门票|免票/u.test(combined)) {
-          return { tone: "ready", label: "无需门票" };
+          return { tone: "ready", label: "无需门票", requiresCheck: false };
         }
         if (/待核验|待确认|待定|参考/u.test(combined)) {
-          return { tone: "pending", label: "待核验" };
+          return { tone: "pending", label: "待核验", requiresCheck: true };
         }
-        return { tone: "pending", label: "行前确认" };
+        return { tone: "pending", label: "行前确认", requiresCheck: true };
+      }
+
+      function getVisualStopDurationValue(stop = {}) {
+        const value = Number(stop.duration_minutes);
+        return Number.isFinite(value) && value > 0 ? String(Math.round(value)) : "";
       }
 
       function renderVisualRouteStopDetails(stop = {}) {
@@ -2068,6 +2073,145 @@
         `;
       }
 
+      function renderVisualRouteTimeEditor(stop = {}, stopMeta = "", stopLabel = "") {
+        const timeValue = stop.time_range || stop.suggested_time || "";
+        const durationValue = getVisualStopDurationValue(stop);
+        return `
+          <details class="visual-route-time-editor" data-route-time-editor="true">
+            <summary
+              aria-label="${escapeHtml(`调整时间：${stopLabel}`)}"
+              title="调整时间"
+            >
+              <span>时间</span>
+            </summary>
+            <div class="visual-route-time-fields">
+              <label>
+                <span>时间段</span>
+                <input
+                  type="text"
+                  name="time_range"
+                  maxlength="40"
+                  value="${escapeHtml(timeValue)}"
+                  placeholder="例如 10:00-12:00"
+                />
+              </label>
+              <label>
+                <span>停留分钟</span>
+                <input
+                  type="number"
+                  name="duration_minutes"
+                  min="1"
+                  max="1440"
+                  step="5"
+                  value="${escapeHtml(durationValue)}"
+                  placeholder="120"
+                />
+              </label>
+              <button
+                class="visual-route-time-save"
+                type="button"
+                data-journey-edit-action="save-time"
+                data-map-day-stop="${escapeHtml(stopMeta)}"
+              >
+                保存
+              </button>
+            </div>
+          </details>
+        `;
+      }
+
+      function buildVisualRouteCheckTasks(dayPlans = []) {
+        const tasks = [];
+        (Array.isArray(dayPlans) ? dayPlans : []).forEach((day, dayIndex) => {
+          const dayLabel = day.label || `Day ${dayIndex + 1}`;
+          const stops = Array.isArray(day.stops) ? day.stops : [];
+          const segments = Array.isArray(day.segments) ? day.segments : [];
+          stops.forEach((stop, stopIndex) => {
+            const stopLabel = cleanJourneyLocationValue(stop.name || "地点待确认");
+            const taskTitle = `${dayLabel} · ${stopIndex + 1}. ${stopLabel}`;
+            const timeText = String(stop.time_range || stop.suggested_time || "").trim();
+            const durationValue = Number(stop.duration_minutes);
+            if (!timeText || !Number.isFinite(durationValue) || durationValue <= 0) {
+              tasks.push({
+                tone: "pending",
+                kind: "时间",
+                title: taskTitle,
+                detail: !timeText
+                  ? "补充开始时段或时间范围，便于后续排冲突。"
+                  : "补充建议停留分钟，便于估算当天节奏。",
+              });
+            }
+            const ticketStatus = getVisualStopTicketStatus(stop);
+            if (ticketStatus.requiresCheck) {
+              const detail = [
+                stop.reservation_note,
+                stop.estimated_cost,
+                stop.verification_note,
+              ]
+                .filter(Boolean)
+                .join(" · ");
+              tasks.push({
+                tone: ticketStatus.tone,
+                kind: ticketStatus.label,
+                title: taskTitle,
+                detail: detail || "出发前确认开放、预约、票价和现场规则。",
+              });
+            }
+          });
+          segments.forEach((segment, segmentIndex) => {
+            const view = getVisualRouteSegmentView(segment);
+            if (view.statusText === "已核验") return;
+            const fromStop = stops[segmentIndex] || {};
+            const toStop = stops[segmentIndex + 1] || {};
+            tasks.push({
+              tone: view.tone || "pending",
+              kind: "路线",
+              title: `${dayLabel} · ${cleanJourneyLocationValue(
+                fromStop.name || segment.from_name || "上一站"
+              )} → ${cleanJourneyLocationValue(toStop.name || segment.to_name || "下一站")}`,
+              detail: `${view.modeText} · ${view.metricText}`,
+            });
+          });
+        });
+        return tasks.slice(0, 10);
+      }
+
+      function renderVisualRouteCheckList(dayPlans = []) {
+        const tasks = buildVisualRouteCheckTasks(dayPlans);
+        return `
+          <section class="visual-route-checklist" data-route-checklist="true">
+            <div class="visual-route-checklist-head">
+              <div>
+                <span>行前核验清单</span>
+                <strong>只记录待确认事项，不代表支付或预订完成</strong>
+              </div>
+              <small>${escapeHtml(tasks.length ? `${tasks.length} 项待核验` : "已清爽")}</small>
+            </div>
+            ${
+              tasks.length
+                ? `<div class="visual-route-checklist-list">
+                    ${tasks
+                      .map(
+                        (task) => `
+                          <article class="visual-route-check-task ${escapeHtml(
+                            task.tone || "pending"
+                          )}" data-route-check-task="true">
+                            <span>${escapeHtml(task.kind)}</span>
+                            <div>
+                              <strong>${escapeHtml(task.title)}</strong>
+                              <small>${escapeHtml(task.detail)}</small>
+                            </div>
+                          </article>
+                        `
+                      )
+                      .join("")}
+                  </div>`
+                : `<p class="visual-route-checklist-empty">当前没有明显待核验项；真实开放、交通和票务仍建议出发前再确认。</p>`
+            }
+          </section>
+        `;
+      }
+
       function renderVisualJourneyDayEditor(dayPlans = [], planningPool = []) {
         if (!Array.isArray(dayPlans) || !dayPlans.length) return "";
         const totalStops = dayPlans.reduce(
@@ -2084,6 +2228,7 @@
               <small>${escapeHtml(String(totalStops))} 个地点</small>
             </div>
             ${renderVisualRoutePlanningPool(dayPlans, planningPool)}
+            ${renderVisualRouteCheckList(dayPlans)}
             <div class="visual-route-day-list">
               ${dayPlans
                 .map((day, dayIndex) => {
@@ -2180,6 +2325,7 @@
                                               )}"
                                               title="${stop.locked ? "解锁" : "锁定"}"
                                             ><span>${stop.locked ? "解锁" : "锁定"}</span></button>
+                                            ${renderVisualRouteTimeEditor(stop, stopMeta, stopLabel)}
                                             <button
                                               type="button"
                                               data-journey-edit-action="prev-day"

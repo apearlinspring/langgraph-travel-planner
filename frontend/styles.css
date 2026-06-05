@@ -5894,6 +5894,109 @@ html {
   line-height: 1.55;
 }
 
+.visual-route-checklist {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid rgba(146, 64, 14, 0.12);
+  border-radius: 8px;
+  background:
+    linear-gradient(135deg, rgba(255, 251, 235, 0.78), rgba(255, 255, 255, 0.94));
+}
+
+.visual-route-checklist-head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.visual-route-checklist-head span {
+  color: #92400e;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.visual-route-checklist-head strong {
+  display: block;
+  margin-top: 3px;
+  color: #334155;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.visual-route-checklist-head small {
+  flex: 0 0 auto;
+  padding: 5px 8px;
+  border-radius: 999px;
+  color: #92400e;
+  background: rgba(255, 251, 235, 0.96);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.visual-route-checklist-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 7px;
+}
+
+.visual-route-check-task {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid rgba(146, 64, 14, 0.1);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.visual-route-check-task > span {
+  align-self: start;
+  min-width: 48px;
+  padding: 4px 7px;
+  border-radius: 999px;
+  color: #92400e;
+  background: rgba(255, 251, 235, 0.96);
+  font-size: 11px;
+  font-weight: 900;
+  text-align: center;
+}
+
+.visual-route-check-task.estimated > span,
+.visual-route-check-task.ready > span {
+  color: #0f766e;
+  background: rgba(240, 253, 250, 0.95);
+}
+
+.visual-route-check-task strong,
+.visual-route-check-task small {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.visual-route-check-task strong {
+  color: #334155;
+  font-size: 12px;
+}
+
+.visual-route-check-task small {
+  margin-top: 3px;
+  color: #64748b;
+  font-size: 11px;
+}
+
+.visual-route-checklist-empty {
+  margin: 0;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
 .visual-route-day-list {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
@@ -6184,7 +6287,7 @@ html {
 }
 
 .visual-route-stop-actions button,
-.visual-route-more-actions summary {
+.visual-route-more-actions > summary {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -6206,16 +6309,16 @@ html {
   min-width: 0;
 }
 
-.visual-route-more-actions summary {
+.visual-route-more-actions > summary {
   list-style: none;
 }
 
-.visual-route-more-actions summary::-webkit-details-marker {
+.visual-route-more-actions > summary::-webkit-details-marker {
   display: none;
 }
 
 .visual-route-stop-actions button:hover:not(:disabled),
-.visual-route-more-actions summary:hover {
+.visual-route-more-actions > summary:hover {
   border-color: rgba(15, 118, 110, 0.36);
   background: rgba(240, 253, 250, 0.95);
 }
@@ -6250,6 +6353,78 @@ html {
   padding: 0 8px;
   font-size: 12px;
   white-space: nowrap;
+}
+
+.visual-route-time-editor {
+  min-width: 0;
+}
+
+.visual-route-time-editor[open] {
+  grid-column: 1 / -1;
+}
+
+.visual-route-time-editor summary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid rgba(15, 118, 110, 0.18);
+  border-radius: 8px;
+  color: #0f766e;
+  background: #fff;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1;
+  list-style: none;
+}
+
+.visual-route-time-editor summary::-webkit-details-marker {
+  display: none;
+}
+
+.visual-route-time-editor summary:hover {
+  border-color: rgba(15, 118, 110, 0.36);
+  background: rgba(240, 253, 250, 0.95);
+}
+
+.visual-route-time-fields {
+  display: grid;
+  grid-template-columns: minmax(110px, 1fr) 96px auto;
+  gap: 6px;
+  margin-top: 6px;
+  min-width: 0;
+}
+
+.visual-route-time-fields label {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.visual-route-time-fields input {
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid rgba(15, 118, 110, 0.16);
+  border-radius: 8px;
+  color: #0f172a;
+  background: #fff;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.visual-route-more-menu .visual-route-time-save {
+  align-self: end;
+  height: 32px;
+  color: #fff;
+  background: #0f766e;
 }
 
 .visual-route-stop-actions [data-journey-edit-action="delete"] {
@@ -6635,6 +6810,23 @@ html {
     min-height: 34px;
   }
 
+  .visual-route-checklist-head {
+    display: grid;
+  }
+
+  .visual-route-checklist-head small {
+    width: max-content;
+  }
+
+  .visual-route-checklist-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .visual-route-check-task strong,
+  .visual-route-check-task small {
+    white-space: normal;
+  }
+
   .visual-route-day-list {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -6651,7 +6843,8 @@ html {
   .visual-route-stop-row {
     grid-template-columns: 42px minmax(0, 1fr);
     align-items: start;
-    padding: 10px;
+    gap: 7px;
+    padding: 9px;
   }
 
   .visual-route-stop-main {
@@ -6670,11 +6863,11 @@ html {
   }
 
   .visual-route-stop-details {
-    gap: 6px;
+    gap: 5px;
   }
 
   .visual-route-stop-pill {
-    min-height: 24px;
+    min-height: 23px;
     white-space: normal;
   }
 
@@ -6700,7 +6893,7 @@ html {
   .visual-route-stop-actions {
     grid-column: 1 / -1;
     grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 8px;
+    gap: 7px;
   }
 
   .visual-route-more-actions {
@@ -6708,9 +6901,9 @@ html {
   }
 
   .visual-route-stop-actions button,
-  .visual-route-more-actions summary {
+  .visual-route-more-actions > summary {
     width: 100%;
-    height: 38px;
+    height: 36px;
     border-radius: 12px;
   }
 
@@ -6724,6 +6917,10 @@ html {
 
   .visual-route-stop-row:has(.visual-route-more-actions[open]) {
     padding-bottom: 148px;
+  }
+
+  .visual-route-stop-row:has(.visual-route-time-editor[open]) {
+    padding-bottom: 330px;
   }
 
   .visual-route-more-menu {
@@ -6743,5 +6940,18 @@ html {
     height: 36px;
     justify-content: center;
     font-size: 12px;
+  }
+
+  .visual-route-time-editor summary {
+    height: 36px;
+  }
+
+  .visual-route-time-fields {
+    grid-template-columns: minmax(0, 1fr) 92px;
+  }
+
+  .visual-route-more-menu .visual-route-time-save {
+    grid-column: 1 / -1;
+    height: 36px;
   }
 }

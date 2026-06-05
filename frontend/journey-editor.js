@@ -109,6 +109,20 @@
       );
     }
 
+    function normalizeEditedTimeText(value = "") {
+      return String(value || "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 40);
+    }
+
+    function parseEditedDurationMinutes(value = "") {
+      const text = String(value || "").trim();
+      if (!text) return "";
+      const minutes = Math.round(Number(text));
+      return Number.isFinite(minutes) && minutes > 0 ? Math.min(minutes, 1440) : null;
+    }
+
     function handleJourneyEditAction(button) {
       if (button.disabled) return false;
       const action = button.dataset.journeyEditAction || "";
@@ -182,6 +196,34 @@
 
       if (action === "toggle-lock") {
         day.stops[index] = { ...currentStop, locked: !currentStop.locked };
+      } else if (action === "save-time") {
+        const timeEditor = button.closest("[data-route-time-editor='true']");
+        const timeValue = normalizeEditedTimeText(
+          timeEditor?.querySelector("input[name='time_range']")?.value || ""
+        );
+        const durationValue = parseEditedDurationMinutes(
+          timeEditor?.querySelector("input[name='duration_minutes']")?.value || ""
+        );
+        if (durationValue === null) {
+          showToast?.("停留时长请输入有效分钟数", true);
+          return true;
+        }
+        if (!timeValue && !durationValue) {
+          showToast?.("至少填写时间段或停留分钟", true);
+          return true;
+        }
+        day.stops[index] = {
+          ...currentStop,
+          time_range: timeValue,
+          suggested_time: timeValue,
+          duration_minutes: durationValue || "",
+        };
+        return commitJourneyPlanEdit(
+          button,
+          shell,
+          dayPlans,
+          `已更新 ${currentStop.name || "这个地点"} 的时间`
+        );
       } else if (action === "delete") {
         if (day.stops.length <= 1) {
           showToast?.("当天至少保留一个地点", true);
