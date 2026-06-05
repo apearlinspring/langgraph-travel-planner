@@ -18,7 +18,7 @@
       href="https://cdn.bootcdn.net/ajax/libs/font-awesome/6.4.0/css/all.min.css"
     />
 
-        <link rel="stylesheet" href="./styles.css?v=20260605-hero-performance" />
+        <link rel="stylesheet" href="./styles.css?v=20260605-guide-import" />
         <link rel="stylesheet" href="./chat.css?v=20260605-frontend-core-split" />
         <link rel="stylesheet" href="./governance.css?v=20260604-main-css-split" />
   </head>
@@ -363,6 +363,35 @@
                 <i class="fa-regular fa-circle"></i> 预算可选
               </span>
             </div>
+            <details class="guide-import-panel" id="guideImportPanel">
+              <summary>
+                <span><i class="fa-solid fa-file-import"></i> 攻略导入</span>
+                <small id="guideImportCount">粘贴文本</small>
+              </summary>
+              <div class="guide-import-body">
+                <textarea
+                  id="guideImportText"
+                  rows="4"
+                  autocomplete="off"
+                  spellcheck="false"
+                  placeholder="粘贴攻略文本，例如分日路线、地点清单、游玩建议。"
+                ></textarea>
+                <div class="guide-import-actions">
+                  <button class="planner-btn primary outline" id="guideImportComposeBtn" type="button">
+                    整理到输入框
+                  </button>
+                  <button class="planner-btn primary" id="guideImportSendBtn" type="button">
+                    导入并发送
+                  </button>
+                  <button class="planner-btn ghost" id="guideImportClearBtn" type="button">
+                    清空
+                  </button>
+                </div>
+                <div class="guide-import-status" id="guideImportStatus">
+                  粘贴攻略文本后，我会整理成一条规划请求。
+                </div>
+              </div>
+            </details>
             <div class="planner-grid">
               <div class="planner-field">
                 <label for="plannerOrigin">出发地</label>
@@ -764,7 +793,7 @@
         <script src="./session-api.js?v=20260603-auth-split"></script>
         <script src="./conversation-api.js?v=20260603-conversation-split"></script>
         <script src="./journey-api.js?v=20260603-journey-split"></script>
-        <script src="./journey-editor.js?v=20260603-journey-editor-split"></script>
+        <script src="./journey-editor.js?v=20260605-route-editor"></script>
         <script src="./journey-overlay.js?v=20260603-journey-overlay-split"></script>
         <script src="./map-controls.js?v=20260603-map-controls-split"></script>
         <script src="./journey-text-utils.js?v=20260604-journey-text-utils-split"></script>
@@ -785,7 +814,8 @@
         <script src="./draft-storage.js?v=20260605-frontend-core-split"></script>
         <script src="./runtime-status.js?v=20260605-frontend-core-split"></script>
         <script src="./chat-stream.js?v=20260605-frontend-core-split"></script>
-        <script src="./app.js?v=20260605-hero-performance"></script>
+        <script src="./guide-import.js?v=20260605-guide-import"></script>
+        <script src="./app.js?v=20260605-guide-import"></script>
   </body>
 </html>
 

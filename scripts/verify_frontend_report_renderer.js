@@ -28,6 +28,7 @@ const frontendScriptBundle = [
   "draft-storage.js",
   "runtime-status.js",
   "chat-stream.js",
+  "guide-import.js",
   "app.js",
 ]
   .map((name) => fs.readFileSync(path.join(repoRoot, "frontend", name), "utf8"))

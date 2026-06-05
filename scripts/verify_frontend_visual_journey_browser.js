@@ -786,6 +786,8 @@ async function installNetworkStubs(context) {
         headers: { "content-type": "application/json; charset=utf-8" },
       });
 
+    window.__visualJourneySavedDrafts = [];
+
     window.fetch = async (input, init) => {
       const rawUrl = typeof input === "string" ? input : input?.url || "";
       const url = String(rawUrl);
@@ -900,7 +902,17 @@ async function installNetworkStubs(context) {
         return json(payload.preview);
       }
       if (url.includes("/api/v1/chat/journey/")) {
-        return json({ status: "saved", journey_data: payload.journeyData });
+        let requestPayload = {};
+        try {
+          requestPayload = JSON.parse(init?.body || "{}");
+        } catch (error) {}
+        if (requestPayload?.journeyData) {
+          window.__visualJourneySavedDrafts.push(requestPayload.journeyData);
+        }
+        return json({
+          status: "saved",
+          journey_data: requestPayload.journeyData || payload.journeyData,
+        });
       }
       return originalFetch(input, init);
     };
@@ -1187,6 +1199,100 @@ async function checkVisualJourneySurface(page, viewport) {
   await expectVisible(page, ".journey-map-sidebar-routes", `${viewport.name} route explanation reopened`);
 }
 
+async function getVisualRouteDayNames(page, dayKey) {
+  return (
+    await page
+      .locator(
+        `.visual-route-day-card[data-journey-day-card="${dayKey}"] .visual-route-stop-main strong`
+      )
+      .allTextContents()
+  )
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+async function checkVisualJourneyEditing(page, viewport) {
+  await expectVisible(page, ".visual-route-editor", `${viewport.name} route editor`);
+  await expectContainsText(
+    page,
+    ".visual-route-editor",
+    ["路线编辑", "分日地点顺序"],
+    `${viewport.name} route editor labels`
+  );
+
+  const day1Before = await getVisualRouteDayNames(page, "visual-day-1");
+  if (day1Before.length < 2) {
+    throw new Error(`${viewport.name} route editor needs at least two stops in day 1.`);
+  }
+  const firstStop = day1Before[0];
+
+  await page
+    .locator(
+      '.visual-route-day-card[data-journey-day-card="visual-day-1"] [data-journey-edit-action="down"][data-map-day-stop="visual-day-1:0"]'
+    )
+    .click();
+  await page.waitForFunction(
+    (expectedSecond) => {
+      const names = Array.from(
+        document.querySelectorAll(
+          '.visual-route-day-card[data-journey-day-card="visual-day-1"] .visual-route-stop-main strong'
+        )
+      ).map((node) => node.textContent.trim());
+      return names[1] === expectedSecond;
+    },
+    firstStop,
+    { timeout: 5000 }
+  );
+  await page.waitForFunction(
+    (expectedSecond) => {
+      const raw = document.querySelector(".journey-live-map-shell")?.dataset.dayPlans || "";
+      try {
+        const days = JSON.parse(decodeURIComponent(raw));
+        const day = days.find((item) => item.key === "visual-day-1");
+        return day?.stops?.[1]?.name === expectedSecond;
+      } catch (error) {
+        return false;
+      }
+    },
+    firstStop,
+    { timeout: 5000 }
+  );
+
+  const day1AfterDown = await getVisualRouteDayNames(page, "visual-day-1");
+  const movingStop = day1AfterDown[0];
+  await page
+    .locator(
+      '.visual-route-day-card[data-journey-day-card="visual-day-1"] [data-journey-edit-action="next-day"][data-map-day-stop="visual-day-1:0"]'
+    )
+    .click();
+  await page.waitForFunction(
+    (movedName) => {
+      const day1Names = Array.from(
+        document.querySelectorAll(
+          '.visual-route-day-card[data-journey-day-card="visual-day-1"] .visual-route-stop-main strong'
+        )
+      ).map((node) => node.textContent.trim());
+      const day2Names = Array.from(
+        document.querySelectorAll(
+          '.visual-route-day-card[data-journey-day-card="visual-day-2"] .visual-route-stop-main strong'
+        )
+      ).map((node) => node.textContent.trim());
+      return !day1Names.includes(movedName) && day2Names.includes(movedName);
+    },
+    movingStop,
+    { timeout: 5000 }
+  );
+
+  const editorOverflow = await page.evaluate(() => {
+    const editor = document.querySelector(".visual-route-editor");
+    if (!editor) return true;
+    return editor.scrollWidth > editor.clientWidth + 3;
+  });
+  if (editorOverflow) {
+    throw new Error(`${viewport.name} route editor overflows horizontally.`);
+  }
+}
+
 async function checkLayoutHealth(page, viewport) {
   const metrics = await page.evaluate(() => {
     const box = (selector) => {
@@ -1245,6 +1351,21 @@ async function checkLayoutHealth(page, viewport) {
 }
 
 async function captureScreenshots(page, viewport) {
+  const workbenchPath = path.join(
+    runtimeDir,
+    `frontend-visual-journey-${viewport.name}-workbench.png`
+  );
+  await page.locator(".visual-journey-workbench").first().screenshot({
+    path: workbenchPath,
+  });
+  const editorPath = path.join(
+    runtimeDir,
+    `frontend-visual-journey-${viewport.name}-editor.png`
+  );
+  await page.locator(".visual-route-editor").first().screenshot({
+    path: editorPath,
+  });
+
   const shellHtml = await page.evaluate(() => {
     const shell = document.querySelector(".journey-live-map-shell--immersive");
     if (!shell) throw new Error("visual journey map shell missing for screenshot");
@@ -1314,7 +1435,7 @@ async function captureScreenshots(page, viewport) {
   await evidencePage.locator(".journey-live-map-shell--immersive").first().screenshot({
     path: focusedPath,
   });
-  screenshots.push(focusedPath);
+  screenshots.push(workbenchPath, editorPath, focusedPath);
 
   if (viewport.isMobile) {
     const mapPath = path.join(runtimeDir, "frontend-visual-journey-mobile-map.png");
@@ -1344,6 +1465,7 @@ async function runViewport(browser, viewport) {
     await gotoFrontend(session.page);
     await injectVisualJourney(session.page);
     await checkVisualJourneySurface(session.page, viewport);
+    await checkVisualJourneyEditing(session.page, viewport);
     await checkLayoutHealth(session.page, viewport);
     const screenshots = await captureScreenshots(session.page, viewport);
     assertNoConsoleErrors(viewport, session.consoleErrors, session.pageErrors);

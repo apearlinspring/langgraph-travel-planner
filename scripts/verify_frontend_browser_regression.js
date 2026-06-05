@@ -511,6 +511,54 @@ async function checkMainSurface(page, viewport) {
   );
 }
 
+async function checkGuideImportComposer(page, viewport) {
+  await expectVisible(page, "#guideImportPanel", `${viewport.name} guide import panel`);
+  await page.locator("#guideImportPanel").evaluate((node) => {
+    node.open = true;
+  });
+  await page.locator("#plannerDestination").fill("杭州");
+  await page.locator("#plannerDays").fill("4天3晚");
+  await page
+    .locator("#guideImportText")
+    .fill(
+      "Day1 西湖、雷峰塔、河坊街。Day2 灵隐寺、飞来峰、龙井村。Day3 良渚古城遗址、京杭大运河。喜欢慢游和茶文化，住宿希望交通方便。"
+    );
+  await expectContainsText(
+    page,
+    "#guideImportCount",
+    ["字"],
+    `${viewport.name} guide import count`
+  );
+  await page.locator("#guideImportComposeBtn").click();
+  await page.waitForFunction(
+    () =>
+      document
+        .getElementById("chatInput")
+        ?.value?.includes("【攻略原文】"),
+    null,
+    { timeout: 5000 }
+  );
+  const draft = await page.locator("#chatInput").inputValue();
+  ["攻略原文", "杭州", "4天3晚", "西湖", "灵隐寺", "待核验项"].forEach((fragment) => {
+    if (!draft.includes(fragment)) {
+      throw new Error(`${viewport.name} guide import draft missing ${fragment}.`);
+    }
+  });
+  await expectContainsText(
+    page,
+    "#plannerSummary",
+    ["攻略已整理到输入框"],
+    `${viewport.name} guide import planner summary`
+  );
+  await page.locator("#chatInput").evaluate((node) => {
+    node.value = "";
+    node.style.height = "auto";
+  });
+  await page.locator("#guideImportPanel").evaluate((node) => {
+    node.open = false;
+  });
+}
+
 async function checkReportSurface(page) {
   await expectVisible(page, '[data-report-source="structured"]', "structured report");
   await expectVisible(page, ".travel-report-card", "report card");
@@ -746,12 +794,17 @@ function intersectionArea(a, b) {
 
 async function checkLayoutHealth(page, viewport) {
   const layout = await page.evaluate(() => {
-    const selectors = [
+      const selectors = [
       ".sidebar",
       ".chat-main",
       "#governanceConsole",
       ".service-banner",
       "#chatMessages",
+      ".chat-input-area",
+      ".planner-panel",
+      ".planner-panel-body",
+      "#guideImportPanel",
+      "#chatInput",
       '[data-report-source="structured"]',
       ".travel-report-grid",
       ".travel-report-card.budget",
@@ -797,8 +850,22 @@ async function checkLayoutHealth(page, viewport) {
       throw new Error(`${selector} is hidden.`);
     }
     if (item.width < 120 || item.height < 80) {
+      const details = [
+        ".chat-input-area",
+        ".planner-panel",
+        ".planner-panel-body",
+        "#guideImportPanel",
+        "#chatInput",
+      ]
+        .map((selector) => {
+          const measured = bySelector.get(selector);
+          return measured
+            ? `${selector}=${Math.round(measured.width)}x${Math.round(measured.height)}`
+            : `${selector}=missing`;
+        })
+        .join(", ");
       throw new Error(
-        `${selector} appears blank or collapsed: ${Math.round(item.width)}x${Math.round(item.height)}.`
+        `${selector} appears blank or collapsed: ${Math.round(item.width)}x${Math.round(item.height)}. ${details}`
       );
     }
     if (item.textLength < 20) {
@@ -855,6 +922,7 @@ async function runViewport(browser, viewport) {
     await seedLoggedInState(main.page);
     await gotoFrontend(main.page);
     await checkMainSurface(main.page, viewport);
+    await checkGuideImportComposer(main.page, viewport);
     await injectReport(main.page);
     await checkReportSurface(main.page);
     const viewportScreenshots = [];
