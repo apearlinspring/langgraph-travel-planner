@@ -31,6 +31,7 @@
       };
       const sessionApi = window.ZhiXingSessionApi;
       const conversationApi = window.ZhiXingConversationApi;
+      const guideImportApi = window.ZhiXingGuideImportApi;
       const governanceApi = window.ZhiXingGovernanceApi;
       const journeyApi = window.ZhiXingJourneyApi;
       const journeyEditorFactory = window.ZhiXingJourneyEditor;
@@ -44,6 +45,9 @@
       const draftStorageFactory = window.ZhiXingDraftStorage;
       const runtimeStatusFactory = window.ZhiXingRuntimeStatus;
       const chatStreamFactory = window.ZhiXingChatStream;
+      if (!guideImportApi) {
+        throw new Error("ZhiXingGuideImportApi is not loaded.");
+      }
       let toastTimer = null;
       let streamingScrollFrame = null;
       const composerDraftKey = "zhixing-composer-draft";
@@ -260,6 +264,12 @@
         updatePlannerSummary: (...args) => updatePlannerSummary(...args),
         setRuntimeStatus: (...args) => setRuntimeStatus(...args),
         showToast: (...args) => showToast(...args),
+        fetchGuideUrl: (url) =>
+          guideImportApi.fetchGuideUrl({
+            apiBase: getApiBase(),
+            stateToken: state.token,
+            url,
+          }),
         sendMessage: (...args) => sendMessage(...args),
       });
       const reportExport = reportExportFactory?.createReportExport?.({
