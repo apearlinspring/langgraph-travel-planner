@@ -4963,7 +4963,8 @@ html {
           padding: 14px;
         }
         .toast {
-          top: max(10px, env(safe-area-inset-top, 0px) + 6px);
+          top: auto;
+          bottom: max(16px, env(safe-area-inset-bottom, 0px) + 12px);
           left: 50%;
           right: auto;
           width: min(320px, calc(100vw - 28px));
@@ -4973,7 +4974,7 @@ html {
           font-size: 13px;
           justify-content: center;
           text-align: center;
-          transform: translate(-50%, -120px);
+          transform: translate(-50%, 120px);
         }
         .toast.show {
           transform: translate(-50%, 0);
@@ -5839,6 +5840,7 @@ html {
 }
 
 .visual-route-stop-row {
+  position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
@@ -5897,12 +5899,15 @@ html {
 }
 
 .visual-route-stop-actions {
+  position: relative;
   display: grid;
-  grid-template-columns: repeat(6, 30px);
+  grid-template-columns: repeat(3, 30px);
   gap: 5px;
+  align-items: start;
 }
 
-.visual-route-stop-actions button {
+.visual-route-stop-actions button,
+.visual-route-more-actions summary {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -5919,7 +5924,21 @@ html {
   line-height: 1;
 }
 
-.visual-route-stop-actions button:hover:not(:disabled) {
+.visual-route-more-actions {
+  position: relative;
+  min-width: 0;
+}
+
+.visual-route-more-actions summary {
+  list-style: none;
+}
+
+.visual-route-more-actions summary::-webkit-details-marker {
+  display: none;
+}
+
+.visual-route-stop-actions button:hover:not(:disabled),
+.visual-route-more-actions summary:hover {
   border-color: rgba(15, 118, 110, 0.36);
   background: rgba(240, 253, 250, 0.95);
 }
@@ -5929,6 +5948,31 @@ html {
   border-color: rgba(148, 163, 184, 0.18);
   background: rgba(241, 245, 249, 0.72);
   cursor: not-allowed;
+}
+
+.visual-route-more-menu {
+  position: absolute;
+  z-index: 8;
+  top: 36px;
+  right: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(74px, 1fr));
+  gap: 6px;
+  min-width: 156px;
+  padding: 8px;
+  border: 1px solid rgba(15, 118, 110, 0.14);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 16px 32px rgba(15, 23, 42, 0.14);
+}
+
+.visual-route-more-menu button {
+  width: 100%;
+  min-width: 0;
+  gap: 5px;
+  padding: 0 8px;
+  font-size: 12px;
+  white-space: nowrap;
 }
 
 .visual-route-stop-actions [data-journey-edit-action="delete"] {
@@ -6294,15 +6338,71 @@ html {
   }
 
   .visual-route-stop-row {
-    grid-template-columns: minmax(0, 1fr);
+    grid-template-columns: 42px minmax(0, 1fr);
+    align-items: start;
+    padding: 10px;
+  }
+
+  .visual-route-stop-main {
+    grid-column: 1 / -1;
+    grid-template-columns: 34px minmax(0, 1fr);
+  }
+
+  .visual-route-stop-main > span {
+    width: 32px;
+    height: 32px;
+  }
+
+  .visual-route-stop-main strong,
+  .visual-route-stop-main small {
+    white-space: normal;
   }
 
   .visual-route-stop-actions {
-    grid-template-columns: repeat(6, minmax(34px, 1fr));
+    grid-column: 1 / -1;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
   }
 
-  .visual-route-stop-actions button {
+  .visual-route-more-actions {
+    position: static;
+  }
+
+  .visual-route-stop-actions button,
+  .visual-route-more-actions summary {
     width: 100%;
-    height: 34px;
+    height: 38px;
+    border-radius: 12px;
+  }
+
+  .visual-route-more-actions[open] {
+    display: block;
+  }
+
+  .visual-route-more-actions[open] summary {
+    width: 100%;
+  }
+
+  .visual-route-stop-row:has(.visual-route-more-actions[open]) {
+    padding-bottom: 104px;
+  }
+
+  .visual-route-more-menu {
+    position: absolute;
+    left: 10px;
+    right: 10px;
+    bottom: 10px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    min-width: 0;
+    width: auto;
+    margin-top: 0;
+    box-shadow: none;
+    background: rgba(255, 255, 255, 0.72);
+  }
+
+  .visual-route-more-menu button {
+    height: 36px;
+    justify-content: center;
+    font-size: 12px;
   }
 }

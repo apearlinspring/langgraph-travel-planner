@@ -1262,6 +1262,16 @@ async function checkVisualJourneyEditing(page, viewport) {
   const movingStop = day1AfterDown[0];
   await page
     .locator(
+      '.visual-route-day-card[data-journey-day-card="visual-day-1"] .visual-route-stop-row[data-map-day-stop="visual-day-1:0"] .visual-route-more-actions summary'
+    )
+    .click();
+  await expectVisible(
+    page,
+    '.visual-route-day-card[data-journey-day-card="visual-day-1"] .visual-route-stop-row[data-map-day-stop="visual-day-1:0"] .visual-route-more-menu [data-journey-edit-action="next-day"]',
+    `${viewport.name} route editor more action menu`
+  );
+  await page
+    .locator(
       '.visual-route-day-card[data-journey-day-card="visual-day-1"] [data-journey-edit-action="next-day"][data-map-day-stop="visual-day-1:0"]'
     )
     .click();
@@ -1290,6 +1300,34 @@ async function checkVisualJourneyEditing(page, viewport) {
   });
   if (editorOverflow) {
     throw new Error(`${viewport.name} route editor overflows horizontally.`);
+  }
+  if (viewport.isMobile) {
+    const compactActionMetrics = await page.evaluate(() => {
+      const row = document.querySelector(".visual-route-stop-row");
+      const actions = row?.querySelector(".visual-route-stop-actions");
+      const visibleControls = Array.from(
+        actions?.querySelectorAll(
+          ".visual-route-action-primary, .visual-route-more-actions summary"
+        ) || []
+      ).filter((node) => {
+        const rect = node.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+      });
+      return {
+        visibleCount: visibleControls.length,
+        rowHeight: row?.getBoundingClientRect().height || 0,
+      };
+    });
+    if (compactActionMetrics.visibleCount !== 3) {
+      throw new Error(
+        `${viewport.name} route editor should expose 3 compact controls, found ${compactActionMetrics.visibleCount}.`
+      );
+    }
+    if (compactActionMetrics.rowHeight > 160) {
+      throw new Error(
+        `${viewport.name} route editor stop row is too tall: ${Math.round(compactActionMetrics.rowHeight)}px.`
+      );
+    }
   }
 }
 
@@ -1365,6 +1403,25 @@ async function captureScreenshots(page, viewport) {
   await page.locator(".visual-route-editor").first().screenshot({
     path: editorPath,
   });
+  let editorMenuPath = "";
+  if (viewport.isMobile) {
+    await page
+      .locator(".visual-route-editor .visual-route-more-actions summary")
+      .first()
+      .click();
+    await expectVisible(
+      page,
+      ".visual-route-editor .visual-route-more-menu",
+      `${viewport.name} route editor expanded menu screenshot`
+    );
+    editorMenuPath = path.join(
+      runtimeDir,
+      "frontend-visual-journey-mobile-editor-menu.png"
+    );
+    await page.locator(".visual-route-editor").first().screenshot({
+      path: editorMenuPath,
+    });
+  }
 
   const shellHtml = await page.evaluate(() => {
     const shell = document.querySelector(".journey-live-map-shell--immersive");
@@ -1436,6 +1493,7 @@ async function captureScreenshots(page, viewport) {
     path: focusedPath,
   });
   screenshots.push(workbenchPath, editorPath, focusedPath);
+  if (editorMenuPath) screenshots.push(editorMenuPath);
 
   if (viewport.isMobile) {
     const mapPath = path.join(runtimeDir, "frontend-visual-journey-mobile-map.png");
