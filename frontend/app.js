@@ -2011,6 +2011,63 @@
         `;
       }
 
+      function formatVisualStopDuration(minutes) {
+        const value = Number(minutes);
+        if (!Number.isFinite(value) || value <= 0) return "停留待定";
+        const rounded = Math.round(value);
+        if (rounded < 60) return `停留 ${rounded}分钟`;
+        const hours = Math.floor(rounded / 60);
+        const remainingMinutes = rounded % 60;
+        return remainingMinutes
+          ? `停留 ${hours}小时${remainingMinutes}分钟`
+          : `停留 ${hours}小时`;
+      }
+
+      function getVisualStopTicketStatus(stop = {}) {
+        const costText = String(stop.estimated_cost || "").trim();
+        const reservationText = String(stop.reservation_note || "").trim();
+        const descriptionText = String(stop.description || "").trim();
+        const combined = [costText, reservationText, descriptionText]
+          .filter(Boolean)
+          .join(" ");
+        if (/预约|限流|名额|博物馆|展馆/u.test(combined)) {
+          return { tone: "pending", label: "预约核验" };
+        }
+        if (/门票|票价|香花券|购票/u.test(combined)) {
+          return { tone: "pending", label: "票务核验" };
+        }
+        if (/游船|体验|演出|项目/u.test(combined)) {
+          return { tone: "pending", label: "活动核验" };
+        }
+        if (/餐饮|茶饮|购物|消费自理|自理/u.test(combined)) {
+          return { tone: "neutral", label: "消费自理" };
+        }
+        if (/免费|无需门票|免票/u.test(combined)) {
+          return { tone: "ready", label: "无需门票" };
+        }
+        if (/待核验|待确认|待定|参考/u.test(combined)) {
+          return { tone: "pending", label: "待核验" };
+        }
+        return { tone: "pending", label: "行前确认" };
+      }
+
+      function renderVisualRouteStopDetails(stop = {}) {
+        const ticketStatus = getVisualStopTicketStatus(stop);
+        const timeText = stop.time_range || stop.suggested_time || "时间待定";
+        const durationText = formatVisualStopDuration(stop.duration_minutes);
+        return `
+          <div class="visual-route-stop-details">
+            <span class="visual-route-stop-pill time">${escapeHtml(timeText)}</span>
+            <span class="visual-route-stop-pill duration">${escapeHtml(durationText)}</span>
+            <span class="visual-route-stop-pill ticket ${escapeHtml(
+              ticketStatus.tone
+            )}" data-ticket-status="${escapeHtml(ticketStatus.label)}">${escapeHtml(
+          ticketStatus.label
+        )}</span>
+          </div>
+        `;
+      }
+
       function renderVisualJourneyDayEditor(dayPlans = [], planningPool = []) {
         if (!Array.isArray(dayPlans) || !dayPlans.length) return "";
         const totalStops = dayPlans.reduce(
@@ -2063,14 +2120,6 @@
                                 .map((stop, stopIndex) => {
                                   const stopMeta = `${dayKey}:${stopIndex}`;
                                   const stopLabel = cleanJourneyLocationValue(stop.name || "地点待确认");
-                                  const metaText = [
-                                    stop.time_range || stop.suggested_time,
-                                    stop.type_label || stop.type,
-                                    stop.estimated_cost,
-                                    stop.locked ? "已锁定" : "",
-                                  ]
-                                    .filter(Boolean)
-                                    .join(" · ");
                                   return `
                                     <div class="visual-route-stop-entry">
                                       <div class="visual-route-stop-row${
@@ -2087,7 +2136,12 @@
                                         <span>${stopIndex + 1}</span>
                                         <div>
                                           <strong>${escapeHtml(stopLabel)}</strong>
-                                          <small>${escapeHtml(metaText || "停留与费用待核验")}</small>
+                                          ${renderVisualRouteStopDetails(stop)}
+                                          ${
+                                            stop.locked
+                                              ? `<small class="visual-route-stop-lock-note">已锁定，优化时不移动</small>`
+                                              : ""
+                                          }
                                         </div>
                                       </button>
                                       <div class="visual-route-stop-actions">

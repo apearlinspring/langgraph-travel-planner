@@ -1223,6 +1223,19 @@ async function checkVisualJourneyEditing(page, viewport) {
   await expectContainsText(
     page,
     ".visual-route-editor",
+    ["09:30-11:30", "停留 2小时", "活动核验", "票务核验"],
+    `${viewport.name} route stop time and ticket status`
+  );
+  const unsafeTicketCopy = await page.evaluate(() => {
+    const text = document.querySelector(".visual-route-editor")?.textContent || "";
+    return /已支付|已出票|预订成功|库存已锁定|价格已锁定/.test(text);
+  });
+  if (unsafeTicketCopy) {
+    throw new Error(`${viewport.name} route ticket status implies payment or booking completion.`);
+  }
+  await expectContainsText(
+    page,
+    ".visual-route-editor",
     ["1.1公里", "步行18分钟", "已核验"],
     `${viewport.name} route segment metrics`
   );
