@@ -2121,6 +2121,32 @@
         }
       }
 
+      function runWhenBrowserIdle(callback, timeout = 1200) {
+        if (typeof window.requestIdleCallback === "function") {
+          window.requestIdleCallback(callback, { timeout });
+          return;
+        }
+        window.setTimeout(callback, timeout);
+      }
+
+      function enableIntroSecondaryImages() {
+        document.body.classList.add("intro-secondary-images-ready");
+      }
+
+      function scheduleIntroSecondaryImages() {
+        const loadSecondaryImages = () =>
+          runWhenBrowserIdle(enableIntroSecondaryImages, 1600);
+        if (document.readyState === "complete") {
+          loadSecondaryImages();
+          return;
+        }
+        window.addEventListener("load", loadSecondaryImages, { once: true });
+      }
+
+      function enableAuthHeroImages() {
+        document.body.classList.add("auth-hero-images-ready");
+      }
+
       function showIntroOverlay() {
         const intro = document.getElementById("introOverlay");
         if (!intro) return;
@@ -3276,12 +3302,31 @@
               <h3 class="welcome-title">欢迎使用 知行</h3>
               <p class="welcome-text">直接告诉我这次想去哪、几天、几个人、预算和偏好，我会按步骤整理目的地、交通、住宿，并在最后形成一份旅游规划报告。</p>
                     <div class="welcome-suggestions">
-                        <button class="suggestion-btn" onclick="applySuggestion('我想从北京出发，端午去成都玩 4 天，2 个人，预算 5000 元，喜欢美食和慢节奏。')">周末城市小旅行</button>
-                        <button class="suggestion-btn" onclick="applySuggestion('帮我规划一次去云南的 7 天亲子旅行，暑假出发，预算 12000 元。')">亲子长线行程</button>
-                        <button class="suggestion-btn" onclick="applySuggestion('我想先看看 3 个适合海边度假的目的地，预算 8000 元以内。')">先做目的地推荐</button>
+                        ${renderSuggestionButton(
+                          "周末城市小旅行",
+                          "我想从北京出发，端午去成都玩 4 天，2 个人，预算 5000 元，喜欢美食和慢节奏。"
+                        )}
+                        ${renderSuggestionButton(
+                          "亲子长线行程",
+                          "帮我规划一次去云南的 7 天亲子旅行，暑假出发，预算 12000 元。"
+                        )}
+                        ${renderSuggestionButton(
+                          "先做目的地推荐",
+                          "我想先看看 3 个适合海边度假的目的地，预算 8000 元以内。"
+                        )}
                     </div>
                 </div>
             `;
+      }
+
+      function renderSuggestionButton(label, text) {
+        return `
+          <button
+            class="suggestion-btn"
+            type="button"
+            data-suggestion-text="${escapeAttribute(text)}"
+          >${escapeHtml(label)}</button>
+        `;
       }
 
       function updatePlannerSummary(message) {
@@ -7072,10 +7117,195 @@
             `;
       }
 
+      function bindStaticActionEvents() {
+        const introOverlay = document.getElementById("introOverlay");
+        introOverlay?.addEventListener("click", enterAuthPortal);
+        introOverlay?.addEventListener("keydown", handleIntroKeydown);
+        document.querySelectorAll(".auth-tab[data-tab]").forEach((tab) => {
+          tab.addEventListener("click", () => switchAuthTab(tab.dataset.tab));
+        });
+        document.getElementById("authForm")?.addEventListener("submit", handleAuth);
+        document
+          .getElementById("newChatBtn")
+          ?.addEventListener("click", createNewConversation);
+        document.getElementById("logoutBtn")?.addEventListener("click", logout);
+        document
+          .getElementById("mobileChatBackBtn")
+          ?.addEventListener("click", exitMobileChatFocus);
+        document
+          .getElementById("retryHealthBtn")
+          ?.addEventListener("click", retryHealthCheck);
+        document
+          .getElementById("plannerToggleBtn")
+          ?.addEventListener("click", () => togglePlannerPanel());
+        document
+          .getElementById("resetPlannerDraftBtn")
+          ?.addEventListener("click", () => resetPlannerDraft());
+        document
+          .getElementById("chatInput")
+          ?.addEventListener("keydown", handleInputKeydown);
+        document.getElementById("sendBtn")?.addEventListener("click", sendMessage);
+        document
+          .getElementById("governanceRefreshBtn")
+          ?.addEventListener("click", refreshGovernanceConsole);
+        document
+          .getElementById("createDemoApprovalBtn")
+          ?.addEventListener("click", createDemoApproval);
+      }
+
+      function getClosestActionTarget(event, selector) {
+        return event.target?.closest?.(selector) || null;
+      }
+
+      function handleDelegatedActionClick(event) {
+        const approvalDecision = getClosestActionTarget(
+          event,
+          "[data-approval-decision-id][data-approval-decision]"
+        );
+        if (approvalDecision) {
+          decideApproval(
+            approvalDecision.dataset.approvalDecisionId,
+            approvalDecision.dataset.approvalDecision,
+            event
+          );
+          return true;
+        }
+
+        const approvalCard = getClosestActionTarget(event, "[data-approval-select-id]");
+        if (approvalCard) {
+          selectApprovalRecord(approvalCard.dataset.approvalSelectId);
+          return true;
+        }
+
+        const saveConversation = getClosestActionTarget(
+          event,
+          "[data-conversation-save-id]"
+        );
+        if (saveConversation) {
+          submitConversationRename(event, saveConversation.dataset.conversationSaveId);
+          return true;
+        }
+
+        if (getClosestActionTarget(event, "[data-conversation-cancel]")) {
+          cancelConversationRename(event);
+          return true;
+        }
+
+        const editConversation = getClosestActionTarget(
+          event,
+          "[data-conversation-edit-id]"
+        );
+        if (editConversation) {
+          renameConversation(event, editConversation.dataset.conversationEditId);
+          return true;
+        }
+
+        const deleteConversationBtn = getClosestActionTarget(
+          event,
+          "[data-conversation-delete-id]"
+        );
+        if (deleteConversationBtn) {
+          deleteConversation(event, deleteConversationBtn.dataset.conversationDeleteId);
+          return true;
+        }
+
+        if (getClosestActionTarget(event, ".conversation-title-edit-form")) {
+          event.stopPropagation();
+          return true;
+        }
+
+        if (getClosestActionTarget(event, "[data-create-conversation]")) {
+          createNewConversation();
+          return true;
+        }
+
+        const conversationItem = getClosestActionTarget(
+          event,
+          "[data-conversation-switch-id]"
+        );
+        if (conversationItem) {
+          switchConversation(conversationItem.dataset.conversationSwitchId);
+          return true;
+        }
+
+        const suggestion = getClosestActionTarget(event, "[data-suggestion-text]");
+        if (suggestion) {
+          applySuggestion(suggestion.dataset.suggestionText || "");
+          return true;
+        }
+
+        const plannerStyle = getClosestActionTarget(event, "[data-planner-style]");
+        if (plannerStyle) {
+          appendPlannerStyle(plannerStyle.dataset.plannerStyle || "");
+          return true;
+        }
+
+        const plannerDraft = getClosestActionTarget(
+          event,
+          "[data-compose-planner-draft]"
+        );
+        if (plannerDraft) {
+          composePlannerDraft(plannerDraft.dataset.composePlannerDraft);
+          return true;
+        }
+
+        const plannerTemplate = getClosestActionTarget(
+          event,
+          "[data-fill-planner-template]"
+        );
+        if (plannerTemplate) {
+          fillPlannerTemplate(plannerTemplate.dataset.fillPlannerTemplate);
+          return true;
+        }
+
+        const approvalFilter = getClosestActionTarget(event, "[data-approval-filter]");
+        if (approvalFilter) {
+          setApprovalFilter(approvalFilter.dataset.approvalFilter || "all");
+          return true;
+        }
+
+        return false;
+      }
+
+      function handleDelegatedActionSubmit(event) {
+        const renameForm = getClosestActionTarget(
+          event,
+          "[data-conversation-rename-form-id]"
+        );
+        if (!renameForm) return false;
+        submitConversationRename(event, renameForm.dataset.conversationRenameFormId);
+        return true;
+      }
+
+      function handleDelegatedActionKeydown(event) {
+        const renameInput = getClosestActionTarget(
+          event,
+          "[data-conversation-rename-input-id]"
+        );
+        if (!renameInput) return false;
+        handleConversationRenameKeydown(
+          event,
+          renameInput.dataset.conversationRenameInputId
+        );
+        return true;
+      }
+
+      function handleDelegatedActionDblClick(event) {
+        const renameTitle = getClosestActionTarget(
+          event,
+          "[data-conversation-rename-title-id]"
+        );
+        if (!renameTitle) return false;
+        beginConversationRename(event, renameTitle.dataset.conversationRenameTitleId);
+        return true;
+      }
+
       document.addEventListener("DOMContentLoaded", async () => {
         const apiBaseInput = document.getElementById("apiBase");
         apiBaseInput.value = getDefaultApiBase();
         apiBaseInput.addEventListener("input", updateEndpointUI);
+        bindStaticActionEvents();
+        scheduleIntroSecondaryImages();
         window.addEventListener("resize", () => {
           if (!isMobileViewport()) {
             setMobileChatFocus(false);
@@ -7103,11 +7333,24 @@
             return;
           }
 
+          if (handleDelegatedActionClick(event)) {
+            return;
+          }
         });
         document.addEventListener("keydown", (event) => {
+          if (handleDelegatedActionKeydown(event)) {
+            return;
+          }
+
           if (event.key === "Escape") {
             journeyOverlayActions?.closeJourneyMapModal?.();
           }
+        });
+        document.addEventListener("submit", (event) => {
+          handleDelegatedActionSubmit(event);
+        });
+        document.addEventListener("dblclick", (event) => {
+          handleDelegatedActionDblClick(event);
         });
         document.addEventListener("visibilitychange", () => {
           if (
@@ -7295,6 +7538,7 @@
         document.getElementById("authOverlay").classList.add("hidden");
       }
       function showAuthOverlay() {
+        enableAuthHeroImages();
         document.getElementById("authOverlay").classList.remove("hidden");
       }
 
@@ -7401,7 +7645,11 @@
               <i class="fa-regular fa-map" style="display:block; font-size:18px; margin-bottom:8px; color:var(--accent);"></i>
               <span class="empty-conversations-title">还没有保存的行程</span>
               <p class="empty-conversations-text">先创建一段新会话，后面每次回来都能从这里继续追问、补充交通和住宿细节。</p>
-              <button class="empty-conversations-btn" type="button" onclick="createNewConversation()">
+              <button
+                class="empty-conversations-btn"
+                type="button"
+                data-create-conversation="true"
+              >
                 <i class="fa-solid fa-compass"></i>
                 立即创建第一段行程
               </button>
@@ -7414,30 +7662,32 @@
                 <div class="conversation-item ${
                   conv.id === state.currentConversationId ? "active" : ""
                 } ${conv.id === state.editingConversationId ? "editing" : ""}"
-                     onclick="switchConversation('${conv.id}')">
+                     data-conversation-switch-id="${escapeAttribute(conv.id)}">
                     <div class="conversation-top">
                       ${
                         conv.id === state.editingConversationId
                           ? `
                               <form
                                 class="conversation-title conversation-title-edit-form"
-                                onsubmit="submitConversationRename(event, '${conv.id}')"
-                                onclick="event.stopPropagation()"
+                                data-conversation-rename-form-id="${escapeAttribute(conv.id)}"
                               >
                                 <i class="fa-solid fa-map-pin" style="font-size:10px; color:var(--accent)"></i>
                                 <input
-                                  id="conversationRenameInput-${conv.id}"
+                                  id="conversationRenameInput-${escapeAttribute(conv.id)}"
                                   class="conversation-title-input"
                                   type="text"
-                                  value="${escapeHtml(conv.title || DEFAULT_CONVERSATION_TITLE)}"
+                                  value="${escapeAttribute(conv.title || DEFAULT_CONVERSATION_TITLE)}"
                                   maxlength="40"
                                   aria-label="编辑行程名称"
-                                  onkeydown="handleConversationRenameKeydown(event, '${conv.id}')"
+                                  data-conversation-rename-input-id="${escapeAttribute(conv.id)}"
                                 />
                               </form>
                             `
                           : `
-                              <div class="conversation-title" ondblclick="beginConversationRename(event, '${conv.id}')">
+                              <div
+                                class="conversation-title"
+                                data-conversation-rename-title-id="${escapeAttribute(conv.id)}"
+                              >
                                 <i class="fa-solid fa-map-pin" style="font-size:10px; color:var(--accent)"></i>
                                 <span class="conversation-title-text">${escapeHtml(
                                   conv.title || "未知行程"
@@ -7458,7 +7708,7 @@
                                   class="conversation-save-btn"
                                   type="button"
                                   aria-label="保存行程名称"
-                                  onclick="submitConversationRename(event, '${conv.id}')"
+                                  data-conversation-save-id="${escapeAttribute(conv.id)}"
                                 >
                                   <i class="fa-solid fa-check"></i>
                                 </button>
@@ -7466,7 +7716,7 @@
                                   class="conversation-cancel-btn"
                                   type="button"
                                   aria-label="取消编辑"
-                                  onclick="cancelConversationRename(event)"
+                                  data-conversation-cancel="true"
                                 >
                                   <i class="fa-solid fa-xmark"></i>
                                 </button>
@@ -7476,7 +7726,7 @@
                                   class="conversation-edit-btn"
                                   type="button"
                                   aria-label="编辑这段行程名称"
-                                  onclick="renameConversation(event, '${conv.id}')"
+                                  data-conversation-edit-id="${escapeAttribute(conv.id)}"
                                 >
                                   <i class="fa-regular fa-pen-to-square"></i>
                                 </button>
@@ -7484,7 +7734,7 @@
                                   class="conversation-delete-btn"
                                   type="button"
                                   aria-label="删除这段行程"
-                                  onclick="deleteConversation(event, '${conv.id}')"
+                                  data-conversation-delete-id="${escapeAttribute(conv.id)}"
                                 >
                                   <i class="fa-regular fa-trash-can"></i>
                                 </button>
@@ -7588,10 +7838,10 @@
             id="chatTitleRenameInput"
             class="chat-title-input"
             type="text"
-            value="${escapeHtml(conv.title || DEFAULT_CONVERSATION_TITLE)}"
+            value="${escapeAttribute(conv.title || DEFAULT_CONVERSATION_TITLE)}"
             maxlength="40"
             aria-label="编辑当前行程名称"
-            onkeydown="handleConversationRenameKeydown(event, '${id}')"
+            data-conversation-rename-input-id="${escapeAttribute(id)}"
           />
         `;
       }
@@ -8340,4 +8590,8 @@
         const div = document.createElement("div");
         div.textContent = text;
         return div.innerHTML.replace(/\n/g, "<br>");
+      }
+
+      function escapeAttribute(text) {
+        return escapeHtml(text).replace(/"/g, "&quot;").replace(/'/g, "&#39;");
       }

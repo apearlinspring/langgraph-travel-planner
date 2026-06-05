@@ -140,6 +140,32 @@
 
 治理台是演示与排查入口，不改变聊天、报告渲染、地图预览和导出主链路；服务为 `degraded` 时允许继续演示核心链路，服务为 `not_ready` 时仍阻止登录、聊天和人工确认动作。
 
+## CSP Report-Only
+
+CSP（内容安全策略）当前以 `Content-Security-Policy-Report-Only` 响应头试运行，只报告潜在违规，不拦截页面资源。本阶段先把前台内联事件迁移到 `addEventListener` 和 `data-*` 事件委托，避免后续正式启用 CSP 时被 `script-src` 拦截。
+
+当前前台允许的外链资源来源应保持收敛：
+
+- `style-src`：`'self'`、`https://cdn.bootcdn.net`，用于 FontAwesome（图标字体库）和 Leaflet（交互地图前端库）样式。
+- `script-src`：`'self'`、`https://cdn.bootcdn.net`、`https://webapi.amap.com`；高德地图 JavaScript SDK（软件开发工具包）只在配置公开 Web Key 后加载。
+- `img-src`：`'self'`、`data:`、`https://images.unsplash.com`、`https://*.tile.openstreetmap.org`、`https://*.tile.opentopomap.org`、`https://*.basemaps.cartocdn.com`，用于首屏背景图、内联 SVG 背景和地图瓦片。
+- `font-src`：`'self'`、`data:`、`https://cdn.bootcdn.net`，用于 FontAwesome 字体文件。
+- `connect-src`：`'self'`、本地开发接口 `http://localhost:8000`、`http://127.0.0.1:8000`；生产环境不应继续放宽到本地地址。
+
+新增前台资源时，应先判断是否能复用本地文件；确实需要外链时，再同步更新这份清单和 `app/main.py` 中的 Report-Only 策略。正式启用拦截型 `Content-Security-Policy` 前，必须先运行严格浏览器验证，并处理 Report-Only 控制台中仍然出现的真实违规。
+
+## 首屏资源性能
+
+前台首屏仍使用真实旅行图片，但要避免让多张远程大图同时抢占初始加载：
+
+- `frontend/zhixing.html` 只预加载第一张 intro（入口页）背景图，并与 `frontend/styles.css` 中的首屏 URL 保持一致。
+- intro 轮播第 2、3 张图只在浏览器 `load` 之后的空闲时段，通过 `intro-secondary-images-ready` 类启用。
+- 登录卡片里的三张背景图只在打开登录层时，通过 `auth-hero-images-ready` 类启用。
+- 不再使用 `w=2200&q=80` 这类首屏大图规格；当前入口图使用 `w=1600&q=72`，登录卡片图使用 `w=1000&q=72`。
+- 地图依赖仍保持按需加载：只有出现可视化旅程和地图预览时，才加载 Leaflet（交互地图前端库）或高德地图 JavaScript SDK（软件开发工具包）。
+
+后续新增首屏图片时，不要把远程大图直接挂在页面初始就存在的 CSS 类上；优先用本地压缩图、延迟启用类或真实交互触发加载。
+
 ## 本地验证
 
 前端无工程化构建步骤，静态语法和结构化渲染可以用：

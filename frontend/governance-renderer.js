@@ -28,10 +28,6 @@
       return escapeHtml(value).replace(/"/g, "&quot;").replace(/'/g, "&#39;");
     }
 
-    function inlineJsonArg(value = "") {
-      return escapeAttribute(JSON.stringify(String(value || "")));
-    }
-
     function renderReadinessServiceGrid(items = []) {
       return items
         .map(
@@ -150,7 +146,7 @@
           return `
             <article
               class="approval-card ${isActive ? "active" : ""}"
-              onclick="selectApprovalRecord(${inlineJsonArg(id)})"
+              data-approval-select-id="${escapeAttribute(id)}"
             >
               <div class="approval-card-head">
                 <strong>${escapeHtml(
@@ -177,7 +173,8 @@
                   class="approval-action-btn approve"
                   type="button"
                   ${isPending ? "" : "disabled"}
-                  onclick="decideApproval(${inlineJsonArg(id)}, 'approve', event)"
+                  data-approval-decision-id="${escapeAttribute(id)}"
+                  data-approval-decision="approve"
                 >
                   批准
                 </button>
@@ -185,7 +182,8 @@
                   class="approval-action-btn reject"
                   type="button"
                   ${isPending ? "" : "disabled"}
-                  onclick="decideApproval(${inlineJsonArg(id)}, 'reject', event)"
+                  data-approval-decision-id="${escapeAttribute(id)}"
+                  data-approval-decision="reject"
                 >
                   拒绝
                 </button>
@@ -193,7 +191,8 @@
                   class="approval-action-btn expire"
                   type="button"
                   ${isPending ? "" : "disabled"}
-                  onclick="decideApproval(${inlineJsonArg(id)}, 'expire', event)"
+                  data-approval-decision-id="${escapeAttribute(id)}"
+                  data-approval-decision="expire"
                 >
                   过期
                 </button>
