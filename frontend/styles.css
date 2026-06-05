@@ -5777,6 +5777,123 @@ html {
   font-weight: 800;
 }
 
+.visual-route-planning-pool {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid rgba(15, 118, 110, 0.12);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(240, 253, 250, 0.88), rgba(255, 255, 255, 0.96));
+}
+
+.visual-route-planning-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.visual-route-planning-head span {
+  display: block;
+  color: #0f766e;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.visual-route-planning-head strong {
+  display: block;
+  margin-top: 2px;
+  color: #134e4a;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.visual-route-planning-head small {
+  flex: 0 0 auto;
+  padding: 5px 8px;
+  border-radius: 999px;
+  color: #0f766e;
+  background: #fff;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.visual-route-planning-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 8px;
+}
+
+.visual-route-planning-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+  padding: 9px;
+  border: 1px solid rgba(15, 118, 110, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.visual-route-planning-card strong,
+.visual-route-planning-card span {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.visual-route-planning-card strong {
+  color: #111827;
+  font-size: 13px;
+}
+
+.visual-route-planning-card span {
+  margin-top: 2px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.visual-route-planning-add {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 5px;
+}
+
+.visual-route-planning-add button,
+.visual-route-day-tools button {
+  min-height: 30px;
+  border: 1px solid rgba(15, 118, 110, 0.18);
+  border-radius: 999px;
+  color: #0f766e;
+  background: #fff;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.visual-route-planning-add button {
+  min-width: 36px;
+  padding: 0 9px;
+}
+
+.visual-route-planning-add button:hover,
+.visual-route-day-tools button:hover {
+  border-color: rgba(15, 118, 110, 0.34);
+  background: rgba(240, 253, 250, 0.98);
+}
+
+.visual-route-planning-empty {
+  margin: 0;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
 .visual-route-day-list {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
@@ -5800,13 +5917,24 @@ html {
   align-items: center;
 }
 
-.visual-route-day-card header > small {
+.visual-route-day-tools {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.visual-route-day-tools small {
   padding: 5px 8px;
   border-radius: 999px;
   color: #0f766e;
   background: rgba(240, 253, 250, 0.95);
   font-size: 12px;
   font-weight: 800;
+}
+
+.visual-route-day-tools button {
+  padding: 0 10px;
 }
 
 .visual-route-day-focus {
@@ -5850,6 +5978,16 @@ html {
   border-radius: 8px;
   background: #f8fafc;
   border: 1px solid rgba(15, 23, 42, 0.06);
+}
+
+.visual-route-stop-row.is-locked {
+  border-color: rgba(15, 118, 110, 0.18);
+  background:
+    linear-gradient(180deg, rgba(240, 253, 250, 0.72), rgba(248, 250, 252, 0.98));
+}
+
+.visual-route-stop-row.is-locked .visual-route-stop-main > span {
+  background: #134e4a;
 }
 
 .visual-route-stop-main {
@@ -6333,8 +6471,42 @@ html {
     min-width: 0;
   }
 
+  .visual-route-planning-head {
+    display: grid;
+  }
+
+  .visual-route-planning-head small {
+    width: max-content;
+  }
+
+  .visual-route-planning-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .visual-route-planning-card {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .visual-route-planning-add {
+    justify-content: flex-start;
+  }
+
+  .visual-route-planning-add button {
+    min-width: 44px;
+    min-height: 34px;
+  }
+
   .visual-route-day-list {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .visual-route-day-card header {
+    align-items: start;
+  }
+
+  .visual-route-day-tools {
+    display: grid;
+    justify-items: end;
   }
 
   .visual-route-stop-row {
@@ -6384,7 +6556,7 @@ html {
   }
 
   .visual-route-stop-row:has(.visual-route-more-actions[open]) {
-    padding-bottom: 104px;
+    padding-bottom: 148px;
   }
 
   .visual-route-more-menu {

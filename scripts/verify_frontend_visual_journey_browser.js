@@ -1212,6 +1212,7 @@ async function getVisualRouteDayNames(page, dayKey) {
 }
 
 async function checkVisualJourneyEditing(page, viewport) {
+  const screenshots = [];
   await expectVisible(page, ".visual-route-editor", `${viewport.name} route editor`);
   await expectContainsText(
     page,
@@ -1293,6 +1294,114 @@ async function checkVisualJourneyEditing(page, viewport) {
     { timeout: 5000 }
   );
 
+  await expectVisible(page, ".visual-route-planning-pool", `${viewport.name} route planning pool`);
+  await expectContainsText(
+    page,
+    ".visual-route-planning-pool",
+    ["待规划地点", "九溪烟树", "满觉陇"],
+    `${viewport.name} route planning pool candidates`
+  );
+  if (viewport.isMobile) {
+    const poolPath = path.join(
+      runtimeDir,
+      "frontend-visual-journey-mobile-planning-pool.png"
+    );
+    await page.locator(".visual-route-planning-pool").first().screenshot({
+      path: poolPath,
+    });
+    screenshots.push(poolPath);
+  }
+  await page
+    .locator(
+      '.visual-route-planning-card[data-pending-poi-id="hz-alt-p1"] [data-journey-edit-action="add-pending"][data-journey-day-key="visual-day-1"]'
+    )
+    .click();
+  await page.waitForFunction(
+    () => {
+      const names = Array.from(
+        document.querySelectorAll(
+          '.visual-route-day-card[data-journey-day-card="visual-day-1"] .visual-route-stop-main strong'
+        )
+      ).map((node) => node.textContent.trim());
+      return names.includes("九溪烟树");
+    },
+    null,
+    { timeout: 5000 }
+  );
+  await page
+    .locator(
+      '.visual-route-planning-card[data-pending-poi-id="hz-alt-p2"] [data-journey-edit-action="add-pending"][data-journey-day-key="visual-day-1"]'
+    )
+    .click();
+  await page.waitForFunction(
+    () => {
+      const names = Array.from(
+        document.querySelectorAll(
+          '.visual-route-day-card[data-journey-day-card="visual-day-1"] .visual-route-stop-main strong'
+        )
+      ).map((node) => node.textContent.trim());
+      return names.includes("九溪烟树") && names.includes("满觉陇");
+    },
+    null,
+    { timeout: 5000 }
+  );
+  await page.waitForFunction(
+    () => !document.querySelector('.visual-route-planning-card[data-pending-poi-id="hz-alt-p1"]'),
+    null,
+    { timeout: 5000 }
+  );
+
+  const day1FirstAfterAdds = (await getVisualRouteDayNames(page, "visual-day-1"))[0];
+  await page
+    .locator(
+      '.visual-route-day-card[data-journey-day-card="visual-day-1"] .visual-route-stop-row[data-map-day-stop="visual-day-1:0"] .visual-route-more-actions summary'
+    )
+    .click();
+  await page
+    .locator(
+      '.visual-route-day-card[data-journey-day-card="visual-day-1"] .visual-route-stop-row[data-map-day-stop="visual-day-1:0"] [data-journey-edit-action="toggle-lock"]'
+    )
+    .click();
+  await page.waitForFunction(
+    (lockedName) => {
+      const raw = document.querySelector(".journey-live-map-shell")?.dataset.dayPlans || "";
+      try {
+        const days = JSON.parse(decodeURIComponent(raw));
+        const day = days.find((item) => item.key === "visual-day-1");
+        return day?.stops?.[0]?.name === lockedName && day?.stops?.[0]?.locked === true;
+      } catch (error) {
+        return false;
+      }
+    },
+    day1FirstAfterAdds,
+    { timeout: 5000 }
+  );
+  await page
+    .locator(
+      '.visual-route-day-card[data-journey-day-card="visual-day-1"] [data-journey-edit-action="optimize-day"][data-journey-day-key="visual-day-1"]'
+    )
+    .click();
+  await page.waitForFunction(
+    (lockedName) => {
+      const raw = document.querySelector(".journey-live-map-shell")?.dataset.dayPlans || "";
+      try {
+        const days = JSON.parse(decodeURIComponent(raw));
+        const day = days.find((item) => item.key === "visual-day-1");
+        const names = (day?.stops || []).map((stop) => stop.name);
+        return (
+          day?.stops?.[0]?.name === lockedName &&
+          day?.stops?.[0]?.locked === true &&
+          names.includes("九溪烟树") &&
+          names.includes("满觉陇")
+        );
+      } catch (error) {
+        return false;
+      }
+    },
+    day1FirstAfterAdds,
+    { timeout: 5000 }
+  );
+
   const editorOverflow = await page.evaluate(() => {
     const editor = document.querySelector(".visual-route-editor");
     if (!editor) return true;
@@ -1329,6 +1438,7 @@ async function checkVisualJourneyEditing(page, viewport) {
       );
     }
   }
+  return screenshots;
 }
 
 async function checkLayoutHealth(page, viewport) {
@@ -1523,9 +1633,12 @@ async function runViewport(browser, viewport) {
     await gotoFrontend(session.page);
     await injectVisualJourney(session.page);
     await checkVisualJourneySurface(session.page, viewport);
-    await checkVisualJourneyEditing(session.page, viewport);
+    const editingScreenshots = await checkVisualJourneyEditing(session.page, viewport);
     await checkLayoutHealth(session.page, viewport);
-    const screenshots = await captureScreenshots(session.page, viewport);
+    const screenshots = [
+      ...editingScreenshots,
+      ...(await captureScreenshots(session.page, viewport)),
+    ];
     assertNoConsoleErrors(viewport, session.consoleErrors, session.pageErrors);
     return screenshots;
   } finally {

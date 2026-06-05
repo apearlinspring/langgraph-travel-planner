@@ -13,6 +13,7 @@
       setJourneyMapDaySelection,
       focusJourneyDayStop,
       getJourneyReplacementCandidates,
+      getJourneyPendingPoiCandidates,
       normalizeJourneyPoiAsStop,
     } = deps;
 
@@ -26,20 +27,162 @@
       return true;
     }
 
+    function getStopCoordinate(stop = {}) {
+      const lat = Number(stop.lat);
+      const lng = Number(stop.lng);
+      return Number.isFinite(lat) && Number.isFinite(lng) ? { lat, lng } : null;
+    }
+
+    function getCoordinateDistance(left = {}, right = {}) {
+      const leftPoint = getStopCoordinate(left);
+      const rightPoint = getStopCoordinate(right);
+      if (!leftPoint || !rightPoint) return Number.POSITIVE_INFINITY;
+      const latDiff = leftPoint.lat - rightPoint.lat;
+      const lngDiff = leftPoint.lng - rightPoint.lng;
+      return latDiff * latDiff + lngDiff * lngDiff;
+    }
+
+    function canOptimizeStop(stop = {}) {
+      return !stop.locked && Boolean(getStopCoordinate(stop));
+    }
+
+    function sortOptimizableRun(stops = [], anchor = null) {
+      if (stops.length < 2) return stops.slice();
+      const remaining = stops.slice();
+      const ordered = [];
+      let cursor = anchor && getStopCoordinate(anchor) ? anchor : remaining.shift();
+      if (!anchor) ordered.push(cursor);
+      while (remaining.length) {
+        let bestIndex = 0;
+        let bestDistance = getCoordinateDistance(cursor, remaining[0]);
+        for (let index = 1; index < remaining.length; index += 1) {
+          const distance = getCoordinateDistance(cursor, remaining[index]);
+          if (distance < bestDistance) {
+            bestDistance = distance;
+            bestIndex = index;
+          }
+        }
+        const [nextStop] = remaining.splice(bestIndex, 1);
+        ordered.push(nextStop);
+        cursor = nextStop;
+      }
+      return ordered;
+    }
+
+    function optimizeJourneyDayStops(stops = []) {
+      const nextStops = stops.slice();
+      let optimizedCount = 0;
+      let index = 0;
+      while (index < nextStops.length) {
+        if (!canOptimizeStop(nextStops[index])) {
+          index += 1;
+          continue;
+        }
+        const start = index;
+        while (index < nextStops.length && canOptimizeStop(nextStops[index])) {
+          index += 1;
+        }
+        const run = nextStops.slice(start, index);
+        if (run.length < 2) continue;
+        const anchor = start > 0 ? nextStops[start - 1] : null;
+        const sortedRun = sortOptimizableRun(run, anchor);
+        sortedRun.forEach((stop, offset) => {
+          nextStops[start + offset] = stop;
+        });
+        optimizedCount += run.length;
+      }
+      const changed = nextStops.some((stop, index) => stop !== stops[index]);
+      return { stops: nextStops, changed, optimizedCount };
+    }
+
+    function hasDuplicateStop(dayPlans, candidate = {}) {
+      const candidateId = candidate.id || "";
+      const candidateName = String(candidate.name || "").trim().toLowerCase();
+      return (dayPlans || []).some((day) =>
+        (day.stops || []).some((stop) => {
+          if (candidateId && stop.id === candidateId) return true;
+          return (
+            candidateName &&
+            String(stop.name || "").trim().toLowerCase() === candidateName
+          );
+        })
+      );
+    }
+
     function handleJourneyEditAction(button) {
       if (button.disabled) return false;
       const action = button.dataset.journeyEditAction || "";
-      const meta = parseJourneyStopMeta?.(button.dataset.mapDayStop || "");
       const shell = getJourneyMapShellFromControl?.(button);
-      if (!action || !meta || !shell) return false;
+      if (!action || !shell) return false;
+      const workbench = button.closest(".visual-journey-workbench");
       const dayPlans = cloneJourneyDayPlans?.(shell)?.map(normalizeJourneyDayPlanStops) || [];
+
+      if (action === "add-pending") {
+        const dayKey = button.dataset.journeyDayKey || "";
+        const pendingPoiId = button.dataset.pendingPoiId || "";
+        const pendingPoiName = String(button.dataset.pendingPoiName || "").trim().toLowerCase();
+        const day = dayPlans.find((item) => item.key === dayKey);
+        if (!day || !Array.isArray(day.stops)) return false;
+        const candidates = getJourneyPendingPoiCandidates?.(workbench, dayPlans) || [];
+        const candidate = candidates.find((poi) => {
+          if (pendingPoiId && poi.id === pendingPoiId) return true;
+          return (
+            pendingPoiName &&
+            String(poi.name || "").trim().toLowerCase() === pendingPoiName
+          );
+        });
+        if (!candidate) {
+          showToast?.("这个地点已经在路线中", true);
+          return true;
+        }
+        const normalizedCandidate =
+          normalizeJourneyPoiAsStop?.(candidate, { city: day.city || "" }) || candidate;
+        if (hasDuplicateStop(dayPlans, normalizedCandidate)) {
+          showToast?.(`${normalizedCandidate.name || "这个地点"} 已在路线中`, true);
+          return true;
+        }
+        day.stops.push(normalizedCandidate);
+        return commitJourneyPlanEdit(
+          button,
+          shell,
+          dayPlans,
+          `已加入 ${normalizedCandidate.name || "待规划地点"}`
+        );
+      }
+
+      if (action === "optimize-day") {
+        const dayKey = button.dataset.journeyDayKey || "";
+        const day = dayPlans.find((item) => item.key === dayKey);
+        if (!day || !Array.isArray(day.stops)) return false;
+        const result = optimizeJourneyDayStops(day.stops);
+        if (!result.optimizedCount) {
+          showToast?.("可优化地点不足，先补充地图坐标", true);
+          return true;
+        }
+        if (!result.changed) {
+          showToast?.("当前顺序已经很顺，锁定点保持不动");
+          return true;
+        }
+        day.stops = result.stops;
+        return commitJourneyPlanEdit(
+          button,
+          shell,
+          dayPlans,
+          `已优化 ${day.label || "当天"} 顺序，锁定点未移动`
+        );
+      }
+
+      const meta = parseJourneyStopMeta?.(button.dataset.mapDayStop || "");
+      if (!meta) return false;
       const day = dayPlans.find((item) => item.key === meta.dayKey);
       if (!day || !Array.isArray(day.stops)) return false;
       const index = meta.stopIndex;
       if (index < 0 || index >= day.stops.length) return false;
       const currentStop = day.stops[index] || {};
 
-      if (action === "delete") {
+      if (action === "toggle-lock") {
+        day.stops[index] = { ...currentStop, locked: !currentStop.locked };
+      } else if (action === "delete") {
         if (day.stops.length <= 1) {
           showToast?.("当天至少保留一个地点", true);
           return true;
@@ -60,7 +203,6 @@
         const [movedStop] = day.stops.splice(index, 1);
         targetDay.stops.push(movedStop);
       } else if (action === "replace") {
-        const workbench = button.closest(".visual-journey-workbench");
         const candidates = getJourneyReplacementCandidates?.(workbench, dayPlans, day.key, index) || [];
         const replacement = candidates[0];
         if (!replacement) {
@@ -79,6 +221,9 @@
         "prev-day": `已移到上一天：${currentStop.name || "这个地点"}`,
         "next-day": `已移到下一天：${currentStop.name || "这个地点"}`,
         replace: `已替换 ${currentStop.name || "这个地点"}`,
+        "toggle-lock": currentStop.locked
+          ? `已解锁 ${currentStop.name || "这个地点"}`
+          : `已锁定 ${currentStop.name || "这个地点"}`,
       };
       return commitJourneyPlanEdit(
         button,

@@ -228,6 +228,7 @@
         getVisualPoiInitial,
         getVisualPoiVerificationBadge,
         getJourneyReplacementCandidates,
+        getJourneyPendingPoiCandidates,
         resolveJourneyRecommendationPoi,
         getJourneyRecommendationTargetDay,
       } = journeyPoiUtils;
@@ -256,6 +257,7 @@
         setJourneyMapDaySelection: (...args) => setJourneyMapDaySelection(...args),
         focusJourneyDayStop: (...args) => focusJourneyDayStop(...args),
         getJourneyReplacementCandidates: (...args) => getJourneyReplacementCandidates(...args),
+        getJourneyPendingPoiCandidates: (...args) => getJourneyPendingPoiCandidates(...args),
         normalizeJourneyPoiAsStop: (...args) => normalizeJourneyPoiAsStop(...args),
       });
       const guideImport = guideImportFactory?.createGuideImport?.({
@@ -1867,7 +1869,94 @@
         `;
       }
 
-      function renderVisualJourneyDayEditor(dayPlans = []) {
+      function getVisualRoutePlanningPool(dayPlans = [], planningPool = []) {
+        const activeIds = new Set(
+          dayPlans.flatMap((day) => (day.stops || []).map((stop) => stop.id).filter(Boolean))
+        );
+        const activeNames = new Set(
+          dayPlans.flatMap((day) =>
+            (day.stops || [])
+              .map((stop) => cleanJourneyLocationValue(stop.name || "").toLowerCase())
+              .filter(Boolean)
+          )
+        );
+        const seen = new Set();
+        return planningPool
+          .map((poi) => normalizeJourneyPoiAsStop(poi))
+          .filter((poi) => {
+            const name = cleanJourneyLocationValue(poi.name || "");
+            const key = poi.id || name.toLowerCase();
+            if (!name || seen.has(key)) return false;
+            seen.add(key);
+            if (poi.id && activeIds.has(poi.id)) return false;
+            if (activeNames.has(name.toLowerCase())) return false;
+            return true;
+          })
+          .slice(0, 8);
+      }
+
+      function renderVisualRoutePlanningPool(dayPlans = [], planningPool = []) {
+        const candidates = getVisualRoutePlanningPool(dayPlans, planningPool);
+        return `
+          <div class="visual-route-planning-pool" data-route-planning-pool="true">
+            <div class="visual-route-planning-head">
+              <div>
+                <span>待规划地点</span>
+                <strong>先放进地点池，再安排到某一天</strong>
+              </div>
+              <small>${escapeHtml(String(candidates.length))} 个可加入</small>
+            </div>
+            ${
+              candidates.length
+                ? `<div class="visual-route-planning-list">
+                    ${candidates
+                      .map((poi) => {
+                        const poiName = cleanJourneyLocationValue(poi.name || "待规划地点");
+                        const poiMeta = [
+                          poi.type_label || poi.type,
+                          poi.time_range || poi.suggested_time,
+                          poi.estimated_cost,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ");
+                        return `
+                          <article class="visual-route-planning-card" data-pending-poi-id="${escapeHtml(
+                            poi.id || ""
+                          )}">
+                            <div>
+                              <strong>${escapeHtml(poiName)}</strong>
+                              <span>${escapeHtml(poiMeta || "地点信息待核验")}</span>
+                            </div>
+                            <div class="visual-route-planning-add">
+                              ${dayPlans
+                                .map(
+                                  (day, index) => `
+                                    <button
+                                      type="button"
+                                      data-journey-edit-action="add-pending"
+                                      data-pending-poi-id="${escapeHtml(poi.id || "")}"
+                                      data-pending-poi-name="${escapeHtml(poiName)}"
+                                      data-journey-day-key="${escapeHtml(day.key || "")}"
+                                      title="${escapeHtml(`加入${day.label || `Day ${index + 1}`}`)}"
+                                    >
+                                      D${index + 1}
+                                    </button>
+                                  `
+                                )
+                                .join("")}
+                            </div>
+                          </article>
+                        `;
+                      })
+                      .join("")}
+                  </div>`
+                : `<p class="visual-route-planning-empty">待规划地点已全部排入行程；可以继续导入攻略或让助手补充候选点。</p>`
+            }
+          </div>
+        `;
+      }
+
+      function renderVisualJourneyDayEditor(dayPlans = [], planningPool = []) {
         if (!Array.isArray(dayPlans) || !dayPlans.length) return "";
         const totalStops = dayPlans.reduce(
           (count, day) => count + (Array.isArray(day.stops) ? day.stops.length : 0),
@@ -1882,6 +1971,7 @@
               </div>
               <small>${escapeHtml(String(totalStops))} 个地点</small>
             </div>
+            ${renderVisualRoutePlanningPool(dayPlans, planningPool)}
             <div class="visual-route-day-list">
               ${dayPlans
                 .map((day, dayIndex) => {
@@ -1898,7 +1988,17 @@
                           <span>${escapeHtml(day.label || `Day ${dayIndex + 1}`)}</span>
                           <strong>${escapeHtml(day.title || day.note || "当天路线")}</strong>
                         </button>
-                        <small>${escapeHtml(String(stops.length))} 点</small>
+                        <div class="visual-route-day-tools">
+                          <small>${escapeHtml(String(stops.length))} 点</small>
+                          <button
+                            type="button"
+                            data-journey-edit-action="optimize-day"
+                            data-journey-day-key="${escapeHtml(dayKey)}"
+                            title="按坐标优化当天地点顺序，锁定点保持不动"
+                          >
+                            优化
+                          </button>
+                        </div>
                       </header>
                       ${
                         stops.length
@@ -1911,11 +2011,16 @@
                                     stop.time_range || stop.suggested_time,
                                     stop.type_label || stop.type,
                                     stop.estimated_cost,
+                                    stop.locked ? "已锁定" : "",
                                   ]
                                     .filter(Boolean)
                                     .join(" · ");
                                   return `
-                                    <div class="visual-route-stop-row" data-map-day-stop="${escapeHtml(stopMeta)}">
+                                    <div class="visual-route-stop-row${
+                                      stop.locked ? " is-locked" : ""
+                                    }" data-map-day-stop="${escapeHtml(
+                                      stopMeta
+                                    )}" data-journey-stop-locked="${stop.locked ? "true" : "false"}">
                                       <button
                                         class="visual-route-stop-main visual-poi-focus-btn"
                                         type="button"
@@ -1955,6 +2060,15 @@
                                             <span aria-hidden="true">⋯</span>
                                           </summary>
                                           <div class="visual-route-more-menu">
+                                            <button
+                                              type="button"
+                                              data-journey-edit-action="toggle-lock"
+                                              data-map-day-stop="${escapeHtml(stopMeta)}"
+                                              aria-label="${escapeHtml(
+                                                stop.locked ? `解锁${stopLabel}` : `锁定${stopLabel}`
+                                              )}"
+                                              title="${stop.locked ? "解锁" : "锁定"}"
+                                            ><span>${stop.locked ? "解锁" : "锁定"}</span></button>
                                             <button
                                               type="button"
                                               data-journey-edit-action="prev-day"
@@ -2007,8 +2121,9 @@
       function refreshVisualJourneyDayEditor(workbench, dayPlans = []) {
         const panel = workbench?.querySelector("[data-visual-route-editor='true']");
         if (!panel) return;
+        const planningPool = getJourneyPendingPoiCandidates?.(workbench, dayPlans) || [];
         const wrapper = document.createElement("div");
-        wrapper.innerHTML = renderVisualJourneyDayEditor(dayPlans);
+        wrapper.innerHTML = renderVisualJourneyDayEditor(dayPlans, planningPool);
         const nextPanel = wrapper.firstElementChild;
         if (nextPanel) panel.replaceWith(nextPanel);
       }
@@ -2215,6 +2330,7 @@
             day_number: day.day_number || plan.dayNumber || 1,
             order: index + 1,
             suggested_time: stop.time_range || stop.suggested_time || "",
+            locked: Boolean(stop.locked),
           }));
           return {
             ...day,
@@ -2226,7 +2342,13 @@
         const activePois = days.flatMap((day) => day.pois || []);
         const activeIds = new Set(activePois.map((poi) => poi.id).filter(Boolean));
         const originalPois = Array.isArray(original.pois) ? original.pois : [];
+        const originalAlternativePois = Array.isArray(original.alternative_pois)
+          ? original.alternative_pois
+          : [];
         const inactiveOriginalPois = originalPois.filter(
+          (poi) => !poi.id || !activeIds.has(poi.id)
+        );
+        const inactiveAlternativePois = originalAlternativePois.filter(
           (poi) => !poi.id || !activeIds.has(poi.id)
         );
         const pois = [...activePois, ...inactiveOriginalPois];
@@ -2235,6 +2357,7 @@
           ...original,
           days,
           pois,
+          alternative_pois: inactiveAlternativePois,
           segments,
           source_summary: {
             ...(original.source_summary || {}),
@@ -6896,6 +7019,7 @@
                 reservation_note: poi.reservation_note || "",
                 verification_status: poi.verification_status || "",
                 verification_note: poi.verification_note || "",
+                locked: Boolean(poi.locked),
                 map_verified: Boolean(poi.map_verified),
                 coordinate_estimated: Boolean(poi.coordinate_estimated),
                 address: poi.address || "",
@@ -7041,7 +7165,7 @@
             ${renderVisualJourneyStats(journeyData)}
             ${renderPlanningTrace(getPlanningTraceFromOptions(options))}
             ${atlas}
-            ${renderVisualJourneyDayEditor(previewState.dayPlans)}
+            ${renderVisualJourneyDayEditor(previewState.dayPlans, previewState.recommendations)}
             <div class="visual-day-strip">
               ${days
                 .map(

@@ -55,6 +55,7 @@
         map_query: poi.map_query || [poi.city, poi.name].filter(Boolean).join(" "),
         lng: typeof poi.lng === "number" ? poi.lng : null,
         lat: typeof poi.lat === "number" ? poi.lat : null,
+        locked: Boolean(poi.locked || fallback.locked),
       };
     }
 
@@ -119,6 +120,45 @@
         .map((item) => item.poi);
     }
 
+    function getJourneyPendingPoiCandidates(workbench, dayPlans) {
+      const allPois = getJourneyPoiPool(workbench);
+      if (!allPois.length) return [];
+      const activeIds = new Set(
+        (dayPlans || []).flatMap((item) =>
+          (item.stops || []).map((stop) => stop.id).filter(Boolean)
+        )
+      );
+      const activeNames = new Set(
+        (dayPlans || []).flatMap((item) =>
+          (item.stops || [])
+            .map((stop) => normalizeJourneyMatchText(stop.name || ""))
+            .filter(Boolean)
+        )
+      );
+      const seen = new Set();
+      return allPois
+        .filter((poi) => {
+          const name = normalizeJourneyMatchText(poi.name || "");
+          const key = poi.id || name;
+          if (!name || seen.has(key)) return false;
+          seen.add(key);
+          if (poi.id && activeIds.has(poi.id)) return false;
+          if (activeNames.has(name)) return false;
+          return true;
+        })
+        .sort((left, right) => {
+          const leftScore =
+            (left.map_verified ? 3 : 0) +
+            (typeof left.lng === "number" && typeof left.lat === "number" ? 2 : 0) +
+            (left.coordinate_estimated ? 1 : 0);
+          const rightScore =
+            (right.map_verified ? 3 : 0) +
+            (typeof right.lng === "number" && typeof right.lat === "number" ? 2 : 0) +
+            (right.coordinate_estimated ? 1 : 0);
+          return rightScore - leftScore;
+        });
+    }
+
     function resolveJourneyRecommendationPoi(workbench, point = {}) {
       const targetName = normalizeJourneyMatchText(point.name || point.label || "");
       const matched = getJourneyPoiPool(workbench).find((poi) => {
@@ -162,6 +202,7 @@
       getVisualPoiVerificationBadge,
       getJourneyPoiPool,
       getJourneyReplacementCandidates,
+      getJourneyPendingPoiCandidates,
       resolveJourneyRecommendationPoi,
       getJourneyRecommendationTargetDay,
     };
