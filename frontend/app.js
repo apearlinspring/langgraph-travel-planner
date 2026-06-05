@@ -1956,6 +1956,61 @@
         `;
       }
 
+      function getVisualRouteSegmentView(segment = {}) {
+        const rawMode = String(segment.mode || segment.transport_mode || segment.source || "").toLowerCase();
+        const modeText = /walk|步行/.test(rawMode)
+          ? "步行"
+          : /bus|公交|metro|subway|地铁/.test(rawMode)
+          ? "公交/地铁"
+          : /train|rail|火车|高铁/.test(rawMode)
+          ? "铁路"
+          : /flight|air|航班|飞机/.test(rawMode)
+          ? "航班"
+          : /drive|driving|car|驾车|自驾/.test(rawMode)
+          ? "驾车"
+          : "交通";
+        const metricText = [segment.distance_text, segment.duration_text]
+          .filter(Boolean)
+          .join(" · ");
+        const confidenceText = [
+          segment.confidence,
+          segment.source,
+          segment.verification_note,
+        ]
+          .filter(Boolean)
+          .join(" ");
+        const isVerified = /amap|高德|已核验/i.test(confidenceText);
+        const isEstimated = /estimated|估算/i.test(confidenceText);
+        const isPending =
+          !metricText || /待|needs|unknown/i.test([metricText, confidenceText].join(" "));
+        const displayMetricText = isPending
+          ? "待高德路线核验"
+          : metricText || "距离/用时待核验";
+        return {
+          modeText,
+          metricText: displayMetricText,
+          tone: isVerified ? "ready" : isEstimated ? "estimated" : isPending ? "pending" : "",
+          statusText: isVerified ? "已核验" : isEstimated ? "估算" : "待核验",
+        };
+      }
+
+      function renderVisualRouteSegment(segment = {}, fromStop = {}, toStop = {}) {
+        const view = getVisualRouteSegmentView(segment);
+        const fromName = cleanJourneyLocationValue(fromStop.name || segment.from_name || "上一站");
+        const toName = cleanJourneyLocationValue(toStop.name || segment.to_name || "下一站");
+        return `
+          <div class="visual-route-segment ${escapeHtml(view.tone)}" data-route-segment="true">
+            <span class="visual-route-segment-line" aria-hidden="true"></span>
+            <div>
+              <strong>${escapeHtml(view.modeText)}</strong>
+              <small>${escapeHtml(`${fromName} → ${toName}`)}</small>
+            </div>
+            <em>${escapeHtml(view.metricText)}</em>
+            <span class="visual-route-segment-status">${escapeHtml(view.statusText)}</span>
+          </div>
+        `;
+      }
+
       function renderVisualJourneyDayEditor(dayPlans = [], planningPool = []) {
         if (!Array.isArray(dayPlans) || !dayPlans.length) return "";
         const totalStops = dayPlans.reduce(
@@ -1977,6 +2032,7 @@
                 .map((day, dayIndex) => {
                   const dayKey = day.key || `visual-day-${dayIndex + 1}`;
                   const stops = Array.isArray(day.stops) ? day.stops : [];
+                  const segments = Array.isArray(day.segments) ? day.segments : [];
                   return `
                     <article class="visual-route-day-card" data-journey-day-card="${escapeHtml(dayKey)}">
                       <header>
@@ -2016,7 +2072,8 @@
                                     .filter(Boolean)
                                     .join(" · ");
                                   return `
-                                    <div class="visual-route-stop-row${
+                                    <div class="visual-route-stop-entry">
+                                      <div class="visual-route-stop-row${
                                       stop.locked ? " is-locked" : ""
                                     }" data-map-day-stop="${escapeHtml(
                                       stopMeta
@@ -2102,6 +2159,16 @@
                                           </div>
                                         </details>
                                       </div>
+                                      </div>
+                                      ${
+                                        stopIndex < stops.length - 1
+                                          ? renderVisualRouteSegment(
+                                              segments[stopIndex] || {},
+                                              stop,
+                                              stops[stopIndex + 1]
+                                            )
+                                          : ""
+                                      }
                                     </div>
                                   `;
                                 })
@@ -2239,7 +2306,16 @@
       function refreshJourneyMapAfterEdit(shell, dayPlans) {
         const mapNode = shell?.querySelector(".journey-live-map[data-map-payload]");
         if (!shell || !mapNode) return;
-        const normalizedDayPlans = dayPlans.map(normalizeJourneyDayPlanStops);
+        const normalizedDayPlans = dayPlans.map((day) => {
+          const normalizedDay = normalizeJourneyDayPlanStops(day);
+          return {
+            ...normalizedDay,
+            segments: buildEditedJourneySegments(
+              normalizedDay.dayNumber || 1,
+              normalizedDay.stops || []
+            ),
+          };
+        });
         const payload = parseMapPayload(mapNode.dataset.mapPayload || "") || {};
         payload.days = normalizedDayPlans.map((day) => ({
           key: day.key,
@@ -2319,7 +2395,16 @@
       function buildJourneyDataFromEditedPlans(workbench, dayPlans) {
         const original = parseMapPayload(workbench?.dataset.journeyData || "") || {};
         if (original.version !== "journey_plan.v1") return null;
-        const normalizedPlans = dayPlans.map(normalizeJourneyDayPlanStops);
+        const normalizedPlans = dayPlans.map((day) => {
+          const normalizedDay = normalizeJourneyDayPlanStops(day);
+          return {
+            ...normalizedDay,
+            segments: buildEditedJourneySegments(
+              normalizedDay.dayNumber || 1,
+              normalizedDay.stops || []
+            ),
+          };
+        });
         const days = (Array.isArray(original.days) ? original.days : []).map((day) => {
           const planKey = `visual-day-${day.day_number || 1}`;
           const plan = normalizedPlans.find((item) => item.key === planKey);

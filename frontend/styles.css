@@ -5967,6 +5967,12 @@ html {
   gap: 8px;
 }
 
+.visual-route-stop-entry {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
 .visual-route-stop-row {
   position: relative;
   display: grid;
@@ -6034,6 +6040,89 @@ html {
   margin-top: 2px;
   color: #64748b;
   font-size: 12px;
+}
+
+.visual-route-segment {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+  margin: -2px 8px 0 8px;
+  padding: 7px 8px;
+  border: 1px solid rgba(15, 118, 110, 0.08);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.74);
+  color: #475569;
+}
+
+.visual-route-segment-line {
+  position: relative;
+  width: 24px;
+  height: 20px;
+}
+
+.visual-route-segment-line::before {
+  content: "";
+  position: absolute;
+  left: 11px;
+  top: -8px;
+  bottom: -8px;
+  border-left: 2px dashed rgba(15, 118, 110, 0.24);
+}
+
+.visual-route-segment strong,
+.visual-route-segment small,
+.visual-route-segment em,
+.visual-route-segment-status {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.visual-route-segment strong {
+  display: block;
+  color: #0f766e;
+  font-size: 12px;
+}
+
+.visual-route-segment small {
+  display: block;
+  margin-top: 1px;
+  color: #64748b;
+  font-size: 11px;
+}
+
+.visual-route-segment em {
+  color: #334155;
+  font-style: normal;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.visual-route-segment-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: max-content;
+  padding: 4px 7px;
+  border-radius: 999px;
+  background: #f1f5f9;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.visual-route-segment.ready .visual-route-segment-status {
+  color: #047857;
+  background: rgba(209, 250, 229, 0.9);
+}
+
+.visual-route-segment.estimated .visual-route-segment-status,
+.visual-route-segment.pending .visual-route-segment-status {
+  color: #92400e;
+  background: rgba(255, 251, 235, 0.96);
 }
 
 .visual-route-stop-actions {
@@ -6527,6 +6616,25 @@ html {
 
   .visual-route-stop-main strong,
   .visual-route-stop-main small {
+    white-space: normal;
+  }
+
+  .visual-route-segment {
+    grid-template-columns: 24px minmax(0, 1fr) auto;
+    margin-right: 0;
+    margin-left: 0;
+  }
+
+  .visual-route-segment-status {
+    max-width: none;
+  }
+
+  .visual-route-segment em {
+    grid-column: 2 / -1;
+    white-space: normal;
+  }
+
+  .visual-route-segment small {
     white-space: normal;
   }
 
