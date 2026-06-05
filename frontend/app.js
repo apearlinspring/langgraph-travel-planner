@@ -1930,6 +1930,7 @@
                                       </button>
                                       <div class="visual-route-stop-actions">
                                         <button
+                                          class="visual-route-action-primary"
                                           type="button"
                                           data-journey-edit-action="up"
                                           data-map-day-stop="${escapeHtml(stopMeta)}"
@@ -1938,6 +1939,7 @@
                                           ${stopIndex === 0 ? "disabled" : ""}
                                         ><span aria-hidden="true">↑</span></button>
                                         <button
+                                          class="visual-route-action-primary"
                                           type="button"
                                           data-journey-edit-action="down"
                                           data-map-day-stop="${escapeHtml(stopMeta)}"
@@ -1945,36 +1947,46 @@
                                           title="下移"
                                           ${stopIndex === stops.length - 1 ? "disabled" : ""}
                                         ><span aria-hidden="true">↓</span></button>
-                                        <button
-                                          type="button"
-                                          data-journey-edit-action="prev-day"
-                                          data-map-day-stop="${escapeHtml(stopMeta)}"
-                                          aria-label="${escapeHtml(`移到上一天：${stopLabel}`)}"
-                                          title="移到上一天"
-                                          ${dayIndex === 0 ? "disabled" : ""}
-                                        ><span aria-hidden="true">←</span></button>
-                                        <button
-                                          type="button"
-                                          data-journey-edit-action="next-day"
-                                          data-map-day-stop="${escapeHtml(stopMeta)}"
-                                          aria-label="${escapeHtml(`移到下一天：${stopLabel}`)}"
-                                          title="移到下一天"
-                                          ${dayIndex === dayPlans.length - 1 ? "disabled" : ""}
-                                        ><span aria-hidden="true">→</span></button>
-                                        <button
-                                          type="button"
-                                          data-journey-edit-action="replace"
-                                          data-map-day-stop="${escapeHtml(stopMeta)}"
-                                          aria-label="${escapeHtml(`替换${stopLabel}`)}"
-                                          title="替换"
-                                        ><span aria-hidden="true">↻</span></button>
-                                        <button
-                                          type="button"
-                                          data-journey-edit-action="delete"
-                                          data-map-day-stop="${escapeHtml(stopMeta)}"
-                                          aria-label="${escapeHtml(`删除${stopLabel}`)}"
-                                          title="删除"
-                                        ><span aria-hidden="true">×</span></button>
+                                        <details class="visual-route-more-actions">
+                                          <summary
+                                            aria-label="${escapeHtml(`更多操作：${stopLabel}`)}"
+                                            title="更多操作"
+                                          >
+                                            <span aria-hidden="true">⋯</span>
+                                          </summary>
+                                          <div class="visual-route-more-menu">
+                                            <button
+                                              type="button"
+                                              data-journey-edit-action="prev-day"
+                                              data-map-day-stop="${escapeHtml(stopMeta)}"
+                                              aria-label="${escapeHtml(`移到上一天：${stopLabel}`)}"
+                                              title="移到上一天"
+                                              ${dayIndex === 0 ? "disabled" : ""}
+                                            ><span aria-hidden="true">←</span><span>上一天</span></button>
+                                            <button
+                                              type="button"
+                                              data-journey-edit-action="next-day"
+                                              data-map-day-stop="${escapeHtml(stopMeta)}"
+                                              aria-label="${escapeHtml(`移到下一天：${stopLabel}`)}"
+                                              title="移到下一天"
+                                              ${dayIndex === dayPlans.length - 1 ? "disabled" : ""}
+                                            ><span aria-hidden="true">→</span><span>下一天</span></button>
+                                            <button
+                                              type="button"
+                                              data-journey-edit-action="replace"
+                                              data-map-day-stop="${escapeHtml(stopMeta)}"
+                                              aria-label="${escapeHtml(`替换${stopLabel}`)}"
+                                              title="替换"
+                                            ><span aria-hidden="true">↻</span><span>替换</span></button>
+                                            <button
+                                              type="button"
+                                              data-journey-edit-action="delete"
+                                              data-map-day-stop="${escapeHtml(stopMeta)}"
+                                              aria-label="${escapeHtml(`删除${stopLabel}`)}"
+                                              title="删除"
+                                            ><span aria-hidden="true">×</span><span>删除</span></button>
+                                          </div>
+                                        </details>
                                       </div>
                                     </div>
                                   `;
