@@ -34,6 +34,7 @@
       const governanceApi = window.ZhiXingGovernanceApi;
       const journeyApi = window.ZhiXingJourneyApi;
       const journeyEditorFactory = window.ZhiXingJourneyEditor;
+      const guideImportFactory = window.ZhiXingGuideImport;
       const journeyOverlayFactory = window.ZhiXingJourneyOverlay;
       const mapControlsFactory = window.ZhiXingMapControls;
       const reportBudgetFactory = window.ZhiXingReportBudget;
@@ -250,6 +251,16 @@
         getVisualJourneyMapEntry: (...args) => getVisualJourneyMapEntry(...args),
         setJourneyMapDaySelection: (...args) => setJourneyMapDaySelection(...args),
         focusJourneyDayStop: (...args) => focusJourneyDayStop(...args),
+        getJourneyReplacementCandidates: (...args) => getJourneyReplacementCandidates(...args),
+        normalizeJourneyPoiAsStop: (...args) => normalizeJourneyPoiAsStop(...args),
+      });
+      const guideImport = guideImportFactory?.createGuideImport?.({
+        getPlannerFields: () => readPlannerFields(),
+        appendToComposer: (...args) => appendToComposer(...args),
+        updatePlannerSummary: (...args) => updatePlannerSummary(...args),
+        setRuntimeStatus: (...args) => setRuntimeStatus(...args),
+        showToast: (...args) => showToast(...args),
+        sendMessage: (...args) => sendMessage(...args),
       });
       const reportExport = reportExportFactory?.createReportExport?.({
         getCurrentConversationTitle: () => getCurrentConversation()?.title || "",
@@ -1846,6 +1857,140 @@
         `;
       }
 
+      function renderVisualJourneyDayEditor(dayPlans = []) {
+        if (!Array.isArray(dayPlans) || !dayPlans.length) return "";
+        const totalStops = dayPlans.reduce(
+          (count, day) => count + (Array.isArray(day.stops) ? day.stops.length : 0),
+          0
+        );
+        return `
+          <section class="visual-route-editor" data-visual-route-editor="true">
+            <div class="visual-route-editor-head">
+              <div>
+                <span>路线编辑</span>
+                <strong>分日地点顺序</strong>
+              </div>
+              <small>${escapeHtml(String(totalStops))} 个地点</small>
+            </div>
+            <div class="visual-route-day-list">
+              ${dayPlans
+                .map((day, dayIndex) => {
+                  const dayKey = day.key || `visual-day-${dayIndex + 1}`;
+                  const stops = Array.isArray(day.stops) ? day.stops : [];
+                  return `
+                    <article class="visual-route-day-card" data-journey-day-card="${escapeHtml(dayKey)}">
+                      <header>
+                        <button
+                          class="visual-route-day-focus visual-day-focus-btn"
+                          type="button"
+                          data-map-day-focus="${escapeHtml(dayKey)}"
+                        >
+                          <span>${escapeHtml(day.label || `Day ${dayIndex + 1}`)}</span>
+                          <strong>${escapeHtml(day.title || day.note || "当天路线")}</strong>
+                        </button>
+                        <small>${escapeHtml(String(stops.length))} 点</small>
+                      </header>
+                      ${
+                        stops.length
+                          ? `<div class="visual-route-stop-list">
+                              ${stops
+                                .map((stop, stopIndex) => {
+                                  const stopMeta = `${dayKey}:${stopIndex}`;
+                                  const stopLabel = cleanJourneyLocationValue(stop.name || "地点待确认");
+                                  const metaText = [
+                                    stop.time_range || stop.suggested_time,
+                                    stop.type_label || stop.type,
+                                    stop.estimated_cost,
+                                  ]
+                                    .filter(Boolean)
+                                    .join(" · ");
+                                  return `
+                                    <div class="visual-route-stop-row" data-map-day-stop="${escapeHtml(stopMeta)}">
+                                      <button
+                                        class="visual-route-stop-main visual-poi-focus-btn"
+                                        type="button"
+                                        data-map-day-stop="${escapeHtml(stopMeta)}"
+                                        aria-label="${escapeHtml(`定位${stopLabel}`)}"
+                                      >
+                                        <span>${stopIndex + 1}</span>
+                                        <div>
+                                          <strong>${escapeHtml(stopLabel)}</strong>
+                                          <small>${escapeHtml(metaText || "停留与费用待核验")}</small>
+                                        </div>
+                                      </button>
+                                      <div class="visual-route-stop-actions">
+                                        <button
+                                          type="button"
+                                          data-journey-edit-action="up"
+                                          data-map-day-stop="${escapeHtml(stopMeta)}"
+                                          aria-label="${escapeHtml(`上移${stopLabel}`)}"
+                                          title="上移"
+                                          ${stopIndex === 0 ? "disabled" : ""}
+                                        ><span aria-hidden="true">↑</span></button>
+                                        <button
+                                          type="button"
+                                          data-journey-edit-action="down"
+                                          data-map-day-stop="${escapeHtml(stopMeta)}"
+                                          aria-label="${escapeHtml(`下移${stopLabel}`)}"
+                                          title="下移"
+                                          ${stopIndex === stops.length - 1 ? "disabled" : ""}
+                                        ><span aria-hidden="true">↓</span></button>
+                                        <button
+                                          type="button"
+                                          data-journey-edit-action="prev-day"
+                                          data-map-day-stop="${escapeHtml(stopMeta)}"
+                                          aria-label="${escapeHtml(`移到上一天：${stopLabel}`)}"
+                                          title="移到上一天"
+                                          ${dayIndex === 0 ? "disabled" : ""}
+                                        ><span aria-hidden="true">←</span></button>
+                                        <button
+                                          type="button"
+                                          data-journey-edit-action="next-day"
+                                          data-map-day-stop="${escapeHtml(stopMeta)}"
+                                          aria-label="${escapeHtml(`移到下一天：${stopLabel}`)}"
+                                          title="移到下一天"
+                                          ${dayIndex === dayPlans.length - 1 ? "disabled" : ""}
+                                        ><span aria-hidden="true">→</span></button>
+                                        <button
+                                          type="button"
+                                          data-journey-edit-action="replace"
+                                          data-map-day-stop="${escapeHtml(stopMeta)}"
+                                          aria-label="${escapeHtml(`替换${stopLabel}`)}"
+                                          title="替换"
+                                        ><span aria-hidden="true">↻</span></button>
+                                        <button
+                                          type="button"
+                                          data-journey-edit-action="delete"
+                                          data-map-day-stop="${escapeHtml(stopMeta)}"
+                                          aria-label="${escapeHtml(`删除${stopLabel}`)}"
+                                          title="删除"
+                                        ><span aria-hidden="true">×</span></button>
+                                      </div>
+                                    </div>
+                                  `;
+                                })
+                                .join("")}
+                            </div>`
+                          : `<p class="visual-route-empty">当天地点待补齐。</p>`
+                      }
+                    </article>
+                  `;
+                })
+                .join("")}
+            </div>
+          </section>
+        `;
+      }
+
+      function refreshVisualJourneyDayEditor(workbench, dayPlans = []) {
+        const panel = workbench?.querySelector("[data-visual-route-editor='true']");
+        if (!panel) return;
+        const wrapper = document.createElement("div");
+        wrapper.innerHTML = renderVisualJourneyDayEditor(dayPlans);
+        const nextPanel = wrapper.firstElementChild;
+        if (nextPanel) panel.replaceWith(nextPanel);
+      }
+
       function destroyJourneyMapEntry(node) {
         const entry = node ? journeyMapInstances.get(node) : null;
         try {
@@ -1985,6 +2130,7 @@
 
       function updateVisualJourneyPoiCards(workbench, dayPlans) {
         if (!workbench) return;
+        refreshVisualJourneyDayEditor(workbench, dayPlans);
         const activeIds = new Set(
           dayPlans.flatMap((day) => (day.stops || []).map((stop) => stop.id).filter(Boolean))
         );
@@ -6873,6 +7019,7 @@
             ${renderVisualJourneyStats(journeyData)}
             ${renderPlanningTrace(getPlanningTraceFromOptions(options))}
             ${atlas}
+            ${renderVisualJourneyDayEditor(previewState.dayPlans)}
             <div class="visual-day-strip">
               ${days
                 .map(
@@ -6971,6 +7118,7 @@
         document
           .getElementById("resetPlannerDraftBtn")
           ?.addEventListener("click", () => resetPlannerDraft());
+        guideImport?.bindGuideImportEvents?.();
         document
           .getElementById("chatInput")
           ?.addEventListener("keydown", handleInputKeydown);

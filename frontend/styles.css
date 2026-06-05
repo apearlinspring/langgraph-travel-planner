@@ -3059,6 +3059,13 @@ html {
         background: rgba(255, 255, 255, 0.22);
         border-color: rgba(255, 255, 255, 0.38);
       }
+      .message.assistant .message-text .travel-report-actions button:focus-visible {
+        outline: 2px solid rgba(255, 250, 240, 0.82);
+        outline-offset: 3px;
+      }
+      .message.assistant .message-text .travel-report-actions button i {
+        flex: 0 0 auto;
+      }
       .message.assistant .message-text .travel-report-summary {
         padding: 16px 18px;
         border-radius: 20px;
@@ -4025,6 +4032,12 @@ html {
       .planner-panel-body[hidden] {
         display: none !important;
       }
+      .planner-panel-body {
+        max-height: min(46vh, 430px);
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        padding-right: 2px;
+      }
       .planner-panel.collapsed {
         padding-bottom: 16px;
       }
@@ -4189,6 +4202,95 @@ html {
         font-size: 12px;
         color: var(--text-light);
         line-height: 1.7;
+      }
+
+      .guide-import-panel {
+        margin-top: 8px;
+        border: 1px solid rgba(26, 77, 84, 0.12);
+        border-radius: 14px;
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.88), rgba(240, 250, 248, 0.78));
+        overflow: hidden;
+      }
+
+      .guide-import-panel summary {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        min-height: 36px;
+        padding: 8px 12px;
+        color: var(--primary);
+        cursor: pointer;
+        list-style: none;
+      }
+
+      .guide-import-panel summary::-webkit-details-marker {
+        display: none;
+      }
+
+      .guide-import-panel summary span,
+      .guide-import-panel summary small {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+        font-weight: 800;
+      }
+
+      .guide-import-panel summary small {
+        flex: 0 0 auto;
+        padding: 5px 9px;
+        border-radius: 999px;
+        color: #0f766e;
+        background: rgba(240, 253, 250, 0.95);
+        font-size: 12px;
+      }
+
+      .guide-import-body {
+        display: grid;
+        gap: 10px;
+        padding: 0 14px 14px;
+      }
+
+      .guide-import-body textarea {
+        width: 100%;
+        min-height: 112px;
+        max-height: 210px;
+        padding: 12px;
+        border: 1px solid rgba(26, 77, 84, 0.14);
+        border-radius: 14px;
+        color: var(--text-main);
+        background: rgba(255, 255, 255, 0.92);
+        resize: vertical;
+        line-height: 1.6;
+        font: inherit;
+      }
+
+      .guide-import-body textarea:focus {
+        outline: none;
+        border-color: rgba(36, 166, 161, 0.48);
+        box-shadow: 0 0 0 3px rgba(36, 166, 161, 0.12);
+      }
+
+      .guide-import-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .guide-import-status {
+        color: var(--text-light);
+        font-size: 12px;
+        line-height: 1.6;
+      }
+
+      .guide-import-status[data-guide-import-tone="ready"] {
+        color: #0f766e;
+      }
+
+      .guide-import-status[data-guide-import-tone="warning"] {
+        color: #a16207;
       }
 
       .thinking-card {
@@ -5577,6 +5679,216 @@ html {
   background: linear-gradient(180deg, rgba(255, 251, 235, 0.96), #fff);
 }
 
+.visual-route-editor {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid rgba(17, 24, 39, 0.08);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.96));
+}
+
+.visual-route-editor-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.visual-route-editor-head span {
+  display: block;
+  color: #0f766e;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.visual-route-editor-head strong {
+  display: block;
+  margin-top: 3px;
+  color: #111827;
+  font-size: 18px;
+}
+
+.visual-route-editor-head small {
+  flex: 0 0 auto;
+  padding: 6px 10px;
+  border-radius: 999px;
+  color: #475569;
+  background: #eef2f7;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.visual-route-day-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 10px;
+}
+
+.visual-route-day-card {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid rgba(15, 118, 110, 0.12);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.visual-route-day-card header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.visual-route-day-card header > small {
+  padding: 5px 8px;
+  border-radius: 999px;
+  color: #0f766e;
+  background: rgba(240, 253, 250, 0.95);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.visual-route-day-focus {
+  min-height: 0;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.visual-route-day-focus span {
+  color: #0f766e;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.visual-route-day-focus strong {
+  display: block;
+  margin-top: 3px;
+  color: #111827;
+  font-size: 14px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.visual-route-stop-list {
+  display: grid;
+  gap: 8px;
+}
+
+.visual-route-stop-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  min-height: 46px;
+  padding: 8px;
+  border-radius: 8px;
+  background: #f8fafc;
+  border: 1px solid rgba(15, 23, 42, 0.06);
+}
+
+.visual-route-stop-main {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.visual-route-stop-main > span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  color: #fff;
+  background: #0f766e;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.visual-route-stop-main strong,
+.visual-route-stop-main small {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.visual-route-stop-main strong {
+  color: #111827;
+  font-size: 14px;
+}
+
+.visual-route-stop-main small {
+  margin-top: 2px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.visual-route-stop-actions {
+  display: grid;
+  grid-template-columns: repeat(6, 30px);
+  gap: 5px;
+}
+
+.visual-route-stop-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid rgba(15, 118, 110, 0.18);
+  border-radius: 8px;
+  color: #0f766e;
+  background: #fff;
+  cursor: pointer;
+  font-size: 15px;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.visual-route-stop-actions button:hover:not(:disabled) {
+  border-color: rgba(15, 118, 110, 0.36);
+  background: rgba(240, 253, 250, 0.95);
+}
+
+.visual-route-stop-actions button:disabled {
+  color: #cbd5e1;
+  border-color: rgba(148, 163, 184, 0.18);
+  background: rgba(241, 245, 249, 0.72);
+  cursor: not-allowed;
+}
+
+.visual-route-stop-actions [data-journey-edit-action="delete"] {
+  color: #b91c1c;
+  border-color: rgba(185, 28, 28, 0.16);
+}
+
+.visual-route-empty {
+  margin: 0;
+  padding: 10px;
+  border-radius: 8px;
+  color: #64748b;
+  background: #f8fafc;
+  font-size: 13px;
+}
+
 .journey-day-status-chips {
   display: flex;
   flex-wrap: wrap;
@@ -5688,6 +6000,15 @@ html {
 
 .visual-day-focus-btn:hover {
   background: rgba(240, 253, 250, 0.9);
+}
+
+.visual-route-day-focus.visual-day-focus-btn {
+  min-height: 0;
+  padding: 0;
+}
+
+.visual-route-day-focus.visual-day-focus-btn:hover {
+  background: transparent;
 }
 
 .visual-day-strip span {
@@ -5910,5 +6231,22 @@ html {
   .visual-journey-badges {
     justify-content: flex-start;
     min-width: 0;
+  }
+
+  .visual-route-day-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .visual-route-stop-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .visual-route-stop-actions {
+    grid-template-columns: repeat(6, minmax(34px, 1fr));
+  }
+
+  .visual-route-stop-actions button {
+    width: 100%;
+    height: 34px;
   }
 }

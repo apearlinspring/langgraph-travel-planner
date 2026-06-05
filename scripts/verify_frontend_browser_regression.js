@@ -511,11 +511,60 @@ async function checkMainSurface(page, viewport) {
   );
 }
 
+async function checkGuideImportComposer(page, viewport) {
+  await expectVisible(page, "#guideImportPanel", `${viewport.name} guide import panel`);
+  await page.locator("#guideImportPanel").evaluate((node) => {
+    node.open = true;
+  });
+  await page.locator("#plannerDestination").fill("杭州");
+  await page.locator("#plannerDays").fill("4天3晚");
+  await page
+    .locator("#guideImportText")
+    .fill(
+      "Day1 西湖、雷峰塔、河坊街。Day2 灵隐寺、飞来峰、龙井村。Day3 良渚古城遗址、京杭大运河。喜欢慢游和茶文化，住宿希望交通方便。"
+    );
+  await expectContainsText(
+    page,
+    "#guideImportCount",
+    ["字"],
+    `${viewport.name} guide import count`
+  );
+  await page.locator("#guideImportComposeBtn").click();
+  await page.waitForFunction(
+    () =>
+      document
+        .getElementById("chatInput")
+        ?.value?.includes("【攻略原文】"),
+    null,
+    { timeout: 5000 }
+  );
+  const draft = await page.locator("#chatInput").inputValue();
+  ["攻略原文", "杭州", "4天3晚", "西湖", "灵隐寺", "待核验项"].forEach((fragment) => {
+    if (!draft.includes(fragment)) {
+      throw new Error(`${viewport.name} guide import draft missing ${fragment}.`);
+    }
+  });
+  await expectContainsText(
+    page,
+    "#plannerSummary",
+    ["攻略已整理到输入框"],
+    `${viewport.name} guide import planner summary`
+  );
+  await page.locator("#chatInput").evaluate((node) => {
+    node.value = "";
+    node.style.height = "auto";
+  });
+  await page.locator("#guideImportPanel").evaluate((node) => {
+    node.open = false;
+  });
+}
+
 async function checkReportSurface(page) {
   await expectVisible(page, '[data-report-source="structured"]', "structured report");
   await expectVisible(page, ".travel-report-card", "report card");
   await expectVisible(page, '[data-report-action="export"]', "export report button");
   await expectVisible(page, '[data-report-action="map"]', "map preview entry");
+  await expectVisible(page, '[data-report-action="copy-summary"]', "copy summary entry");
   await expectVisible(page, ".travel-report-map .journey-live-map-shell", "route map");
   await expectVisible(page, ".travel-report-map .journey-live-map", "live map canvas");
   await expectVisible(page, ".travel-report-card.budget", "budget card");
@@ -523,7 +572,7 @@ async function checkReportSurface(page) {
   await expectContainsText(
     page,
     '[data-report-source="structured"]',
-    ["脱敏演示", "省心方案", "导出报告", "查看路线地图"],
+    ["脱敏演示", "省心方案", "导出报告", "查看路线地图", "复制摘要"],
     "structured report shell"
   );
   await expectContainsText(
@@ -589,6 +638,37 @@ async function checkMapPreviewEntry(page) {
   await expectVisible(page, ".travel-report-map .journey-live-map-shell", "map after map action");
 }
 
+async function checkReportShareSummary(page, viewport) {
+  await page.evaluate(() => {
+    window.__zhixingCopiedReportSummary = "";
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: async (text) => {
+          window.__zhixingCopiedReportSummary = String(text || "");
+        },
+      },
+    });
+  });
+  await page.locator('[data-report-action="copy-summary"]').click();
+  await page
+    .locator("#toast.show", { hasText: "已复制报告交付摘要" })
+    .waitFor({ state: "visible", timeout: 5000 });
+  const copiedText = await page.evaluate(() => window.__zhixingCopiedReportSummary || "");
+  const requiredFragments = [
+    "知行旅游报告",
+    "北京到成都 4 日顾问方案",
+    "核心内容",
+    "待核验项",
+    "交付边界",
+    "不代表真实支付",
+  ];
+  const missing = requiredFragments.filter((fragment) => !copiedText.includes(fragment));
+  if (missing.length) {
+    throw new Error(`${viewport.name} report share summary missing: ${missing.join(", ")}`);
+  }
+}
+
 async function checkStreamingChatSurface(page, viewport) {
   await page
     .locator(".conversation-item", { hasText: "浏览器回归行程" })
@@ -643,6 +723,10 @@ async function checkReportExport(page, viewport) {
   const html = fs.readFileSync(downloadedPath, "utf8");
   const requiredFragments = [
     "知行 ZhiXing 旅游报告",
+    "报告交付摘要",
+    "来源：结构化 report_data 报告",
+    "待核验项",
+    "导出不代表真实支付",
     'data-report-source="structured"',
     "北京到成都 4 日顾问方案（脱敏演示）",
     "预算明细与依据",
@@ -746,12 +830,17 @@ function intersectionArea(a, b) {
 
 async function checkLayoutHealth(page, viewport) {
   const layout = await page.evaluate(() => {
-    const selectors = [
+      const selectors = [
       ".sidebar",
       ".chat-main",
       "#governanceConsole",
       ".service-banner",
       "#chatMessages",
+      ".chat-input-area",
+      ".planner-panel",
+      ".planner-panel-body",
+      "#guideImportPanel",
+      "#chatInput",
       '[data-report-source="structured"]',
       ".travel-report-grid",
       ".travel-report-card.budget",
@@ -797,8 +886,22 @@ async function checkLayoutHealth(page, viewport) {
       throw new Error(`${selector} is hidden.`);
     }
     if (item.width < 120 || item.height < 80) {
+      const details = [
+        ".chat-input-area",
+        ".planner-panel",
+        ".planner-panel-body",
+        "#guideImportPanel",
+        "#chatInput",
+      ]
+        .map((selector) => {
+          const measured = bySelector.get(selector);
+          return measured
+            ? `${selector}=${Math.round(measured.width)}x${Math.round(measured.height)}`
+            : `${selector}=missing`;
+        })
+        .join(", ");
       throw new Error(
-        `${selector} appears blank or collapsed: ${Math.round(item.width)}x${Math.round(item.height)}.`
+        `${selector} appears blank or collapsed: ${Math.round(item.width)}x${Math.round(item.height)}. ${details}`
       );
     }
     if (item.textLength < 20) {
@@ -855,6 +958,7 @@ async function runViewport(browser, viewport) {
     await seedLoggedInState(main.page);
     await gotoFrontend(main.page);
     await checkMainSurface(main.page, viewport);
+    await checkGuideImportComposer(main.page, viewport);
     await injectReport(main.page);
     await checkReportSurface(main.page);
     const viewportScreenshots = [];
@@ -865,6 +969,7 @@ async function runViewport(browser, viewport) {
     await captureReportScreenshot(browser, main.page, viewport, reportScreenshotPath);
     viewportScreenshots.push(reportScreenshotPath);
     await checkMapPreviewEntry(main.page);
+    await checkReportShareSummary(main.page, viewport);
     await checkReportExport(main.page, viewport);
     await checkLayoutHealth(main.page, viewport);
     const screenshotPath = path.join(

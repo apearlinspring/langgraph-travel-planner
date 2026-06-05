@@ -12,7 +12,19 @@
       getVisualJourneyMapEntry,
       setJourneyMapDaySelection,
       focusJourneyDayStop,
+      getJourneyReplacementCandidates,
+      normalizeJourneyPoiAsStop,
     } = deps;
+
+    function commitJourneyPlanEdit(button, shell, dayPlans, message) {
+      const normalizedDayPlans = dayPlans.map(normalizeJourneyDayPlanStops);
+      const workbench = button.closest(".visual-journey-workbench");
+      updateVisualJourneyPoiCards?.(workbench, normalizedDayPlans);
+      refreshJourneyMapAfterEdit?.(shell, normalizedDayPlans);
+      saveEditedJourneyDraft?.(workbench, normalizedDayPlans);
+      if (message) showToast?.(message);
+      return true;
+    }
 
     function handleJourneyEditAction(button) {
       if (button.disabled) return false;
@@ -25,6 +37,7 @@
       if (!day || !Array.isArray(day.stops)) return false;
       const index = meta.stopIndex;
       if (index < 0 || index >= day.stops.length) return false;
+      const currentStop = day.stops[index] || {};
 
       if (action === "delete") {
         if (day.stops.length <= 1) {
@@ -36,17 +49,43 @@
         [day.stops[index - 1], day.stops[index]] = [day.stops[index], day.stops[index - 1]];
       } else if (action === "down" && index < day.stops.length - 1) {
         [day.stops[index], day.stops[index + 1]] = [day.stops[index + 1], day.stops[index]];
+      } else if (action === "prev-day" || action === "next-day") {
+        if (day.stops.length <= 1) {
+          showToast?.("当天至少保留一个地点", true);
+          return true;
+        }
+        const dayIndex = dayPlans.findIndex((item) => item.key === day.key);
+        const targetDay = dayPlans[action === "prev-day" ? dayIndex - 1 : dayIndex + 1];
+        if (!targetDay || !Array.isArray(targetDay.stops)) return false;
+        const [movedStop] = day.stops.splice(index, 1);
+        targetDay.stops.push(movedStop);
+      } else if (action === "replace") {
+        const workbench = button.closest(".visual-journey-workbench");
+        const candidates = getJourneyReplacementCandidates?.(workbench, dayPlans, day.key, index) || [];
+        const replacement = candidates[0];
+        if (!replacement) {
+          showToast?.("暂时没有可替换的候选地点", true);
+          return true;
+        }
+        day.stops[index] = normalizeJourneyPoiAsStop?.(replacement, currentStop) || replacement;
       } else {
         return false;
       }
 
-      const normalizedDayPlans = dayPlans.map(normalizeJourneyDayPlanStops);
-      const workbench = button.closest(".visual-journey-workbench");
-      updateVisualJourneyPoiCards?.(workbench, normalizedDayPlans);
-      refreshJourneyMapAfterEdit?.(shell, normalizedDayPlans);
-      saveEditedJourneyDraft?.(workbench, normalizedDayPlans);
-      showToast?.("已更新当天路线顺序");
-      return true;
+      const actionLabels = {
+        delete: `已移除 ${currentStop.name || "这个地点"}`,
+        up: "已上移地点",
+        down: "已下移地点",
+        "prev-day": `已移到上一天：${currentStop.name || "这个地点"}`,
+        "next-day": `已移到下一天：${currentStop.name || "这个地点"}`,
+        replace: `已替换 ${currentStop.name || "这个地点"}`,
+      };
+      return commitJourneyPlanEdit(
+        button,
+        shell,
+        dayPlans,
+        actionLabels[action] || "已更新路线"
+      );
     }
 
     function handleVisualJourneyDayFocus(button) {
