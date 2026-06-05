@@ -1,13 +1,34 @@
 const fs = require("fs");
 const path = require("path");
 
+const runningInCi = ["1", "true"].includes(String(process.env.CI || "").toLowerCase());
+const strictMissingBrowser =
+  process.env.ZHIXING_FRONTEND_BROWSER_STRICT === "1" ||
+  process.env.ZHIXING_ADMIN_BROWSER_STRICT === "1" ||
+  runningInCi;
+
+function finishMissingDependency(message, details = []) {
+  const header = strictMissingBrowser
+    ? "admin-dashboard-browser-dependency-missing"
+    : "admin-dashboard-browser-skip";
+  const text = [header, message, ...details].filter(Boolean).join("\n");
+  if (strictMissingBrowser) {
+    console.error(text);
+    process.exit(1);
+  }
+  console.warn(text);
+  process.exit(0);
+}
+
 let playwright;
 try {
   playwright = require("playwright");
 } catch (error) {
-  console.log("admin-dashboard-browser-skip");
-  console.log("Playwright is not installed in this checkout.");
-  process.exit(0);
+  finishMissingDependency("Playwright is not installed in this checkout.", [
+    "Install local browser test dependencies with: npm install",
+    "Then install Chromium if needed with: npx playwright install chromium",
+    "CI, ZHIXING_FRONTEND_BROWSER_STRICT=1 and ZHIXING_ADMIN_BROWSER_STRICT=1 treat this as a failed gate.",
+  ]);
 }
 
 const repoRoot = path.resolve(__dirname, "..");

@@ -4,7 +4,12 @@ const { pathToFileURL } = require("url");
 
 const repoRoot = path.resolve(__dirname, "..");
 const frontendHtmlPath = path.join(repoRoot, "frontend", "zhixing.html");
-const frontendStylesText = fs.readFileSync(path.join(repoRoot, "frontend", "styles.css"), "utf8");
+const frontendStylesText = [
+  "styles.css",
+  "chat.css",
+]
+  .map((name) => fs.readFileSync(path.join(repoRoot, "frontend", name), "utf8"))
+  .join("\n");
 const runtimeDir = path.join(repoRoot, ".runtime");
 const reportFixturePath = path.join(
   repoRoot,
