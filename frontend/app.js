@@ -40,76 +40,50 @@
       const reportExportFactory = window.ZhiXingReportExport;
       const reportRendererFactory = window.ZhiXingReportRenderer;
       const reportActionsFactory = window.ZhiXingReportActions;
+      const draftStorageFactory = window.ZhiXingDraftStorage;
+      const runtimeStatusFactory = window.ZhiXingRuntimeStatus;
+      const chatStreamFactory = window.ZhiXingChatStream;
       let toastTimer = null;
       let streamingScrollFrame = null;
       const composerDraftKey = "zhixing-composer-draft";
       const plannerDraftKey = "zhixing-planner-draft";
       const plannerCollapseKey = "zhixing-planner-collapsed";
-      const DRAFT_STORAGE_WRITE_DELAY_MS = 250;
-      const draftStorageWriteTimers = new Map();
-      const pendingDraftStorageValues = new Map();
-
-      function getDraftStorageScope() {
-        return state.user?.id || state.user?.username || "guest";
+      const draftStorage = draftStorageFactory?.createDraftStorage?.({
+        getScope: () => state.user?.id || state.user?.username || "guest",
+      });
+      if (!draftStorage) {
+        throw new Error("ZhiXingDraftStorage is not loaded.");
       }
-
-      function getScopedStorageKey(baseKey) {
-        return `${baseKey}:${getDraftStorageScope()}`;
+      const {
+        readDraftStorage,
+        writeDraftStorage,
+        clearDraftStorage,
+        flushAllDraftStorageWrites,
+      } = draftStorage;
+      const runtimeStatus = runtimeStatusFactory?.createRuntimeStatus?.({
+        document,
+      });
+      if (!runtimeStatus) {
+        throw new Error("ZhiXingRuntimeStatus is not loaded.");
       }
-
-      function readDraftStorage(baseKey) {
-        return (
-          localStorage.getItem(getScopedStorageKey(baseKey)) ??
-          localStorage.getItem(baseKey)
-        );
+      const {
+        setRuntimeStatus,
+        updateEndpointTone,
+        setServiceBanner,
+        setAuthServiceHint,
+        setAuthFeedback,
+        setFieldError,
+        clearAuthErrors,
+      } = runtimeStatus;
+      const chatStream = chatStreamFactory?.createChatStream?.();
+      if (!chatStream) {
+        throw new Error("ZhiXingChatStream is not loaded.");
       }
-
-      function commitDraftStorage(storageKey, value) {
-        localStorage.setItem(storageKey, value);
-      }
-
-      function flushDraftStorageWrite(storageKey) {
-        if (!pendingDraftStorageValues.has(storageKey)) return;
-        const value = pendingDraftStorageValues.get(storageKey);
-        pendingDraftStorageValues.delete(storageKey);
-        const timer = draftStorageWriteTimers.get(storageKey);
-        if (timer) {
-          clearTimeout(timer);
-          draftStorageWriteTimers.delete(storageKey);
-        }
-        commitDraftStorage(storageKey, value);
-      }
-
-      function flushAllDraftStorageWrites() {
-        Array.from(pendingDraftStorageValues.keys()).forEach((storageKey) =>
-          flushDraftStorageWrite(storageKey)
-        );
-      }
-
-      function writeDraftStorage(baseKey, value, options = {}) {
-        const storageKey = getScopedStorageKey(baseKey);
-        if (options.immediate) {
-          pendingDraftStorageValues.set(storageKey, value);
-          flushDraftStorageWrite(storageKey);
-          return;
-        }
-        pendingDraftStorageValues.set(storageKey, value);
-        if (draftStorageWriteTimers.has(storageKey)) return;
-        const timer = setTimeout(() => {
-          flushDraftStorageWrite(storageKey);
-        }, DRAFT_STORAGE_WRITE_DELAY_MS);
-        draftStorageWriteTimers.set(storageKey, timer);
-      }
-
-      function clearDraftStorage(baseKey) {
-        const storageKey = getScopedStorageKey(baseKey);
-        const timer = draftStorageWriteTimers.get(storageKey);
-        if (timer) clearTimeout(timer);
-        draftStorageWriteTimers.delete(storageKey);
-        pendingDraftStorageValues.delete(storageKey);
-        localStorage.removeItem(storageKey);
-        localStorage.removeItem(baseKey);
-      }
+      const {
+        createAssistantThinkingFilter,
+        processSseBuffer,
+        buildStreamingFallbackMessage,
+      } = chatStream;
 
       const getDefaultApiBase = () =>
         window.location.protocol === "file:"
@@ -2278,76 +2252,6 @@
         setMobileChatFocus(false);
       }
 
-      function setRuntimeStatus(label, tone = "idle") {
-        const el = document.getElementById("assistantStatus");
-        if (!el) return;
-        el.textContent = label;
-        el.className = `assistant-status ${tone}`.trim();
-      }
-
-      function updateEndpointTone(tone = "idle") {
-        const endpointHint = document.getElementById("endpointHint");
-        if (!endpointHint) return;
-        endpointHint.className = "endpoint-pill";
-        if (tone === "warning") endpointHint.classList.add("warning");
-        if (tone === "error") endpointHint.classList.add("error");
-      }
-
-      function setServiceBanner({
-        visible = false,
-        tone = "loading",
-        title = "",
-        text = "",
-        meta = "",
-      } = {}) {
-        const banner = document.getElementById("serviceBanner");
-        if (!banner) return;
-        banner.className = `service-banner ${visible ? "show" : ""} ${
-          tone || ""
-        }`.trim();
-        document.getElementById("serviceBannerTitle").textContent = title;
-        document.getElementById("serviceBannerText").textContent = text;
-        document.getElementById("serviceBannerMeta").textContent = meta;
-      }
-
-      function setAuthServiceHint(message, tone = "loading") {
-        const hint = document.getElementById("authServiceHint");
-        if (!hint) return;
-        hint.textContent = message;
-        hint.className = `auth-service-hint ${tone}`.trim();
-      }
-
-      function setAuthFeedback(message, tone = "info") {
-        const el = document.getElementById("authFeedback");
-        if (!el) return;
-        if (!message) {
-          el.className = "auth-feedback";
-          el.textContent = "";
-          return;
-        }
-        el.textContent = message;
-        el.className = `auth-feedback show ${tone}`.trim();
-      }
-
-      function setFieldError(field, message = "") {
-        const input = document.getElementById(field);
-        const error = document.getElementById(`${field}Error`);
-        const wrapper = input?.closest(".form-group");
-        if (wrapper) {
-          wrapper.classList.toggle("error", Boolean(message));
-        }
-        if (error) {
-          error.textContent = message;
-        }
-      }
-
-      function clearAuthErrors() {
-        ["username", "email", "password"].forEach((field) =>
-          setFieldError(field, "")
-        );
-        setAuthFeedback("", "info");
-      }
-
       function validateAuthForm(isRegister) {
         clearAuthErrors();
         const username = document.getElementById("username").value.trim();
@@ -3717,80 +3621,6 @@
           .join("\n")
           .replace(/\n{3,}/g, "\n\n")
           .trim();
-      }
-
-      function getLongestTagPrefixSuffix(text = "", tag = "") {
-        const lowerText = String(text || "").toLowerCase();
-        const maxSize = Math.min(tag.length - 1, lowerText.length);
-        for (let size = maxSize; size > 0; size -= 1) {
-          if (tag.startsWith(lowerText.slice(-size))) {
-            return size;
-          }
-        }
-        return 0;
-      }
-
-      function createAssistantThinkingFilter() {
-        const openTag = "<think>";
-        const closeTag = "</think>";
-        let buffer = "";
-        let insideThinking = false;
-
-        return {
-          feed(value = "") {
-            buffer += String(value || "");
-            const chunks = [];
-
-            while (buffer) {
-              const lowerBuffer = buffer.toLowerCase();
-              if (insideThinking) {
-                const closeIndex = lowerBuffer.indexOf(closeTag);
-                if (closeIndex >= 0) {
-                  buffer = buffer.slice(closeIndex + closeTag.length);
-                  insideThinking = false;
-                  continue;
-                }
-                const keepSize = getLongestTagPrefixSuffix(buffer, closeTag);
-                buffer = keepSize ? buffer.slice(-keepSize) : "";
-                break;
-              }
-
-              const openIndex = lowerBuffer.indexOf(openTag);
-              if (openIndex >= 0) {
-                chunks.push(buffer.slice(0, openIndex));
-                buffer = buffer.slice(openIndex + openTag.length);
-                insideThinking = true;
-                continue;
-              }
-
-              const keepSize = getLongestTagPrefixSuffix(buffer, openTag);
-              if (keepSize) {
-                chunks.push(buffer.slice(0, -keepSize));
-                buffer = buffer.slice(-keepSize);
-              } else {
-                chunks.push(buffer);
-                buffer = "";
-              }
-              break;
-            }
-
-            return chunks.join("");
-          },
-          finish() {
-            if (insideThinking) {
-              buffer = "";
-              insideThinking = false;
-              return "";
-            }
-            if (buffer && openTag.startsWith(buffer.toLowerCase())) {
-              buffer = "";
-              return "";
-            }
-            const remainder = buffer;
-            buffer = "";
-            return remainder;
-          },
-        };
       }
 
       function stripAssistantThinkingBlocks(text = "") {
@@ -8083,58 +7913,6 @@
 
       function clearChatMessages() {
         document.getElementById("chatMessages").innerHTML = getWelcomeMarkup();
-      }
-
-      function extractStreamContent(rawData) {
-        if (!rawData || rawData === "[DONE]") return "";
-        try {
-          const parsed = JSON.parse(rawData);
-          if (typeof parsed.content === "string") return parsed.content;
-          if (typeof parsed.delta === "string") return parsed.delta;
-          if (typeof parsed.message === "string") return parsed.message;
-          return "";
-        } catch (error) {
-          return rawData;
-        }
-      }
-
-      function processSseBuffer(buffer, onContent, onEvent = null) {
-        const events = buffer.split("\n\n");
-        const remainder = events.pop() || "";
-        events.forEach((eventBlock) => {
-          const dataLines = eventBlock
-            .split("\n")
-            .filter((line) => line.startsWith("data: "));
-          dataLines.forEach((line) => {
-            const rawData = line.slice(6).trim();
-            if (onEvent) {
-              try {
-                onEvent(JSON.parse(rawData));
-              } catch (error) {
-                // 非 JSON SSE 片段仍按纯文本增量处理。
-              }
-            }
-            const content = extractStreamContent(rawData);
-            if (content) {
-              onContent(content);
-            }
-          });
-        });
-        return remainder;
-      }
-
-      function buildStreamingFallbackMessage({
-        elapsedMs = 0,
-        hasPartialContent = false,
-        reachedVerySlowStage = false,
-      } = {}) {
-        if (hasPartialContent) {
-          return "\n\n补充说明：这轮回复在中途断开了。你可以直接继续追问，我会尽量接着当前上下文往下补全。";
-        }
-        if (reachedVerySlowStage || elapsedMs >= 45000) {
-          return "这轮等待时间比较久，可能是规划链路较慢，或者交通、住宿这类外部查询还没来得及返回。你可以稍后再试一次，或直接继续追问，我会尽量接着当前上下文继续。";
-        }
-        return "这轮连接没有顺利完成。你可以稍后重试一次，或换个问法继续，我会接着当前会话往下帮你规划。";
       }
 
       async function sendMessage() {
