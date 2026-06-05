@@ -6022,8 +6022,7 @@ html {
   font-weight: 900;
 }
 
-.visual-route-stop-main strong,
-.visual-route-stop-main small {
+.visual-route-stop-main strong {
   display: block;
   min-width: 0;
   overflow: hidden;
@@ -6036,10 +6035,61 @@ html {
   font-size: 14px;
 }
 
-.visual-route-stop-main small {
-  margin-top: 2px;
-  color: #64748b;
-  font-size: 12px;
+.visual-route-stop-details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 5px;
+  min-width: 0;
+}
+
+.visual-route-stop-pill {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 22px;
+  padding: 0 7px;
+  border-radius: 999px;
+  color: #475569;
+  background: #f1f5f9;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.visual-route-stop-pill.time {
+  color: #0f766e;
+  background: rgba(240, 253, 250, 0.98);
+}
+
+.visual-route-stop-pill.duration {
+  color: #334155;
+  background: rgba(226, 232, 240, 0.82);
+}
+
+.visual-route-stop-pill.ticket.ready {
+  color: #047857;
+  background: rgba(209, 250, 229, 0.9);
+}
+
+.visual-route-stop-pill.ticket.pending {
+  color: #92400e;
+  background: rgba(255, 251, 235, 0.96);
+}
+
+.visual-route-stop-pill.ticket.neutral {
+  color: #475569;
+  background: rgba(241, 245, 249, 0.92);
+}
+
+.visual-route-stop-lock-note {
+  display: block;
+  margin-top: 4px;
+  color: #0f766e;
+  font-size: 11px;
+  font-weight: 800;
 }
 
 .visual-route-segment {
@@ -6615,7 +6665,16 @@ html {
   }
 
   .visual-route-stop-main strong,
-  .visual-route-stop-main small {
+  .visual-route-stop-lock-note {
+    white-space: normal;
+  }
+
+  .visual-route-stop-details {
+    gap: 6px;
+  }
+
+  .visual-route-stop-pill {
+    min-height: 24px;
     white-space: normal;
   }
 
