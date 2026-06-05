@@ -2504,9 +2504,17 @@ html {
       }
       .journey-live-map--compact-density.journey-live-map--day-focused .amap-journey-segment-label.journey-map-layer--foreground,
       .journey-live-map--compact-density.journey-live-map--day-focused .leaflet-journey-segment-label.journey-map-layer--foreground span {
+        min-width: 132px;
+        max-width: 156px;
         transform: translateY(20px);
       }
-      .journey-live-map--compact-density.journey-live-map--day-focused .amap-journey-day-badge.journey-map-layer--foreground,
+      .journey-live-map--compact-density.journey-live-map--day-focused .amap-journey-segment-label.journey-map-layer--foreground span,
+      .journey-live-map--compact-density.journey-live-map--day-focused .leaflet-journey-segment-label.journey-map-layer--foreground small {
+        max-width: 118px;
+      }
+      .journey-live-map--compact-density.journey-live-map--day-focused .amap-journey-day-badge.journey-map-layer--foreground {
+        transform: translate(-30px, -22px) scale(0.96);
+      }
       .journey-live-map--compact-density.journey-live-map--day-focused .leaflet-journey-day-badge.journey-map-layer--foreground span {
         transform: translateY(-22px) scale(0.96);
       }
