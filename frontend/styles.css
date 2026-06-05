@@ -2429,6 +2429,42 @@ html {
         font-weight: 800;
         line-height: 1.1;
       }
+      .journey-live-map--compact-density .amap-journey-segment-label,
+      .journey-live-map--compact-density .leaflet-journey-segment-label span {
+        min-width: 104px;
+        max-width: 148px;
+        padding: 4px 8px;
+        gap: 4px;
+        box-shadow: 0 7px 14px rgba(18, 52, 58, 0.13);
+        font-size: 10px;
+      }
+      .journey-live-map--compact-density .amap-journey-segment-label strong,
+      .journey-live-map--compact-density .leaflet-journey-segment-label strong {
+        min-width: 34px;
+        height: 20px;
+        padding: 0 6px;
+        font-size: 9px;
+      }
+      .journey-live-map--compact-density .amap-journey-segment-label span,
+      .journey-live-map--compact-density .leaflet-journey-segment-label small {
+        max-width: 96px;
+        font-size: 10px;
+      }
+      .journey-live-map--compact-density .amap-journey-day-badge,
+      .journey-live-map--compact-density .leaflet-journey-day-badge span {
+        min-width: 76px;
+        padding: 6px 8px;
+        border-width: 1.5px;
+        box-shadow: 0 7px 16px rgba(18, 52, 58, 0.14);
+      }
+      .journey-live-map--compact-density .amap-journey-day-badge strong,
+      .journey-live-map--compact-density .leaflet-journey-day-badge strong {
+        font-size: 11px;
+      }
+      .journey-live-map--compact-density .amap-journey-day-badge span,
+      .journey-live-map--compact-density .leaflet-journey-day-badge small {
+        font-size: 9px;
+      }
       .amap-journey-segment-label.verified,
       .leaflet-journey-segment-label span.verified {
         background: rgba(240, 253, 250, 0.96);
