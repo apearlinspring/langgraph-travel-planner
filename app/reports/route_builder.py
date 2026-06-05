@@ -4,6 +4,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from app.journey.route_preferences import route_segment_duration_matches_mode
+
 
 @dataclass(frozen=True)
 class RouteBuilderServices:
@@ -120,7 +122,10 @@ def _segment_duration_for_mode(
     fallback: str,
 ) -> str:
     if duration_text and "待" not in duration_text and "unknown" not in duration_text.lower():
-        if normalize_route_segment_mode(mode) == normalize_route_segment_mode(selected_mode):
+        if (
+            normalize_route_segment_mode(mode) == normalize_route_segment_mode(selected_mode)
+            and route_segment_duration_matches_mode(mode, duration_text)
+        ):
             return duration_text
     return fallback
 
@@ -246,12 +251,18 @@ def normalize_report_route_segment(
         deduped_alternatives.append({**option, "mode": mode})
 
     if selected_mode not in seen_modes:
+        selected_duration_text = _segment_duration_for_mode(
+            mode=selected_mode,
+            selected_mode=selected_mode,
+            duration_text=duration_text,
+            fallback="时间待核验",
+        )
         deduped_alternatives.insert(
             0,
             {
                 "mode": selected_mode,
                 "label": route_segment_mode_label(selected_mode),
-                "duration_text": duration_text,
+                "duration_text": selected_duration_text,
                 "cost_text": str(base.get("cost_text") or "费用待核验"),
                 "reason": str(base.get("reason") or "当前推荐方式，真实路线待核验。"),
                 "verification_status": normalize_route_segment_verification_status(base),

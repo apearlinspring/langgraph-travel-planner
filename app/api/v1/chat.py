@@ -38,6 +38,7 @@ from app.tools.result_validation import (
     evidence_type_for_tool_name,
     validate_tool_output_for_audit,
 )
+from app.journey.route_preferences import extract_route_segment_preferences
 from app.journey.visual_planner import JOURNEY_PLAN_VERSION, validate_journey_plan
 from app.utils.logger import app_logger
 from app.utils.date_normalization import normalize_travel_date
@@ -1221,6 +1222,13 @@ async def _persist_latest_journey_data_on_conversation(
     extra_info["latest_journey_source"] = redact_sensitive_text(source)
     if isinstance(planning_trace, list):
         extra_info["latest_planning_trace"] = redact_sensitive_data(planning_trace)
+    route_segment_preferences = extract_route_segment_preferences(safe_journey_data)
+    if route_segment_preferences:
+        extra_info["latest_route_segment_preferences"] = redact_sensitive_data(
+            route_segment_preferences
+        )
+    else:
+        extra_info.pop("latest_route_segment_preferences", None)
     conversation.extra_info = extra_info
     db.add(conversation)
     await db.commit()
@@ -1235,6 +1243,13 @@ def _merge_journey_draft_extra_info(
     extra_info = dict(existing_extra_info or {})
     extra_info["message_type"] = "journey_plan"
     extra_info["journey_data"] = redact_sensitive_data(journey_data)
+    route_segment_preferences = extract_route_segment_preferences(journey_data)
+    if route_segment_preferences:
+        extra_info["route_segment_preferences"] = redact_sensitive_data(
+            route_segment_preferences
+        )
+    else:
+        extra_info.pop("route_segment_preferences", None)
     extra_info["journey_editor"] = {
         "source": redact_sensitive_text(source or "frontend_editor"),
         "saved_at": int(time.time()),
@@ -1717,6 +1732,9 @@ async def generate_sse_stream(
         )
         if latest_journey_data:
             input_data["journey_plan"] = latest_journey_data
+            route_segment_preferences = extract_route_segment_preferences(latest_journey_data)
+            if route_segment_preferences:
+                input_data["route_segment_preferences"] = route_segment_preferences
             app_logger.info(
                 "Injected latest visual journey draft into agent state: "
                 f"conversation_id={conversation_id}, user_id={user.id}"
@@ -2227,6 +2245,13 @@ async def save_journey_draft(
     conversation_extra = dict(conversation.extra_info or {})
     conversation_extra["latest_journey_data"] = redact_sensitive_data(journey_data)
     conversation_extra["latest_journey_saved_at"] = int(time.time())
+    route_segment_preferences = extract_route_segment_preferences(journey_data)
+    if route_segment_preferences:
+        conversation_extra["latest_route_segment_preferences"] = redact_sensitive_data(
+            route_segment_preferences
+        )
+    else:
+        conversation_extra.pop("latest_route_segment_preferences", None)
     conversation.extra_info = conversation_extra
 
     db.add(target_message)
@@ -2243,6 +2268,9 @@ async def save_journey_draft(
             "status": "saved",
             "message_id": str(target_message.id),
             "journey_data": target_message.extra_info.get("journey_data"),
+            "route_segment_preferences": target_message.extra_info.get(
+                "route_segment_preferences", []
+            ),
             "saved_at": target_message.extra_info.get("journey_editor", {}).get("saved_at"),
         }
     )

@@ -1977,6 +1977,21 @@
         return "交通";
       }
 
+      function visualRouteDurationMatchesMode(mode = "", durationText = "") {
+        const text = String(durationText || "").toLowerCase();
+        if (!text) return true;
+        const normalized = normalizeVisualRouteMode(mode);
+        const explicitModes = [];
+        if (/walk|walking|步行/.test(text)) explicitModes.push("walking");
+        if (/bus|公交|metro|subway|地铁|transit/.test(text)) explicitModes.push("transit");
+        if (/taxi|ride|打车|网约车|drive|driving|驾车|自驾/.test(text)) {
+          explicitModes.push("taxi");
+        }
+        if (/train|rail|火车|高铁/.test(text)) explicitModes.push("rail");
+        if (/flight|air|航班|飞机/.test(text)) explicitModes.push("flight");
+        return !explicitModes.length || explicitModes.includes(normalized);
+      }
+
       function buildVisualRouteModeAlternatives(segment = {}) {
         const rawAlternatives = Array.isArray(segment.alternatives)
           ? segment.alternatives
@@ -1990,7 +2005,10 @@
             segment.source ||
             ""
         );
-        const canReuseBaseDuration = Boolean(baseDuration) && !/待|unknown/i.test(baseDuration);
+        const canReuseBaseDuration =
+          Boolean(baseDuration) &&
+          !/待|unknown/i.test(baseDuration) &&
+          visualRouteDurationMatchesMode(baseMode, baseDuration);
         const durationForMode = (mode, fallback) =>
           canReuseBaseDuration && baseMode === mode ? baseDuration : fallback;
         const fallbackAlternatives = rawAlternatives.length
@@ -2065,11 +2083,22 @@
           .join(" ");
         const isVerified = /amap|高德|已核验/i.test(confidenceText);
         const isEstimated = /estimated|估算/i.test(confidenceText);
+        const metricTextIsPending =
+          !metricText || /待|needs|unknown/i.test(metricText);
+        const metricMatchesMode = visualRouteDurationMatchesMode(
+          selectedMode,
+          segment.duration_text || ""
+        );
         const isPending =
-          !metricText || /待|needs|unknown/i.test([metricText, confidenceText].join(" "));
-        const displayMetricText = isPending
-          ? "待高德路线核验"
-          : metricText || selectedAlternative?.metricText || "距离/用时待核验";
+          metricTextIsPending ||
+          !metricMatchesMode ||
+          /needs|unknown/i.test(confidenceText);
+        const displayMetricText =
+          metricTextIsPending
+            ? "待高德路线核验"
+            : metricMatchesMode
+            ? metricText
+            : selectedAlternative?.metricText || "距离/用时待核验";
         return {
           selectedMode,
           modeText,
@@ -2077,8 +2106,20 @@
           reasonText: selectedAlternative?.reason || "交通方式待核验",
           alternatives,
           isModeLocked: Boolean(segment.locked_by_user || segment.mode_locked),
-          tone: isVerified ? "ready" : isEstimated ? "estimated" : isPending ? "pending" : "",
-          statusText: isVerified ? "已核验" : isEstimated ? "估算" : "待核验",
+          tone:
+            metricMatchesMode && isVerified
+              ? "ready"
+              : metricMatchesMode && isEstimated
+              ? "estimated"
+              : isPending
+              ? "pending"
+              : "",
+          statusText:
+            metricMatchesMode && isVerified
+              ? "已核验"
+              : metricMatchesMode && isEstimated
+              ? "估算"
+              : "待核验",
         };
       }
 
