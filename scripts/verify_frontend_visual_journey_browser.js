@@ -1226,6 +1226,12 @@ async function checkVisualJourneyEditing(page, viewport) {
     ["09:30-11:30", "停留 2小时", "活动核验", "票务核验"],
     `${viewport.name} route stop time and ticket status`
   );
+  await expectContainsText(
+    page,
+    ".visual-route-checklist",
+    ["行前核验清单", "不代表支付", "活动核验", "票务核验"],
+    `${viewport.name} route check task list`
+  );
   const unsafeTicketCopy = await page.evaluate(() => {
     const text = document.querySelector(".visual-route-editor")?.textContent || "";
     return /已支付|已出票|预订成功|库存已锁定|价格已锁定/.test(text);
@@ -1238,6 +1244,52 @@ async function checkVisualJourneyEditing(page, viewport) {
     ".visual-route-editor",
     ["1.1公里", "步行18分钟", "已核验"],
     `${viewport.name} route segment metrics`
+  );
+
+  const firstStopRowSelector =
+    '.visual-route-day-card[data-journey-day-card="visual-day-1"] .visual-route-stop-row[data-map-day-stop="visual-day-1:0"]';
+  await page.locator(`${firstStopRowSelector} .visual-route-more-actions > summary`).click();
+  await expectVisible(
+    page,
+    `${firstStopRowSelector} .visual-route-time-editor summary`,
+    `${viewport.name} route time editor entry`
+  );
+  await page.locator(`${firstStopRowSelector} .visual-route-time-editor summary`).click();
+  if (viewport.isMobile) {
+    const timeEditorPath = path.join(
+      runtimeDir,
+      "frontend-visual-journey-mobile-time-editor.png"
+    );
+    await page.locator(firstStopRowSelector).screenshot({ path: timeEditorPath });
+    screenshots.push(timeEditorPath);
+  }
+  await page.locator(`${firstStopRowSelector} input[name="time_range"]`).fill("10:00-12:15");
+  await page.locator(`${firstStopRowSelector} input[name="duration_minutes"]`).fill("135");
+  await page
+    .locator(`${firstStopRowSelector} [data-journey-edit-action="save-time"]`)
+    .click();
+  await page.waitForFunction(
+    () => {
+      const raw = document.querySelector(".journey-live-map-shell")?.dataset.dayPlans || "";
+      try {
+        const days = JSON.parse(decodeURIComponent(raw));
+        const day = days.find((item) => item.key === "visual-day-1");
+        return (
+          day?.stops?.[0]?.time_range === "10:00-12:15" &&
+          String(day?.stops?.[0]?.duration_minutes) === "135"
+        );
+      } catch (error) {
+        return false;
+      }
+    },
+    null,
+    { timeout: 5000 }
+  );
+  await expectContainsText(
+    page,
+    ".visual-route-editor",
+    ["10:00-12:15", "停留 2小时15分钟"],
+    `${viewport.name} route stop editable time`
   );
 
   const day1Before = await getVisualRouteDayNames(page, "visual-day-1");
@@ -1288,7 +1340,7 @@ async function checkVisualJourneyEditing(page, viewport) {
   const movingStop = day1AfterDown[0];
   await page
     .locator(
-      '.visual-route-day-card[data-journey-day-card="visual-day-1"] .visual-route-stop-row[data-map-day-stop="visual-day-1:0"] .visual-route-more-actions summary'
+      '.visual-route-day-card[data-journey-day-card="visual-day-1"] .visual-route-stop-row[data-map-day-stop="visual-day-1:0"] .visual-route-more-actions > summary'
     )
     .click();
   await expectVisible(
@@ -1379,7 +1431,7 @@ async function checkVisualJourneyEditing(page, viewport) {
   const day1FirstAfterAdds = (await getVisualRouteDayNames(page, "visual-day-1"))[0];
   await page
     .locator(
-      '.visual-route-day-card[data-journey-day-card="visual-day-1"] .visual-route-stop-row[data-map-day-stop="visual-day-1:0"] .visual-route-more-actions summary'
+      '.visual-route-day-card[data-journey-day-card="visual-day-1"] .visual-route-stop-row[data-map-day-stop="visual-day-1:0"] .visual-route-more-actions > summary'
     )
     .click();
   await page
@@ -1441,7 +1493,7 @@ async function checkVisualJourneyEditing(page, viewport) {
       const actions = row?.querySelector(".visual-route-stop-actions");
       const visibleControls = Array.from(
         actions?.querySelectorAll(
-          ".visual-route-action-primary, .visual-route-more-actions summary"
+          ".visual-route-action-primary, .visual-route-more-actions > summary"
         ) || []
       ).filter((node) => {
         const rect = node.getBoundingClientRect();
@@ -1541,7 +1593,7 @@ async function captureScreenshots(page, viewport) {
   let editorMenuPath = "";
   if (viewport.isMobile) {
     await page
-      .locator(".visual-route-editor .visual-route-more-actions summary")
+      .locator(".visual-route-editor .visual-route-more-actions > summary")
       .first()
       .click();
     await expectVisible(
