@@ -202,7 +202,8 @@ node scripts\verify_frontend_visual_journey_browser.js
 
 - 轻量静态回归继续运行 `node scripts\verify_frontend_report_renderer.js`，用于确认 `renderAssistantText` 对结构化 `report_data` 的 HTML 输出仍包含关键章节。
 - 报告渲染会按标题、类型和正文做卡片去重；同一轮正文与结构化数据都包含“预算拆分与依据”时只保留一份。包含“下一步 / 请评价 / 满意 / 想调整”的内容会从普通卡片网格剥离，固定渲染在报告底部的独立确认区。
-- 旅程工作台浏览器回归运行 `node scripts\verify_frontend_visual_journey_browser.js`，覆盖桌面和移动视口下的可视化旅程、地图推荐点、分日路线折叠、路线标签密度、POI 底部详情卡不展示和移动端地图截图。
+- 旅程工作台浏览器回归运行 `node scripts\verify_frontend_visual_journey_browser.js`，覆盖桌面和移动视口下的可视化旅程、地图推荐点、分日路线折叠、路线标签密度、单日聚焦后的前景/背景图层层级、POI 底部详情卡不展示和移动端地图截图。
+- 移动端地图标签密度规则：路线总览只显示前 2 个路段指标浮签；单日聚焦时只保留首个路段指标浮签，不自动打开地点 popup，其余路段详情在右侧/下方路线说明和路线编辑台查看。
 - 也可以使用统一的 npm（Node.js 包管理器，Node.js 是 JavaScript 运行时）入口：`npm run verify:frontend-renderer`、`npm run verify:frontend-visual-journey`、`npm run verify:frontend-browser`、`npm run verify:admin-browser`，或一次性运行 `npm run verify:frontend`。
 - 轻量静态回归和真实浏览器 E2E（端到端）回归都读取 `tests/fixtures/report_data/` 下的脱敏 fixture（固定测试数据），不依赖真实 `.env`、真实用户、真实订单、真实支付或真实外部库存。
 - 真实浏览器 E2E 回归运行 `node scripts\verify_frontend_browser_regression.js`。脚本使用 Playwright（浏览器自动化测试框架）启动 Chromium（谷歌开源浏览器内核）无头浏览器，分别覆盖 `1440x1000` 桌面视口和 `390x900` 移动视口。

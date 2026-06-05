@@ -2481,6 +2481,35 @@ html {
         background: rgba(249, 250, 251, 0.94);
         color: #6b7280;
       }
+      .journey-map-layer--background,
+      .journey-map-layer--hidden {
+        pointer-events: none;
+      }
+      .journey-live-map--day-focused .journey-map-layer--foreground.leaflet-journey-day-route {
+        filter: drop-shadow(0 8px 12px rgba(18, 52, 58, 0.2));
+      }
+      .journey-live-map--day-focused .amap-journey-segment-label.journey-map-layer--foreground,
+      .journey-live-map--day-focused .leaflet-journey-segment-label.journey-map-layer--foreground span {
+        transform: translateY(-2px);
+        box-shadow: 0 13px 26px rgba(18, 52, 58, 0.2);
+      }
+      .journey-live-map--day-focused .amap-journey-day-badge.journey-map-layer--foreground,
+      .journey-live-map--day-focused .leaflet-journey-day-badge.journey-map-layer--foreground span {
+        box-shadow:
+          0 0 0 3px rgba(255, 255, 255, 0.88),
+          0 16px 30px rgba(18, 52, 58, 0.22);
+      }
+      .journey-live-map--day-focused .journey-map-layer--background {
+        filter: saturate(0.74);
+      }
+      .journey-live-map--compact-density.journey-live-map--day-focused .amap-journey-segment-label.journey-map-layer--foreground,
+      .journey-live-map--compact-density.journey-live-map--day-focused .leaflet-journey-segment-label.journey-map-layer--foreground span {
+        transform: translateY(20px);
+      }
+      .journey-live-map--compact-density.journey-live-map--day-focused .amap-journey-day-badge.journey-map-layer--foreground,
+      .journey-live-map--compact-density.journey-live-map--day-focused .leaflet-journey-day-badge.journey-map-layer--foreground span {
+        transform: translateY(-22px) scale(0.96);
+      }
       .message.assistant .message-text .journey-preview-route {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));

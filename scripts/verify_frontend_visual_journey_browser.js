@@ -636,6 +636,19 @@ function enhancedLeafletStub() {
             if (this._element) this._element.style.opacity = String(opacity);
             return this;
           },
+          setZIndexOffset(zIndex) {
+            if (this._element) this._element.style.zIndex = String(zIndex);
+            return this;
+          },
+          bringToFront() {
+            this._element?.parentElement?.appendChild(this._element);
+            return this;
+          },
+          bringToBack() {
+            const parent = this._element?.parentElement;
+            if (parent && this._element) parent.insertBefore(this._element, parent.firstChild);
+            return this;
+          },
         };
       }
 
@@ -657,7 +670,9 @@ function enhancedLeafletStub() {
 
       function buildPolyline(latlngs = [], options = {}) {
         const element = document.createElement("div");
-        element.className = "playwright-map-polyline";
+        element.className = ["playwright-map-polyline", options.className || ""]
+          .filter(Boolean)
+          .join(" ");
         element.style.background = options.color || "#14b8a6";
         element.style.height = (options.weight || 4) + "px";
         element.style.opacity = String(options.opacity ?? 0.9);
@@ -1161,6 +1176,108 @@ async function expectVisibleRouteLabelCount(page, expected, label) {
   }
 }
 
+async function expectFocusedDayLayerHierarchy(page, label, options = {}) {
+  const expectedSelectedLabelCount = Object.prototype.hasOwnProperty.call(
+    options,
+    "expectedSelectedLabelCount"
+  )
+    ? options.expectedSelectedLabelCount
+    : 2;
+  const expectedVisibleSelectedLabelCount = Object.prototype.hasOwnProperty.call(
+    options,
+    "expectedVisibleSelectedLabelCount"
+  )
+    ? options.expectedVisibleSelectedLabelCount
+    : expectedSelectedLabelCount;
+  const result = await page.evaluate(() => {
+    const selectedLabels = Array.from(
+      document.querySelectorAll(".leaflet-journey-segment-label.journey-map-layer--foreground")
+    );
+    const secondaryLabels = Array.from(
+      document.querySelectorAll(
+        ".leaflet-journey-segment-label.journey-map-layer--background, .leaflet-journey-segment-label.journey-map-layer--hidden"
+      )
+    );
+    const selectedRoutes = Array.from(
+      document.querySelectorAll(".leaflet-journey-day-route.journey-map-layer--foreground")
+    );
+    const secondaryRoutes = Array.from(
+      document.querySelectorAll(
+        ".leaflet-journey-day-route.journey-map-layer--background, .leaflet-journey-day-route.journey-map-layer--hidden"
+      )
+    );
+    const selectedBadges = Array.from(
+      document.querySelectorAll(".leaflet-journey-day-badge.journey-map-layer--foreground")
+    );
+    const visibleSelectedLabels = selectedLabels.filter(
+      (item) => Number.parseFloat(item.style.opacity || "1") > 0.5
+    );
+    const maxSecondaryRouteZ = Math.max(
+      0,
+      ...secondaryRoutes.map((item) => Number.parseInt(item.style.zIndex || "0", 10) || 0)
+    );
+    const minSelectedRouteZ = Math.min(
+      ...selectedRoutes.map((item) => Number.parseInt(item.style.zIndex || "0", 10) || 0)
+    );
+    const maxSecondaryLabelZ = Math.max(
+      0,
+      ...secondaryLabels.map((item) => Number.parseInt(item.style.zIndex || "0", 10) || 0)
+    );
+    const minSelectedLabelZ = Math.min(
+      ...selectedLabels.map((item) => Number.parseInt(item.style.zIndex || "0", 10) || 0)
+    );
+    return {
+      activeDay: document.querySelector(".journey-live-map-shell")?.dataset.activeDay,
+      mapFocused: document.querySelector(".journey-live-map")?.classList.contains("journey-live-map--day-focused"),
+      selectedLabelCount: selectedLabels.length,
+      visibleSelectedLabelCount: visibleSelectedLabels.length,
+      secondaryLabelCount: secondaryLabels.length,
+      selectedRouteCount: selectedRoutes.length,
+      secondaryRouteCount: secondaryRoutes.length,
+      selectedBadgeCount: selectedBadges.length,
+      minSelectedRouteZ,
+      maxSecondaryRouteZ,
+      minSelectedLabelZ,
+      maxSecondaryLabelZ,
+    };
+  });
+  const failures = [];
+  if (result.activeDay !== "visual-day-2") failures.push(`activeDay=${result.activeDay}`);
+  if (!result.mapFocused) failures.push("map is not day-focused");
+  if (
+    expectedSelectedLabelCount === null
+      ? result.selectedLabelCount < 1
+      : result.selectedLabelCount !== expectedSelectedLabelCount
+  ) {
+    failures.push(`selectedLabelCount=${result.selectedLabelCount}`);
+  }
+  if (
+    expectedVisibleSelectedLabelCount === null
+      ? result.visibleSelectedLabelCount < 1 ||
+        result.visibleSelectedLabelCount > result.selectedLabelCount
+      : result.visibleSelectedLabelCount !== expectedVisibleSelectedLabelCount
+  ) {
+    failures.push(`visibleSelectedLabelCount=${result.visibleSelectedLabelCount}`);
+  }
+  if (result.secondaryLabelCount < 1) failures.push("secondary labels missing");
+  if (result.selectedRouteCount !== 1) failures.push(`selectedRouteCount=${result.selectedRouteCount}`);
+  if (result.secondaryRouteCount < 1) failures.push("secondary routes missing");
+  if (result.selectedBadgeCount !== 1) failures.push(`selectedBadgeCount=${result.selectedBadgeCount}`);
+  if (!(result.minSelectedRouteZ > result.maxSecondaryRouteZ)) {
+    failures.push(
+      `route z-index ${result.minSelectedRouteZ} <= ${result.maxSecondaryRouteZ}`
+    );
+  }
+  if (!(result.minSelectedLabelZ > result.maxSecondaryLabelZ)) {
+    failures.push(
+      `label z-index ${result.minSelectedLabelZ} <= ${result.maxSecondaryLabelZ}`
+    );
+  }
+  if (failures.length) {
+    throw new Error(`${label} hierarchy failed: ${failures.join("; ")}`);
+  }
+}
+
 async function injectVisualJourney(page) {
   await page.evaluate(
     ({ journeyData, planningTrace }) => {
@@ -1303,10 +1420,23 @@ async function checkVisualJourneySurface(page, viewport) {
     null,
     { timeout: 5000 }
   );
+  const selectedDayVisibleLabelCount = await page.evaluate(() =>
+    document.querySelector(".journey-live-map")?.classList.contains("journey-live-map--compact-density")
+      ? 1
+      : 2
+  );
   await expectVisibleRouteLabelCount(
     page,
-    2,
+    selectedDayVisibleLabelCount,
     `${viewport.name} selected day route label density`
+  );
+  await expectFocusedDayLayerHierarchy(
+    page,
+    `${viewport.name} selected day map layer hierarchy`,
+    {
+      expectedSelectedLabelCount: 2,
+      expectedVisibleSelectedLabelCount: selectedDayVisibleLabelCount,
+    }
   );
   await page
     .locator('button.journey-map-stage-stop[data-map-day-stop="visual-day-2:0"]')
@@ -1854,6 +1984,38 @@ async function captureScreenshots(page, viewport) {
       path: editorMenuPath,
     });
   }
+  await page
+    .locator(
+      '.journey-map-sidebar-routes .journey-map-day-btn[data-map-day="visual-day-2"]'
+    )
+    .first()
+    .click();
+  await page.waitForFunction(
+    () =>
+      document.querySelector(".journey-live-map-shell")?.dataset.activeDay ===
+      "visual-day-2",
+    null,
+    { timeout: 5000 }
+  );
+  await expectFocusedDayLayerHierarchy(
+    page,
+    `${viewport.name} focused day map screenshot hierarchy`,
+    { expectedSelectedLabelCount: null, expectedVisibleSelectedLabelCount: null }
+  );
+  await page
+    .waitForFunction(
+      () => !document.querySelector("#toast")?.classList.contains("show"),
+      null,
+      { timeout: 5000 }
+    )
+    .catch(() => {});
+  const focusedDayMapPath = path.join(
+    runtimeDir,
+    `frontend-visual-journey-${viewport.name}-focused-day-map.png`
+  );
+  await page.locator(".journey-map-stage").first().screenshot({
+    path: focusedDayMapPath,
+  });
 
   const shellHtml = await page.evaluate(() => {
     const shell = document.querySelector(".journey-live-map-shell--immersive");
@@ -1924,7 +2086,7 @@ async function captureScreenshots(page, viewport) {
   await evidencePage.locator(".journey-live-map-shell--immersive").first().screenshot({
     path: focusedPath,
   });
-  screenshots.push(workbenchPath, editorPath, focusedPath);
+  screenshots.push(workbenchPath, editorPath, focusedDayMapPath, focusedPath);
   if (editorMenuPath) screenshots.push(editorMenuPath);
 
   if (viewport.isMobile) {
