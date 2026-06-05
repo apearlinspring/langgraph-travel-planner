@@ -22,18 +22,74 @@ def _agency_evidence(category: str):
     }
 
 
+def _route_segments(points: list[str], *, day_number: int = 1):
+    segments = []
+    for index, (from_name, to_name) in enumerate(zip(points, points[1:]), start=1):
+        segments.append(
+            {
+                "id": f"d{day_number}-s{index}",
+                "day_number": day_number,
+                "from_name": from_name,
+                "to_name": to_name,
+                "mode": "taxi",
+                "recommended_mode": "taxi",
+                "selected_mode": "taxi",
+                "mode_label": "打车",
+                "locked_by_user": False,
+                "verification_status": "needs_live_route",
+                "verification_label": "待核验",
+                "distance_text": "待高德路线核验",
+                "duration_text": "约10-20分钟",
+                "cost_text": "费用待核验",
+                "confidence": "needs_live_route",
+                "source": "fixture",
+                "verification_note": "测试报告路段待高德路线核验。",
+                "alternatives": [
+                    {
+                        "mode": "taxi",
+                        "label": "打车",
+                        "duration_text": "约10-20分钟",
+                        "cost_text": "费用待核验",
+                        "reason": "省体力，适合赶时间或带行李。",
+                        "verification_status": "needs_live_route",
+                    },
+                    {
+                        "mode": "transit",
+                        "label": "公交/地铁",
+                        "duration_text": "约25-40分钟",
+                        "cost_text": "约2-8元",
+                        "reason": "更省预算，班次和换乘待核验。",
+                        "verification_status": "needs_live_route",
+                    },
+                    {
+                        "mode": "walking",
+                        "label": "步行",
+                        "duration_text": "约30-45分钟",
+                        "cost_text": "0元",
+                        "reason": "适合短距离慢游，体力消耗更高。",
+                        "verification_status": "needs_live_route",
+                    },
+                ],
+            }
+        )
+    return segments
+
+
 def _valid_report_data(mode="agency_plan"):
+    route_points = ["Beijing", "Shanghai", "People Square", "The Bund"]
     route = {
         "day_number": 1,
-        "route_points": ["Beijing", "Shanghai", "People Square", "The Bund"],
+        "route_points": route_points,
         "summary": "Beijing -> Shanghai -> People Square -> The Bund",
         "map_label": "Day 1: Beijing -> Shanghai -> People Square -> The Bund",
+        "segments": _route_segments(route_points),
     }
     route_map_day = {
         "day_number": 1,
         "title": "Arrival and light city walk",
         "summary": route["summary"],
         "route_points": route["route_points"],
+        "segments": route["segments"],
         "points": [
             {
                 "name": "Beijing",
@@ -239,6 +295,17 @@ def test_evaluate_report_quality_flags_itinerary_route_count_mismatch():
 
     assert result.passed is False
     assert any("map_routes count must match itinerary day count" in item for item in result.summary)
+
+
+def test_evaluate_report_quality_flags_missing_route_segment_contract():
+    report_data = _valid_report_data()
+    report_data["itinerary"][0]["route"]["segments"] = []
+    report_data["route_map"]["days"][0]["segments"] = []
+
+    result = evaluate_report_quality(report_data, expected_mode="agency_plan")
+
+    assert result.passed is False
+    assert any("route segment mode alternatives" in item for item in result.summary)
 
 
 def test_evaluate_report_quality_checks_expected_planning_mode():

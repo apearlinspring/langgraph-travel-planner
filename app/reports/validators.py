@@ -11,6 +11,12 @@ from app.reports.contracts import (
     REQUIRED_REPORT_TOP_LEVEL_KEYS,
 )
 
+ROUTE_SEGMENT_VERIFICATION_STATUSES = {
+    "verified",
+    "estimated",
+    "needs_live_route",
+}
+
 
 @dataclass(frozen=True)
 class ReportValidationResult:
@@ -56,6 +62,57 @@ def _section_ids(report_data: dict[str, Any]) -> set[str]:
     }
 
 
+def _route_point_label(point: Any) -> str:
+    if isinstance(point, dict):
+        for key in ("label", "name", "title", "address"):
+            value = point.get(key)
+            if value is not None and str(value).strip():
+                return str(value).strip()
+        return ""
+    return str(point or "").strip()
+
+
+def _route_points(route: dict[str, Any]) -> list[str]:
+    raw_points = route.get("route_points") or route.get("points") or []
+    return [label for point in _as_list(raw_points) if (label := _route_point_label(point))]
+
+
+def _validate_route_segment_contract(
+    route: dict[str, Any],
+    *,
+    day_number: Any,
+    route_mismatches: list[str],
+) -> None:
+    points = _route_points(route)
+    if len(points) < 2:
+        return
+
+    segments = [item for item in _as_list(route.get("segments")) if isinstance(item, dict)]
+    expected_count = len(points) - 1
+    if len(segments) != expected_count:
+        route_mismatches.append(
+            f"Day {day_number} 路段数量必须等于路线点之间的连接数。"
+        )
+        return
+
+    for index, segment in enumerate(segments, start=1):
+        selected_mode = str(segment.get("selected_mode") or segment.get("mode") or "").strip()
+        alternatives = [
+            item for item in _as_list(segment.get("alternatives")) if isinstance(item, dict)
+        ]
+        verification_status = str(segment.get("verification_status") or "").strip()
+        if not selected_mode:
+            route_mismatches.append(f"Day {day_number} 第 {index} 段缺少 selected_mode。")
+        if "locked_by_user" not in segment or not isinstance(segment.get("locked_by_user"), bool):
+            route_mismatches.append(f"Day {day_number} 第 {index} 段缺少 locked_by_user 布尔值。")
+        if verification_status not in ROUTE_SEGMENT_VERIFICATION_STATUSES:
+            route_mismatches.append(f"Day {day_number} 第 {index} 段 verification_status 无效。")
+        if not alternatives:
+            route_mismatches.append(f"Day {day_number} 第 {index} 段缺少交通候选 alternatives。")
+        elif not any(str(option.get("mode") or "").strip() == selected_mode for option in alternatives):
+            route_mismatches.append(f"Day {day_number} 第 {index} 段候选中缺少当前 selected_mode。")
+
+
 def validate_report_data(report_data: dict[str, Any]) -> ReportValidationResult:
     """Validate the minimum report contract required for delivery and export."""
 
@@ -99,11 +156,21 @@ def validate_report_data(report_data: dict[str, Any]) -> ReportValidationResult:
         for index in range(min(len(itinerary), len(map_routes))):
             day = itinerary[index]
             route = map_routes[index]
+            day_number = day.get("day_number") or route.get("day_number") or "?"
             day_summary = _as_dict(day.get("route")).get("summary")
             route_summary = route.get("summary")
             if day_summary != route_summary:
-                day_number = day.get("day_number") or route.get("day_number") or "?"
                 route_mismatches.append(f"Day {day_number} 行程路线摘要与地图摘要不一致。")
+            _validate_route_segment_contract(
+                _as_dict(day.get("route")),
+                day_number=day_number,
+                route_mismatches=route_mismatches,
+            )
+            _validate_route_segment_contract(
+                route,
+                day_number=day_number,
+                route_mismatches=route_mismatches,
+            )
 
     if route_map:
         if not route_map_days:
@@ -115,6 +182,11 @@ def validate_report_data(report_data: dict[str, Any]) -> ReportValidationResult:
             points = _as_list(route_day.get("points"))
             if len(points) < 2:
                 route_mismatches.append(f"route_map Day {day_number} 至少需要 2 个路线点。")
+            _validate_route_segment_contract(
+                route_day,
+                day_number=day_number,
+                route_mismatches=route_mismatches,
+            )
 
     agency_context = _as_dict(report_data.get("agency_context"))
     if "agency_context" not in missing_fields and agency_context.get("mode") not in REPORT_PLANNING_MODES:

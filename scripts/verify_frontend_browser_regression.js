@@ -81,8 +81,75 @@ const tinyPng = Buffer.from(
   "base64"
 );
 
+function buildRouteSegments(points, dayNumber = 1) {
+  return points.slice(0, -1).map((fromName, index) => ({
+    id: `browser-d${dayNumber}-s${index + 1}`,
+    day_number: dayNumber,
+    from_name: fromName,
+    to_name: points[index + 1],
+    mode: "walking",
+    recommended_mode: "walking",
+    selected_mode: "walking",
+    mode_label: "步行",
+    locked_by_user: index === 0,
+    verification_status: "needs_live_route",
+    verification_label: "待核验",
+    distance_text: "待高德路线核验",
+    duration_text: "约30-45分钟",
+    cost_text: "0元",
+    confidence: "needs_live_route",
+    source: "browser_fixture",
+    verification_note: "结构化报告路段候选待高德路线核验。",
+    alternatives: [
+      {
+        mode: "walking",
+        label: "步行",
+        duration_text: "约30-45分钟",
+        cost_text: "0元",
+        reason: "适合短距离慢游，体力消耗更高。",
+        verification_status: "needs_live_route",
+      },
+      {
+        mode: "taxi",
+        label: "打车",
+        duration_text: "约10-20分钟",
+        cost_text: "费用待核验",
+        reason: "省体力，适合赶时间或带行李。",
+        verification_status: "needs_live_route",
+      },
+      {
+        mode: "transit",
+        label: "公交/地铁",
+        duration_text: "约25-40分钟",
+        cost_text: "约2-8元",
+        reason: "更省预算，班次和换乘待核验。",
+        verification_status: "needs_live_route",
+      },
+    ],
+  }));
+}
+
+function addRouteSegmentContract(reportData) {
+  const mapRoutes = Array.isArray(reportData.map_routes) ? reportData.map_routes : [];
+  const routeMapDays = Array.isArray(reportData.route_map?.days)
+    ? reportData.route_map.days
+    : [];
+  const itineraryDays = Array.isArray(reportData.itinerary) ? reportData.itinerary : [];
+  mapRoutes.forEach((route, index) => {
+    const dayNumber = Number(route.day_number || index + 1);
+    const points = Array.isArray(route.route_points) ? route.route_points : [];
+    const segments = buildRouteSegments(points, dayNumber);
+    route.segments = segments;
+    const itineraryDay = itineraryDays.find((day) => Number(day.day_number) === dayNumber);
+    if (itineraryDay?.route) itineraryDay.route.segments = segments;
+    const routeMapDay = routeMapDays.find((day) => Number(day.day_number) === dayNumber);
+    if (routeMapDay) routeMapDay.segments = segments;
+  });
+  return reportData;
+}
+
 function sampleReportData() {
-  return JSON.parse(JSON.stringify(reportFixture));
+  return addRouteSegmentContract(JSON.parse(JSON.stringify(reportFixture)));
 }
 
 function responseJson(payload, status = 200) {
@@ -636,6 +703,7 @@ async function checkReportSurface(page) {
   await expectVisible(page, '[data-report-action="copy-summary"]', "copy summary entry");
   await expectVisible(page, ".travel-report-map .journey-live-map-shell", "route map");
   await expectVisible(page, ".travel-report-map .journey-live-map", "live map canvas");
+  await expectVisible(page, ".travel-report-route-segment", "route segment candidate card");
   await expectVisible(page, ".travel-report-card.budget", "budget card");
   await expectVisible(page, ".travel-report-card.warning", "risk card");
   await expectContainsText(
@@ -661,6 +729,12 @@ async function checkReportSurface(page) {
     ".travel-report-map",
     ["路线预览", "成都东站", "路线地图", "地图工具", "全屏", "路线参考"],
     "route map"
+  );
+  await expectContainsText(
+    page,
+    ".travel-report-route-segments",
+    ["步行", "候选：打车 / 公交/地铁", "已锁定"],
+    "route segment candidates"
   );
   const mapText = (await page.locator(".travel-report-map").textContent()) || "";
   [

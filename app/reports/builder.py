@@ -50,6 +50,74 @@ def _clean_report_line(line: Any) -> str:
     return str(line or "").strip().lstrip("-").strip()
 
 
+def _route_segment_mode_text(segment: dict[str, Any]) -> str:
+    return str(
+        segment.get("mode_label")
+        or segment.get("selected_mode")
+        or segment.get("mode")
+        or "交通"
+    ).strip()
+
+
+def _route_segment_summary(segment: dict[str, Any]) -> str:
+    from_name = str(segment.get("from_name") or "上一站").strip()
+    to_name = str(segment.get("to_name") or "下一站").strip()
+    mode_text = _route_segment_mode_text(segment)
+    status = str(
+        segment.get("verification_label")
+        or segment.get("verification_status")
+        or "待核验"
+    ).strip()
+    metric_text = " · ".join(
+        str(item).strip()
+        for item in (segment.get("distance_text"), segment.get("duration_text"))
+        if str(item or "").strip()
+    )
+    metric_suffix = f"；{metric_text}" if metric_text else ""
+    return f"{from_name} → {to_name}：{mode_text}（{status}{metric_suffix}）"
+
+
+def _route_segment_evidence(segment: dict[str, Any]) -> dict[str, Any]:
+    alternatives = []
+    for option in segment.get("alternatives") or []:
+        if not isinstance(option, dict):
+            continue
+        alternatives.append(
+            {
+                "mode": option.get("mode"),
+                "label": option.get("label"),
+                "duration_text": option.get("duration_text"),
+                "cost_text": option.get("cost_text"),
+                "verification_status": option.get("verification_status"),
+            }
+        )
+    return {
+        "id": segment.get("id"),
+        "from_name": segment.get("from_name"),
+        "to_name": segment.get("to_name"),
+        "recommended_mode": segment.get("recommended_mode"),
+        "selected_mode": segment.get("selected_mode"),
+        "locked_by_user": bool(segment.get("locked_by_user")),
+        "verification_status": segment.get("verification_status"),
+        "distance_text": segment.get("distance_text"),
+        "duration_text": segment.get("duration_text"),
+        "alternatives": alternatives,
+    }
+
+
+def _route_segment_pending_checks(route_summaries: list[dict[str, Any]]) -> list[str]:
+    checks = []
+    for route in route_summaries:
+        day_number = route.get("day_number") or "?"
+        for segment in route.get("segments") or []:
+            if not isinstance(segment, dict):
+                continue
+            if segment.get("verification_status") == "verified":
+                continue
+            checks.append(f"Day {day_number} 路段待核验：{_route_segment_summary(segment)}")
+    return _dedupe_report_points(checks, max_items=6)
+
+
 def _dedupe_report_points(points: list[str], max_items: int = 6) -> list[str]:
     picked = []
     for point in points:
@@ -124,6 +192,11 @@ def build_report_evidence_bundle(
                 "day_number": route.get("day_number"),
                 "route_points": list(route.get("route_points") or []),
                 "summary": route.get("summary") or "",
+                "segments": [
+                    _route_segment_evidence(segment)
+                    for segment in route.get("segments") or []
+                    if isinstance(segment, dict)
+                ],
             }
             for route in route_summaries
         ],
@@ -142,6 +215,7 @@ def build_report_tool_audit_summary(
         [
             *[_clean_report_line(item) for item in budget.get("estimated_items") or []],
             *[_clean_report_line(item) for item in budget.get("verification_items") or []],
+            *_route_segment_pending_checks(route_summaries),
             *[_clean_report_line(item) for item in audit_pending_checks],
         ],
         max_items=6,
@@ -155,6 +229,9 @@ def build_report_tool_audit_summary(
         f"交通：{selected_transport_option.get('source') or '用户选择/规则估算'}",
         f"住宿：{selected_accommodation.get('source') or '用户选择/规则估算'}",
         f"地图路线：已生成 {len(route_summaries)} 条分日路线节点",
+        "路段交通候选：已生成 {count} 段可切换交通偏好".format(
+            count=sum(len(route.get("segments") or []) for route in route_summaries)
+        ),
         "预算：已拆分为已确认、估算和待核验项目",
     ]
     return {

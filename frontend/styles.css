@@ -3690,6 +3690,65 @@ html {
         font-size: 10px;
         white-space: nowrap;
       }
+      .message.assistant .message-text .travel-report-route-segments {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+        gap: 8px;
+        margin-top: 10px;
+      }
+      .message.assistant .message-text .travel-report-route-segment {
+        display: grid;
+        gap: 5px;
+        min-width: 0;
+        padding: 9px 10px;
+        border-radius: 12px;
+        border: 1px solid rgba(26, 77, 84, 0.1);
+        background: rgba(255, 255, 255, 0.74);
+      }
+      .message.assistant .message-text .travel-report-route-segment.ready {
+        border-color: rgba(4, 120, 87, 0.16);
+        background: rgba(240, 253, 244, 0.72);
+      }
+      .message.assistant .message-text .travel-report-route-segment.estimated,
+      .message.assistant .message-text .travel-report-route-segment.pending {
+        border-color: rgba(180, 83, 9, 0.14);
+        background: rgba(255, 251, 235, 0.7);
+      }
+      .message.assistant .message-text .travel-report-route-segment div {
+        min-width: 0;
+      }
+      .message.assistant .message-text .travel-report-route-segment strong,
+      .message.assistant .message-text .travel-report-route-segment span,
+      .message.assistant .message-text .travel-report-route-segment small,
+      .message.assistant .message-text .travel-report-route-segment em,
+      .message.assistant .message-text .travel-report-route-segment p {
+        min-width: 0;
+        overflow-wrap: anywhere;
+      }
+      .message.assistant .message-text .travel-report-route-segment strong {
+        display: block;
+        color: var(--primary);
+        font-size: 12px;
+      }
+      .message.assistant .message-text .travel-report-route-segment span {
+        display: block;
+        margin-top: 2px;
+        color: var(--text-muted);
+        font-size: 11px;
+      }
+      .message.assistant .message-text .travel-report-route-segment small {
+        color: var(--text-main);
+        font-size: 12px;
+        font-weight: 800;
+      }
+      .message.assistant .message-text .travel-report-route-segment em,
+      .message.assistant .message-text .travel-report-route-segment p {
+        margin: 0;
+        color: var(--text-muted);
+        font-size: 11px;
+        font-style: normal;
+        line-height: 1.45;
+      }
       .message.assistant .message-text .travel-report-map .journey-live-map-shell {
         margin-top: 0;
       }

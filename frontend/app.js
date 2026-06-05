@@ -6620,6 +6620,30 @@
         );
       }
 
+      function normalizeReportRouteSegmentsForDay(
+        routeMapDay = {},
+        route = {},
+        itineraryDay = {},
+        routePointNames = []
+      ) {
+        const rawSegments = Array.isArray(routeMapDay.segments)
+          ? routeMapDay.segments
+          : Array.isArray(route.segments)
+          ? route.segments
+          : Array.isArray(itineraryDay.route?.segments)
+          ? itineraryDay.route.segments
+          : Array.isArray(itineraryDay.segments)
+          ? itineraryDay.segments
+          : [];
+        return rawSegments
+          .map((segment, index) => ({
+            ...(segment && typeof segment === "object" ? segment : {}),
+            from_name: segment?.from_name || routePointNames[index] || "上一站",
+            to_name: segment?.to_name || routePointNames[index + 1] || "下一站",
+          }))
+          .filter((segment) => segment.from_name || segment.to_name);
+      }
+
       function getReportDataDayNumber(day = {}, fallback = 0) {
         const explicit = Number(day?.day_number || day?.day || 0);
         if (explicit > 0) return explicit;
@@ -6750,6 +6774,7 @@
           const routePointNames = normalizeRouteMapDayPoints(routeDay, matchedRoute)
             .map((point) => point.name)
             .filter(Boolean);
+          const routePointObjects = normalizeRouteMapDayPoints(routeDay, matchedRoute);
           const itineraryPointNames = extractReportItineraryDayRoutePoints(itineraryDay);
           const waypoints = normalizeReportRoutePointNames([
             routePointNames,
@@ -6768,14 +6793,31 @@
             matchedRoute.summary ||
             itineraryDay.route_note ||
             (waypoints.length ? waypoints.join(" → ") : "当天路线待补充具体地点。");
+          const stops = routePointObjects.map((point, pointIndex) => ({
+            id: `report-day-${dayNumber}-p${pointIndex + 1}`,
+            name: point.name,
+            type_label: point.typeLabel || "路线点",
+            description: point.description || "",
+            verification_status: point.verification_status || "",
+            verification_note: point.description || "",
+          }));
+          const segments = normalizeReportRouteSegmentsForDay(
+            routeDay,
+            matchedRoute,
+            itineraryDay,
+            routePointObjects.map((point) => point.name).filter(Boolean)
+          );
           dayPlans.push({
             key: `report-day-${dayNumber}`,
             dayNumber,
             label: `Day ${dayNumber}`,
             title,
             waypoints,
+            stops,
+            segments,
             highlights: waypoints.slice(0, 3),
             note,
+            routeStatus: getJourneyDayRouteStatus({ segments }),
           });
         }
         return dayPlans;
@@ -6856,6 +6898,47 @@
                   </span>
                 `
               )
+              .join("")}
+          </div>
+        `;
+      }
+
+      function renderReportDataRouteSegments(segments = []) {
+        const normalized = (Array.isArray(segments) ? segments : []).filter(
+          (segment) => segment && typeof segment === "object"
+        );
+        if (!normalized.length) return "";
+        return `
+          <div class="travel-report-route-segments">
+            ${normalized
+              .slice(0, 4)
+              .map((segment) => {
+                const view = getVisualRouteSegmentView(segment);
+                const alternatives = (view.alternatives || [])
+                  .filter((option) => option.mode !== view.selectedMode)
+                  .map((option) => option.label)
+                  .filter(Boolean)
+                  .slice(0, 2)
+                  .join(" / ");
+                const routeText = `${cleanJourneyLocationValue(
+                  segment.from_name || "上一站"
+                )} → ${cleanJourneyLocationValue(segment.to_name || "下一站")}`;
+                return `
+                  <div class="travel-report-route-segment ${escapeHtml(view.tone || "pending")}">
+                    <div>
+                      <strong>${escapeHtml(view.modeText)}</strong>
+                      <span>${escapeHtml(routeText)}</span>
+                    </div>
+                    <small>${escapeHtml(view.metricText)}</small>
+                    <em>${escapeHtml(view.statusText)}${segment.locked_by_user ? " · 已锁定" : ""}</em>
+                    ${
+                      alternatives
+                        ? `<p>候选：${escapeHtml(alternatives)}</p>`
+                        : ""
+                    }
+                  </div>
+                `;
+              })
               .join("")}
           </div>
         `;
@@ -7207,6 +7290,12 @@
                   day.route_summary ||
                   "";
                 const routePoints = normalizeRouteMapDayPoints(routeMapDay, route);
+                const routeSegments = normalizeReportRouteSegmentsForDay(
+                  routeMapDay,
+                  route,
+                  day,
+                  routePoints.map((point) => point.name).filter(Boolean)
+                );
                 const timeBlocks = Array.isArray(day.time_blocks)
                   ? day.time_blocks
                   : [];
@@ -7229,6 +7318,7 @@
                           : ""
                       }
                       ${renderReportRoutePointChips(routePoints)}
+                      ${renderReportDataRouteSegments(routeSegments)}
                       ${renderReportDataList(timeBlocks.slice(0, 4), "当天时段待补充")}
                       ${
                         meals.length
