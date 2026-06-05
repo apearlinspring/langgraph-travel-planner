@@ -204,6 +204,31 @@ async function installNetworkStubs(context) {
           created_at: "2026-05-11T14:00:00Z",
         });
       }
+      if (url.includes("/api/v1/guide-import/fetch")) {
+        const body = JSON.parse(String(init?.body || "{}"));
+        if (!String(body.url || "").includes("example.com/hangzhou-public-guide")) {
+          return json(
+            {
+              detail: {
+                code: "guide_import_url_rejected",
+                message: "测试链接不在浏览器回归允许范围内。",
+              },
+            },
+            422
+          );
+        }
+        return json({
+          status: "success",
+          url: body.url,
+          final_url: body.url,
+          source_domain: "example.com",
+          title: "杭州网页慢游攻略",
+          text:
+            "Day1 断桥、白堤、苏堤和雷峰塔。Day2 灵隐寺、飞来峰、龙井村。Day3 良渚古城遗址和京杭大运河。网页建议慢游、茶文化和交通便利住宿。",
+          truncated: false,
+          message: "已抓取网页正文；动态信息仍需核验。",
+        });
+      }
       if (url.includes("/api/v1/chat/stream/")) {
         return sse([
           'data: {"content":"流式回复"}\n\n',
@@ -518,6 +543,50 @@ async function checkGuideImportComposer(page, viewport) {
   });
   await page.locator("#plannerDestination").fill("杭州");
   await page.locator("#plannerDays").fill("4天3晚");
+  await page.locator("#guideImportUrl").fill("https://example.com/hangzhou-public-guide");
+  await page.locator("#guideImportFetchBtn").click();
+  await page.waitForFunction(
+    () =>
+      document
+        .getElementById("guideImportText")
+        ?.value?.includes("断桥"),
+    null,
+    { timeout: 5000 }
+  );
+  await expectContainsText(
+    page,
+    "#guideImportStatus",
+    ["已抓取网页正文", "动态信息仍需核验"],
+    `${viewport.name} guide import fetch status`
+  );
+  await page.locator("#guideImportComposeBtn").click();
+  await page.waitForFunction(
+    () =>
+      document
+        .getElementById("chatInput")
+        ?.value?.includes("【攻略来源】"),
+    null,
+    { timeout: 5000 }
+  );
+  const fetchedDraft = await page.locator("#chatInput").inputValue();
+  [
+    "攻略来源",
+    "原始链接",
+    "example.com/hangzhou-public-guide",
+    "杭州网页慢游攻略",
+    "断桥",
+    "动态信息必须二次核验",
+    "待核验项",
+  ].forEach((fragment) => {
+    if (!fetchedDraft.includes(fragment)) {
+      throw new Error(`${viewport.name} fetched guide import draft missing ${fragment}.`);
+    }
+  });
+  await page.locator("#guideImportClearBtn").click();
+  await page.locator("#chatInput").evaluate((node) => {
+    node.value = "";
+    node.style.height = "auto";
+  });
   await page
     .locator("#guideImportText")
     .fill(

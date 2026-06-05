@@ -4197,6 +4197,11 @@ html {
         color: var(--text-light);
         border: 1px solid rgba(26, 77, 84, 0.08);
       }
+      .planner-btn:disabled {
+        cursor: not-allowed;
+        opacity: 0.58;
+        box-shadow: none;
+      }
       .planner-summary {
         margin-top: 12px;
         font-size: 12px;
@@ -4253,6 +4258,47 @@ html {
         padding: 0 14px 14px;
       }
 
+      .guide-import-url-row {
+        display: grid;
+        gap: 6px;
+      }
+
+      .guide-import-url-row label {
+        color: var(--text-light);
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .guide-import-url-control {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 8px;
+        align-items: stretch;
+      }
+
+      .guide-import-url-control input {
+        min-width: 0;
+        width: 100%;
+        min-height: 38px;
+        padding: 0 12px;
+        border: 1px solid rgba(26, 77, 84, 0.14);
+        border-radius: 999px;
+        color: var(--text-main);
+        background: rgba(255, 255, 255, 0.94);
+        font: inherit;
+      }
+
+      .guide-import-url-control input:focus {
+        outline: none;
+        border-color: rgba(36, 166, 161, 0.48);
+        box-shadow: 0 0 0 3px rgba(36, 166, 161, 0.12);
+      }
+
+      .guide-import-fetch-btn {
+        min-height: 38px;
+        white-space: nowrap;
+      }
+
       .guide-import-body textarea {
         width: 100%;
         min-height: 112px;
@@ -4287,6 +4333,10 @@ html {
 
       .guide-import-status[data-guide-import-tone="ready"] {
         color: #0f766e;
+      }
+
+      .guide-import-status[data-guide-import-tone="busy"] {
+        color: #0f6674;
       }
 
       .guide-import-status[data-guide-import-tone="warning"] {
@@ -4637,6 +4687,12 @@ html {
         .planner-actions {
           align-items: flex-start;
           flex-direction: column;
+        }
+        .guide-import-url-control {
+          grid-template-columns: 1fr;
+        }
+        .guide-import-fetch-btn {
+          width: 100%;
         }
         .planner-toggle-btn {
           width: 100%;

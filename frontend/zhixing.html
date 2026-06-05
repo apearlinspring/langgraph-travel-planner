@@ -369,12 +369,28 @@
                 <small id="guideImportCount">粘贴文本</small>
               </summary>
               <div class="guide-import-body">
+                <div class="guide-import-url-row">
+                  <label for="guideImportUrl">网页链接</label>
+                  <div class="guide-import-url-control">
+                    <input
+                      id="guideImportUrl"
+                      type="url"
+                      inputmode="url"
+                      autocomplete="off"
+                      spellcheck="false"
+                      placeholder="粘贴公开攻略网页链接"
+                    />
+                    <button class="planner-btn primary outline guide-import-fetch-btn" id="guideImportFetchBtn" type="button">
+                      抓取网页
+                    </button>
+                  </div>
+                </div>
                 <textarea
                   id="guideImportText"
                   rows="4"
                   autocomplete="off"
                   spellcheck="false"
-                  placeholder="粘贴攻略文本，例如分日路线、地点清单、游玩建议。"
+                  placeholder="粘贴攻略文本，或先抓取公开网页正文。"
                 ></textarea>
                 <div class="guide-import-actions">
                   <button class="planner-btn primary outline" id="guideImportComposeBtn" type="button">
@@ -792,6 +808,7 @@
 
         <script src="./session-api.js?v=20260603-auth-split"></script>
         <script src="./conversation-api.js?v=20260603-conversation-split"></script>
+        <script src="./guide-import-api.js?v=20260605-guide-web-fetch"></script>
         <script src="./journey-api.js?v=20260603-journey-split"></script>
         <script src="./journey-editor.js?v=20260605-route-editor"></script>
         <script src="./journey-overlay.js?v=20260603-journey-overlay-split"></script>
@@ -814,8 +831,8 @@
         <script src="./draft-storage.js?v=20260605-frontend-core-split"></script>
         <script src="./runtime-status.js?v=20260605-frontend-core-split"></script>
         <script src="./chat-stream.js?v=20260605-frontend-core-split"></script>
-        <script src="./guide-import.js?v=20260605-guide-import"></script>
-        <script src="./app.js?v=20260605-guide-import"></script>
+        <script src="./guide-import.js?v=20260605-guide-web-fetch"></script>
+        <script src="./app.js?v=20260605-guide-web-fetch"></script>
   </body>
 </html>
 

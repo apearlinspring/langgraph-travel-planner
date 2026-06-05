@@ -12,7 +12,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api.v1 import admin, approvals, chat, conversations, maps, users
+from app.api.v1 import admin, approvals, chat, conversations, guide_import, maps, users
 from app.config import (
     RUNTIME_READINESS_VERSION,
     runtime_configuration_snapshot,
@@ -571,6 +571,7 @@ async def append_security_headers(request: Request, call_next):
 
 app.include_router(users.router, prefix="/api/v1")
 app.include_router(conversations.router, prefix="/api/v1")
+app.include_router(guide_import.router, prefix="/api/v1")
 app.include_router(maps.router, prefix="/api/v1")
 app.include_router(approvals.router, prefix="/api/v1")
 app.include_router(admin.router, prefix="/api/v1")

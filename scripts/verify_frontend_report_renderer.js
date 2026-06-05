@@ -6,6 +6,7 @@ const repoRoot = path.resolve(__dirname, "..");
 const frontendScriptBundle = [
   "session-api.js",
   "conversation-api.js",
+  "guide-import-api.js",
   "journey-api.js",
   "journey-editor.js",
   "journey-overlay.js",
