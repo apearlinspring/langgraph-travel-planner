@@ -9,7 +9,7 @@ from app.api.v1.chat import (
     _latest_journey_data_from_conversation_extra,
     _merge_journey_draft_extra_info,
 )
-from app.core.middleware import _looks_like_visual_journey_request
+from app.core.middleware import _format_visual_journey_summary, _looks_like_visual_journey_request
 from app.journey.enrichment import (
     MAX_POI_LOOKUPS,
     _refresh_flattened_sections,
@@ -21,6 +21,10 @@ from app.journey.enrichment import (
     merge_amap_candidate_into_poi,
     resolve_city_adcode,
     weather_summary_from_amap_payload,
+)
+from app.journey.route_preferences import (
+    extract_route_segment_preferences,
+    format_route_segment_preferences_summary,
 )
 from app.journey.visual_planner import (
     JOURNEY_PLAN_VERSION,
@@ -389,6 +393,11 @@ def test_merge_journey_draft_extra_info_preserves_trace_and_marks_editor():
         "message_type": "journey_plan",
         "planning_trace": [{"phase": "search"}],
     }
+    first_segment = result["journey_plan"]["days"][0]["segments"][0]
+    first_segment["selected_mode"] = "transit"
+    first_segment["recommended_mode"] = "taxi"
+    first_segment["locked_by_user"] = True
+    first_segment["source"] = "user_segment_mode_preference"
 
     extra = _merge_journey_draft_extra_info(
         existing,
@@ -399,8 +408,59 @@ def test_merge_journey_draft_extra_info_preserves_trace_and_marks_editor():
     assert extra["message_type"] == "journey_plan"
     assert extra["planning_trace"] == [{"phase": "search"}]
     assert extra["journey_data"]["version"] == JOURNEY_PLAN_VERSION
+    assert extra["route_segment_preferences"][0]["selected_mode"] == "transit"
+    assert extra["route_segment_preferences"][0]["locked_by_user"] is True
     assert extra["journey_editor"]["source"] == "frontend_editor_test"
     assert isinstance(extra["journey_editor"]["saved_at"], int)
+
+
+def test_merge_journey_draft_extra_info_clears_stale_route_preferences():
+    result = build_visual_journey_plan(
+        destination="西藏",
+        date_text="下周三，7天，经典线吧",
+        base_date=date(2026, 5, 18),
+    )
+
+    extra = _merge_journey_draft_extra_info(
+        {
+            "message_type": "journey_plan",
+            "route_segment_preferences": [{"selected_mode": "taxi"}],
+        },
+        result["journey_plan"],
+        source="frontend_editor_test",
+    )
+
+    assert "route_segment_preferences" not in extra
+
+
+def test_route_segment_preferences_summary_uses_user_locked_modes():
+    result = build_visual_journey_plan(
+        destination="西藏",
+        date_text="下周三，7天，经典线吧",
+        base_date=date(2026, 5, 18),
+    )
+    segment = result["journey_plan"]["days"][0]["segments"][0]
+    segment["selected_mode"] = "taxi"
+    segment["recommended_mode"] = "walking"
+    segment["locked_by_user"] = True
+    segment["distance_text"] = "待高德路线核验"
+    segment["duration_text"] = "待高德路线核验"
+    segment["source"] = "user_segment_mode_preference"
+
+    preferences = extract_route_segment_preferences(result["journey_plan"])
+    summary = format_route_segment_preferences_summary(preferences)
+    visual_summary = _format_visual_journey_summary(
+        {
+            "journey_plan": result["journey_plan"],
+            "route_segment_preferences": preferences,
+        }
+    )
+
+    assert preferences[0]["mode_label"] == "打车"
+    assert "路段交通偏好" in summary
+    assert "打车" in summary
+    assert "已锁定" in summary
+    assert "路段交通偏好" in visual_summary
 
 
 def test_latest_journey_data_from_conversation_extra_validates_contract():

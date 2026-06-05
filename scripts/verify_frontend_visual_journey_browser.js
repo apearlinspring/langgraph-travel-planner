@@ -314,6 +314,9 @@ const dayDefinitions = [
       {
         from: "西湖",
         to: "断桥残雪",
+        mode: "taxi",
+        recommended_mode: "walking",
+        selected_mode: "taxi",
         distance_text: "1.1公里",
         duration_text: "步行18分钟",
         confidence: "amap_driving",
@@ -1242,7 +1245,7 @@ async function checkVisualJourneyEditing(page, viewport) {
   await expectContainsText(
     page,
     ".visual-route-editor",
-    ["1.1公里", "步行18分钟", "已核验"],
+    ["0.7公里", "步行12分钟", "已核验"],
     `${viewport.name} route segment metrics`
   );
   await expectContainsText(
@@ -1254,6 +1257,16 @@ async function checkVisualJourneyEditing(page, viewport) {
 
   const firstSegmentSelector =
     '.visual-route-day-card[data-journey-day-card="visual-day-1"] .visual-route-segment[data-map-day-segment="visual-day-1:0"]';
+  await expectContainsText(
+    page,
+    firstSegmentSelector,
+    ["打车", "约10-20分钟", "待核验"],
+    `${viewport.name} route segment avoids incompatible walking metric`
+  );
+  const firstSegmentText = (await page.locator(firstSegmentSelector).textContent()) || "";
+  if (firstSegmentText.includes("步行18分钟")) {
+    throw new Error(`${viewport.name} taxi segment reused walking duration.`);
+  }
   await page.locator(`${firstSegmentSelector} .visual-route-mode-options summary`).click();
   if (viewport.isMobile) {
     const modeOptionsPath = path.join(

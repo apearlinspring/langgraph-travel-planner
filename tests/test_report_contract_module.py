@@ -5,6 +5,7 @@ from app.reports import (
     report_sections,
     validate_report_data,
 )
+from app.reports.route_builder import normalize_report_route_segment
 from tests.test_report_quality_evaluation import _valid_report_data
 
 
@@ -89,6 +90,29 @@ def test_report_validator_requires_route_segment_contract_when_route_points_exis
 
     assert validation.ok is False
     assert "Day 1 路段数量必须等于路线点之间的连接数。" in validation.route_mismatches
+
+
+def test_route_segment_alternative_does_not_reuse_incompatible_duration():
+    segment = normalize_report_route_segment(
+        {
+            "mode": "taxi",
+            "selected_mode": "taxi",
+            "distance_text": "1.1公里",
+            "duration_text": "步行18分钟",
+            "source": "amap_driving",
+            "confidence": "amap_driving",
+        },
+        day_number=1,
+        index=0,
+        from_name="西湖",
+        to_name="断桥残雪",
+    )
+
+    taxi = next(option for option in segment["alternatives"] if option["mode"] == "taxi")
+
+    assert segment["selected_mode"] == "taxi"
+    assert taxi["duration_text"] == "约10-20分钟"
+    assert taxi["duration_text"] != "步行18分钟"
 
 
 def test_report_builder_assembles_report_data_from_domain_inputs():

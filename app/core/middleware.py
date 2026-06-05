@@ -13,6 +13,10 @@ from app.core.observability import build_observability_context
 from app.core.state import TravelState
 from app.core.store import get_user_memory_service
 from app.core.workflow import AGENCY_STEP_LABELS, INITIAL_AGENCY_STEP, INITIAL_PLANNING_STEP
+from app.journey.route_preferences import (
+    extract_route_segment_preferences,
+    format_route_segment_preferences_summary,
+)
 from app.utils.llm_factory import get_model_compatibility
 from app.utils.logger import app_logger
 
@@ -524,6 +528,14 @@ def _format_visual_journey_summary(state_dict: dict[str, Any]) -> str:
         lines.append(f"Day {day_number} {day_title}：{poi_text}")
     if len(days) > 5:
         lines.append(f"其余 {len(days) - 5} 天按地图草案顺序继续执行")
+    route_preferences = (
+        state_dict.get("route_segment_preferences")
+        if isinstance(state_dict.get("route_segment_preferences"), list)
+        else extract_route_segment_preferences(journey_plan)
+    )
+    preference_summary = format_route_segment_preferences_summary(route_preferences)
+    if preference_summary:
+        lines.append(preference_summary)
     return "\n".join(lines)
 
 

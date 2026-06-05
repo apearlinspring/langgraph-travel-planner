@@ -320,6 +320,7 @@ class TravelState(AgentState):
     report: NotRequired[str]
     report_data: NotRequired[ReportData]
     journey_plan: NotRequired[JourneyPlanData]
+    route_segment_preferences: NotRequired[list[dict[str, Any]]]
     planning_trace: NotRequired[list[dict[str, Any]]]
     order_id: NotRequired[str]
 
@@ -370,6 +371,7 @@ def create_initial_state(user_id: str, session_id: str) -> TravelState:
         turn_id="",
         observability_context={},
         long_term_preferences_snapshot=[],
+        route_segment_preferences=[],
         user_id=user_id,
         session_id=session_id,
         created_at=time.time(),
