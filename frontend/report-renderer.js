@@ -137,6 +137,9 @@
                 <button type="button" data-report-action="map">
                   <i class="fa-solid fa-map-location-dot"></i> 查看路线地图
                 </button>
+                <button type="button" data-report-action="copy-summary">
+                  <i class="fa-solid fa-copy"></i> 复制摘要
+                </button>
                 <button type="button" data-report-action="export">
                   <i class="fa-solid fa-file-export"></i> 导出报告
                 </button>
@@ -397,6 +400,9 @@
                 </button>
                 <button type="button" data-report-action="map">
                   <i class="fa-solid fa-map-location-dot"></i> 查看路线地图
+                </button>
+                <button type="button" data-report-action="copy-summary">
+                  <i class="fa-solid fa-copy"></i> 复制摘要
                 </button>
                 <button type="button" data-report-action="export">
                   <i class="fa-solid fa-file-export"></i> 导出报告

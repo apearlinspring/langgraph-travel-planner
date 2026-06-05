@@ -564,6 +564,7 @@ async function checkReportSurface(page) {
   await expectVisible(page, ".travel-report-card", "report card");
   await expectVisible(page, '[data-report-action="export"]', "export report button");
   await expectVisible(page, '[data-report-action="map"]', "map preview entry");
+  await expectVisible(page, '[data-report-action="copy-summary"]', "copy summary entry");
   await expectVisible(page, ".travel-report-map .journey-live-map-shell", "route map");
   await expectVisible(page, ".travel-report-map .journey-live-map", "live map canvas");
   await expectVisible(page, ".travel-report-card.budget", "budget card");
@@ -571,7 +572,7 @@ async function checkReportSurface(page) {
   await expectContainsText(
     page,
     '[data-report-source="structured"]',
-    ["脱敏演示", "省心方案", "导出报告", "查看路线地图"],
+    ["脱敏演示", "省心方案", "导出报告", "查看路线地图", "复制摘要"],
     "structured report shell"
   );
   await expectContainsText(
@@ -637,6 +638,37 @@ async function checkMapPreviewEntry(page) {
   await expectVisible(page, ".travel-report-map .journey-live-map-shell", "map after map action");
 }
 
+async function checkReportShareSummary(page, viewport) {
+  await page.evaluate(() => {
+    window.__zhixingCopiedReportSummary = "";
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: async (text) => {
+          window.__zhixingCopiedReportSummary = String(text || "");
+        },
+      },
+    });
+  });
+  await page.locator('[data-report-action="copy-summary"]').click();
+  await page
+    .locator("#toast.show", { hasText: "已复制报告交付摘要" })
+    .waitFor({ state: "visible", timeout: 5000 });
+  const copiedText = await page.evaluate(() => window.__zhixingCopiedReportSummary || "");
+  const requiredFragments = [
+    "知行旅游报告",
+    "北京到成都 4 日顾问方案",
+    "核心内容",
+    "待核验项",
+    "交付边界",
+    "不代表真实支付",
+  ];
+  const missing = requiredFragments.filter((fragment) => !copiedText.includes(fragment));
+  if (missing.length) {
+    throw new Error(`${viewport.name} report share summary missing: ${missing.join(", ")}`);
+  }
+}
+
 async function checkStreamingChatSurface(page, viewport) {
   await page
     .locator(".conversation-item", { hasText: "浏览器回归行程" })
@@ -691,6 +723,10 @@ async function checkReportExport(page, viewport) {
   const html = fs.readFileSync(downloadedPath, "utf8");
   const requiredFragments = [
     "知行 ZhiXing 旅游报告",
+    "报告交付摘要",
+    "来源：结构化 report_data 报告",
+    "待核验项",
+    "导出不代表真实支付",
     'data-report-source="structured"',
     "北京到成都 4 日顾问方案（脱敏演示）",
     "预算明细与依据",
@@ -933,6 +969,7 @@ async function runViewport(browser, viewport) {
     await captureReportScreenshot(browser, main.page, viewport, reportScreenshotPath);
     viewportScreenshots.push(reportScreenshotPath);
     await checkMapPreviewEntry(main.page);
+    await checkReportShareSummary(main.page, viewport);
     await checkReportExport(main.page, viewport);
     await checkLayoutHealth(main.page, viewport);
     const screenshotPath = path.join(

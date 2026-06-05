@@ -130,6 +130,7 @@ for (const [mode, reportData] of fixtures) {
       "服务/预留",
       "travel-report-budget-table",
       "查看路线地图",
+      "复制摘要",
       "导出报告",
     ],
     mode

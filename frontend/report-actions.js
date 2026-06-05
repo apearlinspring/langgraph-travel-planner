@@ -10,6 +10,82 @@
       setJourneyMapDaySelection,
     } = deps;
 
+    function cleanReportText(value = "") {
+      return String(value || "").replace(/\s+/g, " ").trim();
+    }
+
+    function limitReportText(value = "", maxLength = 120) {
+      const text = cleanReportText(value);
+      if (text.length <= maxLength) return text;
+      return `${text.slice(0, maxLength - 1)}…`;
+    }
+
+    function getReportCardDigest(card) {
+      const label = cleanReportText(
+        card.querySelector(".travel-report-card-label")?.textContent
+      );
+      const title = cleanReportText(card.querySelector("h4")?.textContent);
+      const body = limitReportText(card.querySelector(".travel-report-card-body")?.textContent);
+      const heading = [label, title].filter(Boolean).join(" - ");
+      return [heading, body].filter(Boolean).join("：");
+    }
+
+    function buildReportShareSummary(report) {
+      const title =
+        cleanReportText(report.querySelector(".travel-report-hero h3")?.textContent) ||
+        "知行旅游报告";
+      const metrics = Array.from(report.querySelectorAll(".travel-report-metrics span"))
+        .map((node) => cleanReportText(node.textContent))
+        .filter(Boolean)
+        .slice(0, 4);
+      const cardDigests = Array.from(report.querySelectorAll(".travel-report-card"))
+        .map((card) => getReportCardDigest(card))
+        .filter(Boolean)
+        .slice(0, 4);
+      const lines = [`知行旅游报告：${title}`];
+      if (metrics.length) lines.push(`关键要素：${metrics.join(" | ")}`);
+      if (cardDigests.length) {
+        lines.push("核心内容：");
+        cardDigests.forEach((digest) => lines.push(`- ${digest}`));
+      }
+      lines.push("待核验项：出发前请重新确认交通、住宿、门票/体验、天气、排队预约和价格库存。");
+      lines.push("交付边界：本摘要不代表真实支付、预订、出票、锁价或履约成功。");
+      return lines.join("\n");
+    }
+
+    function copyTextWithFallback(text) {
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.setAttribute("readonly", "");
+      textarea.style.position = "fixed";
+      textarea.style.left = "-9999px";
+      textarea.style.top = "0";
+      document.body.appendChild(textarea);
+      try {
+        textarea.focus();
+        textarea.select();
+        textarea.setSelectionRange?.(0, textarea.value.length);
+        if (!document.execCommand?.("copy")) {
+          throw new Error("document.execCommand('copy') returned false");
+        }
+      } finally {
+        textarea.remove();
+      }
+    }
+
+    async function copyTextToClipboard(text) {
+      if (!text) throw new Error("Nothing to copy");
+      if (navigator.clipboard?.writeText) {
+        try {
+          await navigator.clipboard.writeText(text);
+          return;
+        } catch (error) {
+          // 本地 file:// 或权限不足时继续走传统复制兜底。
+        }
+      }
+      copyTextWithFallback(text);
+    }
+
     function focusJourneyMapFromPlan(button, target = "destination") {
       const plan = button.closest(".travel-plan");
       const shell = plan?.querySelector(".journey-live-map-shell");
@@ -61,6 +137,20 @@
         }
         map.scrollIntoView({ behavior: "smooth", block: "start" });
         showToast?.("已定位到路线地图");
+        return true;
+      }
+
+      if (action === "copy-summary") {
+        const summaryText = buildReportShareSummary(report);
+        copyTextToClipboard(summaryText)
+          .then(() => {
+            setRuntimeStatus?.("报告交付摘要已复制", "online");
+            showToast?.("已复制报告交付摘要");
+          })
+          .catch((error) => {
+            console.error(error);
+            showToast?.("复制失败，请手动选择报告内容。", true);
+          });
         return true;
       }
 

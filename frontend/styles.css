@@ -3059,6 +3059,13 @@ html {
         background: rgba(255, 255, 255, 0.22);
         border-color: rgba(255, 255, 255, 0.38);
       }
+      .message.assistant .message-text .travel-report-actions button:focus-visible {
+        outline: 2px solid rgba(255, 250, 240, 0.82);
+        outline-offset: 3px;
+      }
+      .message.assistant .message-text .travel-report-actions button i {
+        flex: 0 0 auto;
+      }
       .message.assistant .message-text .travel-report-summary {
         padding: 16px 18px;
         border-radius: 20px;
