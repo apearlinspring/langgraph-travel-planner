@@ -116,13 +116,15 @@
       const statusText = [
         segment.confidence,
         segment.source,
+        segment.verification_status,
+        segment.verification_label,
         segment.verification_note,
         segment.distance_text,
         segment.duration_text,
       ]
         .filter(Boolean)
         .join(" ");
-      if (/amap_driving|高德/i.test(statusText) && !/待/.test(statusText)) {
+      if (/amap_driving|verified|已核验|高德/i.test(statusText) && !/待/.test(statusText)) {
         return "verified";
       }
       if (/estimated|估算/i.test(statusText)) {

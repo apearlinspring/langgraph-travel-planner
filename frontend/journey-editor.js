@@ -234,6 +234,8 @@
                   duration_text: "待高德路线核验",
                   confidence: "needs_live_route",
                   source: "user_segment_mode_preference",
+                  verification_status: "needs_live_route",
+                  verification_label: "待高德路线核验",
                   verification_note: "用户已切换交通方式，真实路线和用时待核验。",
                 }
               : {}),

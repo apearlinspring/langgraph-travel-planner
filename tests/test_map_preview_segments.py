@@ -8,6 +8,7 @@ from app.api.v1.maps import (
     MapPreviewDay,
     MapPreviewResponse,
     MapPreviewRequest,
+    MapPreviewSegmentRequest,
     MapPreviewStopRequest,
     _fallback_points_from_day_groups,
     _map_preview_deadline_expired,
@@ -46,6 +47,8 @@ async def test_resolve_segment_falls_back_to_estimated_distance_without_directio
     assert segment.from_name == "布达拉宫"
     assert segment.to_name == "大昭寺"
     assert segment.confidence == "estimated_straight_line"
+    assert segment.verification_status == "estimated"
+    assert segment.selected_mode == "taxi"
     assert segment.distance_meters and segment.distance_meters > 0
     assert "约" in segment.distance_text
     assert segment.path == [
@@ -91,12 +94,110 @@ async def test_resolve_segment_exposes_amap_route_path():
     )
 
     assert segment.confidence == "amap_driving"
+    assert segment.source == "amap_direction_driving"
+    assert segment.verification_status == "verified"
+    assert segment.selected_mode == "taxi"
     assert segment.distance_text == "1.2 公里"
     assert segment.path == [
         {"lng": 120.1, "lat": 30.1},
         {"lng": 120.11, "lat": 30.105},
         {"lng": 120.12, "lat": 30.11},
     ]
+
+
+@pytest.mark.asyncio
+async def test_resolve_segment_marks_taxi_preference_verified_with_amap_route():
+    class FakeDirectionTool:
+        async def ainvoke(self, payload):
+            return '{"paths":[{"distance":"1800","duration":"720","steps":[]}]}'
+
+    left = MapPoint(
+        kind="day",
+        label="Day 1",
+        name="宽窄巷子",
+        lng=104.056,
+        lat=30.674,
+        address="宽窄巷子",
+    )
+    right = MapPoint(
+        kind="day",
+        label="Day 1",
+        name="人民公园",
+        lng=104.059,
+        lat=30.659,
+        address="人民公园",
+    )
+    preference = MapPreviewSegmentRequest(
+        selected_mode="taxi",
+        recommended_mode="walking",
+        locked_by_user=True,
+        alternatives=[
+            {
+                "mode": "taxi",
+                "duration_text": "约10-20分钟",
+                "cost_text": "费用待核验",
+                "reason": "省体力",
+            }
+        ],
+    )
+
+    segment = await _resolve_segment(
+        FakeDirectionTool(),
+        day_key="day-1",
+        day_label="Day 1",
+        left=left,
+        right=right,
+        preference=preference,
+    )
+
+    assert segment.selected_mode == "taxi"
+    assert segment.recommended_mode == "walking"
+    assert segment.locked_by_user is True
+    assert segment.verification_status == "verified"
+    assert segment.verification_label == "已核验"
+    assert segment.duration_text == "12分钟"
+    assert segment.alternatives[0]["mode"] == "taxi"
+
+
+@pytest.mark.asyncio
+async def test_resolve_segment_keeps_transit_preference_pending_without_driving_metrics():
+    class FakeDirectionTool:
+        async def ainvoke(self, payload):
+            raise AssertionError("transit preference must not call driving route")
+
+    left = MapPoint(
+        kind="day",
+        label="Day 1",
+        name="南京博物院",
+        lng=118.848,
+        lat=32.043,
+        address="南京博物院",
+    )
+    right = MapPoint(
+        kind="day",
+        label="Day 1",
+        name="总统府",
+        lng=118.792,
+        lat=32.044,
+        address="总统府",
+    )
+
+    segment = await _resolve_segment(
+        FakeDirectionTool(),
+        day_key="day-1",
+        day_label="Day 1",
+        left=left,
+        right=right,
+        preference=MapPreviewSegmentRequest(selected_mode="transit", locked_by_user=True),
+    )
+
+    assert segment.selected_mode == "transit"
+    assert segment.mode_label == "公交/地铁"
+    assert segment.locked_by_user is True
+    assert segment.confidence == "needs_live_route"
+    assert segment.verification_status == "needs_live_route"
+    assert segment.distance_text == "待高德路线核验"
+    assert segment.duration_text == "待高德路线核验"
 
 
 def test_point_from_stop_coordinates_uses_structured_poi_position():
@@ -202,6 +303,62 @@ async def test_map_preview_uses_structured_coordinates_when_geocoder_unavailable
     assert len(response.days) == 1
     assert response.days[0].points[0].name == "南京博物院"
     assert response.days[0].segments[0].confidence == "estimated_straight_line"
+    assert response.days[0].segments[0].verification_status == "estimated"
+
+
+@pytest.mark.asyncio
+async def test_map_preview_accepts_day_segment_preferences(monkeypatch):
+    async def fail_to_load_amap_tool(name):
+        raise TimeoutError()
+
+    monkeypatch.setattr(maps, "_get_amap_tool", fail_to_load_amap_tool)
+    request = MapPreviewRequest.model_validate(
+        {
+            "destination": "南京",
+            "days": [
+                {
+                    "key": "visual-day-1",
+                    "label": "第1天",
+                    "stops": [
+                        {
+                            "id": "d1-p1",
+                            "name": "南京博物院",
+                            "city": "南京",
+                            "lng": 118.848,
+                            "lat": 32.043,
+                        },
+                        {
+                            "id": "d1-p2",
+                            "name": "总统府",
+                            "city": "南京",
+                            "lng": 118.792,
+                            "lat": 32.044,
+                        },
+                    ],
+                    "segments": [
+                        {
+                            "id": "d1-s1",
+                            "selected_mode": "transit",
+                            "recommended_mode": "taxi",
+                            "locked_by_user": True,
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+
+    response = await maps.get_map_preview(
+        request,
+        user=SimpleNamespace(id="map-segment-preference-test"),
+    )
+
+    segment = response.days[0].segments[0]
+    assert segment.selected_mode == "transit"
+    assert segment.recommended_mode == "taxi"
+    assert segment.locked_by_user is True
+    assert segment.verification_status == "needs_live_route"
+    assert "公交/地铁" in segment.verification_note
 
 
 @pytest.mark.asyncio

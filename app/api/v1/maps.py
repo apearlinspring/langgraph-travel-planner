@@ -15,6 +15,10 @@ from pydantic import BaseModel, Field
 
 from app.api.dependencies import get_current_user
 from app.config import settings
+from app.journey.route_preferences import (
+    normalize_route_segment_mode,
+    route_segment_mode_label,
+)
 from app.mcp_core.client import get_mcp_client
 from app.models.user import User
 from app.utils.logger import app_logger
@@ -33,11 +37,34 @@ class MapPreviewStopRequest(BaseModel):
     lat: float | None = None
 
 
+class MapPreviewSegmentRequest(BaseModel):
+    id: str | None = None
+    day_number: int | None = None
+    from_poi_id: str | None = None
+    to_poi_id: str | None = None
+    from_name: str | None = None
+    to_name: str | None = None
+    mode: str | None = None
+    selected_mode: str | None = None
+    recommended_mode: str | None = None
+    transport_mode: str | None = None
+    locked_by_user: bool = False
+    mode_locked: bool = False
+    distance_text: str | None = None
+    duration_text: str | None = None
+    confidence: str | None = None
+    source: str | None = None
+    verification_status: str | None = None
+    verification_note: str | None = None
+    alternatives: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class MapPreviewDayRequest(BaseModel):
     key: str | None = None
     label: str
     waypoints: list[str] = Field(default_factory=list)
     stops: list[MapPreviewStopRequest] = Field(default_factory=list)
+    segments: list[MapPreviewSegmentRequest] = Field(default_factory=list)
 
 
 class MapPreviewRequest(BaseModel):
@@ -63,12 +90,21 @@ class MapRouteSegment(BaseModel):
     day_label: str
     from_name: str
     to_name: str
-    mode: str = "driving"
+    mode: str = "taxi"
+    selected_mode: str = "taxi"
+    recommended_mode: str = "taxi"
+    mode_label: str = "打车"
+    locked_by_user: bool = False
     distance_text: str
     duration_text: str
     distance_meters: float | None = None
     duration_seconds: float | None = None
     confidence: str = "needs_live_route"
+    source: str = ""
+    verification_status: str = "needs_live_route"
+    verification_label: str = "待高德路线核验"
+    verification_note: str = ""
+    alternatives: list[dict[str, Any]] = Field(default_factory=list)
     path: list[dict[str, float]] = Field(default_factory=list)
 
 
@@ -327,6 +363,97 @@ def _format_duration(duration_seconds: float) -> str:
     return f"{minutes}分钟"
 
 
+def _verification_label(status: str | None) -> str:
+    normalized = str(status or "").strip().lower()
+    if normalized == "verified":
+        return "已核验"
+    if normalized == "estimated":
+        return "估算"
+    return "待高德路线核验"
+
+
+def _segment_selected_mode(preference: MapPreviewSegmentRequest | None) -> str:
+    if not preference:
+        return "taxi"
+    return normalize_route_segment_mode(
+        preference.selected_mode
+        or preference.mode
+        or preference.transport_mode
+        or ""
+    )
+
+
+def _segment_recommended_mode(
+    preference: MapPreviewSegmentRequest | None,
+    selected_mode: str,
+) -> str:
+    if not preference:
+        return selected_mode
+    return normalize_route_segment_mode(preference.recommended_mode or selected_mode)
+
+
+def _segment_locked_by_user(preference: MapPreviewSegmentRequest | None) -> bool:
+    return bool(
+        preference
+        and (preference.locked_by_user or preference.mode_locked)
+    )
+
+
+def _segment_alternatives(
+    preference: MapPreviewSegmentRequest | None,
+) -> list[dict[str, Any]]:
+    if not preference:
+        return []
+    alternatives: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for option in preference.alternatives[:4]:
+        if not isinstance(option, dict):
+            continue
+        mode = normalize_route_segment_mode(
+            option.get("mode") or option.get("transport_mode") or ""
+        )
+        if not mode or mode in seen:
+            continue
+        seen.add(mode)
+        alternatives.append(
+            {
+                "mode": mode,
+                "label": str(option.get("label") or route_segment_mode_label(mode)),
+                "duration_text": str(
+                    option.get("duration_text") or option.get("duration") or "时间待核验"
+                ),
+                "cost_text": str(option.get("cost_text") or option.get("cost") or "费用待核验"),
+                "reason": str(option.get("reason") or option.get("note") or "适配性待核验"),
+            }
+        )
+    return alternatives
+
+
+def _segment_contract_fields(
+    preference: MapPreviewSegmentRequest | None,
+    *,
+    source: str,
+    confidence: str,
+    verification_status: str,
+    verification_note: str,
+) -> dict[str, Any]:
+    selected_mode = _segment_selected_mode(preference)
+    recommended_mode = _segment_recommended_mode(preference, selected_mode)
+    return {
+        "mode": selected_mode,
+        "selected_mode": selected_mode,
+        "recommended_mode": recommended_mode,
+        "mode_label": route_segment_mode_label(selected_mode),
+        "locked_by_user": _segment_locked_by_user(preference),
+        "confidence": confidence,
+        "source": source,
+        "verification_status": verification_status,
+        "verification_label": _verification_label(verification_status),
+        "verification_note": verification_note,
+        "alternatives": _segment_alternatives(preference),
+    }
+
+
 def _haversine_distance_meters(left: MapPoint, right: MapPoint) -> float:
     radius = 6371000
     lat1 = math.radians(left.lat)
@@ -385,7 +512,33 @@ async def _resolve_segment(
     day_label: str,
     left: MapPoint,
     right: MapPoint,
+    preference: MapPreviewSegmentRequest | None = None,
 ) -> MapRouteSegment:
+    selected_mode = _segment_selected_mode(preference)
+    direct_path = [{"lng": left.lng, "lat": left.lat}, {"lng": right.lng, "lat": right.lat}]
+    if selected_mode not in {"taxi"}:
+        return MapRouteSegment(
+            day_key=day_key,
+            day_label=day_label,
+            from_name=left.name,
+            to_name=right.name,
+            distance_text="待高德路线核验",
+            duration_text="待高德路线核验",
+            distance_meters=_haversine_distance_meters(left, right),
+            duration_seconds=None,
+            path=direct_path,
+            **_segment_contract_fields(
+                preference,
+                source="route_mode_pending_amap_tool",
+                confidence="needs_live_route",
+                verification_status="needs_live_route",
+                verification_note=(
+                    f"已收到{route_segment_mode_label(selected_mode)}偏好，"
+                    "真实路线、用时和换乘细节待高德对应路线工具核验。"
+                ),
+            ),
+        )
+
     if direction_tool is not None:
         try:
             result = await asyncio.wait_for(
@@ -413,8 +566,14 @@ async def _resolve_segment(
                         duration_text=_format_duration(duration),
                         distance_meters=distance,
                         duration_seconds=duration,
-                        confidence="amap_driving",
                         path=_extract_amap_route_path(path),
+                        **_segment_contract_fields(
+                            preference,
+                            source="amap_direction_driving",
+                            confidence="amap_driving",
+                            verification_status="verified",
+                            verification_note="已用高德驾车路线核验距离和用时；票价、路况和叫车费用仍需行前确认。",
+                        ),
                     )
         except Exception as exc:
             app_logger.warning(
@@ -433,8 +592,14 @@ async def _resolve_segment(
         duration_text=f"约 {_format_duration(duration)}",
         distance_meters=distance,
         duration_seconds=duration,
-        confidence="estimated_straight_line",
-        path=[{"lng": left.lng, "lat": left.lat}, {"lng": right.lng, "lat": right.lat}],
+        path=direct_path,
+        **_segment_contract_fields(
+            preference,
+            source="estimated_straight_line",
+            confidence="estimated_straight_line",
+            verification_status="estimated",
+            verification_note="高德驾车路线暂不可用，已按点位直线距离给出估算，真实路线待二次核验。",
+        ),
     )
 
 
@@ -494,6 +659,26 @@ async def get_map_preview(
                             "lat": stop.lat,
                         }
                         for stop in day.stops[:8]
+                    ],
+                    "segments": [
+                        {
+                            "id": segment.id,
+                            "from_poi_id": segment.from_poi_id,
+                            "to_poi_id": segment.to_poi_id,
+                            "from_name": segment.from_name,
+                            "to_name": segment.to_name,
+                            "mode": segment.mode,
+                            "selected_mode": segment.selected_mode,
+                            "recommended_mode": segment.recommended_mode,
+                            "transport_mode": segment.transport_mode,
+                            "locked_by_user": segment.locked_by_user,
+                            "mode_locked": segment.mode_locked,
+                            "confidence": segment.confidence,
+                            "source": segment.source,
+                            "verification_status": segment.verification_status,
+                            "alternatives": segment.alternatives[:4],
+                        }
+                        for segment in day.segments[:8]
                     ],
                 }
                 for day in data.days[:7]
@@ -683,6 +868,9 @@ async def get_map_preview(
                 day_label=day_label,
                 left=day_points[point_index],
                 right=day_points[point_index + 1],
+                preference=day.segments[point_index]
+                if point_index < len(day.segments)
+                else None,
             )
             segments.append(segment)
             all_segments.append(segment)

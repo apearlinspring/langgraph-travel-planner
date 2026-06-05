@@ -790,6 +790,16 @@ async function installNetworkStubs(context) {
       });
 
     window.__visualJourneySavedDrafts = [];
+    window.__visualJourneyMapPreviewRequests = [];
+
+    const normalizeSegmentMode = (value = "") => {
+      const raw = String(value || "").toLowerCase();
+      if (/walk|walking|步行/.test(raw)) return "walking";
+      if (/bus|公交|metro|subway|地铁|transit/.test(raw)) return "transit";
+      if (/train|rail|火车|高铁/.test(raw)) return "rail";
+      if (/flight|air|航班|飞机/.test(raw)) return "flight";
+      return "taxi";
+    };
 
     window.fetch = async (input, init) => {
       const rawUrl = typeof input === "string" ? input : input?.url || "";
@@ -860,6 +870,7 @@ async function installNetworkStubs(context) {
       if (url.includes("/api/v1/maps/preview")) {
         try {
           const requestPayload = JSON.parse(init?.body || "{}");
+          window.__visualJourneyMapPreviewRequests.push(requestPayload);
           const requestDays = Array.isArray(requestPayload?.days)
             ? requestPayload.days
             : [];
@@ -876,11 +887,49 @@ async function installNetworkStubs(context) {
             });
             const days = requestDays.map((day, index) => {
               const stops = Array.isArray(day?.stops) ? day.stops : [];
+              const points = stops.map((stop) => pointFromStop(stop, "day"));
               return {
                 key: day?.key || `day-${index + 1}`,
                 label: day?.label || `Day ${index + 1}`,
-                points: stops.map((stop) => pointFromStop(stop, "day")),
-                segments: Array.isArray(day?.segments) ? day.segments : [],
+                points,
+                segments: (Array.isArray(day?.segments) ? day.segments : []).map(
+                  (segment, segmentIndex) => {
+                    const selectedMode = normalizeSegmentMode(
+                      segment?.selected_mode || segment?.mode || segment?.transport_mode || ""
+                    );
+                    const verified = selectedMode === "taxi";
+                    return {
+                      ...segment,
+                      mode: selectedMode,
+                      selected_mode: selectedMode,
+                      recommended_mode: normalizeSegmentMode(
+                        segment?.recommended_mode || selectedMode
+                      ),
+                      locked_by_user: Boolean(segment?.locked_by_user || segment?.mode_locked),
+                      confidence: verified ? "amap_driving" : "needs_live_route",
+                      source: verified
+                        ? "amap_direction_driving"
+                        : "route_mode_pending_amap_tool",
+                      verification_status: verified ? "verified" : "needs_live_route",
+                      verification_label: verified ? "已核验" : "待高德路线核验",
+                      verification_note: verified
+                        ? "已用高德驾车路线核验距离和用时；叫车费用仍需行前确认。"
+                        : "已收到交通偏好，真实路线和用时待高德对应路线工具核验。",
+                      distance_text: verified ? "1.2 公里" : "待高德路线核验",
+                      duration_text: verified ? "12分钟" : "待高德路线核验",
+                      path:
+                        points[segmentIndex] && points[segmentIndex + 1]
+                          ? [
+                              { lng: points[segmentIndex].lng, lat: points[segmentIndex].lat },
+                              {
+                                lng: points[segmentIndex + 1].lng,
+                                lat: points[segmentIndex + 1].lat,
+                              },
+                            ]
+                          : [],
+                    };
+                  }
+                ),
               };
             });
             const dayPoints = days.flatMap((day) => day.points || []);
@@ -1101,7 +1150,7 @@ async function checkVisualJourneySurface(page, viewport) {
   await expectContainsText(
     page,
     ".leaflet-journey-segment-label",
-    ["05.27", "1.1公里"],
+    ["05.27", "1.2 公里"],
     `${viewport.name} route segment date labels`
   );
   await expectVisibleRouteLabelCount(
@@ -1245,7 +1294,7 @@ async function checkVisualJourneyEditing(page, viewport) {
   await expectContainsText(
     page,
     ".visual-route-editor",
-    ["0.7公里", "步行12分钟", "已核验"],
+    ["1.2 公里", "12分钟", "已核验"],
     `${viewport.name} route segment metrics`
   );
   await expectContainsText(
@@ -1260,7 +1309,7 @@ async function checkVisualJourneyEditing(page, viewport) {
   await expectContainsText(
     page,
     firstSegmentSelector,
-    ["打车", "约10-20分钟", "待核验"],
+    ["打车", "1.2 公里", "已核验"],
     `${viewport.name} route segment avoids incompatible walking metric`
   );
   const firstSegmentText = (await page.locator(firstSegmentSelector).textContent()) || "";
@@ -1285,9 +1334,19 @@ async function checkVisualJourneyEditing(page, viewport) {
       try {
         const days = JSON.parse(decodeURIComponent(raw));
         const day = days.find((item) => item.key === "visual-day-1");
+        const requests = window.__visualJourneyMapPreviewRequests || [];
+        const sawTransitPreviewRequest = requests.some((request) =>
+          (request?.days || []).some((requestDay) =>
+            (requestDay?.segments || []).some(
+              (segment) => segment?.selected_mode === "transit"
+            )
+          )
+        );
         return (
           day?.segments?.[0]?.selected_mode === "transit" &&
-          day?.segments?.[0]?.confidence === "needs_live_route"
+          day?.segments?.[0]?.confidence === "needs_live_route" &&
+          day?.segments?.[0]?.verification_status === "needs_live_route" &&
+          sawTransitPreviewRequest
         );
       } catch (error) {
         return false;
@@ -1413,11 +1472,29 @@ async function checkVisualJourneyEditing(page, viewport) {
     firstStop,
     { timeout: 5000 }
   );
+  await page.waitForFunction(
+    () => {
+      const raw = document.querySelector(".journey-live-map-shell")?.dataset.dayPlans || "";
+      try {
+        const days = JSON.parse(decodeURIComponent(raw));
+        const day = days.find((item) => item.key === "visual-day-1");
+        return (day?.segments || []).some(
+          (segment) =>
+            segment?.verification_status === "verified" &&
+            segment?.distance_text === "1.2 公里"
+        );
+      } catch (error) {
+        return false;
+      }
+    },
+    null,
+    { timeout: 5000 }
+  );
   await expectContainsText(
     page,
     ".visual-route-editor",
-    ["待高德路线核验"],
-    `${viewport.name} edited route segment pending metrics`
+    ["1.2 公里", "已核验"],
+    `${viewport.name} edited route segment verification metrics`
   );
 
   const day1AfterDown = await getVisualRouteDayNames(page, "visual-day-1");
