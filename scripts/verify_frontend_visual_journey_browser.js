@@ -1108,6 +1108,24 @@ async function expectVisibleElementWithText(page, selector, fragments, label) {
   return page.locator(selector).nth(matchedIndex);
 }
 
+async function screenshotVisibleElementWithText(page, selector, fragments, screenshotOptions, label) {
+  let lastError = null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const locator = await expectVisibleElementWithText(page, selector, fragments, label);
+    try {
+      await locator.screenshot(screenshotOptions);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (!/attached|detached|stable/i.test(String(error?.message || error))) {
+        throw error;
+      }
+      await page.waitForTimeout(120);
+    }
+  }
+  throw lastError || new Error(`${label} screenshot failed.`);
+}
+
 async function expectNotContainsText(page, selector, fragments, label) {
   const locator = page.locator(selector).first();
   await locator.waitFor({ state: "visible", timeout: 6000 });
@@ -1211,9 +1229,16 @@ async function checkVisualJourneySurface(page, viewport) {
   );
   await expectVisibleRouteLabelCount(
     page,
-    4,
+    viewport.isMobile ? 2 : 4,
     `${viewport.name} overview route label density`
   );
+  if (viewport.isMobile) {
+    await page.waitForFunction(
+      () => document.querySelector(".journey-live-map")?.classList.contains("journey-live-map--compact-density"),
+      null,
+      { timeout: 5000 }
+    );
+  }
   await page.locator('[data-map-action="toggle-tools"]').first().click();
   await expectContainsText(
     page,
@@ -1588,7 +1613,7 @@ async function checkVisualJourneyEditing(page, viewport) {
     { timeout: 5000 }
   );
 
-  const planningPool = await expectVisibleElementWithText(
+  await expectVisibleElementWithText(
     page,
     ".visual-route-planning-pool",
     ["待规划地点", "九溪烟树", "满觉陇"],
@@ -1599,9 +1624,13 @@ async function checkVisualJourneyEditing(page, viewport) {
       runtimeDir,
       "frontend-visual-journey-mobile-planning-pool.png"
     );
-    await planningPool.screenshot({
-      path: poolPath,
-    });
+    await screenshotVisibleElementWithText(
+      page,
+      ".visual-route-planning-pool",
+      ["待规划地点", "九溪烟树", "满觉陇"],
+      { path: poolPath },
+      `${viewport.name} route planning pool screenshot`
+    );
     screenshots.push(poolPath);
   }
   await page

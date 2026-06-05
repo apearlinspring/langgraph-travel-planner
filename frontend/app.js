@@ -795,6 +795,8 @@
         const activeDayKey = entry.activeDayKey || "all";
         const activeMode = entry.dayDisplayMode || "solo";
         const isOverview = activeDayKey === "all";
+        const isCompactMapDensity = applyJourneyMapDensityState(entry);
+        let compactOverviewLabelCount = 0;
         const dayLayers = Array.isArray(entry.dayLayers) ? entry.dayLayers : [];
         const selectedPlan = entry.dayPlans?.find((day) => day.key === activeDayKey);
         const selectedHighlightIndexes = new Set(
@@ -810,12 +812,16 @@
               : (isSelected ? 0.98 : 0.18);
           layer.markers.forEach((marker) => setJourneyLayerOpacity(marker, opacity));
           (layer.segmentLabels || []).forEach((label, labelIndex) => {
-            const labelOpacity = getJourneySegmentLabelViewOpacity({
+            let labelOpacity = getJourneySegmentLabelViewOpacity({
               isOverview,
               isSelected,
               activeMode,
               labelIndex,
             });
+            if (isOverview && isCompactMapDensity && labelOpacity > 0.5) {
+              labelOpacity = compactOverviewLabelCount < 2 ? labelOpacity : 0;
+              compactOverviewLabelCount += 1;
+            }
             setJourneyLayerOpacity(label, labelOpacity);
           });
           setJourneyLayerOpacity(layer.dayBadge, opacity);
@@ -930,6 +936,8 @@
       }
 
       function registerJourneyMapEntry(node, entry) {
+        entry.mapNode = node;
+        applyJourneyMapDensityState(entry);
         const shell = entry.shell;
         const availableDayKeys = new Set(
           [
@@ -999,6 +1007,27 @@
             entry.map?.resize?.();
           }
         }, 80);
+      }
+
+      function isJourneyMapCompactDensityTarget(mapNode, shell) {
+        const mapWidth =
+          Number(mapNode?.clientWidth) ||
+          Number(shell?.getBoundingClientRect?.().width) ||
+          Number(window.innerWidth);
+        return mapWidth <= 520 || window.matchMedia?.("(max-width: 520px)")?.matches === true;
+      }
+
+      function isJourneyMapCompactDensity(entry = {}) {
+        const mapNode = entry.mapNode || entry.shell?.querySelector?.(".journey-live-map");
+        return isJourneyMapCompactDensityTarget(mapNode, entry.shell);
+      }
+
+      function applyJourneyMapDensityState(entry = {}) {
+        const compact = isJourneyMapCompactDensity(entry);
+        entry.isCompactMapDensity = compact;
+        entry.mapNode?.classList?.toggle("journey-live-map--compact-density", compact);
+        entry.shell?.classList?.toggle("journey-map-shell--compact-density", compact);
+        return compact;
       }
 
       function buildAmapMarkerContent(kind = "highlight", text = "●", color = "") {
@@ -1175,6 +1204,10 @@
 
         node.innerHTML = "";
         node.classList.add("journey-live-map--amap");
+        const shell = node.closest(".journey-live-map-shell");
+        const compactMapDensity = isJourneyMapCompactDensityTarget(node, shell);
+        node.classList.toggle("journey-live-map--compact-density", compactMapDensity);
+        shell?.classList?.toggle("journey-map-shell--compact-density", compactMapDensity);
         const map = new AMap.Map(node, {
           zoom: 8,
           viewMode: "2D",
@@ -1205,7 +1238,6 @@
           routePoints.map((point) => [point.kind, point])
         );
         const markersByKind = {};
-        const shell = node.closest(".journey-live-map-shell");
         let entry = null;
 
         const markers = points.map((point) => {
@@ -1509,6 +1541,9 @@
           );
           const markersByKind = {};
           let entry = null;
+          const compactMapDensity = isJourneyMapCompactDensityTarget(node, shell);
+          node.classList.toggle("journey-live-map--compact-density", compactMapDensity);
+          shell?.classList?.toggle("journey-map-shell--compact-density", compactMapDensity);
 
           const latLngs = [];
           const markers = [];
@@ -1608,10 +1643,14 @@
                       html: `<span style="border-color:${escapeHtml(color)}"><strong>${escapeHtml(
                         getJourneyDayBadgeLabel(day, index)
                       )}</strong><small>${escapeHtml(dayPoints.length ? `${dayPoints.length}站` : "路线")}</small></span>`,
-                      iconSize: [118, 42],
+                      iconSize: compactMapDensity ? [96, 36] : [118, 42],
                       iconAnchor: [
-                        [18, -18, 66, -24, 54][Math.abs(index) % 5],
-                        [52, 64, 42, 34, 70][Math.abs(index) % 5],
+                        (compactMapDensity
+                          ? [12, -10, 54, -16, 42]
+                          : [18, -18, 66, -24, 54])[Math.abs(index) % 5],
+                        (compactMapDensity
+                          ? [44, 54, 36, 30, 58]
+                          : [52, 64, 42, 34, 70])[Math.abs(index) % 5],
                       ],
                     }),
                     interactive: false,
@@ -1636,8 +1675,11 @@
                       )}"><strong>${escapeHtml(labelParts.day)}</strong><small>${escapeHtml(
                         labelParts.metric
                       )}</small></span>`,
-                      iconSize: [160, 40],
-                      iconAnchor: [80 - offset.x, 20 - offset.y],
+                      iconSize: compactMapDensity ? [148, 34] : [160, 40],
+                      iconAnchor: [
+                        (compactMapDensity ? 74 : 80) - offset.x,
+                        (compactMapDensity ? 17 : 20) - offset.y,
+                      ],
                     }),
                     interactive: false,
                   }).addTo(map);
