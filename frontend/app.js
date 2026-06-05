@@ -1358,6 +1358,56 @@
         registerJourneyMapEntry(node, entry);
       }
 
+      function mergeMapPreviewSegmentsIntoDayPlans(shell, previewDays = []) {
+        if (!shell || !Array.isArray(previewDays) || !previewDays.length) return [];
+        const dayPlans = parseMapPayload(shell.dataset.dayPlans || "") || [];
+        if (!dayPlans.length) return [];
+        const findPreviewDay = (day, index) =>
+          previewDays.find((item) => item?.key && item.key === day.key) ||
+          previewDays.find((item) => item?.label && item.label === day.label) ||
+          previewDays[index] ||
+          null;
+        let changed = false;
+        const mergedPlans = dayPlans.map((day, index) => {
+          const previewDay = findPreviewDay(day, index);
+          const previewSegments = Array.isArray(previewDay?.segments)
+            ? previewDay.segments
+            : [];
+          if (!previewSegments.length) return day;
+          changed = true;
+          const normalizedDay = normalizeJourneyDayPlanStops(day);
+          return {
+            ...normalizedDay,
+            segments: buildEditedJourneySegments(
+              normalizedDay.dayNumber || index + 1,
+              normalizedDay.stops || [],
+              previewSegments
+            ),
+          };
+        });
+        if (!changed) return dayPlans;
+        shell.dataset.dayPlans = serializeMapPayload(mergedPlans);
+        const mapNode = shell.querySelector(".journey-live-map[data-map-payload]");
+        const payload = parseMapPayload(mapNode?.dataset.mapPayload || "") || {};
+        if (mapNode && Array.isArray(payload.days)) {
+          payload.days = payload.days.map((day, index) => {
+            const merged = mergedPlans.find((item) => item.key && item.key === day.key) || mergedPlans[index];
+            return merged
+              ? {
+                  ...day,
+                  segments: merged.segments || [],
+                }
+              : day;
+          });
+          mapNode.dataset.mapPayload = serializeMapPayload(payload);
+        }
+        const workbench = shell.closest(".visual-journey-workbench");
+        if (workbench) {
+          refreshVisualJourneyDayEditor(workbench, mergedPlans);
+        }
+        return mergedPlans;
+      }
+
       async function hydrateJourneyMap(node) {
         if (!node || node.dataset.mapReady === "1" || node.dataset.mapReady === "loading") {
           return;
@@ -1398,6 +1448,11 @@
           if (!points.length) {
             throw new Error(preview?.message || "map-preview-empty");
           }
+          const shell = node.closest(".journey-live-map-shell");
+          mergeMapPreviewSegmentsIntoDayPlans(
+            shell,
+            Array.isArray(preview?.days) ? preview.days : []
+          );
 
           const mapConfig =
             preview?.provider === "amap-js"
@@ -1453,7 +1508,6 @@
             routePoints.map((point) => [point.kind, point])
           );
           const markersByKind = {};
-          const shell = node.closest(".journey-live-map-shell");
           let entry = null;
 
           const latLngs = [];
@@ -1977,6 +2031,24 @@
         return "交通";
       }
 
+      function normalizeVisualRouteVerificationStatus(segment = {}) {
+        const statusText = [
+          segment.verification_status,
+          segment.confidence,
+          segment.source,
+          segment.verification_note,
+        ]
+          .filter(Boolean)
+          .join(" ");
+        if (/amap|verified|已核验|高德/i.test(statusText) && !/待/.test(statusText)) {
+          return "verified";
+        }
+        if (/estimated|估算/i.test(statusText)) {
+          return "estimated";
+        }
+        return "needs_live_route";
+      }
+
       function visualRouteDurationMatchesMode(mode = "", durationText = "") {
         const text = String(durationText || "").toLowerCase();
         if (!text) return true;
@@ -2077,11 +2149,13 @@
         const confidenceText = [
           segment.confidence,
           segment.source,
+          segment.verification_status,
+          segment.verification_label,
           segment.verification_note,
         ]
           .filter(Boolean)
           .join(" ");
-        const isVerified = /amap|高德|已核验/i.test(confidenceText);
+        const isVerified = /amap|高德|verified|已核验/i.test(confidenceText);
         const isEstimated = /estimated|估算/i.test(confidenceText);
         const metricTextIsPending =
           !metricText || /待|needs|unknown/i.test(metricText);
@@ -2758,6 +2832,7 @@
         previous = {}
       ) {
         const base = previous && typeof previous === "object" ? previous : {};
+        const verificationStatus = normalizeVisualRouteVerificationStatus(base);
         return {
           ...base,
           id: `d${dayNumber}-s${index + 1}`,
@@ -2773,6 +2848,15 @@
           distance_text: base.distance_text || "待高德路线核验",
           duration_text: base.duration_text || "待高德路线核验",
           confidence: base.confidence || "needs_live_route",
+          source: base.source || "",
+          verification_status: verificationStatus,
+          verification_label:
+            base.verification_label ||
+            (verificationStatus === "verified"
+              ? "已核验"
+              : verificationStatus === "estimated"
+              ? "估算"
+              : "待高德路线核验"),
           verification_note: base.verification_note || "交通方式为草案偏好，真实路线待核验。",
         };
       }
