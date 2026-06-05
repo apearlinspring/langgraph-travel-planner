@@ -897,7 +897,31 @@ async function installNetworkStubs(context) {
                     const selectedMode = normalizeSegmentMode(
                       segment?.selected_mode || segment?.mode || segment?.transport_mode || ""
                     );
-                    const verified = selectedMode === "taxi";
+                    const routeMetrics = {
+                      taxi: {
+                        confidence: "amap_driving",
+                        source: "amap_direction_driving",
+                        distanceText: "1.2 公里",
+                        durationText: "12分钟",
+                        note: "已用高德驾车路线核验距离和用时；叫车费用仍需行前确认。",
+                      },
+                      transit: {
+                        confidence: "amap_transit",
+                        source: "amap_direction_transit_integrated",
+                        distanceText: "1.1 公里",
+                        durationText: "18分钟",
+                        note: "已用高德公交/地铁综合路线核验距离和用时；班次、末班车、换乘和票价仍需行前确认。",
+                      },
+                      walking: {
+                        confidence: "amap_walking",
+                        source: "amap_direction_walking",
+                        distanceText: "1.1 公里",
+                        durationText: "14分钟",
+                        note: "已用高德步行路线核验距离和用时；体力和天气仍需行前确认。",
+                      },
+                    };
+                    const verified = Boolean(routeMetrics[selectedMode]);
+                    const metric = routeMetrics[selectedMode] || {};
                     return {
                       ...segment,
                       mode: selectedMode,
@@ -906,17 +930,15 @@ async function installNetworkStubs(context) {
                         segment?.recommended_mode || selectedMode
                       ),
                       locked_by_user: Boolean(segment?.locked_by_user || segment?.mode_locked),
-                      confidence: verified ? "amap_driving" : "needs_live_route",
-                      source: verified
-                        ? "amap_direction_driving"
-                        : "route_mode_pending_amap_tool",
+                      confidence: verified ? metric.confidence : "needs_live_route",
+                      source: verified ? metric.source : "route_mode_pending_amap_tool",
                       verification_status: verified ? "verified" : "needs_live_route",
                       verification_label: verified ? "已核验" : "待高德路线核验",
                       verification_note: verified
-                        ? "已用高德驾车路线核验距离和用时；叫车费用仍需行前确认。"
+                        ? metric.note
                         : "已收到交通偏好，真实路线和用时待高德对应路线工具核验。",
-                      distance_text: verified ? "1.2 公里" : "待高德路线核验",
-                      duration_text: verified ? "12分钟" : "待高德路线核验",
+                      distance_text: verified ? metric.distanceText : "待高德路线核验",
+                      duration_text: verified ? metric.durationText : "待高德路线核验",
                       path:
                         points[segmentIndex] && points[segmentIndex + 1]
                           ? [
@@ -1050,6 +1072,40 @@ async function expectContainsText(page, selector, fragments, label) {
   if (missing.length) {
     throw new Error(`${label} missing text: ${missing.join(", ")}`);
   }
+}
+
+async function expectVisibleElementWithText(page, selector, fragments, label) {
+  await page.waitForFunction(
+    ({ selector: targetSelector, fragments: targetFragments }) =>
+      Array.from(document.querySelectorAll(targetSelector)).some((node) => {
+        const rect = node.getBoundingClientRect();
+        const text = node.textContent || "";
+        return (
+          rect.width >= 4 &&
+          rect.height >= 4 &&
+          targetFragments.every((fragment) => text.includes(fragment))
+        );
+      }),
+    { selector, fragments },
+    { timeout: 6000 }
+  );
+  const matchedIndex = await page.evaluate(
+    ({ selector: targetSelector, fragments: targetFragments }) =>
+      Array.from(document.querySelectorAll(targetSelector)).findIndex((node) => {
+        const rect = node.getBoundingClientRect();
+        const text = node.textContent || "";
+        return (
+          rect.width >= 4 &&
+          rect.height >= 4 &&
+          targetFragments.every((fragment) => text.includes(fragment))
+        );
+      }),
+    { selector, fragments }
+  );
+  if (matchedIndex < 0) {
+    throw new Error(`${label} is visible but not stable.`);
+  }
+  return page.locator(selector).nth(matchedIndex);
 }
 
 async function expectNotContainsText(page, selector, fragments, label) {
@@ -1344,8 +1400,8 @@ async function checkVisualJourneyEditing(page, viewport) {
         );
         return (
           day?.segments?.[0]?.selected_mode === "transit" &&
-          day?.segments?.[0]?.confidence === "needs_live_route" &&
-          day?.segments?.[0]?.verification_status === "needs_live_route" &&
+          day?.segments?.[0]?.confidence === "amap_transit" &&
+          day?.segments?.[0]?.verification_status === "verified" &&
           sawTransitPreviewRequest
         );
       } catch (error) {
@@ -1358,8 +1414,8 @@ async function checkVisualJourneyEditing(page, viewport) {
   await expectContainsText(
     page,
     ".visual-route-editor",
-    ["公交/地铁", "待高德路线核验"],
-    `${viewport.name} selected segment mode stays pending`
+    ["公交/地铁", "1.1 公里", "18分钟", "已核验"],
+    `${viewport.name} selected segment mode is verified by preview`
   );
   await page.locator(`${firstSegmentSelector} .visual-route-mode-options summary`).click();
   await page
@@ -1532,8 +1588,7 @@ async function checkVisualJourneyEditing(page, viewport) {
     { timeout: 5000 }
   );
 
-  await expectVisible(page, ".visual-route-planning-pool", `${viewport.name} route planning pool`);
-  await expectContainsText(
+  const planningPool = await expectVisibleElementWithText(
     page,
     ".visual-route-planning-pool",
     ["待规划地点", "九溪烟树", "满觉陇"],
@@ -1544,7 +1599,7 @@ async function checkVisualJourneyEditing(page, viewport) {
       runtimeDir,
       "frontend-visual-journey-mobile-planning-pool.png"
     );
-    await page.locator(".visual-route-planning-pool").first().screenshot({
+    await planningPool.screenshot({
       path: poolPath,
     });
     screenshots.push(poolPath);
