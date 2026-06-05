@@ -200,6 +200,148 @@ async def test_resolve_segment_keeps_transit_preference_pending_without_driving_
     assert segment.duration_text == "待高德路线核验"
 
 
+@pytest.mark.asyncio
+async def test_resolve_segment_verifies_walking_preference_with_amap_tool():
+    class FakeWalkingTool:
+        async def ainvoke(self, payload):
+            assert payload["origin"] == "120.1489,30.2596"
+            assert payload["destination"] == "120.1482,30.2631"
+            return (
+                '{"route":{"paths":[{"distance":"1074","duration":"859","steps":['
+                '{"polyline":"120.148900,30.259600;120.148200,30.263100"}]}]}}'
+            )
+
+    left = MapPoint(
+        kind="day",
+        label="Day 1",
+        name="西湖",
+        lng=120.1489,
+        lat=30.2596,
+        address="杭州",
+    )
+    right = MapPoint(
+        kind="day",
+        label="Day 1",
+        name="断桥残雪",
+        lng=120.1482,
+        lat=30.2631,
+        address="杭州",
+    )
+
+    segment = await _resolve_segment(
+        {"walking": FakeWalkingTool()},
+        day_key="day-1",
+        day_label="Day 1",
+        left=left,
+        right=right,
+        preference=MapPreviewSegmentRequest(selected_mode="walking", locked_by_user=True),
+    )
+
+    assert segment.selected_mode == "walking"
+    assert segment.mode_label == "步行"
+    assert segment.locked_by_user is True
+    assert segment.confidence == "amap_walking"
+    assert segment.source == "amap_direction_walking"
+    assert segment.verification_status == "verified"
+    assert segment.distance_text == "1.1 公里"
+    assert segment.duration_text == "14分钟"
+    assert segment.path == [
+        {"lng": left.lng, "lat": left.lat},
+        {"lng": right.lng, "lat": right.lat},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_resolve_segment_verifies_transit_preference_with_city_context():
+    class FakeTransitTool:
+        async def ainvoke(self, payload):
+            assert payload == {
+                "origin": "120.1489,30.2596",
+                "destination": "119.9907,30.3927",
+                "city": "杭州",
+                "cityd": "杭州",
+            }
+            return (
+                '{"distance":"19354","transits":[{"duration":"7397",'
+                '"walking_distance":"3632","segments":[{}, {}, {}]}]}'
+            )
+
+    left = MapPoint(
+        kind="day",
+        label="Day 3",
+        name="西湖",
+        lng=120.1489,
+        lat=30.2596,
+        address="杭州",
+    )
+    right = MapPoint(
+        kind="day",
+        label="Day 3",
+        name="良渚古城遗址公园",
+        lng=119.9907,
+        lat=30.3927,
+        address="杭州",
+    )
+
+    segment = await _resolve_segment(
+        {"transit": FakeTransitTool()},
+        day_key="day-3",
+        day_label="Day 3",
+        left=left,
+        right=right,
+        preference=MapPreviewSegmentRequest(selected_mode="transit", locked_by_user=True),
+        city="杭州",
+        cityd="杭州",
+    )
+
+    assert segment.selected_mode == "transit"
+    assert segment.mode_label == "公交/地铁"
+    assert segment.confidence == "amap_transit"
+    assert segment.source == "amap_direction_transit_integrated"
+    assert segment.verification_status == "verified"
+    assert segment.distance_text == "19.4 公里"
+    assert segment.duration_text == "2小时3分钟"
+    assert "班次" in segment.verification_note
+
+
+@pytest.mark.asyncio
+async def test_resolve_segment_keeps_transit_pending_without_city_context():
+    class FakeTransitTool:
+        async def ainvoke(self, payload):
+            raise AssertionError("transit route requires city context first")
+
+    left = MapPoint(
+        kind="day",
+        label="Day 1",
+        name="西湖",
+        lng=120.1489,
+        lat=30.2596,
+        address="杭州",
+    )
+    right = MapPoint(
+        kind="day",
+        label="Day 1",
+        name="良渚古城遗址公园",
+        lng=119.9907,
+        lat=30.3927,
+        address="杭州",
+    )
+
+    segment = await _resolve_segment(
+        {"transit": FakeTransitTool()},
+        day_key="day-1",
+        day_label="Day 1",
+        left=left,
+        right=right,
+        preference=MapPreviewSegmentRequest(selected_mode="transit"),
+    )
+
+    assert segment.selected_mode == "transit"
+    assert segment.verification_status == "needs_live_route"
+    assert segment.distance_text == "待高德路线核验"
+    assert "城市信息不足" in segment.verification_note
+
+
 def test_point_from_stop_coordinates_uses_structured_poi_position():
     stop = MapPreviewStopRequest(
         id="d1-p1",
@@ -359,6 +501,79 @@ async def test_map_preview_accepts_day_segment_preferences(monkeypatch):
     assert segment.locked_by_user is True
     assert segment.verification_status == "needs_live_route"
     assert "公交/地铁" in segment.verification_note
+
+
+@pytest.mark.asyncio
+async def test_map_preview_verifies_transit_segment_when_tool_and_city_exist(monkeypatch):
+    maps._preview_cache.clear()
+
+    class FakeGeoTool:
+        async def ainvoke(self, payload):
+            return '{"results":[{"location":"120.1489,30.2596","formatted_address":"杭州"}]}'
+
+    class FakeTransitTool:
+        async def ainvoke(self, payload):
+            assert payload["city"] == "杭州"
+            assert payload["cityd"] == "杭州"
+            return '{"distance":"19354","transits":[{"duration":"7397","segments":[{},{}]}]}'
+
+    async def fake_get_amap_tool(name):
+        assert name == "maps_geo"
+        return FakeGeoTool()
+
+    async def fake_get_optional_amap_tool(name):
+        if name == "maps_direction_transit_integrated":
+            return FakeTransitTool()
+        return None
+
+    monkeypatch.setattr(maps, "_get_amap_tool", fake_get_amap_tool)
+    monkeypatch.setattr(maps, "_get_optional_amap_tool", fake_get_optional_amap_tool)
+    request = MapPreviewRequest.model_validate(
+        {
+            "destination": "杭州",
+            "days": [
+                {
+                    "key": "visual-day-1",
+                    "label": "第1天",
+                    "stops": [
+                        {
+                            "id": "d1-p1",
+                            "name": "西湖",
+                            "city": "杭州",
+                            "lng": 120.1489,
+                            "lat": 30.2596,
+                        },
+                        {
+                            "id": "d1-p2",
+                            "name": "良渚古城遗址公园",
+                            "city": "杭州",
+                            "lng": 119.9907,
+                            "lat": 30.3927,
+                        },
+                    ],
+                    "segments": [
+                        {
+                            "id": "d1-s1",
+                            "selected_mode": "transit",
+                            "locked_by_user": True,
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+
+    response = await maps.get_map_preview(
+        request,
+        user=SimpleNamespace(id="map-transit-route-test"),
+    )
+
+    segment = response.days[0].segments[0]
+    assert segment.selected_mode == "transit"
+    assert segment.confidence == "amap_transit"
+    assert segment.verification_status == "verified"
+    assert segment.distance_text == "19.4 公里"
+    assert segment.duration_text == "2小时3分钟"
 
 
 @pytest.mark.asyncio

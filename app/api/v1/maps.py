@@ -8,6 +8,7 @@ import asyncio
 import math
 import re
 import time
+from collections.abc import Mapping
 from typing import Any
 
 from fastapi import APIRouter, Depends
@@ -505,58 +506,142 @@ def _extract_amap_route_path(path: dict[str, Any]) -> list[dict[str, float]]:
     return route_path
 
 
+def _first_amap_route_path(data: dict[str, Any]) -> dict[str, Any]:
+    paths = data.get("paths") if isinstance(data, dict) else None
+    if not paths and isinstance(data.get("route"), dict):
+        paths = data["route"].get("paths")
+    if isinstance(paths, list) and paths and isinstance(paths[0], dict):
+        return paths[0]
+    return {}
+
+
+def _first_amap_transit(data: dict[str, Any]) -> dict[str, Any]:
+    transits = data.get("transits") if isinstance(data, dict) else None
+    if not transits and isinstance(data.get("route"), dict):
+        transits = data["route"].get("transits")
+    if isinstance(transits, list) and transits and isinstance(transits[0], dict):
+        return transits[0]
+    return {}
+
+
+def _float_value(*values: Any) -> float | None:
+    for value in values:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            continue
+        if number > 0:
+            return number
+    return None
+
+
+def _route_tool_for_mode(route_tools: Mapping[str, Any] | Any | None, mode: str) -> Any | None:
+    if isinstance(route_tools, Mapping):
+        if mode == "walking":
+            return route_tools.get("walking")
+        if mode == "transit":
+            return route_tools.get("transit")
+        return route_tools.get("taxi") or route_tools.get("driving")
+    return route_tools if mode == "taxi" else None
+
+
+def _direct_segment_path(left: MapPoint, right: MapPoint) -> list[dict[str, float]]:
+    return [{"lng": left.lng, "lat": left.lat}, {"lng": right.lng, "lat": right.lat}]
+
+
+def _pending_segment_for_mode(
+    *,
+    day_key: str,
+    day_label: str,
+    left: MapPoint,
+    right: MapPoint,
+    preference: MapPreviewSegmentRequest | None,
+    selected_mode: str,
+    reason: str,
+) -> MapRouteSegment:
+    return MapRouteSegment(
+        day_key=day_key,
+        day_label=day_label,
+        from_name=left.name,
+        to_name=right.name,
+        distance_text="待高德路线核验",
+        duration_text="待高德路线核验",
+        distance_meters=_haversine_distance_meters(left, right),
+        duration_seconds=None,
+        path=_direct_segment_path(left, right),
+        **_segment_contract_fields(
+            preference,
+            source="route_mode_pending_amap_tool",
+            confidence="needs_live_route",
+            verification_status="needs_live_route",
+            verification_note=(
+                f"已收到{route_segment_mode_label(selected_mode)}偏好，"
+                f"{reason}"
+            ),
+        ),
+    )
+
+
 async def _resolve_segment(
-    direction_tool: Any | None,
+    direction_tool: Mapping[str, Any] | Any | None,
     *,
     day_key: str,
     day_label: str,
     left: MapPoint,
     right: MapPoint,
     preference: MapPreviewSegmentRequest | None = None,
+    city: str | None = None,
+    cityd: str | None = None,
 ) -> MapRouteSegment:
     selected_mode = _segment_selected_mode(preference)
-    direct_path = [{"lng": left.lng, "lat": left.lat}, {"lng": right.lng, "lat": right.lat}]
-    if selected_mode not in {"taxi"}:
-        return MapRouteSegment(
+    direct_path = _direct_segment_path(left, right)
+    route_tool = _route_tool_for_mode(direction_tool, selected_mode)
+    if selected_mode == "transit" and (not _normalize_query(city) or not _normalize_query(cityd)):
+        return _pending_segment_for_mode(
             day_key=day_key,
             day_label=day_label,
-            from_name=left.name,
-            to_name=right.name,
-            distance_text="待高德路线核验",
-            duration_text="待高德路线核验",
-            distance_meters=_haversine_distance_meters(left, right),
-            duration_seconds=None,
-            path=direct_path,
-            **_segment_contract_fields(
-                preference,
-                source="route_mode_pending_amap_tool",
-                confidence="needs_live_route",
-                verification_status="needs_live_route",
-                verification_note=(
-                    f"已收到{route_segment_mode_label(selected_mode)}偏好，"
-                    "真实路线、用时和换乘细节待高德对应路线工具核验。"
-                ),
-            ),
+            left=left,
+            right=right,
+            preference=preference,
+            selected_mode=selected_mode,
+            reason="公交/地铁路线核验需要起点城市和终点城市，当前城市信息不足。",
+        )
+    if selected_mode in {"walking", "transit"} and route_tool is None:
+        return _pending_segment_for_mode(
+            day_key=day_key,
+            day_label=day_label,
+            left=left,
+            right=right,
+            preference=preference,
+            selected_mode=selected_mode,
+            reason="真实路线、用时和换乘细节待高德对应路线工具核验。",
         )
 
-    if direction_tool is not None:
+    if route_tool is not None:
         try:
+            payload = {
+                "origin": f"{left.lng},{left.lat}",
+                "destination": f"{right.lng},{right.lat}",
+            }
+            if selected_mode == "transit":
+                payload["city"] = _normalize_query(city)
+                payload["cityd"] = _normalize_query(cityd)
             result = await asyncio.wait_for(
-                direction_tool.ainvoke(
-                    {
-                        "origin": f"{left.lng},{left.lat}",
-                        "destination": f"{right.lng},{right.lat}",
-                    }
-                ),
+                route_tool.ainvoke(payload),
                 timeout=MAP_DIRECTION_TIMEOUT_SECONDS,
             )
             data = _parse_json_text(result)
-            paths = data.get("paths") or []
-            if paths:
-                path = paths[0]
-                distance = float(path.get("distance") or 0)
-                duration = float(path.get("duration") or 0)
-                if distance > 0 and duration > 0:
+            if selected_mode == "transit":
+                transit = _first_amap_transit(data)
+                distance = _float_value(
+                    transit.get("distance"),
+                    data.get("distance"),
+                )
+                duration = _float_value(
+                    transit.get("duration"),
+                    data.get("duration"),
+                )
+                if distance and duration:
                     return MapRouteSegment(
                         day_key=day_key,
                         day_label=day_label,
@@ -566,13 +651,53 @@ async def _resolve_segment(
                         duration_text=_format_duration(duration),
                         distance_meters=distance,
                         duration_seconds=duration,
-                        path=_extract_amap_route_path(path),
+                        path=direct_path,
                         **_segment_contract_fields(
                             preference,
-                            source="amap_direction_driving",
-                            confidence="amap_driving",
+                            source="amap_direction_transit_integrated",
+                            confidence="amap_transit",
                             verification_status="verified",
-                            verification_note="已用高德驾车路线核验距离和用时；票价、路况和叫车费用仍需行前确认。",
+                            verification_note=(
+                                "已用高德公交/地铁综合路线核验距离和用时；班次、末班车、换乘、票价和临时运营调整仍需行前确认。"
+                            ),
+                        ),
+                    )
+            else:
+                path = _first_amap_route_path(data)
+                distance = _float_value(path.get("distance"))
+                duration = _float_value(path.get("duration"))
+                if distance and duration:
+                    source = (
+                        "amap_direction_walking"
+                        if selected_mode == "walking"
+                        else "amap_direction_driving"
+                    )
+                    confidence = "amap_walking" if selected_mode == "walking" else "amap_driving"
+                    note = (
+                        "已用高德步行路线核验距离和用时；实际体力、天气、临时封路和夜间安全仍需行前确认。"
+                        if selected_mode == "walking"
+                        else "已用高德驾车路线核验距离和用时；票价、路况和叫车费用仍需行前确认。"
+                    )
+                    return MapRouteSegment(
+                        day_key=day_key,
+                        day_label=day_label,
+                        from_name=left.name,
+                        to_name=right.name,
+                        distance_text=_format_distance(distance),
+                        duration_text=_format_duration(duration),
+                        distance_meters=distance,
+                        duration_seconds=duration,
+                        path=(
+                            _extract_amap_route_path(path)
+                            if selected_mode == "taxi"
+                            else direct_path
+                        ),
+                        **_segment_contract_fields(
+                            preference,
+                            source=source,
+                            confidence=confidence,
+                            verification_status="verified",
+                            verification_note=note,
                         ),
                     )
         except Exception as exc:
@@ -580,6 +705,17 @@ async def _resolve_segment(
                 "Map preview direction failed: "
                 f"{left.name}->{right.name}: {exc}"
             )
+
+    if selected_mode in {"walking", "transit"}:
+        return _pending_segment_for_mode(
+            day_key=day_key,
+            day_label=day_label,
+            left=left,
+            right=right,
+            preference=preference,
+            selected_mode=selected_mode,
+            reason="高德对应路线工具暂未返回可靠距离和用时，保留为待路线核验。",
+        )
 
     distance = _haversine_distance_meters(left, right)
     duration = distance / 1000 / 25 * 3600
@@ -694,7 +830,7 @@ async def get_map_preview(
         return cached
 
     geo_tool = None
-    direction_tool = None
+    route_tools: dict[str, Any] = {}
     geocoder_unavailable = False
     try:
         geo_tool = await _get_amap_tool("maps_geo")
@@ -706,7 +842,19 @@ async def get_map_preview(
             f"user_id={user.id}, elapsed_seconds={elapsed:.3f}, error={exc}"
         )
     if geo_tool is not None:
-        direction_tool = await _get_optional_amap_tool("maps_direction_driving")
+        route_tool_names = {
+            "taxi": "maps_direction_driving",
+            "walking": "maps_direction_walking",
+            "transit": "maps_direction_transit_integrated",
+        }
+        loaded_route_tools = await asyncio.gather(
+            *(_get_optional_amap_tool(tool_name) for tool_name in route_tool_names.values())
+        )
+        route_tools = {
+            mode: tool_item
+            for mode, tool_item in zip(route_tool_names, loaded_route_tools)
+            if tool_item is not None
+        }
     destination_hint = _normalize_query(data.destination)
 
     ordered_queries = [
@@ -790,6 +938,7 @@ async def get_map_preview(
     for index, day in enumerate(data.days[:7]):
         seen_names: set[str] = set()
         day_points: list[MapPoint] = []
+        day_point_cities: list[str] = []
         day_label = _normalize_query(day.label) or f"Day {index + 1}"
         day_key = day.key or _build_day_key(day.label, index)
         if _map_preview_deadline_expired(deadline):
@@ -858,12 +1007,13 @@ async def get_map_preview(
                 continue
             seen_names.add(dedupe_key)
             day_points.append(point)
+            day_point_cities.append(city_hint or destination_hint)
         segments: list[MapRouteSegment] = []
         for point_index in range(max(len(day_points) - 1, 0)):
             if _map_preview_deadline_expired(deadline):
                 break
             segment = await _resolve_segment(
-                direction_tool,
+                route_tools,
                 day_key=day_key,
                 day_label=day_label,
                 left=day_points[point_index],
@@ -871,6 +1021,12 @@ async def get_map_preview(
                 preference=day.segments[point_index]
                 if point_index < len(day.segments)
                 else None,
+                city=day_point_cities[point_index]
+                if point_index < len(day_point_cities)
+                else destination_hint,
+                cityd=day_point_cities[point_index + 1]
+                if point_index + 1 < len(day_point_cities)
+                else destination_hint,
             )
             segments.append(segment)
             all_segments.append(segment)
