@@ -27,6 +27,8 @@ def test_report_bundle_renders_markdown_from_valid_report_data():
     assert "verify ticket price" in bundle.markdown
     assert "产品与报价规则" in bundle.markdown
     assert "| 类别 | 金额 | 依据 |" in bundle.markdown
+    assert "路段交通" in bundle.markdown
+    assert "打车" in bundle.markdown
     assert "人均：" not in bundle.markdown
 
 
@@ -75,6 +77,18 @@ def test_report_validator_reports_route_length_mismatch_without_truncating():
     assert validation.ok is False
     assert "每日行程数量必须和地图路线数量一致。" in validation.route_mismatches
     assert "Day 2 缺少地图路线摘要。" in validation.route_mismatches
+
+
+def test_report_validator_requires_route_segment_contract_when_route_points_exist():
+    report_data = _valid_report_data()
+    report_data["itinerary"][0]["route"].pop("segments", None)
+    report_data["map_routes"][0].pop("segments", None)
+    report_data["route_map"]["days"][0].pop("segments", None)
+
+    validation = validate_report_data(report_data)
+
+    assert validation.ok is False
+    assert "Day 1 路段数量必须等于路线点之间的连接数。" in validation.route_mismatches
 
 
 def test_report_builder_assembles_report_data_from_domain_inputs():
@@ -134,6 +148,13 @@ def test_report_builder_assembles_report_data_from_domain_inputs():
     assert report_data["version"] == "travel_report.v1"
     assert report_data["quote_policy"]["locked_price"] is False
     assert report_data["agency_product"]["non_commitments"]
+    assert report_data["itinerary"][0]["route"]["segments"]
+    assert report_data["map_routes"][0]["segments"]
+    assert report_data["route_map"]["days"][0]["segments"]
+    assert report_data["map_routes"][0]["segments"][0]["selected_mode"] == "taxi"
+    assert report_data["map_routes"][0]["segments"][0]["locked_by_user"] is False
+    assert report_data["map_routes"][0]["segments"][0]["verification_status"] == "needs_live_route"
+    assert len(report_data["map_routes"][0]["segments"][0]["alternatives"]) == 3
     assert report_data["route_map"]["days"][0]["points"][0]["type_label"]
     assert [item["key"] for item in report_data["budget"]["items"]] == [
         "transport",
@@ -214,6 +235,7 @@ def test_report_builder_pads_missing_routes_instead_of_zip_truncating():
     assert len(report_data["itinerary"]) == 2
     assert len(report_data["map_routes"]) == 2
     assert len(report_data["route_map"]["days"]) == 2
+    assert all(route["segments"] for route in report_data["map_routes"])
     assert report_data["itinerary"][1]["route"]["summary"] == report_data["map_routes"][1]["summary"]
     assert report_data["evidence_bundle"]["route_alignment_findings"] == [
         "Day 2 缺少地图路线，已按行程内容补齐。"

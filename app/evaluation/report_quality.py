@@ -152,6 +152,35 @@ def _route_points(route: dict[str, Any]) -> list[str]:
     return [label for point in raw_points if (label := _route_point_label(point))]
 
 
+def _route_segment_contract_ready(route: dict[str, Any]) -> bool:
+    points = _route_points(route)
+    if len(points) < 2:
+        return True
+    segments = [item for item in _as_list(route.get("segments")) if isinstance(item, dict)]
+    if len(segments) != len(points) - 1:
+        return False
+    for segment in segments:
+        selected_mode = str(segment.get("selected_mode") or segment.get("mode") or "").strip()
+        alternatives = [
+            item for item in _as_list(segment.get("alternatives")) if isinstance(item, dict)
+        ]
+        if not selected_mode:
+            return False
+        if not isinstance(segment.get("locked_by_user"), bool):
+            return False
+        if str(segment.get("verification_status") or "").strip() not in {
+            "verified",
+            "estimated",
+            "needs_live_route",
+        }:
+            return False
+        if not alternatives:
+            return False
+        if not any(str(option.get("mode") or "").strip() == selected_mode for option in alternatives):
+            return False
+    return True
+
+
 def _budget_group(key: str) -> str:
     normalized = key.lower().strip()
     if normalized in {"other"}:
@@ -233,6 +262,7 @@ def _criterion_itinerary_and_map(report_data: dict[str, Any]) -> CriterionResult
 
     rich_days = 0
     routed_days = 0
+    segment_ready_days = 0
     for day in itinerary:
         if not isinstance(day, dict):
             continue
@@ -246,6 +276,7 @@ def _criterion_itinerary_and_map(report_data: dict[str, Any]) -> CriterionResult
         rich_days += 1 if has_daily_content else 0
         route = _as_dict(day.get("route"))
         routed_days += 1 if len(_route_points(route)) >= 2 and _has_text(route.get("summary")) else 0
+        segment_ready_days += 1 if _route_segment_contract_ready(route) else 0
 
     score += _score(
         rich_days == len(itinerary) and bool(itinerary),
@@ -255,9 +286,15 @@ def _criterion_itinerary_and_map(report_data: dict[str, Any]) -> CriterionResult
     )
     score += _score(
         routed_days == len(itinerary) and bool(itinerary),
-        4,
+        3,
         findings,
         "Some itinerary days lack visual route nodes",
+    )
+    score += _score(
+        segment_ready_days == len(itinerary) and bool(itinerary),
+        1,
+        findings,
+        "Some itinerary days lack route segment mode alternatives",
     )
     score += _score(
         len(map_routes) == len(itinerary) and bool(map_routes),
@@ -473,10 +510,11 @@ def _criterion_frontend_export(report_data: dict[str, Any]) -> CriterionResult:
     if route_map_days:
         score += _score(
             len(route_map_days) == len(itinerary)
-            and all(len(_as_list(day.get("points"))) >= 2 for day in route_map_days),
+            and all(len(_as_list(day.get("points"))) >= 2 for day in route_map_days)
+            and all(_route_segment_contract_ready(day) for day in route_map_days),
             0,
             findings,
-            "route_map.days must align with itinerary and include typed route points",
+            "route_map.days must align with itinerary and include typed route points plus route segments",
         )
     score += _score(
         {"map_routes", "budget", "risk"}.issubset(section_ids),

@@ -72,6 +72,9 @@ def _format_daily_itinerary(itinerary: list[dict[str, Any]], max_days: int = 8) 
         lines.append(f"Day {day_number}：{title}")
         if route.get("summary"):
             lines.append(f"- 地图路线：{route['summary']}")
+        route_segments = _format_route_segments(_as_list(route.get("segments")))
+        if route_segments:
+            lines.append(f"- 路段交通：{route_segments}")
 
         time_blocks = _as_list(day.get("time_blocks"))
         if time_blocks:
@@ -101,6 +104,72 @@ def _format_daily_itinerary(itinerary: list[dict[str, Any]], max_days: int = 8) 
     if len(itinerary) > max_days:
         lines.append(f"- 其余 {len(itinerary) - max_days} 天按已生成行程继续执行。")
     return lines
+
+
+def _format_segment_status(segment: dict[str, Any]) -> str:
+    return str(
+        segment.get("verification_label")
+        or segment.get("verification_status")
+        or "待核验"
+    ).strip()
+
+
+def _format_segment_mode(segment: dict[str, Any]) -> str:
+    return str(
+        segment.get("mode_label")
+        or segment.get("selected_mode")
+        or segment.get("mode")
+        or "交通"
+    ).strip()
+
+
+def _format_segment_alternatives(segment: dict[str, Any]) -> str:
+    selected_mode = str(segment.get("selected_mode") or segment.get("mode") or "").strip()
+    labels = []
+    for option in _as_list(segment.get("alternatives")):
+        if not isinstance(option, dict):
+            continue
+        option_mode = str(option.get("mode") or "").strip()
+        if option_mode and option_mode == selected_mode:
+            continue
+        label = str(option.get("label") or option_mode or "").strip()
+        if label and label not in labels:
+            labels.append(label)
+    return " / ".join(labels[:2])
+
+
+def _format_route_segments(segments: list[Any], max_segments: int = 4) -> str:
+    normalized = [segment for segment in segments if isinstance(segment, dict)]
+    if not normalized:
+        return ""
+    parts = []
+    for segment in normalized[:max_segments]:
+        endpoint = "{from_name}→{to_name}".format(
+            from_name=segment.get("from_name") or "上一站",
+            to_name=segment.get("to_name") or "下一站",
+        )
+        metric_text = " · ".join(
+            str(item).strip()
+            for item in (segment.get("distance_text"), segment.get("duration_text"))
+            if str(item or "").strip()
+        )
+        alternatives = _format_segment_alternatives(segment)
+        alt_text = f"，候选：{alternatives}" if alternatives else ""
+        locked_text = "，已锁定" if segment.get("locked_by_user") else ""
+        metric_suffix = f"，{metric_text}" if metric_text else ""
+        parts.append(
+            "{endpoint}：{mode}（{status}{metric}{alt}{locked}）".format(
+                endpoint=endpoint,
+                mode=_format_segment_mode(segment),
+                status=_format_segment_status(segment),
+                metric=metric_suffix,
+                alt=alt_text,
+                locked=locked_text,
+            )
+        )
+    if len(normalized) > max_segments:
+        parts.append(f"其余 {len(normalized) - max_segments} 段出发前继续核验")
+    return "；".join(parts)
 
 
 def _format_budget_items(budget: dict[str, Any]) -> list[str]:

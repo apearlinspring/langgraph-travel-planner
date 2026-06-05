@@ -40,6 +40,71 @@ function loadReportFixture(fileName) {
   return JSON.parse(fs.readFileSync(path.join(fixtureDir, fileName), "utf8"));
 }
 
+function buildRouteSegments(points, dayNumber = 1) {
+  return points.slice(0, -1).map((fromName, index) => ({
+    id: `fixture-d${dayNumber}-s${index + 1}`,
+    day_number: dayNumber,
+    from_name: fromName,
+    to_name: points[index + 1],
+    mode: "walking",
+    recommended_mode: "walking",
+    selected_mode: "walking",
+    mode_label: "步行",
+    locked_by_user: index === 0,
+    verification_status: "needs_live_route",
+    verification_label: "待核验",
+    distance_text: "待高德路线核验",
+    duration_text: "约30-45分钟",
+    cost_text: "0元",
+    confidence: "needs_live_route",
+    source: "frontend_fixture",
+    verification_note: "结构化报告路段候选待高德路线核验。",
+    alternatives: [
+      {
+        mode: "walking",
+        label: "步行",
+        duration_text: "约30-45分钟",
+        cost_text: "0元",
+        reason: "适合短距离慢游，体力消耗更高。",
+        verification_status: "needs_live_route",
+      },
+      {
+        mode: "taxi",
+        label: "打车",
+        duration_text: "约10-20分钟",
+        cost_text: "费用待核验",
+        reason: "省体力，适合赶时间或带行李。",
+        verification_status: "needs_live_route",
+      },
+      {
+        mode: "transit",
+        label: "公交/地铁",
+        duration_text: "约25-40分钟",
+        cost_text: "约2-8元",
+        reason: "更省预算，班次和换乘待核验。",
+        verification_status: "needs_live_route",
+      },
+    ],
+  }));
+}
+
+function addRouteSegmentContract(reportData) {
+  const mapRoutes = Array.isArray(reportData.map_routes) ? reportData.map_routes : [];
+  const routeMapDays = Array.isArray(reportData.route_map?.days) ? reportData.route_map.days : [];
+  const itineraryDays = Array.isArray(reportData.itinerary) ? reportData.itinerary : [];
+  mapRoutes.forEach((route, index) => {
+    const dayNumber = Number(route.day_number || index + 1);
+    const points = Array.isArray(route.route_points) ? route.route_points : [];
+    const segments = buildRouteSegments(points, dayNumber);
+    route.segments = segments;
+    const itineraryDay = itineraryDays.find((day) => Number(day.day_number) === dayNumber);
+    if (itineraryDay?.route) itineraryDay.route.segments = segments;
+    const routeMapDay = routeMapDays.find((day) => Number(day.day_number) === dayNumber);
+    if (routeMapDay) routeMapDay.segments = segments;
+  });
+  return reportData;
+}
+
 function escapeHtmlText(value) {
   return String(value || "")
     .replace(/&/g, "&amp;")
@@ -107,8 +172,8 @@ function countOccurrences(text, fragment) {
 const context = createRenderContext();
 
 const fixtures = [
-  ["agency_plan", loadReportFixture("agency_plan_desensitized.json")],
-  ["free_planning", loadReportFixture("free_planning_desensitized.json")],
+  ["agency_plan", addRouteSegmentContract(loadReportFixture("agency_plan_desensitized.json"))],
+  ["free_planning", addRouteSegmentContract(loadReportFixture("free_planning_desensitized.json"))],
 ];
 
 for (const [mode, reportData] of fixtures) {
@@ -133,6 +198,8 @@ for (const [mode, reportData] of fixtures) {
       "查看路线地图",
       "复制摘要",
       "导出报告",
+      "候选：打车 / 公交/地铁",
+      "已锁定",
     ],
     mode
   );

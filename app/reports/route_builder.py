@@ -43,6 +43,20 @@ ROUTE_POINT_TYPE_LABELS = {
     "other": "路线点",
 }
 
+ROUTE_SEGMENT_MODE_LABELS = {
+    "walking": "步行",
+    "transit": "公交/地铁",
+    "taxi": "打车",
+    "rail": "铁路",
+    "flight": "航班",
+}
+
+ROUTE_SEGMENT_VERIFICATION_LABELS = {
+    "verified": "已核验",
+    "estimated": "估算",
+    "needs_live_route": "待核验",
+}
+
 
 def dedupe_route_points(points: list[str], max_items: int = 6) -> list[str]:
     picked = []
@@ -54,6 +68,251 @@ def dedupe_route_points(points: list[str], max_items: int = 6) -> list[str]:
         if len(picked) >= max_items:
             break
     return picked
+
+
+def normalize_route_segment_mode(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    if any(token in raw for token in ("walk", "walking", "步行")):
+        return "walking"
+    if any(token in raw for token in ("bus", "公交", "metro", "subway", "地铁", "transit")):
+        return "transit"
+    if any(token in raw for token in ("taxi", "ride", "打车", "网约车")):
+        return "taxi"
+    if any(token in raw for token in ("drive", "driving", "car", "驾车", "自驾")):
+        return "taxi"
+    if any(token in raw for token in ("train", "rail", "火车", "高铁")):
+        return "rail"
+    if any(token in raw for token in ("flight", "air", "航班", "飞机")):
+        return "flight"
+    return raw or "taxi"
+
+
+def route_segment_mode_label(mode: str) -> str:
+    return ROUTE_SEGMENT_MODE_LABELS.get(normalize_route_segment_mode(mode), "交通")
+
+
+def normalize_route_segment_verification_status(segment: dict[str, Any]) -> str:
+    explicit = str(segment.get("verification_status") or "").strip().lower()
+    if explicit in ROUTE_SEGMENT_VERIFICATION_LABELS:
+        return explicit
+    source = " ".join(
+        str(item or "")
+        for item in (
+            segment.get("confidence"),
+            segment.get("source"),
+            segment.get("verification_note"),
+            segment.get("distance_text"),
+            segment.get("duration_text"),
+        )
+    ).lower()
+    if "amap_driving" in source or "verified" in source or "已核验" in source:
+        return "verified"
+    if "estimated" in source or "估算" in source:
+        return "estimated"
+    return "needs_live_route"
+
+
+def _segment_duration_for_mode(
+    *,
+    mode: str,
+    selected_mode: str,
+    duration_text: str,
+    fallback: str,
+) -> str:
+    if duration_text and "待" not in duration_text and "unknown" not in duration_text.lower():
+        if normalize_route_segment_mode(mode) == normalize_route_segment_mode(selected_mode):
+            return duration_text
+    return fallback
+
+
+def default_route_segment_alternatives(
+    *,
+    selected_mode: str,
+    duration_text: str = "",
+) -> list[dict[str, str]]:
+    return [
+        {
+            "mode": "taxi",
+            "label": "打车",
+            "duration_text": _segment_duration_for_mode(
+                mode="taxi",
+                selected_mode=selected_mode,
+                duration_text=duration_text,
+                fallback="约10-20分钟",
+            ),
+            "cost_text": "费用待核验",
+            "reason": "省体力，适合赶时间或带行李。",
+            "verification_status": "needs_live_route",
+        },
+        {
+            "mode": "transit",
+            "label": "公交/地铁",
+            "duration_text": _segment_duration_for_mode(
+                mode="transit",
+                selected_mode=selected_mode,
+                duration_text=duration_text,
+                fallback="约25-40分钟",
+            ),
+            "cost_text": "约2-8元",
+            "reason": "更省预算，班次和换乘待核验。",
+            "verification_status": "needs_live_route",
+        },
+        {
+            "mode": "walking",
+            "label": "步行",
+            "duration_text": _segment_duration_for_mode(
+                mode="walking",
+                selected_mode=selected_mode,
+                duration_text=duration_text,
+                fallback="约30-45分钟",
+            ),
+            "cost_text": "0元",
+            "reason": "适合短距离慢游，体力消耗更高。",
+            "verification_status": "needs_live_route",
+        },
+    ]
+
+
+def normalize_report_route_segment_alternative(
+    option: dict[str, Any],
+    *,
+    selected_mode: str,
+    duration_text: str,
+) -> dict[str, Any]:
+    mode = normalize_route_segment_mode(
+        option.get("mode") or option.get("transport_mode") or option.get("label")
+    )
+    return {
+        "mode": mode,
+        "label": str(option.get("label") or route_segment_mode_label(mode)),
+        "duration_text": str(
+            option.get("duration_text")
+            or option.get("duration")
+            or _segment_duration_for_mode(
+                mode=mode,
+                selected_mode=selected_mode,
+                duration_text=duration_text,
+                fallback="时间待核验",
+            )
+        ),
+        "cost_text": str(option.get("cost_text") or option.get("cost") or "费用待核验"),
+        "reason": str(option.get("reason") or option.get("note") or "适配性待核验。"),
+        "verification_status": normalize_route_segment_verification_status(option),
+    }
+
+
+def normalize_report_route_segment(
+    segment: dict[str, Any] | None,
+    *,
+    day_number: int,
+    index: int,
+    from_name: str,
+    to_name: str,
+) -> dict[str, Any]:
+    base = dict(segment or {})
+    selected_mode = normalize_route_segment_mode(
+        base.get("selected_mode")
+        or base.get("mode")
+        or base.get("transport_mode")
+        or base.get("duration_text")
+        or base.get("source")
+    )
+    recommended_mode = normalize_route_segment_mode(
+        base.get("recommended_mode") or base.get("mode") or selected_mode
+    )
+    duration_text = str(base.get("duration_text") or "待高德路线核验")
+    raw_alternatives = base.get("alternatives") if isinstance(base.get("alternatives"), list) else []
+    alternatives = [
+        normalize_report_route_segment_alternative(
+            option if isinstance(option, dict) else {"label": option},
+            selected_mode=selected_mode,
+            duration_text=duration_text,
+        )
+        for option in raw_alternatives
+    ]
+    if not alternatives:
+        alternatives = default_route_segment_alternatives(
+            selected_mode=selected_mode,
+            duration_text=duration_text,
+        )
+
+    seen_modes: set[str] = set()
+    deduped_alternatives: list[dict[str, Any]] = []
+    for option in alternatives:
+        mode = normalize_route_segment_mode(option.get("mode"))
+        if not mode or mode in seen_modes:
+            continue
+        seen_modes.add(mode)
+        deduped_alternatives.append({**option, "mode": mode})
+
+    if selected_mode not in seen_modes:
+        deduped_alternatives.insert(
+            0,
+            {
+                "mode": selected_mode,
+                "label": route_segment_mode_label(selected_mode),
+                "duration_text": duration_text,
+                "cost_text": str(base.get("cost_text") or "费用待核验"),
+                "reason": str(base.get("reason") or "当前推荐方式，真实路线待核验。"),
+                "verification_status": normalize_route_segment_verification_status(base),
+            },
+        )
+
+    verification_status = normalize_route_segment_verification_status(base)
+    return {
+        "id": str(base.get("id") or f"d{day_number}-s{index + 1}"),
+        "day_number": day_number,
+        "from_poi_id": str(base.get("from_poi_id") or ""),
+        "to_poi_id": str(base.get("to_poi_id") or ""),
+        "from_name": str(base.get("from_name") or from_name),
+        "to_name": str(base.get("to_name") or to_name),
+        "mode": selected_mode,
+        "recommended_mode": recommended_mode,
+        "selected_mode": selected_mode,
+        "mode_label": route_segment_mode_label(selected_mode),
+        "locked_by_user": bool(base.get("locked_by_user") or base.get("mode_locked")),
+        "verification_status": verification_status,
+        "verification_label": ROUTE_SEGMENT_VERIFICATION_LABELS.get(
+            verification_status,
+            "待核验",
+        ),
+        "distance_text": str(base.get("distance_text") or "待高德路线核验"),
+        "duration_text": duration_text,
+        "cost_text": str(base.get("cost_text") or "费用待核验"),
+        "confidence": str(base.get("confidence") or verification_status),
+        "source": str(base.get("source") or "report_route_segment_contract"),
+        "verification_note": str(
+            base.get("verification_note")
+            or "交通方式为草案偏好，真实路线、票价和耗时待核验。"
+        ),
+        "alternatives": deduped_alternatives[:3],
+    }
+
+
+def normalize_report_route_segments(
+    route_points: list[str],
+    *,
+    day_number: int,
+    raw_segments: Any = None,
+) -> list[dict[str, Any]]:
+    if len(route_points) < 2:
+        return []
+    source_segments = raw_segments if isinstance(raw_segments, list) else []
+    segments = []
+    for index in range(len(route_points) - 1):
+        segment = source_segments[index] if index < len(source_segments) else {}
+        if not isinstance(segment, dict):
+            segment = {}
+        segments.append(
+            normalize_report_route_segment(
+                segment,
+                day_number=day_number,
+                index=index,
+                from_name=route_points[index],
+                to_name=route_points[index + 1],
+            )
+        )
+    return segments
 
 
 def _route_point_name(point: Any) -> str:
@@ -68,6 +327,10 @@ def _route_point_name(point: Any) -> str:
 
 def _route_text_items(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
+
+
+def _as_dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
 
 
 def _classify_route_point(
@@ -177,6 +440,11 @@ def build_route_map(
                     ),
                 }
             )
+        segments = normalize_report_route_segments(
+            names,
+            day_number=day_number,
+            raw_segments=route.get("segments") or _as_dict(day.get("route")).get("segments"),
+        )
 
         days.append(
             {
@@ -186,6 +454,7 @@ def build_route_map(
                 "route_note": route.get("route_note") or day.get("route_note") or "",
                 "route_points": names,
                 "points": typed_points,
+                "segments": segments,
             }
         )
 
@@ -509,12 +778,21 @@ def build_day_route_summary(
             summary = f"{summary}｜{theme}"
     else:
         summary = theme
+    raw_segments = day.get("segments")
+    day_route = day.get("route") if isinstance(day.get("route"), dict) else {}
+    if not isinstance(raw_segments, list):
+        raw_segments = day_route.get("segments")
     return {
         "day_number": day_number,
         "route_points": route_points,
         "summary": summary,
         "map_label": f"Day {day_number}：{summary}",
         "route_note": day.get("route_note") or day.get("transport_note") or "",
+        "segments": normalize_report_route_segments(
+            route_points,
+            day_number=int(day_number or 0),
+            raw_segments=raw_segments,
+        ),
     }
 
 
@@ -598,8 +876,14 @@ def _route_summary_from_day(day: dict[str, Any], fallback_day_number: int) -> di
             route["route_points"] = dedupe_route_points(
                 [str(day.get("title") or day.get("theme") or f"Day {day_number}"), "待核验路线"]
             )
+        route_points = dedupe_route_points([str(point) for point in route.get("route_points") or []])
         route.setdefault("map_label", f"Day {day_number}：{route['summary']}")
         route.setdefault("route_note", day.get("route_note") or day.get("transport_note") or "")
+        route["segments"] = normalize_report_route_segments(
+            route_points,
+            day_number=int(day_number or 0),
+            raw_segments=route.get("segments") or day.get("segments"),
+        )
         return route
 
     route_points = day.get("route_points")
@@ -619,6 +903,11 @@ def _route_summary_from_day(day: dict[str, Any], fallback_day_number: int) -> di
         "summary": summary,
         "map_label": f"Day {day_number}：{summary}",
         "route_note": day.get("route_note") or day.get("transport_note") or "",
+        "segments": normalize_report_route_segments(
+            points,
+            day_number=int(day_number or 0),
+            raw_segments=day.get("segments"),
+        ),
     }
 
 
@@ -670,6 +959,11 @@ def normalize_report_route_alignment(
         route.setdefault("summary", " → ".join(route.get("route_points") or []) or f"Day {day_number} 路线待核验")
         route.setdefault("map_label", f"Day {day_number}：{route['summary']}")
         route.setdefault("route_note", day.get("route_note") or day.get("transport_note") or "")
+        route["segments"] = normalize_report_route_segments(
+            dedupe_route_points([str(point) for point in route.get("route_points") or []]),
+            day_number=int(day_number or 0),
+            raw_segments=route.get("segments") or _as_dict(day.get("route")).get("segments") or day.get("segments"),
+        )
         day["route"] = route
 
     return RouteAlignmentResult(
