@@ -17,17 +17,46 @@
     function moveJourneyMapToBounds(map, bounds, options = {}) {
       if (!map || !bounds?.isValid?.()) return false;
       const { padding = [26, 26], animate = false } = options;
+      if (bounds.engine === "amap_points") {
+        const points = Array.isArray(bounds.points) ? bounds.points : [];
+        if (!points.length || typeof map.setZoomAndCenter !== "function") return false;
+        const lngValues = points.map((point) => Number(point.lng));
+        const latValues = points.map((point) => Number(point.lat));
+        const minLng = Math.min(...lngValues);
+        const maxLng = Math.max(...lngValues);
+        const minLat = Math.min(...latValues);
+        const maxLat = Math.max(...latValues);
+        const span = Math.max(maxLng - minLng, maxLat - minLat);
+        const zoom =
+          points.length === 1
+            ? 13
+            : span < 0.018
+              ? 15
+              : span < 0.045
+                ? 14
+                : span < 0.12
+                  ? 13
+                  : span < 0.35
+                    ? 12
+                    : 11;
+        map.resize?.();
+        map.setZoomAndCenter(zoom, [(minLng + maxLng) / 2, (minLat + maxLat) / 2], true);
+        map.resize?.();
+        return true;
+      }
       if (bounds.engine === "amap") {
         const overlays = (bounds.overlays || [])
           .map((item) => item?.overlay || item)
           .filter(Boolean);
         if (!overlays.length || typeof map.setFitView !== "function") return false;
+        map.resize?.();
         map.setFitView(overlays, false, [
           padding[1] || 26,
           padding[0] || 26,
           padding[1] || 26,
           padding[0] || 26,
         ]);
+        map.resize?.();
         return true;
       }
       if (animate && typeof map.flyToBounds === "function") {
@@ -47,6 +76,22 @@
         overlays,
         isValid() {
           return overlays.length > 0;
+        },
+      };
+    }
+
+    function buildAmapBoundsFromPoints(points = []) {
+      const normalizedPoints = (Array.isArray(points) ? points : [])
+        .map((point) => ({
+          lng: Number(point?.lng),
+          lat: Number(point?.lat),
+        }))
+        .filter((point) => Number.isFinite(point.lng) && Number.isFinite(point.lat));
+      return {
+        engine: "amap_points",
+        points: normalizedPoints,
+        isValid() {
+          return normalizedPoints.length > 0;
         },
       };
     }
@@ -175,6 +220,7 @@
       buildBoundsFromPoints,
       moveJourneyMapToBounds,
       buildAmapBoundsFromLayers,
+      buildAmapBoundsFromPoints,
       fitJourneyMapState,
       focusJourneyMapTarget,
       activateJourneyHighlightCard,

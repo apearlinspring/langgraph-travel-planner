@@ -197,6 +197,7 @@
         buildBoundsFromPoints,
         moveJourneyMapToBounds,
         buildAmapBoundsFromLayers,
+        buildAmapBoundsFromPoints,
         fitJourneyMapState,
         focusJourneyMapTarget,
         activateJourneyHighlightCard,
@@ -1465,26 +1466,22 @@
               dayBadge,
               segmentLabels,
               polyline,
-              bounds: buildAmapBoundsFromLayers([...dayMarkers, dayBadge, polyline, ...segmentLabels].filter(Boolean)),
+              bounds: buildAmapBoundsFromPoints(dayPoints),
             };
           })
           .filter(Boolean);
 
-        const allBounds = buildAmapBoundsFromLayers([
-          ...markers,
-          routeLine,
-          ...dayLayers.flatMap((layer) => [...layer.markers, layer.dayBadge, layer.polyline, ...(layer.segmentLabels || [])]),
-        ].filter(Boolean));
-        const dayBounds = buildAmapBoundsFromLayers(
-          dayLayers.flatMap((layer) => [...layer.markers, layer.dayBadge, layer.polyline, ...(layer.segmentLabels || [])]).filter(Boolean)
+        const allBounds = buildAmapBoundsFromPoints([
+          ...points,
+          ...dayLayers.flatMap((layer) => layer.points || []),
+        ]);
+        const dayBounds = buildAmapBoundsFromPoints(
+          dayLayers.flatMap((layer) => layer.points || [])
         );
-        const routeBounds = buildAmapBoundsFromLayers([
-          ...orderedKinds.flatMap((kind) => markersByKind[kind] || []),
-          routeLine,
-        ].filter(Boolean));
-        const highlightBounds = buildAmapBoundsFromLayers([
-          ...(markersByKind.highlight || []),
-          ...(markersByKind.recommendation || []),
+        const routeBounds = buildAmapBoundsFromPoints(routePoints);
+        const highlightBounds = buildAmapBoundsFromPoints([
+          ...highlightPoints,
+          ...recommendationPoints,
         ]);
         if (points.length === 1) {
           map.setZoomAndCenter(11, getAmapPosition(points[0]));
@@ -6775,6 +6772,14 @@
         );
       }
 
+      function collapsePlannerPanelForVisualJourney(options = {}) {
+        if (state.plannerCollapsed) return;
+        const journeyData = getJourneyDataFromOptions(options);
+        if (!isVisualJourneyData(journeyData)) return;
+        state.plannerCollapsed = true;
+        applyPlannerPanelState();
+      }
+
       function isStructuredTravelReportData(reportData) {
         return (
           reportData &&
@@ -9346,6 +9351,9 @@
         const container = document.getElementById("chatMessages");
         const id = "msg-" + Date.now();
         const div = document.createElement("div");
+        if (role === "assistant") {
+          collapsePlannerPanelForVisualJourney(options);
+        }
         div.className = `message ${role}`;
         div.id = id;
         div.innerHTML = buildMessageMarkup(role, text, new Date(), options);
@@ -9380,6 +9388,7 @@
       function updateMessage(id, text, options = {}) {
         const el = document.getElementById(id);
         if (el) {
+          collapsePlannerPanelForVisualJourney(options);
           el.querySelector(".message-text").innerHTML = renderMessageText(
             "assistant",
             text,
