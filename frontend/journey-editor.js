@@ -123,6 +123,31 @@
       return Number.isFinite(minutes) && minutes > 0 ? Math.min(minutes, 1440) : null;
     }
 
+    function parseJourneySegmentMeta(value = "") {
+      if (!String(value || "").includes(":")) return null;
+      const [dayKey, segmentIndexText] = String(value).split(":");
+      const segmentIndex = Number(segmentIndexText);
+      if (!dayKey || Number.isNaN(segmentIndex)) return null;
+      return { dayKey, segmentIndex };
+    }
+
+    function normalizeSegmentMode(value = "") {
+      const raw = String(value || "").toLowerCase();
+      if (/walk|walking|步行/.test(raw)) return "walking";
+      if (/bus|公交|metro|subway|地铁|transit/.test(raw)) return "transit";
+      if (/taxi|ride|打车|网约车/.test(raw)) return "taxi";
+      if (/drive|driving|car|驾车|自驾/.test(raw)) return "taxi";
+      return raw || "taxi";
+    }
+
+    function getSegmentModeLabel(mode = "") {
+      const normalized = normalizeSegmentMode(mode);
+      if (normalized === "walking") return "步行";
+      if (normalized === "transit") return "公交/地铁";
+      if (normalized === "taxi") return "打车";
+      return "交通";
+    }
+
     function handleJourneyEditAction(button) {
       if (button.disabled) return false;
       const action = button.dataset.journeyEditAction || "";
@@ -183,6 +208,59 @@
           shell,
           dayPlans,
           `已优化 ${day.label || "当天"} 顺序，锁定点未移动`
+        );
+      }
+
+      if (action === "select-segment-mode" || action === "toggle-segment-lock") {
+        const segmentMeta = parseJourneySegmentMeta(button.dataset.mapDaySegment || "");
+        if (!segmentMeta) return false;
+        const day = dayPlans.find((item) => item.key === segmentMeta.dayKey);
+        if (!day || !Array.isArray(day.segments)) return false;
+        const segment = day.segments[segmentMeta.segmentIndex];
+        if (!segment) return false;
+        if (action === "select-segment-mode") {
+          const selectedMode = normalizeSegmentMode(button.dataset.segmentMode || "");
+          const currentMode = normalizeSegmentMode(
+            segment.selected_mode || segment.mode || segment.transport_mode || ""
+          );
+          const modeChanged = selectedMode !== currentMode;
+          day.segments[segmentMeta.segmentIndex] = {
+            ...segment,
+            mode: selectedMode,
+            selected_mode: selectedMode,
+            ...(modeChanged
+              ? {
+                  distance_text: "待高德路线核验",
+                  duration_text: "待高德路线核验",
+                  confidence: "needs_live_route",
+                  source: "user_segment_mode_preference",
+                  verification_note: "用户已切换交通方式，真实路线和用时待核验。",
+                }
+              : {}),
+          };
+          return commitJourneyPlanEdit(
+            button,
+            shell,
+            dayPlans,
+            `已选用${getSegmentModeLabel(selectedMode)}，真实路线待核验`
+          );
+        }
+        const currentMode = normalizeSegmentMode(
+          segment.selected_mode || segment.mode || segment.transport_mode || ""
+        );
+        day.segments[segmentMeta.segmentIndex] = {
+          ...segment,
+          mode: currentMode,
+          selected_mode: currentMode,
+          locked_by_user: !segment.locked_by_user,
+        };
+        return commitJourneyPlanEdit(
+          button,
+          shell,
+          dayPlans,
+          segment.locked_by_user
+            ? "已解除这段交通锁定"
+            : `已锁定这段为${getSegmentModeLabel(currentMode)}`
         );
       }
 

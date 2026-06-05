@@ -6199,7 +6199,7 @@ html {
   display: grid;
   grid-template-columns: 24px minmax(0, 1fr) auto auto;
   gap: 8px;
-  align-items: center;
+  align-items: start;
   min-width: 0;
   margin: -2px 8px 0 8px;
   padding: 7px 8px;
@@ -6234,6 +6234,10 @@ html {
   white-space: nowrap;
 }
 
+.visual-route-segment-main {
+  min-width: 0;
+}
+
 .visual-route-segment strong {
   display: block;
   color: #0f766e;
@@ -6247,7 +6251,12 @@ html {
   font-size: 11px;
 }
 
+.visual-route-segment-reason {
+  color: #94a3b8;
+}
+
 .visual-route-segment em {
+  align-self: center;
   color: #334155;
   font-style: normal;
   font-size: 12px;
@@ -6255,6 +6264,7 @@ html {
 }
 
 .visual-route-segment-status {
+  align-self: center;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -6274,6 +6284,111 @@ html {
 
 .visual-route-segment.estimated .visual-route-segment-status,
 .visual-route-segment.pending .visual-route-segment-status {
+  color: #92400e;
+  background: rgba(255, 251, 235, 0.96);
+}
+
+.visual-route-segment.is-mode-locked {
+  border-color: rgba(15, 118, 110, 0.18);
+  background:
+    linear-gradient(180deg, rgba(240, 253, 250, 0.55), rgba(255, 255, 255, 0.84));
+}
+
+.visual-route-mode-options {
+  grid-column: 2 / -1;
+  min-width: 0;
+}
+
+.visual-route-mode-options summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 26px;
+  padding: 0 8px;
+  border: 1px solid rgba(15, 118, 110, 0.16);
+  border-radius: 999px;
+  color: #0f766e;
+  background: rgba(240, 253, 250, 0.82);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 900;
+  list-style: none;
+}
+
+.visual-route-mode-options summary::-webkit-details-marker {
+  display: none;
+}
+
+.visual-route-mode-options summary strong {
+  display: inline;
+  color: #64748b;
+  font-size: 11px;
+}
+
+.visual-route-mode-menu {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 7px;
+  min-width: 0;
+}
+
+.visual-route-mode-menu button {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  min-height: 64px;
+  padding: 7px;
+  border: 1px solid rgba(15, 118, 110, 0.12);
+  border-radius: 8px;
+  color: #475569;
+  background: rgba(255, 255, 255, 0.78);
+  cursor: pointer;
+  text-align: left;
+}
+
+.visual-route-mode-menu button strong,
+.visual-route-mode-menu button span,
+.visual-route-mode-menu button small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.visual-route-mode-menu button strong {
+  color: #0f766e;
+  font-size: 12px;
+}
+
+.visual-route-mode-menu button span {
+  color: #334155;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.visual-route-mode-menu button small {
+  color: #64748b;
+  font-size: 10px;
+  line-height: 1.25;
+}
+
+.visual-route-mode-menu button.is-selected {
+  border-color: rgba(15, 118, 110, 0.34);
+  background: rgba(240, 253, 250, 0.95);
+}
+
+.visual-route-mode-menu .visual-route-mode-lock {
+  grid-column: 1 / -1;
+  min-height: 30px;
+  justify-content: center;
+  color: #0f766e;
+  font-size: 12px;
+  font-weight: 900;
+  text-align: center;
+}
+
+.visual-route-mode-menu .visual-route-mode-lock.is-locked {
   color: #92400e;
   background: rgba(255, 251, 235, 0.96);
 }
@@ -6872,21 +6987,42 @@ html {
   }
 
   .visual-route-segment {
-    grid-template-columns: 24px minmax(0, 1fr) auto;
+    grid-template-columns: 24px minmax(0, 1fr);
     margin-right: 0;
     margin-left: 0;
   }
 
   .visual-route-segment-status {
-    max-width: none;
+    grid-column: 2 / -1;
+    justify-self: start;
+    max-width: 100%;
   }
 
   .visual-route-segment em {
     grid-column: 2 / -1;
+    justify-self: start;
     white-space: normal;
   }
 
   .visual-route-segment small {
+    white-space: normal;
+  }
+
+  .visual-route-mode-options {
+    grid-column: 2 / -1;
+  }
+
+  .visual-route-mode-menu {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .visual-route-mode-menu button {
+    min-height: 54px;
+  }
+
+  .visual-route-mode-menu button strong,
+  .visual-route-mode-menu button span,
+  .visual-route-mode-menu button small {
     white-space: normal;
   }
 

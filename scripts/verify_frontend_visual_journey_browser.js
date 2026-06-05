@@ -1245,6 +1245,77 @@ async function checkVisualJourneyEditing(page, viewport) {
     ["1.1公里", "步行18分钟", "已核验"],
     `${viewport.name} route segment metrics`
   );
+  await expectContainsText(
+    page,
+    ".visual-route-editor",
+    ["交通候选", "打车", "公交/地铁", "步行"],
+    `${viewport.name} route segment mode options`
+  );
+
+  const firstSegmentSelector =
+    '.visual-route-day-card[data-journey-day-card="visual-day-1"] .visual-route-segment[data-map-day-segment="visual-day-1:0"]';
+  await page.locator(`${firstSegmentSelector} .visual-route-mode-options summary`).click();
+  if (viewport.isMobile) {
+    const modeOptionsPath = path.join(
+      runtimeDir,
+      "frontend-visual-journey-mobile-segment-modes.png"
+    );
+    await page.locator(firstSegmentSelector).screenshot({ path: modeOptionsPath });
+    screenshots.push(modeOptionsPath);
+  }
+  await page
+    .locator(`${firstSegmentSelector} [data-journey-edit-action="select-segment-mode"][data-segment-mode="transit"]`)
+    .click();
+  await page.waitForFunction(
+    () => {
+      const raw = document.querySelector(".journey-live-map-shell")?.dataset.dayPlans || "";
+      try {
+        const days = JSON.parse(decodeURIComponent(raw));
+        const day = days.find((item) => item.key === "visual-day-1");
+        return (
+          day?.segments?.[0]?.selected_mode === "transit" &&
+          day?.segments?.[0]?.confidence === "needs_live_route"
+        );
+      } catch (error) {
+        return false;
+      }
+    },
+    null,
+    { timeout: 5000 }
+  );
+  await expectContainsText(
+    page,
+    ".visual-route-editor",
+    ["公交/地铁", "待高德路线核验"],
+    `${viewport.name} selected segment mode stays pending`
+  );
+  await page.locator(`${firstSegmentSelector} .visual-route-mode-options summary`).click();
+  await page
+    .locator(`${firstSegmentSelector} [data-journey-edit-action="toggle-segment-lock"]`)
+    .click();
+  await page.waitForFunction(
+    () => {
+      const raw = document.querySelector(".journey-live-map-shell")?.dataset.dayPlans || "";
+      try {
+        const days = JSON.parse(decodeURIComponent(raw));
+        const day = days.find((item) => item.key === "visual-day-1");
+        return (
+          day?.segments?.[0]?.selected_mode === "transit" &&
+          day?.segments?.[0]?.locked_by_user === true
+        );
+      } catch (error) {
+        return false;
+      }
+    },
+    null,
+    { timeout: 5000 }
+  );
+  await expectContainsText(
+    page,
+    ".visual-route-editor",
+    ["已锁定"],
+    `${viewport.name} locked segment mode`
+  );
 
   const firstStopRowSelector =
     '.visual-route-day-card[data-journey-day-card="visual-day-1"] .visual-route-stop-row[data-map-day-stop="visual-day-1:0"]';

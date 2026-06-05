@@ -1956,19 +1956,103 @@
         `;
       }
 
+      function normalizeVisualRouteMode(value = "") {
+        const raw = String(value || "").toLowerCase();
+        if (/walk|walking|步行/.test(raw)) return "walking";
+        if (/bus|公交|metro|subway|地铁|transit/.test(raw)) return "transit";
+        if (/taxi|ride|打车|网约车/.test(raw)) return "taxi";
+        if (/drive|driving|car|驾车|自驾/.test(raw)) return "taxi";
+        if (/train|rail|火车|高铁/.test(raw)) return "rail";
+        if (/flight|air|航班|飞机/.test(raw)) return "flight";
+        return raw || "taxi";
+      }
+
+      function getVisualRouteModeLabel(mode = "") {
+        const normalized = normalizeVisualRouteMode(mode);
+        if (normalized === "walking") return "步行";
+        if (normalized === "transit") return "公交/地铁";
+        if (normalized === "taxi") return "打车";
+        if (normalized === "rail") return "铁路";
+        if (normalized === "flight") return "航班";
+        return "交通";
+      }
+
+      function buildVisualRouteModeAlternatives(segment = {}) {
+        const rawAlternatives = Array.isArray(segment.alternatives)
+          ? segment.alternatives
+          : [];
+        const baseDuration = String(segment.duration_text || "").trim();
+        const baseMode = normalizeVisualRouteMode(
+          segment.selected_mode ||
+            segment.mode ||
+            segment.transport_mode ||
+            segment.duration_text ||
+            segment.source ||
+            ""
+        );
+        const canReuseBaseDuration = Boolean(baseDuration) && !/待|unknown/i.test(baseDuration);
+        const durationForMode = (mode, fallback) =>
+          canReuseBaseDuration && baseMode === mode ? baseDuration : fallback;
+        const fallbackAlternatives = rawAlternatives.length
+          ? rawAlternatives
+          : [
+              {
+                mode: "taxi",
+                duration_text: durationForMode("taxi", "约10-20分钟"),
+                cost_text: "费用待核验",
+                reason: "省体力，适合赶时间或带行李",
+              },
+              {
+                mode: "transit",
+                duration_text: durationForMode("transit", "约25-40分钟"),
+                cost_text: "约2-8元",
+                reason: "更省预算，班次和换乘待核验",
+              },
+              {
+                mode: "walking",
+                duration_text: durationForMode("walking", "约30-45分钟"),
+                cost_text: "0元",
+                reason: "适合短距离慢游，体力消耗更高",
+              },
+            ];
+        const seen = new Set();
+        return fallbackAlternatives
+          .map((option) => {
+            const mode = normalizeVisualRouteMode(option.mode || option.transport_mode || "");
+            return {
+              mode,
+              label: option.label || getVisualRouteModeLabel(mode),
+              durationText: option.duration_text || option.duration || "时间待核验",
+              costText: option.cost_text || option.cost || "费用待核验",
+              reason: option.reason || option.note || "适配性待核验",
+            };
+          })
+          .filter((option) => {
+            if (!option.mode || seen.has(option.mode)) return false;
+            seen.add(option.mode);
+            return true;
+          })
+          .slice(0, 3)
+          .map((option) => ({
+            ...option,
+            metricText: [option.durationText, option.costText].filter(Boolean).join(" · "),
+          }));
+      }
+
       function getVisualRouteSegmentView(segment = {}) {
-        const rawMode = String(segment.mode || segment.transport_mode || segment.source || "").toLowerCase();
-        const modeText = /walk|步行/.test(rawMode)
-          ? "步行"
-          : /bus|公交|metro|subway|地铁/.test(rawMode)
-          ? "公交/地铁"
-          : /train|rail|火车|高铁/.test(rawMode)
-          ? "铁路"
-          : /flight|air|航班|飞机/.test(rawMode)
-          ? "航班"
-          : /drive|driving|car|驾车|自驾/.test(rawMode)
-          ? "驾车"
-          : "交通";
+        const rawMode = String(
+          segment.selected_mode ||
+            segment.mode ||
+            segment.transport_mode ||
+            segment.duration_text ||
+            segment.source ||
+            ""
+        );
+        const selectedMode = normalizeVisualRouteMode(rawMode);
+        const alternatives = buildVisualRouteModeAlternatives(segment);
+        const selectedAlternative =
+          alternatives.find((option) => option.mode === selectedMode) || alternatives[0];
+        const modeText = selectedAlternative?.label || getVisualRouteModeLabel(selectedMode);
         const metricText = [segment.distance_text, segment.duration_text]
           .filter(Boolean)
           .join(" · ");
@@ -1985,28 +2069,76 @@
           !metricText || /待|needs|unknown/i.test([metricText, confidenceText].join(" "));
         const displayMetricText = isPending
           ? "待高德路线核验"
-          : metricText || "距离/用时待核验";
+          : metricText || selectedAlternative?.metricText || "距离/用时待核验";
         return {
+          selectedMode,
           modeText,
           metricText: displayMetricText,
+          reasonText: selectedAlternative?.reason || "交通方式待核验",
+          alternatives,
+          isModeLocked: Boolean(segment.locked_by_user || segment.mode_locked),
           tone: isVerified ? "ready" : isEstimated ? "estimated" : isPending ? "pending" : "",
           statusText: isVerified ? "已核验" : isEstimated ? "估算" : "待核验",
         };
       }
 
-      function renderVisualRouteSegment(segment = {}, fromStop = {}, toStop = {}) {
+      function renderVisualRouteModeOptions(view = {}, segmentMeta = "") {
+        if (!Array.isArray(view.alternatives) || !view.alternatives.length) return "";
+        return `
+          <details class="visual-route-mode-options" data-route-mode-options="true">
+            <summary>
+              <span>交通候选</span>
+              <strong>${escapeHtml(view.isModeLocked ? "已锁定" : "可切换")}</strong>
+            </summary>
+            <div class="visual-route-mode-menu">
+              ${view.alternatives
+                .map(
+                  (option) => `
+                    <button
+                      type="button"
+                      class="${option.mode === view.selectedMode ? "is-selected" : ""}"
+                      data-journey-edit-action="select-segment-mode"
+                      data-map-day-segment="${escapeHtml(segmentMeta)}"
+                      data-segment-mode="${escapeHtml(option.mode)}"
+                      aria-pressed="${option.mode === view.selectedMode ? "true" : "false"}"
+                    >
+                      <strong>${escapeHtml(option.label)}</strong>
+                      <span>${escapeHtml(option.metricText)}</span>
+                      <small>${escapeHtml(option.reason)}</small>
+                    </button>
+                  `
+                )
+                .join("")}
+              <button
+                class="visual-route-mode-lock ${view.isModeLocked ? "is-locked" : ""}"
+                type="button"
+                data-journey-edit-action="toggle-segment-lock"
+                data-map-day-segment="${escapeHtml(segmentMeta)}"
+              >
+                ${escapeHtml(view.isModeLocked ? "解除锁定" : "锁定当前")}
+              </button>
+            </div>
+          </details>
+        `;
+      }
+
+      function renderVisualRouteSegment(segment = {}, fromStop = {}, toStop = {}, segmentMeta = "") {
         const view = getVisualRouteSegmentView(segment);
         const fromName = cleanJourneyLocationValue(fromStop.name || segment.from_name || "上一站");
         const toName = cleanJourneyLocationValue(toStop.name || segment.to_name || "下一站");
         return `
-          <div class="visual-route-segment ${escapeHtml(view.tone)}" data-route-segment="true">
+          <div class="visual-route-segment ${escapeHtml(view.tone)}${
+          view.isModeLocked ? " is-mode-locked" : ""
+        }" data-route-segment="true" data-map-day-segment="${escapeHtml(segmentMeta)}">
             <span class="visual-route-segment-line" aria-hidden="true"></span>
-            <div>
+            <div class="visual-route-segment-main">
               <strong>${escapeHtml(view.modeText)}</strong>
               <small>${escapeHtml(`${fromName} → ${toName}`)}</small>
+              <small class="visual-route-segment-reason">${escapeHtml(view.reasonText)}</small>
             </div>
             <em>${escapeHtml(view.metricText)}</em>
             <span class="visual-route-segment-status">${escapeHtml(view.statusText)}</span>
+            ${renderVisualRouteModeOptions(view, segmentMeta)}
           </div>
         `;
       }
@@ -2365,7 +2497,8 @@
                                           ? renderVisualRouteSegment(
                                               segments[stopIndex] || {},
                                               stop,
-                                              stops[stopIndex + 1]
+                                              stops[stopIndex + 1],
+                                              `${dayKey}:${stopIndex}`
                                             )
                                           : ""
                                       }
@@ -2512,7 +2645,8 @@
             ...normalizedDay,
             segments: buildEditedJourneySegments(
               normalizedDay.dayNumber || 1,
-              normalizedDay.stops || []
+              normalizedDay.stops || [],
+              normalizedDay.segments || []
             ),
           };
         });
@@ -2522,7 +2656,11 @@
           label: day.label,
           waypoints: day.waypoints,
           stops: day.stops || [],
-          segments: buildEditedJourneySegments(day.dayNumber || 1, day.stops || []),
+          segments: buildEditedJourneySegments(
+            day.dayNumber || 1,
+            day.stops || [],
+            day.segments || []
+          ),
         }));
         shell.dataset.dayPlans = serializeMapPayload(normalizedDayPlans);
         mapNode.dataset.mapPayload = serializeMapPayload(payload);
@@ -2571,23 +2709,47 @@
         });
       }
 
-      function buildEditedJourneySegments(dayNumber, pois = []) {
+      function normalizeEditedJourneySegment(
+        dayNumber,
+        index,
+        left = {},
+        right = {},
+        previous = {}
+      ) {
+        const base = previous && typeof previous === "object" ? previous : {};
+        return {
+          ...base,
+          id: `d${dayNumber}-s${index + 1}`,
+          day_number: dayNumber,
+          from_poi_id: left.id || "",
+          to_poi_id: right.id || "",
+          from_name: left.name || "",
+          to_name: right.name || "",
+          mode: base.mode || base.selected_mode || "taxi",
+          selected_mode: base.selected_mode || base.mode || "taxi",
+          locked_by_user: Boolean(base.locked_by_user),
+          alternatives: Array.isArray(base.alternatives) ? base.alternatives : [],
+          distance_text: base.distance_text || "待高德路线核验",
+          duration_text: base.duration_text || "待高德路线核验",
+          confidence: base.confidence || "needs_live_route",
+          verification_note: base.verification_note || "交通方式为草案偏好，真实路线待核验。",
+        };
+      }
+
+      function buildEditedJourneySegments(dayNumber, pois = [], previousSegments = []) {
         const segments = [];
         for (let index = 0; index < Math.max(pois.length - 1, 0); index += 1) {
           const left = pois[index];
           const right = pois[index + 1];
-          segments.push({
-            id: `d${dayNumber}-s${index + 1}`,
-            day_number: dayNumber,
-            from_poi_id: left.id || "",
-            to_poi_id: right.id || "",
-            from_name: left.name || "",
-            to_name: right.name || "",
-            mode: "driving",
-            distance_text: "待高德路线核验",
-            duration_text: "待高德路线核验",
-            confidence: "needs_live_route",
-          });
+          const previous = Array.isArray(previousSegments) ? previousSegments[index] || {} : {};
+          const sameStops =
+            (!previous.from_poi_id || previous.from_poi_id === (left.id || "")) &&
+            (!previous.to_poi_id || previous.to_poi_id === (right.id || "")) &&
+            (!previous.from_name || previous.from_name === (left.name || "")) &&
+            (!previous.to_name || previous.to_name === (right.name || ""));
+          segments.push(
+            normalizeEditedJourneySegment(dayNumber, index, left, right, sameStops ? previous : {})
+          );
         }
         return segments;
       }
@@ -2601,7 +2763,8 @@
             ...normalizedDay,
             segments: buildEditedJourneySegments(
               normalizedDay.dayNumber || 1,
-              normalizedDay.stops || []
+              normalizedDay.stops || [],
+              normalizedDay.segments || []
             ),
           };
         });
@@ -2621,7 +2784,11 @@
             ...day,
             summary: pois.map((poi) => poi.name).filter(Boolean).join(" · "),
             pois,
-            segments: buildEditedJourneySegments(day.day_number || plan.dayNumber || 1, pois),
+            segments: buildEditedJourneySegments(
+              day.day_number || plan.dayNumber || 1,
+              pois,
+              plan.segments || []
+            ),
           };
         });
         const activePois = days.flatMap((day) => day.pois || []);
