@@ -22,6 +22,7 @@ const frontendScriptBundle = [
   "journey-poi-renderer.js",
   "report-data-view-model.js",
   "report-data-panels.js",
+  "report-data-itinerary.js",
   "report-budget.js",
   "report-renderer.js",
   "report-export.js",
