@@ -16,6 +16,7 @@ const frontendScriptBundle = [
   "journey-map-view.js",
   "journey-map-focus.js",
   "journey-map-shell.js",
+  "journey-map-hydration.js",
   "journey-poi-utils.js",
   "journey-poi-renderer.js",
   "report-budget.js",
@@ -29,6 +30,9 @@ const frontendScriptBundle = [
   "draft-storage.js",
   "runtime-status.js",
   "chat-stream.js",
+  "chat-runner.js",
+  "chat-messages.js",
+  "planner-controls.js",
   "guide-import.js",
   "app.js",
 ]

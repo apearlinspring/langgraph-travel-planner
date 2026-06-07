@@ -94,6 +94,7 @@
 - `frontend/journey-map-view.js`：地图实例、路线图层、点位图层和降级地图视图。
 - `frontend/journey-map-focus.js`：Day（日期）聚焦、POI 聚焦和地图视图同步。
 - `frontend/journey-map-shell.js`：圆周旅迹工作台外壳、路线列表和地图容器渲染。
+- `frontend/journey-map-hydration.js`：地图占位节点扫描、去重调度和延迟 hydration（挂载/激活）入口。
 - `frontend/journey-poi-utils.js`：推荐 POI 合并、排序、标签和匹配辅助逻辑。
 - `frontend/journey-poi-renderer.js`：推荐 POI 卡片、列表和加入/替换入口渲染。
 - `frontend/report-budget.js`：预算标题归一化、预算表格提取、预算总额估算、预算卡片渲染、过早预算段落抑制。
@@ -105,6 +106,11 @@
 - `frontend/governance-progress.js`：前台进度台阶段、事实和偏好展示逻辑。
 - `frontend/governance-renderer.js`：右侧治理台卡片、审批记录和运行摘要渲染。
 - `frontend/governance.css`：前台治理台和进度台样式。
+- `frontend/chat-stream.js`：SSE（服务器发送事件）分帧、`<think>` 过滤和流式失败兜底文案。
+- `frontend/chat-runner.js`：聊天发送主流程、流式消息渲染调度、慢请求提示和异常降级。
+- `frontend/chat-messages.js`：历史消息、用户/助手消息、loading 卡片和流式消息更新的 DOM（文档对象模型）渲染。
+- `frontend/planner.css`：行程摘要面板、偏好标签、规划按钮和攻略导入样式。
+- `frontend/planner-controls.js`：输入框草稿、行程摘要面板、偏好标签、模板填充和规划请求草稿生成。
 - `frontend/guide-import.js`：攻略文本导入、规划请求生成和输入框/发送接线。
 - `frontend/admin-api.js`、`frontend/admin.js`：独立后台管理台的数据请求和展示逻辑。
 
@@ -127,21 +133,25 @@
 9. `journey-map-view.js`
 10. `journey-map-focus.js`
 11. `journey-map-shell.js`
-12. `journey-poi-utils.js`
-13. `journey-poi-renderer.js`
-14. `report-budget.js`
-15. `report-renderer.js`
-16. `report-export.js`
-17. `report-actions.js`
-18. `governance-api.js`
-19. `governance-tools.js`
-20. `governance-progress.js`
-21. `governance-renderer.js`
-22. `draft-storage.js`
-23. `runtime-status.js`
-24. `chat-stream.js`
-25. `guide-import.js`
-26. `app.js`
+12. `journey-map-hydration.js`
+13. `journey-poi-utils.js`
+14. `journey-poi-renderer.js`
+15. `report-budget.js`
+16. `report-renderer.js`
+17. `report-export.js`
+18. `report-actions.js`
+19. `governance-api.js`
+20. `governance-tools.js`
+21. `governance-progress.js`
+22. `governance-renderer.js`
+23. `draft-storage.js`
+24. `runtime-status.js`
+25. `chat-stream.js`
+26. `chat-runner.js`
+27. `chat-messages.js`
+28. `planner-controls.js`
+29. `guide-import.js`
+30. `app.js`
 
 `scripts/verify_frontend_report_renderer.js` 会按报告渲染所需的依赖子集拼接这些模块。后续新增模块时，必须同时检查 `frontend/zhixing.html` 和该校验脚本是否需要同步，否则静态回归会出现“浏览器能跑、Node 拼接校验失败”或反过来的漂移。
 

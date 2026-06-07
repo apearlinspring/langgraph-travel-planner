@@ -38,6 +38,7 @@
       const guideImportFactory = window.ZhiXingGuideImport;
       const journeyOverlayFactory = window.ZhiXingJourneyOverlay;
       const mapControlsFactory = window.ZhiXingMapControls;
+      const journeyMapHydrationFactory = window.ZhiXingJourneyMapHydration;
       const reportBudgetFactory = window.ZhiXingReportBudget;
       const reportExportFactory = window.ZhiXingReportExport;
       const reportRendererFactory = window.ZhiXingReportRenderer;
@@ -45,11 +46,13 @@
       const draftStorageFactory = window.ZhiXingDraftStorage;
       const runtimeStatusFactory = window.ZhiXingRuntimeStatus;
       const chatStreamFactory = window.ZhiXingChatStream;
+      const chatRunnerFactory = window.ZhiXingChatRunner;
+      const chatMessagesFactory = window.ZhiXingChatMessages;
+      const plannerControlsFactory = window.ZhiXingPlannerControls;
       if (!guideImportApi) {
         throw new Error("ZhiXingGuideImportApi is not loaded.");
       }
       let toastTimer = null;
-      let streamingScrollFrame = null;
       const composerDraftKey = "zhixing-composer-draft";
       const plannerDraftKey = "zhixing-planner-draft";
       const plannerCollapseKey = "zhixing-planner-collapsed";
@@ -89,6 +92,87 @@
         processSseBuffer,
         buildStreamingFallbackMessage,
       } = chatStream;
+      let chatRunner = null;
+      const sendMessage = (...args) => {
+        if (!chatRunner) {
+          throw new Error("ZhiXingChatRunner is not initialized.");
+        }
+        return chatRunner.sendMessage(...args);
+      };
+      const plannerControls = plannerControlsFactory?.createPlannerControls?.({
+        document,
+        state,
+        localStorage,
+        composerDraftKey,
+        plannerDraftKey,
+        plannerCollapseKey,
+        readDraftStorage,
+        writeDraftStorage,
+        clearDraftStorage,
+        setRuntimeStatus,
+        escapeHtml,
+        escapeAttribute,
+      });
+      if (!plannerControls) {
+        throw new Error("ZhiXingPlannerControls is not loaded.");
+      }
+      const {
+        persistComposerDraft,
+        persistPlannerDraft,
+        restoreDrafts,
+        resetComposerDraft,
+        applyPlannerPanelState,
+        togglePlannerPanel,
+        getWelcomeMarkup,
+        updatePlannerSummary,
+        updatePlannerAssistStrip,
+        appendToComposer,
+        applySuggestion,
+        appendPlannerStyle,
+        fillPlannerTemplate,
+        readPlannerFields,
+        composePlannerDraft,
+        resetPlannerDraft,
+        resetConversationDrafts,
+      } = plannerControls;
+      const chatMessages = chatMessagesFactory?.createChatMessages?.({
+        document,
+        Date,
+        Math,
+        requestAnimationFrame: (...args) => window.requestAnimationFrame(...args),
+        cancelAnimationFrame: (...args) => window.cancelAnimationFrame(...args),
+        hydrateGovernanceFromMessages: (...args) =>
+          hydrateGovernanceFromMessages(...args),
+        getWelcomeMarkup,
+        buildMessageMarkup: (...args) => buildMessageMarkup(...args),
+        renderMessageText: (...args) => renderMessageText(...args),
+        scheduleJourneyMapHydration: (...args) => scheduleJourneyMapHydration(...args),
+        collapsePlannerPanelForVisualJourney: (...args) =>
+          collapsePlannerPanelForVisualJourney(...args),
+      });
+      if (!chatMessages) {
+        throw new Error("ZhiXingChatMessages is not loaded.");
+      }
+      const {
+        renderMessages,
+        clearChatMessages,
+        addMessage,
+        updateMessage,
+        convertLoadingToAssistant,
+        addLoading,
+        updateLoadingCopy,
+        removeMessage,
+      } = chatMessages;
+      Object.assign(window, {
+        renderMessages,
+        clearChatMessages,
+        addMessage,
+        updateMessage,
+        convertLoadingToAssistant,
+        addLoading,
+        updateLoadingCopy,
+        removeMessage,
+      });
 
       const getDefaultApiBase = () =>
         window.location.protocol === "file:"
@@ -129,9 +213,19 @@
 
       const isMobileViewport = () => window.innerWidth <= 900;
       const journeyMapInstances = new WeakMap();
-      const scheduledJourneyMapHydrationRoots = new WeakSet();
       const JOURNEY_MAP_DEGRADE_AFTER_MS = 180000;
       const DEFAULT_CONVERSATION_TITLE = "新行程";
+      const journeyMapHydration =
+        journeyMapHydrationFactory?.createJourneyMapHydration?.({
+          document,
+          hydrateJourneyMap: (...args) => hydrateJourneyMap(...args),
+          requestAnimationFrame: (...args) => window.requestAnimationFrame(...args),
+          WeakSet,
+        });
+      if (!journeyMapHydration) {
+        throw new Error("ZhiXingJourneyMapHydration is not loaded.");
+      }
+      const { scheduleJourneyMapHydration } = journeyMapHydration;
       const journeyTextUtils = window.ZhiXingJourneyTextUtils?.createJourneyTextUtils?.({
         sanitizeConversationTitleSegment,
         isDefaultConversationTitle,
@@ -1894,38 +1988,6 @@
         }
       }
 
-      function getHydratableJourneyMapNodes(root = document) {
-        if (!root) return [];
-        const nodes = [];
-        if (root.matches?.(".journey-live-map[data-map-payload]")) {
-          nodes.push(root);
-        }
-        root
-          .querySelectorAll?.(".journey-live-map[data-map-payload]")
-          .forEach((node) => {
-            if (node !== root) nodes.push(node);
-          });
-        return nodes;
-      }
-
-      function hydrateJourneyMaps(root = document) {
-        getHydratableJourneyMapNodes(root).forEach((node) => hydrateJourneyMap(node));
-      }
-
-      function scheduleJourneyMapHydration(root = document) {
-        if (
-          !getHydratableJourneyMapNodes(root).length ||
-          scheduledJourneyMapHydrationRoots.has(root)
-        ) {
-          return;
-        }
-        scheduledJourneyMapHydrationRoots.add(root);
-        requestAnimationFrame(() => {
-          scheduledJourneyMapHydrationRoots.delete(root);
-          hydrateJourneyMaps(root);
-        });
-      }
-
       function getJourneyDayRouteStatus(day = {}) {
         const segments = Array.isArray(day.segments) ? day.segments : [];
         if (!segments.length) {
@@ -3196,98 +3258,6 @@
         }
       }
 
-      function persistComposerDraft(options = {}) {
-        const input = document.getElementById("chatInput");
-        if (!input) return;
-        writeDraftStorage(composerDraftKey, input.value || "", options);
-      }
-
-      function persistPlannerDraft() {
-        const payload = {
-          origin: document.getElementById("plannerOrigin")?.value || "",
-          destination:
-            document.getElementById("plannerDestination")?.value || "",
-          date: document.getElementById("plannerDate")?.value || "",
-          days: document.getElementById("plannerDays")?.value || "",
-          travelers: document.getElementById("plannerTravelers")?.value || "",
-          budget: document.getElementById("plannerBudget")?.value || "",
-          transport: document.getElementById("plannerTransport")?.value || "",
-          stay: document.getElementById("plannerStay")?.value || "",
-          style: document.getElementById("plannerStyle")?.value || "",
-        };
-        writeDraftStorage(plannerDraftKey, JSON.stringify(payload));
-        updatePlannerAssistStrip();
-      }
-
-      function restoreDrafts() {
-        const composerDraft = readDraftStorage(composerDraftKey);
-        if (composerDraft) {
-          const input = document.getElementById("chatInput");
-          if (input && !input.value) {
-            input.value = composerDraft;
-            input.style.height = "auto";
-            input.style.height = Math.min(input.scrollHeight, 120) + "px";
-          }
-        }
-
-        const plannerDraft = readDraftStorage(plannerDraftKey);
-        if (plannerDraft) {
-          try {
-            const parsed = JSON.parse(plannerDraft);
-            document.getElementById("plannerOrigin").value = parsed.origin || "";
-            document.getElementById("plannerDestination").value =
-              parsed.destination || "";
-            document.getElementById("plannerDate").value = parsed.date || "";
-            document.getElementById("plannerDays").value = parsed.days || "";
-            document.getElementById("plannerTravelers").value =
-              parsed.travelers || "";
-            document.getElementById("plannerBudget").value = parsed.budget || "";
-            document.getElementById("plannerTransport").value =
-              parsed.transport || "";
-            document.getElementById("plannerStay").value = parsed.stay || "";
-            document.getElementById("plannerStyle").value = parsed.style || "";
-          } catch (error) {}
-        }
-      }
-
-      function resetComposerDraft(options = {}) {
-        const silent =
-          typeof options === "boolean"
-            ? options
-            : Boolean(options?.silent);
-        const input = document.getElementById("chatInput");
-        if (input) {
-          input.value = "";
-          input.style.height = "auto";
-        }
-        clearDraftStorage(composerDraftKey);
-        if (!silent) {
-          setRuntimeStatus("输入草稿已重置", "online");
-        }
-      }
-
-      function applyPlannerPanelState() {
-        const panel = document.querySelector(".planner-panel");
-        const toggleBtn = document.getElementById("plannerToggleBtn");
-        const panelBody = document.getElementById("plannerPanelBody");
-        if (!panel || !toggleBtn || !panelBody) return;
-        panel.classList.toggle("collapsed", state.plannerCollapsed);
-        panelBody.hidden = state.plannerCollapsed;
-        toggleBtn.setAttribute("aria-expanded", String(!state.plannerCollapsed));
-        toggleBtn.innerHTML = state.plannerCollapsed
-          ? '<i class="fa-solid fa-angle-down"></i> 展开辅助栏'
-          : '<i class="fa-solid fa-angle-up"></i> 收起辅助栏';
-      }
-
-      function togglePlannerPanel(forceCollapsed) {
-        state.plannerCollapsed =
-          typeof forceCollapsed === "boolean"
-            ? forceCollapsed
-            : !state.plannerCollapsed;
-        localStorage.setItem(plannerCollapseKey, state.plannerCollapsed ? "1" : "0");
-        applyPlannerPanelState();
-      }
-
       function setMobileChatFocus(enabled) {
         const shouldFocus = Boolean(enabled && isMobileViewport() && state.user);
         state.mobileChatFocus = shouldFocus;
@@ -3430,6 +3400,47 @@
         renderApprovalListHtml,
         renderApprovalEventList,
       } = governanceRenderer;
+      chatRunner = chatRunnerFactory?.createChatRunner?.({
+        document,
+        state,
+        ensureServiceReady: (...args) => ensureServiceReady(...args),
+        createNewConversation: (...args) => createNewConversation(...args),
+        maybeAutoNameCurrentConversation: (...args) =>
+          maybeAutoNameCurrentConversation(...args),
+        setSendButtonLoading: (...args) => setSendButtonLoading(...args),
+        setRuntimeStatus: (...args) => setRuntimeStatus(...args),
+        addMessage: (...args) => addMessage(...args),
+        parseOptimisticTripFactsFromText,
+        getGovernanceProgressSnapshot: (...args) =>
+          getGovernanceProgressSnapshot(...args),
+        rememberProgressSnapshot: (...args) => rememberProgressSnapshot(...args),
+        progressSnapshotFromFastSplit,
+        renderReadinessPanel: (...args) => renderReadinessPanel(...args),
+        persistComposerDraft: (...args) => persistComposerDraft(...args),
+        addLoading: (...args) => addLoading(...args),
+        createAssistantThinkingFilter,
+        updateLoadingCopy: (...args) => updateLoadingCopy(...args),
+        conversationApi,
+        getApiBase: (...args) => getApiBase(...args),
+        processSseBuffer,
+        convertLoadingToAssistant: (...args) => convertLoadingToAssistant(...args),
+        updateMessage: (...args) => updateMessage(...args),
+        rememberToolAuditEvent: (...args) => rememberToolAuditEvent(...args),
+        rememberTurnObservability: (...args) => rememberTurnObservability(...args),
+        removeMessage: (...args) => removeMessage(...args),
+        buildStreamingFallbackMessage,
+        TextDecoder:
+          window.TextDecoder ||
+          (typeof TextDecoder !== "undefined" ? TextDecoder : null),
+        Date,
+        setTimeout: (...args) => window.setTimeout(...args),
+        clearTimeout: (...args) => window.clearTimeout(...args),
+        requestAnimationFrame: (...args) => window.requestAnimationFrame(...args),
+        cancelAnimationFrame: (...args) => window.cancelAnimationFrame(...args),
+      });
+      if (!chatRunner) {
+        throw new Error("ZhiXingChatRunner is not loaded.");
+      }
 
       function getReadinessStatusCopy(status = "") {
         if (status === "ready") return "对话、报告和行程进度都可演示。";
@@ -4243,272 +4254,6 @@
           ? '<i class="fa-solid fa-spinner"></i>'
           : '<i class="fa-regular fa-paper-plane"></i>';
         syncUiAvailability();
-      }
-
-      function getWelcomeMarkup() {
-        return `
-                <div class="welcome-screen">
-              <div class="welcome-logo"><i class="fa-solid fa-paper-plane"></i></div>
-              <h3 class="welcome-title">欢迎使用 知行</h3>
-              <p class="welcome-text">直接告诉我这次想去哪、几天、几个人、预算和偏好，我会按步骤整理目的地、交通、住宿，并在最后形成一份旅游规划报告。</p>
-                    <div class="welcome-suggestions">
-                        ${renderSuggestionButton(
-                          "周末城市小旅行",
-                          "我想从北京出发，端午去成都玩 4 天，2 个人，预算 5000 元，喜欢美食和慢节奏。"
-                        )}
-                        ${renderSuggestionButton(
-                          "亲子长线行程",
-                          "帮我规划一次去云南的 7 天亲子旅行，暑假出发，预算 12000 元。"
-                        )}
-                        ${renderSuggestionButton(
-                          "先做目的地推荐",
-                          "我想先看看 3 个适合海边度假的目的地，预算 8000 元以内。"
-                        )}
-                    </div>
-                </div>
-            `;
-      }
-
-      function renderSuggestionButton(label, text) {
-        return `
-          <button
-            class="suggestion-btn"
-            type="button"
-            data-suggestion-text="${escapeAttribute(text)}"
-          >${escapeHtml(label)}</button>
-        `;
-      }
-
-      function updatePlannerSummary(message) {
-        const el = document.getElementById("plannerSummary");
-        if (el) {
-          el.textContent = message;
-        }
-      }
-
-      function updatePlannerAssistStrip() {
-        const strip = document.getElementById("plannerAssistStrip");
-        const panel = document.querySelector(".planner-panel");
-        if (!strip) return;
-        const fields = readPlannerFields();
-        const checks = [
-          { key: "origin", label: "出发地", required: true },
-          { key: "destination", label: "目的地", required: true },
-          { key: "days", label: "天数", required: true },
-          { key: "budget", label: "预算", required: false },
-          { key: "travelers", label: "人数", required: false },
-          { key: "style", label: "偏好", required: false },
-        ];
-        const requiredFilled = checks.filter(
-          (item) => item.required && fields[item.key]
-        ).length;
-        const ready = requiredFilled >= checks.filter((item) => item.required).length;
-        panel?.classList.toggle("planner-panel-ready", ready);
-        strip.innerHTML = checks
-          .map((item) => {
-            const filled = Boolean(fields[item.key]);
-            const tone = filled ? "filled" : item.required ? "missing" : "optional";
-            const icon = filled ? "fa-circle-check" : "fa-circle";
-            return `
-              <span class="planner-assist-chip ${tone}">
-                <i class="fa-regular ${icon}"></i>
-                ${escapeHtml(item.label)}${!item.required && !filled ? "可选" : ""}
-              </span>
-            `;
-          })
-          .join("");
-        [
-          ["plannerOrigin", fields.origin],
-          ["plannerDestination", fields.destination],
-          ["plannerDate", fields.date],
-          ["plannerDays", fields.days],
-          ["plannerTravelers", fields.travelers],
-          ["plannerBudget", fields.budget],
-          ["plannerTransport", fields.transport],
-          ["plannerStay", fields.stay],
-          ["plannerStyle", fields.style],
-        ].forEach(([id, value]) => {
-          document
-            .getElementById(id)
-            ?.closest(".planner-field")
-            ?.classList.toggle("filled", Boolean(value));
-        });
-      }
-
-      function appendToComposer(text, mode = "replace") {
-        const input = document.getElementById("chatInput");
-        const current = input.value.trim();
-        input.value =
-          mode === "append" && current ? `${current}\n${text}` : text;
-        input.style.height = "auto";
-        input.style.height = Math.min(input.scrollHeight, 120) + "px";
-        input.focus();
-        persistComposerDraft({ immediate: true });
-      }
-
-      function applySuggestion(text) {
-        appendToComposer(text, "replace");
-        updatePlannerSummary("这组需求已经填入输入框，可以直接发送；我会先确认你想要省心方案还是个性化旅游规划。");
-        setRuntimeStatus("需求已填入，可以直接发送", "online");
-      }
-
-      function appendPlannerStyle(value) {
-        const input = document.getElementById("plannerStyle");
-        const current = input.value
-          .split(/[，,\s]+/)
-          .map((item) => item.trim())
-          .filter(Boolean);
-        if (!current.includes(value)) {
-          current.push(value);
-        }
-        input.value = current.join("、");
-        persistPlannerDraft();
-        updatePlannerSummary(`已加入偏好关键词：${current.join("、")}`);
-      }
-
-      function fillPlannerTemplate(kind) {
-        const templates = {
-          weekend: {
-            origin: "北京",
-            destination: "成都",
-            date: "本周末",
-            days: "3天2晚",
-            travelers: "2人",
-            budget: "5000元以内",
-            transport: "高铁或飞机都可以，少折腾优先",
-            stay: "市中心，吃饭方便",
-            style: "美食慢游、轻松、不赶行程",
-          },
-          family: {
-            origin: "上海",
-            destination: "云南",
-            date: "暑假",
-            days: "5天4晚",
-            travelers: "2大1小",
-            budget: "12000元左右",
-            transport: "飞行时间别太折腾，市内交通轻松",
-            stay: "亲子友好，卫生安静",
-            style: "亲子出游、轻松、自然体验",
-          },
-        };
-        const picked = templates[kind];
-        if (!picked) return;
-        document.getElementById("plannerOrigin").value = picked.origin;
-        document.getElementById("plannerDestination").value = picked.destination;
-        document.getElementById("plannerDate").value = picked.date;
-        document.getElementById("plannerDays").value = picked.days;
-        document.getElementById("plannerTravelers").value = picked.travelers;
-        document.getElementById("plannerBudget").value = picked.budget;
-        document.getElementById("plannerTransport").value = picked.transport;
-        document.getElementById("plannerStay").value = picked.stay;
-        document.getElementById("plannerStyle").value = picked.style;
-        persistPlannerDraft();
-        updatePlannerSummary("模板已填入，可以选择省心方案，也可以选择个性化旅游规划。");
-      }
-
-      function readPlannerFields() {
-        return {
-          origin: document.getElementById("plannerOrigin").value.trim(),
-          destination: document
-            .getElementById("plannerDestination")
-            .value.trim(),
-          date: document.getElementById("plannerDate").value.trim(),
-          days: document.getElementById("plannerDays").value.trim(),
-          travelers: document
-            .getElementById("plannerTravelers")
-            .value.trim(),
-          budget: document.getElementById("plannerBudget").value.trim(),
-          transport: document.getElementById("plannerTransport").value.trim(),
-          stay: document.getElementById("plannerStay").value.trim(),
-          style: document.getElementById("plannerStyle").value.trim(),
-        };
-      }
-
-      function buildPlannerOpening({ origin, destination }) {
-        if (origin && destination) return `我想从${origin}出发去${destination}`;
-        if (destination) return `我想去${destination}旅行`;
-        if (origin) return `我想从${origin}出发规划一次旅行`;
-        return "我想规划一次旅行";
-      }
-
-      function composePlannerDraft(mode = "personalized") {
-        const {
-          origin,
-          destination,
-          date,
-          days,
-          travelers,
-          budget,
-          transport,
-          stay,
-          style,
-        } = readPlannerFields();
-
-        const parts = [
-          buildPlannerOpening({ origin, destination }),
-          date ? `，出发时间大概是${date}` : "",
-          days ? `，行程预计${days}` : "",
-          travelers ? `，同行人数是${travelers}` : "",
-          budget ? `，预算希望控制在${budget}` : "",
-          transport ? `，交通偏好是${transport}` : "",
-          stay ? `，住宿偏好是${stay}` : "",
-          style ? `，偏好是${style}` : "",
-        ];
-
-        const modeInstruction =
-          mode === "agency"
-            ? "。请按“现成省心方案”来做：优先匹配成熟路线样板，直接给交通、住宿商圈与示例酒店、门票参考、餐饮、费用说明和涵盖服务；价格只按参考价和待核验口径说明，不承诺实时锁价。"
-            : "。请按“个性化旅游规划”来做：先判断需求是否完整；如果已经足够，请继续完成目的地、交通、住宿、预算、每日路线，并在最后整理成专属于我的个性化旅游规划报告。交通和住宿可以结合可用工具做真实查询与对比。";
-        parts.push(modeInstruction);
-
-        const draft = parts.join("");
-        appendToComposer(draft, "replace");
-        updatePlannerSummary(
-          mode === "agency"
-            ? "省心方案草稿已放进输入框：会优先匹配成熟路线，并说明价格待核验边界。"
-            : "个性化旅游规划草稿已放进输入框：会继续补齐交通、住宿、预算和最终报告。"
-        );
-        setRuntimeStatus(
-          mode === "agency" ? "省心方案草稿已整理" : "个性化规划草稿已整理",
-          "online"
-        );
-      }
-
-      function resetPlannerDraft(options = {}) {
-        const silent =
-          typeof options === "boolean"
-            ? options
-            : Boolean(options?.silent);
-        [
-          "plannerOrigin",
-          "plannerDestination",
-          "plannerDate",
-          "plannerDays",
-          "plannerTravelers",
-          "plannerBudget",
-          "plannerTransport",
-          "plannerStay",
-          "plannerStyle",
-        ].forEach((id) => {
-          const el = document.getElementById(id);
-          if (el) el.value = "";
-        });
-        clearDraftStorage(plannerDraftKey);
-        updatePlannerAssistStrip();
-        updatePlannerSummary(
-          silent
-            ? "可以先选一种规划方式；如果你只写旅行需求，我会先帮你确认要省心方案还是个性化旅游规划。"
-            : "行程摘要已清空。你可以重新填写，也可以直接在下面描述需求。"
-        );
-      }
-
-      function resetConversationDrafts(options = {}) {
-        const silent =
-          typeof options === "boolean"
-            ? options
-            : Boolean(options?.silent);
-        resetComposerDraft({ silent: true });
-        resetPlannerDraft({ silent });
       }
 
       function isDefaultConversationTitle(title = "") {
@@ -9021,441 +8766,6 @@
         state.governance.toolAuditEvents = state.governance.toolAuditEvents.slice(0, 20);
         renderToolAuditList();
         renderTurnObservability();
-      }
-
-      function renderMessages(messages) {
-        const container = document.getElementById("chatMessages");
-        hydrateGovernanceFromMessages(messages);
-        if (messages.length === 0) {
-          clearChatMessages();
-          return;
-        }
-        const lastAssistantIndex = messages
-          .map((msg, index) => (msg.role === "assistant" ? index : -1))
-          .filter((index) => index >= 0)
-          .pop();
-        container.innerHTML = messages
-          .map(
-            (msg, index) => `
-                <div class="message ${
-                  msg.role
-                }" id="msg-${Date.now()}-${Math.random()}">
-                    ${buildMessageMarkup(
-                      msg.role,
-                      msg.content,
-                      msg.created_at || msg.updated_at || new Date(),
-                      {
-                        extraInfo: msg.extra_info || msg.extraInfo || {},
-                        suppressJourneyPreview:
-                          msg.role === "assistant" && index !== lastAssistantIndex,
-                      }
-                    )}
-                </div>
-            `
-          )
-          .join("");
-        scheduleJourneyMapHydration(container);
-        container.scrollTop = container.scrollHeight;
-      }
-
-      function clearChatMessages() {
-        document.getElementById("chatMessages").innerHTML = getWelcomeMarkup();
-      }
-
-      async function sendMessage() {
-        if (!(await ensureServiceReady("发送消息"))) return;
-        const input = document.getElementById("chatInput");
-        const content = input.value.trim();
-        if (!content || state.isLoading) return;
-
-        if (!state.currentConversationId) {
-          await createNewConversation();
-          if (!state.currentConversationId) return;
-        }
-
-        await maybeAutoNameCurrentConversation(content);
-
-        state.isLoading = true;
-        setSendButtonLoading(true);
-        setRuntimeStatus("正在规划行程", "loading");
-
-        // 移除欢迎页
-        const welcome = document.querySelector(".welcome-screen");
-        if (welcome) welcome.remove();
-
-        // 用户消息
-        addMessage("user", content);
-        const optimisticFacts = parseOptimisticTripFactsFromText(content);
-        if (Object.keys(optimisticFacts).length) {
-          const existingProgress = getGovernanceProgressSnapshot();
-          rememberProgressSnapshot(
-            progressSnapshotFromFastSplit({
-              facts: {
-                ...optimisticFacts,
-                planning_mode:
-                  existingProgress.planning_mode || optimisticFacts.planning_mode || "",
-                active_workflow:
-                  existingProgress.active_workflow || existingProgress.planning_mode || "",
-                agency_step: existingProgress.agency_step || optimisticFacts.agency_step || "",
-              },
-            })
-          );
-          renderReadinessPanel();
-        }
-        input.value = "";
-        input.style.height = "auto";
-        persistComposerDraft({ immediate: true });
-
-        // 助手Loading
-        const loadingId = addLoading();
-        const requestStartedAt = Date.now();
-        let reachedSlowStage = false;
-        let reachedVerySlowStage = false;
-        let streamingMessageId = "";
-        let streamingFullText = "";
-        let streamingReportData = null;
-        let streamingJourneyData = null;
-        let streamingPlanningTrace = [];
-        let pendingStreamingChunk = "";
-        let streamingRenderFrame = null;
-        let flushPendingVisibleChunks = () => {};
-        const streamingThinkingFilter = createAssistantThinkingFilter();
-        const slowHintTimer = setTimeout(() => {
-          reachedSlowStage = true;
-          updateLoadingCopy(
-            loadingId,
-            "正在继续整理这次行程建议。如果这轮涉及交通、住宿、地图或外部服务，等待时间会比普通回答更长一些。"
-          );
-          setRuntimeStatus("外部信息查询中", "loading");
-        }, 18000);
-        const verySlowHintTimer = setTimeout(() => {
-          reachedVerySlowStage = true;
-          updateLoadingCopy(
-            loadingId,
-            "这轮等待时间比平时更久，可能正在查询外部信息，或整理较长的分日建议。页面可以继续保持打开，我会在结果返回后直接补上。"
-          );
-          setRuntimeStatus("仍在处理中", "loading");
-        }, 45000);
-
-        try {
-          const res = await conversationApi.openChatStream({
-            apiBase: getApiBase(),
-            stateToken: state.token,
-            conversationId: state.currentConversationId,
-            content,
-          });
-
-          if (
-            res.ok &&
-            res.headers.get("content-type")?.includes("event-stream")
-          ) {
-            const reader = res.body.getReader();
-            const decoder = new TextDecoder();
-            let buffer = "";
-
-            const buildStreamingRenderOptions = (overrides = {}) => ({
-              suppressJourneyPreview: true,
-              pinToTop: true,
-              reportData: streamingReportData,
-              journeyData: streamingJourneyData,
-              planningTrace: streamingPlanningTrace,
-              ...overrides,
-            });
-
-            const renderVisibleChunk = (chunk) => {
-              if (!chunk) return;
-              if (!streamingMessageId) {
-                streamingFullText = chunk;
-                streamingMessageId = convertLoadingToAssistant(
-                  loadingId,
-                  streamingFullText,
-                  buildStreamingRenderOptions()
-                );
-                return;
-              }
-              streamingFullText += chunk;
-              updateMessage(
-                streamingMessageId,
-                streamingFullText,
-                buildStreamingRenderOptions()
-              );
-            };
-
-            flushPendingVisibleChunks = () => {
-              if (streamingRenderFrame) {
-                cancelAnimationFrame(streamingRenderFrame);
-                streamingRenderFrame = null;
-              }
-              const chunk = pendingStreamingChunk;
-              pendingStreamingChunk = "";
-              renderVisibleChunk(chunk);
-            };
-
-            const appendVisibleChunk = (chunk) => {
-              if (!chunk) return;
-              if (!streamingMessageId) {
-                renderVisibleChunk(chunk);
-                return;
-              }
-              pendingStreamingChunk += chunk;
-              if (streamingRenderFrame) return;
-              streamingRenderFrame = requestAnimationFrame(() => {
-                streamingRenderFrame = null;
-                const nextChunk = pendingStreamingChunk;
-                pendingStreamingChunk = "";
-                renderVisibleChunk(nextChunk);
-              });
-            };
-            const applyChunk = (chunk) => {
-              const visibleChunk = streamingThinkingFilter.feed(chunk);
-              if (visibleChunk) {
-                appendVisibleChunk(visibleChunk);
-              }
-            };
-            const applyStreamEvent = (event) => {
-              if (event?.type === "report_data" && event.report_data) {
-                streamingReportData = event.report_data;
-              }
-              if (event?.type === "planning_trace") {
-                streamingPlanningTrace = [
-                  ...streamingPlanningTrace,
-                  {
-                    phase: event.phase,
-                    status: event.status,
-                    title: event.title,
-                    detail: event.detail,
-                    count: event.count,
-                    city: event.city,
-                    date_range: event.date_range,
-                    evidence_type: event.evidence_type,
-                  },
-                ].filter((item) => item.title || item.detail);
-              }
-              if (event?.type === "journey_data" && event.journey_data) {
-                streamingJourneyData = event.journey_data;
-                if (Array.isArray(event.planning_trace)) {
-                  streamingPlanningTrace = event.planning_trace;
-                }
-              }
-              if (event?.type === "tool_audit") {
-                rememberToolAuditEvent(event);
-              }
-              if (event?.type === "turn_observability") {
-                rememberTurnObservability(event);
-              }
-            };
-
-            while (true) {
-              const { done, value } = await reader.read();
-              if (done) break;
-              buffer += decoder.decode(value, { stream: true });
-              buffer = processSseBuffer(buffer, applyChunk, applyStreamEvent);
-            }
-
-            const tail = decoder.decode();
-            if (tail) {
-              buffer += tail;
-            }
-            if (buffer.trim()) {
-              processSseBuffer(`${buffer}\n\n`, applyChunk, applyStreamEvent);
-            }
-            const visibleTail = streamingThinkingFilter.finish();
-            if (visibleTail) {
-              appendVisibleChunk(visibleTail);
-            }
-            flushPendingVisibleChunks();
-
-            if (!streamingMessageId) {
-              streamingMessageId = convertLoadingToAssistant(
-                loadingId,
-                streamingReportData
-                  ? "结构化旅游规划报告已整理完成。"
-                  : streamingJourneyData
-                  ? "可视化旅程草案已整理完成。"
-                  : "这次没有拿到可展示的内容，你可以再试一次，或者换个问法继续。",
-                {
-                  suppressJourneyPreview: false,
-                  pinToTop: true,
-                  reportData: streamingReportData,
-                  journeyData: streamingJourneyData,
-                  planningTrace: streamingPlanningTrace,
-                }
-              );
-            } else {
-              updateMessage(streamingMessageId, streamingFullText, {
-                suppressJourneyPreview: false,
-                pinToTop: true,
-                reportData: streamingReportData,
-                journeyData: streamingJourneyData,
-                planningTrace: streamingPlanningTrace,
-              });
-            }
-            setRuntimeStatus("行程建议已整理", "online");
-          } else {
-            clearTimeout(slowHintTimer);
-            removeMessage(loadingId);
-            const data = await res.json();
-            addMessage(
-              "assistant",
-              data.content || data.message || JSON.stringify(data)
-            );
-            if (!res.ok) {
-              setRuntimeStatus("请求失败", "error");
-            } else {
-              setRuntimeStatus("已连接", "online");
-            }
-          }
-        } catch (e) {
-          const elapsedMs = Date.now() - requestStartedAt;
-          clearTimeout(slowHintTimer);
-          clearTimeout(verySlowHintTimer);
-          flushPendingVisibleChunks();
-          if (streamingMessageId && streamingFullText.trim()) {
-            updateMessage(
-              streamingMessageId,
-              `${streamingFullText}${buildStreamingFallbackMessage({
-                elapsedMs,
-                hasPartialContent: true,
-                reachedVerySlowStage,
-              })}`,
-              {
-                suppressJourneyPreview: true,
-                pinToTop: true,
-                reportData: streamingReportData,
-                journeyData: streamingJourneyData,
-                planningTrace: streamingPlanningTrace,
-              }
-            );
-          } else {
-            removeMessage(loadingId);
-            addMessage(
-              "assistant",
-              buildStreamingFallbackMessage({
-                elapsedMs,
-                hasPartialContent: false,
-                reachedVerySlowStage,
-              })
-            );
-          }
-          setRuntimeStatus("连接异常", "error");
-        } finally {
-          clearTimeout(slowHintTimer);
-          clearTimeout(verySlowHintTimer);
-        }
-
-        state.isLoading = false;
-        setSendButtonLoading(false);
-      }
-
-      function addMessage(role, text, options = {}) {
-        const container = document.getElementById("chatMessages");
-        const id = "msg-" + Date.now();
-        const div = document.createElement("div");
-        if (role === "assistant") {
-          collapsePlannerPanelForVisualJourney(options);
-        }
-        div.className = `message ${role}`;
-        div.id = id;
-        div.innerHTML = buildMessageMarkup(role, text, new Date(), options);
-        container.appendChild(div);
-        scheduleJourneyMapHydration(div);
-        container.scrollTop = container.scrollHeight;
-        return id;
-      }
-
-      function scrollChatMessageToTop(id, behavior = "smooth") {
-        const container = document.getElementById("chatMessages");
-        const el = document.getElementById(id);
-        if (!container || !el) return;
-
-        const targetTop = Math.max(
-          el.offsetTop - container.offsetTop - 16,
-          0
-        );
-        container.scrollTo({ top: targetTop, behavior });
-      }
-
-      function pinChatMessageToTop(id) {
-        if (streamingScrollFrame) {
-          cancelAnimationFrame(streamingScrollFrame);
-        }
-        streamingScrollFrame = requestAnimationFrame(() => {
-          scrollChatMessageToTop(id, "auto");
-          streamingScrollFrame = null;
-        });
-      }
-
-      function updateMessage(id, text, options = {}) {
-        const el = document.getElementById(id);
-        if (el) {
-          collapsePlannerPanelForVisualJourney(options);
-          el.querySelector(".message-text").innerHTML = renderMessageText(
-            "assistant",
-            text,
-            options
-          );
-          if (!options?.suppressJourneyPreview) {
-            scheduleJourneyMapHydration(el);
-          }
-          if (options?.pinToTop) {
-            pinChatMessageToTop(id);
-          }
-        }
-      }
-
-      function convertLoadingToAssistant(id, text, options = {}) {
-        const el = document.getElementById(id);
-        if (!el) {
-          return addMessage("assistant", text, options);
-        }
-        const messageId = "msg-" + Date.now();
-        el.id = messageId;
-        el.className = "message assistant";
-        el.innerHTML = buildMessageMarkup("assistant", text, new Date(), options);
-        if (!options?.suppressJourneyPreview) {
-          scheduleJourneyMapHydration(el);
-        }
-        scrollChatMessageToTop(messageId, options?.pinToTop ? "auto" : "smooth");
-        return messageId;
-      }
-
-      function addLoading() {
-        const container = document.getElementById("chatMessages");
-        const id = "loading-" + Date.now();
-        const div = document.createElement("div");
-        div.className = "message assistant";
-        div.id = id;
-        div.innerHTML = `
-                <div class="message-avatar"><i class="fa-solid fa-compass"></i></div>
-                <div class="message-content thinking-card">
-                    <div class="thinking-header">
-                        <div class="thinking-title">
-                            <i class="fa-solid fa-route"></i>
-                            正在整理行程建议
-                        </div>
-                        <span class="thinking-badge">处理中</span>
-                    </div>
-                    <div class="thinking-copy">正在结合你的需求和已经聊到的信息，整理下一步更完整的建议。</div>
-                    <div class="thinking-progress"></div>
-                    <div class="typing-dots" style="margin-top: 12px;"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>
-                </div>
-            `;
-        container.appendChild(div);
-        scrollChatMessageToTop(id);
-        return id;
-      }
-
-      function updateLoadingCopy(id, text) {
-        const el = document.getElementById(id);
-        const copy = el?.querySelector(".thinking-copy");
-        if (copy) {
-          copy.textContent = text;
-        }
-      }
-
-      function removeMessage(id) {
-        const el = document.getElementById(id);
-        if (el) el.remove();
       }
 
       function handleInputKeydown(e) {

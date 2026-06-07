@@ -6,6 +6,7 @@ const repoRoot = path.resolve(__dirname, "..");
 const frontendHtmlPath = path.join(repoRoot, "frontend", "zhixing.html");
 const frontendStylesText = [
   "styles.css",
+  "planner.css",
   "chat.css",
 ]
   .map((name) => fs.readFileSync(path.join(repoRoot, "frontend", name), "utf8"))
