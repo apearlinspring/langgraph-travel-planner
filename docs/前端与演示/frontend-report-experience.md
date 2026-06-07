@@ -98,6 +98,7 @@
 - `frontend/journey-preview.js`：路线预览状态构建、预览 HTML（超文本标记语言）入口和是否展示预览的判定。
 - `frontend/journey-poi-utils.js`：推荐 POI 合并、排序、标签和匹配辅助逻辑。
 - `frontend/journey-poi-renderer.js`：推荐 POI 卡片、列表和加入/替换入口渲染。
+- `frontend/visual-journey-editor.js`：视觉旅程工作台统计、路线编辑器、交通候选、时间/票务核验和分日编辑 HTML 渲染。
 - `frontend/assistant-renderer.js`：助手消息 Markdown（轻量标记文本）表格、列表、交通方案卡片和 fallback（兜底）HTML 渲染。
 - `frontend/report-data-view-model.js`：结构化报告识别、预算分组、预期天数、规划模式和治理交付视图模型。
 - `frontend/report-data-panels.js`：结构化报告里的预算置信度、交付状态、人工确认边界和预算明细面板。
@@ -143,27 +144,28 @@
 13. `journey-preview.js`
 14. `journey-poi-utils.js`
 15. `journey-poi-renderer.js`
-16. `assistant-renderer.js`
-17. `report-data-view-model.js`
-18. `report-data-panels.js`
-19. `report-data-itinerary.js`
-20. `report-text-structured.js`
-21. `report-budget.js`
-22. `report-renderer.js`
-23. `report-export.js`
-24. `report-actions.js`
-25. `governance-api.js`
-26. `governance-tools.js`
-27. `governance-progress.js`
-28. `governance-renderer.js`
-29. `draft-storage.js`
-30. `runtime-status.js`
-31. `chat-stream.js`
-32. `chat-runner.js`
-33. `chat-messages.js`
-34. `planner-controls.js`
-35. `guide-import.js`
-36. `app.js`
+16. `visual-journey-editor.js`
+17. `assistant-renderer.js`
+18. `report-data-view-model.js`
+19. `report-data-panels.js`
+20. `report-data-itinerary.js`
+21. `report-text-structured.js`
+22. `report-budget.js`
+23. `report-renderer.js`
+24. `report-export.js`
+25. `report-actions.js`
+26. `governance-api.js`
+27. `governance-tools.js`
+28. `governance-progress.js`
+29. `governance-renderer.js`
+30. `draft-storage.js`
+31. `runtime-status.js`
+32. `chat-stream.js`
+33. `chat-runner.js`
+34. `chat-messages.js`
+35. `planner-controls.js`
+36. `guide-import.js`
+37. `app.js`
 
 `scripts/verify_frontend_report_renderer.js` 会按报告渲染所需的依赖子集拼接这些模块。后续新增模块时，必须同时检查 `frontend/zhixing.html` 和该校验脚本是否需要同步，否则静态回归会出现“浏览器能跑、Node 拼接校验失败”或反过来的漂移。
 
