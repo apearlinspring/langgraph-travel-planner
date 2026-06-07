@@ -101,6 +101,7 @@
 - `frontend/report-data-view-model.js`：结构化报告识别、预算分组、预期天数、规划模式和治理交付视图模型。
 - `frontend/report-data-panels.js`：结构化报告里的预算置信度、交付状态、人工确认边界和预算明细面板。
 - `frontend/report-data-itinerary.js`：结构化报告每日行程、路线点、路线段和未就绪空状态渲染。
+- `frontend/report-text-structured.js`：文本报告结构化卡片、旅程预览和行程摘要组合渲染。
 - `frontend/report-budget.js`：预算标题归一化、预算表格提取、预算总额估算、预算卡片渲染、过早预算段落抑制。
 - `frontend/report-renderer.js`：结构化报告主干、文本报告主干、报告分段渲染入口。
 - `frontend/report-export.js`：HTML（超文本标记语言）导出、导出内容清理、交付摘要封面和文件生成。
@@ -144,22 +145,23 @@
 16. `report-data-view-model.js`
 17. `report-data-panels.js`
 18. `report-data-itinerary.js`
-19. `report-budget.js`
-20. `report-renderer.js`
-21. `report-export.js`
-22. `report-actions.js`
-23. `governance-api.js`
-24. `governance-tools.js`
-25. `governance-progress.js`
-26. `governance-renderer.js`
-27. `draft-storage.js`
-28. `runtime-status.js`
-29. `chat-stream.js`
-30. `chat-runner.js`
-31. `chat-messages.js`
-32. `planner-controls.js`
-33. `guide-import.js`
-34. `app.js`
+19. `report-text-structured.js`
+20. `report-budget.js`
+21. `report-renderer.js`
+22. `report-export.js`
+23. `report-actions.js`
+24. `governance-api.js`
+25. `governance-tools.js`
+26. `governance-progress.js`
+27. `governance-renderer.js`
+28. `draft-storage.js`
+29. `runtime-status.js`
+30. `chat-stream.js`
+31. `chat-runner.js`
+32. `chat-messages.js`
+33. `planner-controls.js`
+34. `guide-import.js`
+35. `app.js`
 
 `scripts/verify_frontend_report_renderer.js` 会按报告渲染所需的依赖子集拼接这些模块。后续新增模块时，必须同时检查 `frontend/zhixing.html` 和该校验脚本是否需要同步，否则静态回归会出现“浏览器能跑、Node 拼接校验失败”或反过来的漂移。
 

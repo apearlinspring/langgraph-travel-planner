@@ -23,6 +23,7 @@ const frontendScriptBundle = [
   "report-data-view-model.js",
   "report-data-panels.js",
   "report-data-itinerary.js",
+  "report-text-structured.js",
   "report-budget.js",
   "report-renderer.js",
   "report-export.js",
