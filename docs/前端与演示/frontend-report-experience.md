@@ -99,6 +99,7 @@
 - `frontend/journey-poi-utils.js`：推荐 POI 合并、排序、标签和匹配辅助逻辑。
 - `frontend/journey-poi-renderer.js`：推荐 POI 卡片、列表和加入/替换入口渲染。
 - `frontend/report-data-view-model.js`：结构化报告识别、预算分组、预期天数、规划模式和治理交付视图模型。
+- `frontend/report-data-panels.js`：结构化报告里的预算置信度、交付状态、人工确认边界和预算明细面板。
 - `frontend/report-budget.js`：预算标题归一化、预算表格提取、预算总额估算、预算卡片渲染、过早预算段落抑制。
 - `frontend/report-renderer.js`：结构化报告主干、文本报告主干、报告分段渲染入口。
 - `frontend/report-export.js`：HTML（超文本标记语言）导出、导出内容清理、交付摘要封面和文件生成。
@@ -140,22 +141,23 @@
 14. `journey-poi-utils.js`
 15. `journey-poi-renderer.js`
 16. `report-data-view-model.js`
-17. `report-budget.js`
-18. `report-renderer.js`
-19. `report-export.js`
-20. `report-actions.js`
-21. `governance-api.js`
-22. `governance-tools.js`
-23. `governance-progress.js`
-24. `governance-renderer.js`
-25. `draft-storage.js`
-26. `runtime-status.js`
-27. `chat-stream.js`
-28. `chat-runner.js`
-29. `chat-messages.js`
-30. `planner-controls.js`
-31. `guide-import.js`
-32. `app.js`
+17. `report-data-panels.js`
+18. `report-budget.js`
+19. `report-renderer.js`
+20. `report-export.js`
+21. `report-actions.js`
+22. `governance-api.js`
+23. `governance-tools.js`
+24. `governance-progress.js`
+25. `governance-renderer.js`
+26. `draft-storage.js`
+27. `runtime-status.js`
+28. `chat-stream.js`
+29. `chat-runner.js`
+30. `chat-messages.js`
+31. `planner-controls.js`
+32. `guide-import.js`
+33. `app.js`
 
 `scripts/verify_frontend_report_renderer.js` 会按报告渲染所需的依赖子集拼接这些模块。后续新增模块时，必须同时检查 `frontend/zhixing.html` 和该校验脚本是否需要同步，否则静态回归会出现“浏览器能跑、Node 拼接校验失败”或反过来的漂移。
 
