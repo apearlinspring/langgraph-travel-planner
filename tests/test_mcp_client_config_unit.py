@@ -1,8 +1,10 @@
+from pathlib import Path
 import sys
 
 import pytest
 
 from app.mcp_core.client import MCPClientManager
+from app.utils.security import REDACTED_VALUE, redact_sensitive_text
 
 
 @pytest.fixture(autouse=True)
@@ -149,3 +151,62 @@ def test_service_health_table_blocks_required_hotel_when_acceptance_declares_it(
     assert hotel["requirement"] == "required"
     assert hotel["configured"] is False
     assert "required by the selected acceptance scenarios" in hotel["reason"]
+
+
+def test_mcp_service_catalog_document_matches_service_definitions():
+    doc_path = (
+        Path(__file__).resolve().parents[1]
+        / "docs"
+        / "治理与可观测"
+        / "tool-governance-audit.md"
+    )
+    catalog = doc_path.read_text(encoding="utf-8")
+
+    assert "required_when_declared" in catalog
+    for server, definition in MCPClientManager.SERVICE_DEFINITIONS.items():
+        assert f"`{server}`" in catalog
+        assert f"`{definition['core_requirement']}`" in catalog
+        assert f"`{definition['acceptance_requirement']}`" in catalog
+        assert str(definition["startup_probe"]) in catalog
+        for env_var in definition["env_vars"]:
+            assert f"`{env_var}`" in catalog
+
+
+def test_redaction_masks_url_query_credentials():
+    text = (
+        "AMap failed: https://mcp.amap.com/mcp?key=amap-secret-1234567890 "
+        "VariFlight failed: https://ai.variflight.com/mcp/?api_key=variflight-secret-1234567890 "
+        "keep city=南京"
+    )
+
+    redacted = redact_sensitive_text(text)
+
+    assert "amap-secret-1234567890" not in redacted
+    assert "variflight-secret-1234567890" not in redacted
+    assert f"key={REDACTED_VALUE}" in redacted
+    assert f"api_key={REDACTED_VALUE}" in redacted
+    assert "city=南京" in redacted
+
+
+def test_mcp_error_formatter_redacts_url_credentials():
+    exc = RuntimeError(
+        "upstream 403 for https://mcp.amap.com/mcp?key=amap-secret-1234567890"
+    )
+
+    formatted = MCPClientManager._format_error(exc)
+
+    assert "amap-secret-1234567890" not in formatted
+    assert f"key={REDACTED_VALUE}" in formatted
+
+
+@pytest.mark.asyncio
+async def test_unknown_mcp_session_error_redacts_server_name():
+    with pytest.raises(ValueError) as exc_info:
+        async with MCPClientManager().session(
+            "https://mcp.amap.com/mcp?key=amap-secret-1234567890"
+        ):
+            pass
+
+    message = str(exc_info.value)
+    assert "amap-secret-1234567890" not in message
+    assert f"key={REDACTED_VALUE}" in message

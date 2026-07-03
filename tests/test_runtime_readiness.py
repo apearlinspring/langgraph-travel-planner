@@ -1,6 +1,8 @@
 from pathlib import Path
 import sqlite3
 import subprocess
+import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -17,6 +19,8 @@ from app.evaluation.scenarios import EvaluationScenario
 from scripts.check_runtime_readiness import (
     build_docker_compose_readiness_report,
     build_database_migration_readiness_report,
+    build_rag_mixed_corpus_safety_readiness_report,
+    build_rag_multimodal_e2e_readiness_report,
     build_runtime_readiness_report,
 )
 
@@ -433,6 +437,23 @@ def test_acceptance_preflight_blocks_missing_real_external_credentials(tmp_path:
     assert "report_quality" in preflight.skipped_metrics
 
 
+def test_acceptance_preflight_includes_rag_mixed_corpus_safety_gate(tmp_path: Path):
+    preflight = run_acceptance_preflight(
+        [],
+        base_url="http://127.0.0.1:8000",
+        environ=_required_runtime_env(),
+        dotenv_path=tmp_path / "missing.env",
+        check_backend=False,
+    )
+
+    safety_check = next(
+        check for check in preflight.checks if check.key == "rag_mixed_corpus_safety"
+    )
+    assert safety_check.status == "passed"
+    assert safety_check.required is True
+    assert safety_check.details["scenario_count"] >= 1
+
+
 def test_runtime_readiness_report_covers_development_staging_acceptance_and_production(tmp_path: Path):
     report = build_runtime_readiness_report(
         environ={},
@@ -463,6 +484,12 @@ def test_runtime_readiness_report_covers_development_staging_acceptance_and_prod
     assert any("scripts.init_db" in item["command"] for item in report["repair_suggestions"])
     assert report["database_migrations"]["status"] == "passed"
     assert report["docker_compose"]["status"] == "not_checked"
+    assert report["rag_mixed_corpus_safety"]["status"] == "passed"
+    assert report["rag_mixed_corpus_safety"]["checked"] is True
+    assert not any(item["target"] == "rag_mixed_corpus_safety" for item in report["blocked_reasons"])
+    assert report["rag_multimodal_e2e"]["status"] == "not_checked"
+    assert report["rag_multimodal_e2e"]["checked"] is False
+    assert not any(item["target"] == "rag_multimodal_e2e" for item in report["blocked_reasons"])
 
 
 def test_runtime_readiness_report_accepts_local_alias(tmp_path: Path):
@@ -512,6 +539,152 @@ def test_docker_compose_readiness_is_not_checked_by_default():
     assert report["status"] == "not_checked"
     assert report["checked"] is False
     assert "docker compose up -d postgres redis" in report["commands"]["start_dependencies"]
+
+
+def test_rag_multimodal_e2e_readiness_is_not_checked_by_default():
+    report = build_rag_multimodal_e2e_readiness_report()
+
+    assert report["status"] == "not_checked"
+    assert report["checked"] is False
+    assert "check_rag_multimodal_readiness.py --json --check-e2e" in report["commands"]["check"]
+
+
+def test_rag_mixed_corpus_safety_readiness_passes_by_default():
+    report = build_rag_mixed_corpus_safety_readiness_report()
+
+    assert report["status"] == "passed"
+    assert report["checked"] is True
+    assert report["scenario_count"] >= 1
+    assert report["document_count"] >= 1
+    assert "--mixed-corpus-safety --top-k 3 --json" in report["commands"]["check"]
+    assert not report["blocked_reasons"]
+
+
+def test_rag_mixed_corpus_safety_readiness_can_be_skipped():
+    report = build_rag_mixed_corpus_safety_readiness_report(check=False)
+
+    assert report["status"] == "not_checked"
+    assert report["checked"] is False
+    assert "evaluate_rag_retrieval.py" in report["commands"]["check"]
+
+
+def test_rag_mixed_corpus_safety_blocks_runtime_report_when_default_gate_fails(monkeypatch):
+    summary = SimpleNamespace(
+        to_dict=lambda: {
+            "strategy": "metadata_aware_bm25",
+            "top_k": 3,
+            "source_recall": 1.0,
+            "category_recall": 1.0,
+            "source_type_recall": 1.0,
+            "visibility_recall": 1.0,
+            "hit_rate": 1.0,
+            "safety_pass_rate": 0.0,
+            "mrr": 1.0,
+        }
+    )
+    fake_result = SimpleNamespace(
+        scenario_count=1,
+        document_count=2,
+        top_k_values=[3],
+        summaries=[summary],
+    )
+
+    def fake_eval(*, top_k_values=(3,)):
+        assert tuple(top_k_values) == (3,)
+        return fake_result
+
+    def fake_failures(result):
+        assert result is fake_result
+        return [
+            {
+                "scenario_id": "public_internal_leak",
+                "reasons": ["forbidden_hits"],
+                "forbidden_hits": ["internal-policy.md"],
+            }
+        ]
+
+    monkeypatch.setitem(
+        sys.modules,
+        "app.evaluation.rag_retrieval",
+        SimpleNamespace(
+            evaluate_rag_mixed_corpus_safety=fake_eval,
+            rag_mixed_corpus_safety_failures=fake_failures,
+        ),
+    )
+
+    report = build_runtime_readiness_report(
+        targets=["development"],
+        environ=_required_runtime_env(),
+        dotenv_path=Path("missing.env"),
+    )
+
+    assert report["status"] == "blocked"
+    assert report["rag_mixed_corpus_safety"]["status"] == "blocked"
+    assert report["rag_mixed_corpus_safety"]["failed_scenarios"][0]["scenario_id"] == "public_internal_leak"
+    assert any(item["target"] == "rag_mixed_corpus_safety" for item in report["blocked_reasons"])
+
+
+def test_rag_multimodal_e2e_readiness_passes_when_deep_check_passes(monkeypatch):
+    def fake_readiness(*, check_e2e=False):
+        assert check_e2e is True
+        return {
+            "status": "passed",
+            "findings": [],
+            "e2e_acceptance": {
+                "status": "passed",
+                "passed": True,
+                "loaded_from_disk": True,
+            },
+        }
+
+    monkeypatch.setitem(
+        sys.modules,
+        "scripts.check_rag_multimodal_readiness",
+        SimpleNamespace(build_rag_multimodal_readiness_report=fake_readiness),
+    )
+
+    report = build_runtime_readiness_report(
+        targets=["development"],
+        environ=_required_runtime_env(),
+        dotenv_path=Path("missing.env"),
+        check_rag_multimodal_e2e=True,
+    )
+
+    assert report["rag_multimodal_e2e"]["status"] == "passed"
+    assert report["rag_multimodal_e2e"]["e2e_acceptance"]["loaded_from_disk"] is True
+    assert not any(item["target"] == "rag_multimodal_e2e" for item in report["blocked_reasons"])
+
+
+def test_rag_multimodal_e2e_readiness_blocks_runtime_report_when_requested(monkeypatch):
+    def fake_readiness(*, check_e2e=False):
+        assert check_e2e is True
+        return {
+            "status": "degraded",
+            "findings": ["sample image missing"],
+            "e2e_acceptance": {
+                "status": "blocked",
+                "passed": False,
+                "error": "required sample files are missing",
+            },
+        }
+
+    monkeypatch.setitem(
+        sys.modules,
+        "scripts.check_rag_multimodal_readiness",
+        SimpleNamespace(build_rag_multimodal_readiness_report=fake_readiness),
+    )
+
+    report = build_runtime_readiness_report(
+        targets=["development"],
+        environ=_required_runtime_env(),
+        dotenv_path=Path("missing.env"),
+        check_rag_multimodal_e2e=True,
+    )
+
+    assert report["status"] == "blocked"
+    assert report["rag_multimodal_e2e"]["status"] == "blocked"
+    assert report["rag_multimodal_e2e"]["blocked_reasons"][0]["key"] == "rag_multimodal_e2e"
+    assert any(item["target"] == "rag_multimodal_e2e" for item in report["blocked_reasons"])
 
 
 def test_docker_compose_readiness_passes_when_cli_and_daemon_are_available(monkeypatch):

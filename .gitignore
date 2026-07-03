@@ -24,6 +24,8 @@ wheels/
 
 # Local runtime state
 logs/
+backups/
+**/backups/
 .runtime/
 .tmp/
 .fastmcp/
@@ -52,6 +54,7 @@ Thumbs.db
 # Local scratch files
 test1.py
 test2.py
+tree.txt
 
 # Local UI/e2e review artifacts
 tmp-playwright-review/

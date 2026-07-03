@@ -139,7 +139,7 @@ $env:POSTGRES_USER='test_user'
 $env:POSTGRES_PASSWORD='test_password'
 $env:AIGOHOTEL_API_KEY='test-hotel-key'
 
-D:\Users\Administrator\PycharmProjects\ZhiXing\langgraph-travel-planner\.venv\Scripts\python.exe -m pytest -q
+uv run python -m pytest -q
 ```
 
 live 评估必须从当前 worktree 启动后端。否则 `scripts/run_evaluation_scenarios.py` 会请求已经监听在同一端口上的旧主线服务，不能验证本分支代码。建议使用不同端口，例如 `8001`，避免和主仓库服务冲突。
@@ -147,21 +147,20 @@ live 评估必须从当前 worktree 启动后端。否则 `scripts/run_evaluatio
 启动当前 worktree 后端示例：
 
 ```powershell
-cd D:\Users\Administrator\PycharmProjects\ZhiXing\langgraph-travel-planner-agency-runtime-governance
+cd <current-worktree-root>
 
-# 仅本地可选，不提交；不要把真实 .env 或密钥写入仓库。
-Copy-Item ..\langgraph-travel-planner\.env .\.env
+# 仅在私有 shell 或 CI secrets 中注入必要变量；不要复制或提交真实 .env。
 
 $env:APP_PORT='8001'
-D:\Users\Administrator\PycharmProjects\ZhiXing\langgraph-travel-planner\.venv\Scripts\python.exe main.py
+uv run python main.py
 ```
 
 另一个终端运行 live 评估：
 
 ```powershell
-cd D:\Users\Administrator\PycharmProjects\ZhiXing\langgraph-travel-planner-agency-runtime-governance
+cd <current-worktree-root>
 
-D:\Users\Administrator\PycharmProjects\ZhiXing\langgraph-travel-planner\.venv\Scripts\python.exe scripts\run_evaluation_scenarios.py --base-url http://127.0.0.1:8001
+uv run python scripts\run_evaluation_scenarios.py --base-url http://127.0.0.1:8001
 ```
 
 如果 live 快照缺少 `evidence_bundle`、`tool_audit_summary` 等当前分支已经生成的字段，先确认后端进程是否从当前 worktree 启动。此前发现的 live 快照缺字段不是 `.env` 直接导致，而是 `127.0.0.1:8000` 后端服务从主仓库旧代码启动；当前分支已补 `agency_context.evidence` fallback（兜底证据），验证 live 场景时需要从当前 worktree 重启服务。

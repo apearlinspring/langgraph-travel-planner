@@ -18,6 +18,7 @@ from app.tools.audit import (
     start_tool_audit,
     summarize_tool_input,
 )
+from app.utils.security import REDACTED_VALUE
 from app.tools.contracts import classify_tool_governance
 from app.tools.execution_guard import begin_tool_execution, execute_guarded_call
 from app.tools.guardrails import validate_hotel_query_args, validate_transport_query_args
@@ -167,6 +168,33 @@ def test_tool_audit_event_redacts_sensitive_output_summary():
     assert "test@example.com" not in serialized
     assert "110101199001011234" not in serialized
     assert "sk-testvalue123456789" not in serialized
+
+
+def test_tool_audit_event_redacts_url_query_keys():
+    context = start_tool_audit("maps_direction_driving")
+    event = build_tool_audit_event(
+        context,
+        status="failed",
+        input_summary={
+            "url": "https://mcp.amap.com/mcp?key=amap-secret-1234567890&city=南京",
+        },
+        output_summary={
+            "message": (
+                "403 from https://ai.variflight.com/mcp/?api_key="
+                "variflight-secret-1234567890"
+            ),
+        },
+        error_type=(
+            "RuntimeError: https://mcp.amap.com/mcp?key=amap-secret-1234567890"
+        ),
+        evidence_type="mcp_live_query",
+    )
+    serialized = str(event)
+
+    assert "amap-secret-1234567890" not in serialized
+    assert "variflight-secret-1234567890" not in serialized
+    assert f"key={REDACTED_VALUE}" in serialized
+    assert f"api_key={REDACTED_VALUE}" in serialized
 
 
 def test_tool_execution_policy_classifies_high_value_tools():

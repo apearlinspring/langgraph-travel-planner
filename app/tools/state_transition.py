@@ -4020,6 +4020,22 @@ def generate_order_tool(
             report_bundle.validation.to_user_message(),
             runtime,
         )
+    report_data = report_bundle.report_data
+    mock_checkout = {
+        "enabled": True,
+        "mode": "m1_demo_only",
+        "order_id": order_id,
+        "checkout_url": f"/api/v1/mock-checkout/{order_id}",
+        "status_url": f"/api/v1/mock-checkout/{order_id}/status",
+        "redirect_behavior": "internal_303_to_frontend",
+        "real_payment": False,
+        "real_booking": False,
+        "inventory_locked": False,
+        "fulfillment_triggered": False,
+        "boundary": "M1 mock checkout only proves internal redirect behavior; it is not a payment link.",
+    }
+    report_data.setdefault("tool_audit_summary", {})["m1_mock_checkout"] = mock_checkout
+    report_data.setdefault("evidence_bundle", {})["m1_mock_checkout"] = mock_checkout
     report = report_bundle.markdown
     message = "\n".join(
         [
@@ -4027,7 +4043,8 @@ def generate_order_tool(
             "",
             "订单生成成功：",
             f"- 订单号：{order_id}",
-            "- 支付链接：当前项目未接入真实支付服务，暂不生成支付链接。",
+            f"- M1 模拟确认页：{mock_checkout['checkout_url']}（站内演示跳转，不是支付链接）。",
+            "- 支付边界：当前项目未接入真实支付服务，不扣款、不锁库存、不出票、不触发供应商预订。",
             "- 审批治理：生成订单号当前为记录型敏感动作，不阻塞报告交付；未来接入真实支付或真实预订时必须先完成人工审批。",
             f"- 治理边界：{approval_payload['boundary']}",
             "感谢使用智能旅行规划系统。",

@@ -109,6 +109,35 @@
 - `search_accommodation_info`
 - `search_travel_tips`
 
+## MCP 失败审计与脱敏口径
+
+MCP（模型上下文协议）服务默认按“可降级外部能力”处理：服务未配置、连接失败、超时或返回待核验内容时，审计事件必须保留失败状态和 `evidence_type`，但不得把错误当成真实库存、价格、路线或开放状态来写入最终结论。
+
+### 外部 MCP 服务目录
+
+本表和 `MCPClientManager.SERVICE_DEFINITIONS` 保持同一口径。`core requirement` 表示普通开发和核心链路是否必须依赖该服务；`acceptance requirement` 表示验收场景如何判断它是否必须可用。当前所有外部 MCP 服务都是核心可选能力，验收语义统一为 `required_when_declared`：只有被选中的验收场景明确声明该服务为必需时，配置缺失、凭据缺失或探针失败才阻塞验收；普通开发、未声明验收或演示场景中，缺失服务只能进入 `skipped` 或 `degraded`，最终报告使用待核验口径。
+
+| 服务名 | 用途 | 凭据环境变量名 | core requirement | acceptance requirement | 启动 / 探针策略 | 缺失时状态 | 用户可见口径 |
+|---|---|---|---|---|---|---|---|
+| `weather` | 本地天气 MCP，使用 AMap（高德地图）天气能力补充目的地天气参考。 | `AMAP_API_KEY` | `optional` | `required_when_declared` | `default`：默认随 MCP 启动集合预热；`/health/ready` 通过 `service_health` 探针汇总。 | 未声明必需时凭据缺失为 `degraded`；声明必需时为 `blocked`。 | “天气服务暂不可用，天气建议需出行前二次核验。” |
+| `search` | 本地搜索 MCP，使用 Tavily（搜索服务）补充开放网页检索。 | `TAVILY_API_KEY` | `optional` | `required_when_declared` | `default`：默认随 MCP 启动集合预热；`/health/ready` 通过 `service_health` 探针汇总。 | 未声明必需时凭据缺失为 `degraded`；声明必需时为 `blocked`。 | “实时搜索暂不可用，本轮仅使用已有知识和可追溯资料。” |
+| `amap` | 高德地图远端 MCP，用于地图、地点、路线等外部能力。 | `AMAP_API_KEY` | `optional` | `required_when_declared` | `default`：远端 HTTP MCP；启动快照记录配置，健康检查按探针结果汇总。 | 未声明必需时凭据缺失或连接异常为 `degraded`；声明必需时为 `blocked`。 | “地图或路线服务异常，路线、位置和开放状态需核验。” |
+| `12306-mcp` | 12306 高铁 / 火车候选查询补充能力。 | 无 | `optional` | `required_when_declared` | `default`：远端 `streamable_http` MCP；不需要本地凭据，健康检查按连接探针汇总。 | 未声明必需时连接异常为 `degraded`；声明必需时为 `blocked`。 | “火车 / 高铁实时查询暂不可用，车次和余票需到官方渠道复核。” |
+| `VariFlight-Aviation` | VariFlight（飞常准）航班候选查询补充能力。 | `VARIFLIGHT_API_KEY` | `optional` | `required_when_declared` | `default`：远端 `streamable_http` MCP；启动快照记录配置，健康检查按探针结果汇总。 | 未声明必需时凭据缺失或连接异常为 `degraded`；声明必需时为 `blocked`。 | “航班实时查询暂不可用，航班时刻、价格和库存需复核。” |
+| `aigohotel-mcp` | 酒店候选、详情和搜索标签补充能力。 | `AIGOHOTEL_API_KEY`、`AIGOHOTEL_MCP_API`、`AIGOHOTEL_SECRET_KEY` | `optional` | `required_when_declared` | `on_demand_optional`：有任一酒店凭据才注册，且不进入默认启动预热集合。 | 未配置且未声明必需时为 `skipped`；已配置但凭据 / 连接异常时为 `degraded`；声明必需且缺失时为 `blocked`。 | “酒店实时查询暂不可用，不承诺库存、价格或可订状态。” |
+
+`/health/ready` 和运行时 readiness（就绪检查）使用同一套展示语义：`healthy` 说明配置和探针满足当前场景；`skipped` 说明可选能力未配置且当前场景未声明必需；`degraded` 说明核心路径可继续但外部能力缺失、未探测或异常；`blocked` 只用于 required 场景，即验收用例声明该 MCP 服务必须可用但服务未配置、凭据缺失或探针失败。
+
+当前 MCP 失败口径：
+
+- 未知 MCP server：默认跳过并记录 warning（警告日志），不动态加载未登记服务，不把未知工具视作可执行能力。
+- 必需场景缺失：当验收场景声明某 MCP 服务必需，但配置或凭据缺失时，`service_health` 标记为 `blocked`。
+- 可选服务缺失：未声明必需的可选服务标记为 `skipped` 或 `degraded`，报告中只能写“待二次核验”。
+- 工具执行失败：`guard_mcp_tool()` 统一输出 `tool_audit_events` artifact（附加产物），状态进入 `failed`、`timeout`、`degraded` 或 `skipped`。
+- 错误脱敏：MCP 错误、审计摘要和 URL query 参数统一经过 `redact_sensitive_text()`，例如 `?key=...`、`?api_key=...`、`access_token=...` 会替换为 `[REDACTED]`。
+
+这意味着展示或报告只能引用“服务异常 / 参数不足 / 需核验”等公开口径，不能展示原始第三方 URL 密钥、HTTP token（访问令牌）、手机号、邮箱、身份证号或真实用户身份信息。
+
 ## 高风险动作边界
 
 当前项目仍不接入真实支付、真实下单、短信发送、客服链接或供应链履约。
@@ -129,6 +158,7 @@
 新增或强化的保护点：
 
 - `tests/test_tool_audit_governance.py`：验证审批状态、MCP 包装、目的地 Router 审计、治理分类器，以及 `empty_transport_result` 的“未查到且非崩溃”公开语义。
+- `tests/test_mcp_client_config_unit.py`：验证 MCP 服务健康表、未知服务策略，以及 MCP URL query 密钥和错误信息脱敏。
 - `tests/test_travel_agent_tool_registry.py`：验证 Travel Agent 注册工具全量有治理分类。
 - `tests/test_flight_query_tool.py`、`tests/test_train_query_tool.py`、`tests/test_driving_query_tool.py`：验证交通子查询工具保持兼容并走治理包装。
 - `tests/test_hotel_query_tool.py`、`tests/test_transport_query_tool.py`：继续保护酒店和交通顶层真实查询的失败兜底与审计事件。

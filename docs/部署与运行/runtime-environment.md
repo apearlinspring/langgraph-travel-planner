@@ -81,9 +81,24 @@ RAG_INTERNAL_COLLECTION_NAME=agency_internal_knowledge
 .\.venv\Scripts\python scripts\check_runtime_readiness.py --target staging --check-docker --json
 .\.venv\Scripts\python scripts\check_runtime_readiness.py --target production --json
 .\.venv\Scripts\python scripts\check_runtime_readiness.py --target acceptance --check-backend --base-url http://127.0.0.1:8000 --json
+.\.venv\Scripts\python scripts\check_runtime_readiness.py --target production --json --check-rag-multimodal-e2e
+.\.venv\Scripts\python scripts\check_runtime_dependency_scope.py --json
+.\.venv\Scripts\python scripts\check_production_image_build_policy.py --json
+.\.venv\Scripts\python scripts\check_production_image_build_execution_record.py --template
+.\.venv\Scripts\python scripts\prepare_production_image_build_execution.py --ssh-target <ssh-user>@<server-host> --deploy-dir <deploy-dir> --build-id <build-id> --release-label <release-label> --markdown
 ```
 
 `check_runtime_readiness.py` 不输出密钥值，只输出变量名、状态和修复方向。带 `--check-docker` 时会额外检查 Docker Desktop（Docker 桌面运行环境）、Docker daemon（后台服务）和 Docker Compose（容器编排）插件；如果 Docker Desktop 未运行，报告必须是 blocked（环境阻塞），不能把本地依赖启动伪装成通过。
+
+带 `--check-rag-multimodal-e2e` 时会额外执行 RAG（检索增强生成）多模态端到端验收：准备好的图片、音频和视频样例会进入临时向量库，再通过检索链路确认能召回。该开关需要真实 LLM（大语言模型）密钥、可用 `ffmpeg` / `faster-whisper` 和 `.runtime` 下的本地样例，默认 CI（持续集成）不要启用；一旦显式启用，失败会让整体 readiness blocked（环境阻塞）。
+
+`check_runtime_dependency_scope.py` 是生产镜像依赖范围门禁。它只读 `pyproject.toml`、`requirements.runtime.txt` 和 `Dockerfile` 这类显式输入，不读取 `.env`、`.runtime/`、日志、向量库或已安装包。默认 API 镜像只能安装 runtime-only requirements（仅运行时依赖）；`pytest` / `pytest-asyncio` 留在 dev dependency group（开发依赖组），`faster-whisper`、`imageio-ffmpeg` 和 `sentence-transformers` 留在 optional profile（可选能力组合）。如果这些包、`torch`、`triton`、`nvidia-*` 或 `av` 重新进入 `requirements.runtime.txt`，或者生产 Dockerfile 又安装完整 `requirements.txt`，报告必须是 blocked（环境阻塞）。
+
+`check_production_image_build_policy.py` 是生产镜像构建策略门禁。它不运行 Docker、不连接 SSH（安全外壳远程连接）、不启动服务、不删除 Docker 资源、不读取 `.env`，只验证构建策略是否要求：包镜像源通过 `PIP_INDEX_URL` / `PIP_TRUSTED_HOST` 配置，固定 `COMPOSE_PROJECT_NAME`（Compose 项目名），远程长时间构建使用后台 wrapper（包装命令），有超时、日志、PID（进程编号）、镜像 ID / size（大小）、`compose ps` 和 `/health/ready` 证据，并明确禁止 `docker system prune`、删除 volume（数据卷）、删除 `.env` 和删除向量库。
+
+`check_production_image_build_execution_record.py` 是真实远程后台构建后的执行记录门禁。它只验证私有 JSON（结构化文本）记录，不运行 Docker、不连接 SSH、不读取 `.env`、不查看原始日志。通过时只说明某一次构建窗口已经记录后台执行、runtime-only 依赖输入、镜像 ID / size、磁盘与运行时数据安全边界、`compose ps`、`/health/live` 和 `/health/ready`；不能替代镜像漏洞扫描、长期构建稳定性或真实业务履约。
+
+`prepare_production_image_build_execution.py` 是远程后台构建启动器。默认 dry-run（预演）只生成脱敏执行计划，不连接 SSH、不运行 Docker；只有显式 `--execute --approval-token APPROVE_PRODUCTION_IMAGE_BUILD_EXECUTION` 才会在服务器后台启动 `deploy/update-runtime-image.sh`。启动成功不等于构建通过，必须等后台任务完成后填写并校验执行记录。运行时镜像刷新脚本默认使用 `ZHIXING_COMPOSE_PROJECT_NAME=langgraph-travel-planner`，防止从 `current` release 目录运行时产生新的 Compose project 并撞固定容器名。
 
 ## Local / Staging 基线
 
@@ -111,6 +126,11 @@ RAG_INTERNAL_COLLECTION_NAME=agency_internal_knowledge
 | CI（持续集成） | `python scripts/check_runtime_readiness.py --target development --json` | 只使用测试占位值，不读取真实密钥 | 合并前证明配置契约和脚本入口可重复运行 |
 | 本地 staging（预生产）依赖启动 | `scripts\check_runtime_readiness.py --target staging --check-docker --json` | 真实值通过本地 `.env` 注入；Docker Desktop 未运行必须 blocked | 启动 PostgreSQL 和 Redis 前确认 Docker 闭环 |
 | acceptance（验收）preflight（预检） | `scripts\run_evaluation_scenarios.py --acceptance-core --preflight-only --json` | 必需项必须是真实值；缺失返回 blocked（环境阻塞） | 不消耗真实对话配额地检查验收条件 |
+| production image dependency scope（生产镜像依赖范围） | `scripts\check_runtime_dependency_scope.py --json` | 不读取真实密钥，只检查默认依赖、`requirements.runtime.txt` 和 Dockerfile | 阻止测试框架、多模态深门禁、GPU/model 重依赖进入默认 API 镜像 |
+| production image build policy（生产镜像构建策略） | `scripts\check_production_image_build_policy.py --json` | 不读取真实密钥，只检查构建策略和公开脚本契约 | 约束镜像源、Compose project 固定、后台构建、日志证据、磁盘保护和禁止清理边界 |
+| production image build execution（生产镜像构建执行记录） | `scripts\check_production_image_build_execution_record.py --record-json <private-workdir>\production-image-build-execution-record.local.json --json` | 只读私有记录，不读取 `.env` 或原始日志 | 验收一次真实远程后台构建的耗时、镜像 ID、镜像大小、健康探针和安全边界 |
+| production image build starter（生产镜像构建启动器） | `scripts\prepare_production_image_build_execution.py --ssh-target ... --deploy-dir ... --markdown` | dry-run 不连 SSH；execute 需要 approval token | 启动远程后台构建任务并生成后续执行记录所需的私有证据位置 |
+| RAG multimodal deep gate（多模态深门禁） | `scripts\check_runtime_readiness.py --target production --json --check-rag-multimodal-e2e` | 必须使用真实模型密钥和本地样例；不放默认 CI | 发布涉及图片、音频、视频抽取或召回时证明完整链路 |
 | staging（预生产）live acceptance（在线验收） | `scripts\run_evaluation_scenarios.py --acceptance-core --base-url <staging-url>` | 真实密钥通过部署环境注入 | 手动触发真实链路验收 |
 | production（生产）readiness（就绪） | `scripts\check_runtime_readiness.py --target production --json` | 必需项必须是真实值，不允许 placeholder（占位） | 发布前检查配置、RAG（检索增强生成）向量库和安全边界 |
 

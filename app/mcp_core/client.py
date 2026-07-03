@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
 from app.config import has_configured_value, has_real_env_value
+from app.utils.security import redact_sensitive_text
 from app.utils.logger import app_logger
 
 load_dotenv()
@@ -494,7 +495,9 @@ class MCPClientManager:
         valid_servers = []
         for server in target_servers:
             if server not in self.SERVER_CONFIGS:
-                app_logger.warning(f"Skipping unknown MCP server: {server}")
+                app_logger.warning(
+                    f"Skipping unknown MCP server: {redact_sensitive_text(str(server))}"
+                )
                 continue
             valid_servers.append(server)
         return valid_servers
@@ -510,7 +513,9 @@ class MCPClientManager:
     async def session(self, server: str) -> AsyncIterator[Any]:
         """Open a single MCP session for callers that need multiple tool calls."""
         if server not in self.SERVER_CONFIGS:
-            raise ValueError(f"Unknown MCP server: {server}")
+            raise ValueError(
+                f"Unknown MCP server: {redact_sensitive_text(str(server))}"
+            )
 
         client = self._get_or_create_client(server)
         try:
@@ -540,7 +545,7 @@ class MCPClientManager:
         if exc is None:
             return "unknown error"
         message = str(exc).strip()
-        return message or exc.__class__.__name__
+        return redact_sensitive_text(message or exc.__class__.__name__)
 
     async def _load_server_tools(self, server: str, *, force_refresh: bool = False) -> list[Any]:
         return await self._load_server_tools_with_overrides(

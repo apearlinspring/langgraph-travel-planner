@@ -2,6 +2,7 @@
 RAG 检索工具
 将 Advanced RAG 管道封装为 Agent 可自主调用的工具
 """
+import json
 from pathlib import Path
 from typing import Optional
 from langchain.tools import ToolRuntime, tool
@@ -79,6 +80,7 @@ _DESTINATION_ALIASES = {
     "马尔代夫": ("马尔代夫", "maldives"),
 }
 RAG_TOOL_TIMEOUT_SECONDS = 20.0
+RAG_QUERY_STRATEGY = "local_multi_query"
 
 
 def _has_existing_vectorstore(persist_directory: str) -> bool:
@@ -116,7 +118,7 @@ def _create_pipeline(
     persist_directory: str,
     collection_name: str,
     label: str,
-    query_strategy: str = "original",
+    query_strategy: str = RAG_QUERY_STRATEGY,
 ) -> tuple[AdvancedRAGPipeline, AdvancedParentDocumentSplitter]:
     """从文档集合创建或加载一条 RAG 管道。"""
 
@@ -171,7 +173,7 @@ async def _get_rag_pipeline() -> AdvancedRAGPipeline:
             persist_directory=settings.rag_vectorstore_path,
             collection_name=settings.rag_collection_name,
             label="公开攻略 RAG",
-            query_strategy="original",
+            query_strategy=RAG_QUERY_STRATEGY,
         )
 
         app_logger.info("✅ RAG 管道初始化完成")
@@ -202,7 +204,7 @@ async def _get_internal_rag_pipeline() -> AdvancedRAGPipeline:
             persist_directory=settings.rag_internal_vectorstore_path,
             collection_name=settings.rag_internal_collection_name,
             label="旅行社内部知识库 RAG",
-            query_strategy="original",
+            query_strategy=RAG_QUERY_STRATEGY,
         )
 
         app_logger.info("✅ 旅行社内部知识库 RAG 管道初始化完成")
@@ -225,6 +227,33 @@ def _format_rag_results(
         visibility=visibility,
         empty_message=empty_message,
         include_product_directions=include_product_directions,
+    )
+
+
+def _log_rag_retrieval_trace(
+    *,
+    pipeline: AdvancedRAGPipeline,
+    tool_label: str,
+    visibility: str,
+    query: str,
+    result_count: int,
+    expected_category: str | None = None,
+    requested_destinations: set[str] | None = None,
+) -> None:
+    trace = dict(getattr(pipeline, "last_trace", {}) or {})
+    trace.update(
+        {
+            "tool_label": tool_label,
+            "visibility": visibility,
+            "expected_category": expected_category,
+            "requested_destinations": sorted(requested_destinations or ()),
+            "returned_document_count": result_count,
+            "query_preview": query[:120],
+        }
+    )
+    app_logger.info(
+        "RAG retrieval trace: "
+        + json.dumps(trace, ensure_ascii=False, default=str, sort_keys=True)
     )
 
 
@@ -374,9 +403,25 @@ async def _retrieve_public(query: str, enhanced_query: str | None = None) -> str
                 "公开攻略 RAG 未命中查询目的地，已拦截不匹配内容: "
                 f"{query} -> {sorted(requested_destinations)}"
             )
+            _log_rag_retrieval_trace(
+                pipeline=pipeline,
+                tool_label="public_rag",
+                visibility="public",
+                query=query,
+                result_count=0,
+                requested_destinations=requested_destinations,
+            )
             return _format_public_destination_gap(query, requested_destinations)
         documents = matched_documents
 
+    _log_rag_retrieval_trace(
+        pipeline=pipeline,
+        tool_label="public_rag",
+        visibility="public",
+        query=query,
+        result_count=len(documents),
+        requested_destinations=requested_destinations,
+    )
     return _format_rag_results(documents, query, visibility="public")
 
 
@@ -405,6 +450,14 @@ async def _retrieve_internal(
             f"内部知识库暂未命中「{expected_category}」类证据。"
             "为避免跨类别误用，我没有返回其他内部资料；请基于已确认信息给出保守建议。"
         )
+    _log_rag_retrieval_trace(
+        pipeline=pipeline,
+        tool_label="internal_rag",
+        visibility="internal",
+        query=query,
+        result_count=len(documents),
+        expected_category=expected_category,
+    )
     return _format_rag_results(
         documents,
         query,

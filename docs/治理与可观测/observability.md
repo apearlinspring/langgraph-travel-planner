@@ -14,6 +14,8 @@
 - 本轮是否走了轻量快路径，没有创建完整 Travel Agent（旅行智能体）或加载 MCP（模型上下文协议）工具。
 - 完整 Agent 流是否触发事件空闲超时，避免前端无限等待。
 
+相关的 AgentOps（智能体运行运营与治理）回放和版本记录口径见 [AgentOps 轻量回放与版本记录](agentops-replay-versioning.md)。该文档只把当前能力定义为 turn（单轮对话）级安全摘要复盘，不声明完整 OpenTelemetry（开放遥测标准）或分布式 trace（链路追踪）能力。
+
 ## 运行时契约
 
 核心代码在 `app/core/observability.py`：

@@ -40,6 +40,8 @@ from app.models.migration_contract import (  # noqa: E402
 READINESS_REPORT_VERSION = "runtime_readiness_report.v1"
 DATABASE_MIGRATION_READINESS_VERSION = "database_migration_readiness.v1"
 DOCKER_COMPOSE_READINESS_VERSION = "docker_compose_readiness.v1"
+RAG_MULTIMODAL_E2E_READINESS_VERSION = "rag_multimodal_e2e_readiness.v1"
+RAG_MIXED_CORPUS_SAFETY_READINESS_VERSION = "rag_mixed_corpus_safety_readiness.v1"
 DEFAULT_BASE_URL = "http://127.0.0.1:8000"
 READINESS_TARGETS = ("development", "staging", "acceptance", "production")
 READINESS_TARGET_ALIASES = {"local": "development"}
@@ -60,6 +62,12 @@ ALEMBIC_CONFIG_PATH = PROJECT_ROOT / "alembic.ini"
 ALEMBIC_SCRIPT_PATH = PROJECT_ROOT / "alembic"
 ALEMBIC_VERSION_PATH = ALEMBIC_SCRIPT_PATH / "versions"
 DOCKER_TIMEOUT_SECONDS = 8
+RAG_MULTIMODAL_E2E_READINESS_COMMAND = (
+    ".\\.venv\\Scripts\\python scripts\\check_rag_multimodal_readiness.py --json --check-e2e"
+)
+RAG_MIXED_CORPUS_SAFETY_READINESS_COMMAND = (
+    ".\\.venv\\Scripts\\python scripts\\evaluate_rag_retrieval.py --mixed-corpus-safety --top-k 3 --json"
+)
 
 DEPENDENCY_REPAIR_SUGGESTIONS: dict[str, dict[str, str]] = {
     "postgresql": {
@@ -486,6 +494,170 @@ def build_docker_compose_readiness_report(*, check: bool = False) -> dict[str, A
     return report
 
 
+def build_rag_multimodal_e2e_readiness_report(*, check: bool = False) -> dict[str, Any]:
+    """Optionally run the live RAG multimodal vector-store acceptance check."""
+
+    report: dict[str, Any] = {
+        "version": RAG_MULTIMODAL_E2E_READINESS_VERSION,
+        "status": "not_checked",
+        "checked": check,
+        "requires_real_llm": True,
+        "requires_runtime_samples": True,
+        "commands": {
+            "check": RAG_MULTIMODAL_E2E_READINESS_COMMAND,
+            "prepare_samples": (
+                "Prepare image/audio/video samples under "
+                ".runtime\\rag_web_acceptance\\documents\\destinations"
+            ),
+        },
+        "findings": [],
+        "blocked_reasons": [],
+        "repair_suggestions": [],
+    }
+    if not check:
+        return report
+
+    try:
+        from scripts.check_rag_multimodal_readiness import (
+            build_rag_multimodal_readiness_report,
+        )
+
+        readiness = build_rag_multimodal_readiness_report(check_e2e=True)
+    except Exception as exc:
+        report["status"] = "blocked"
+        finding = (
+            "RAG multimodal e2e readiness failed before producing a report: "
+            f"{exc.__class__.__name__}: {exc}"
+        )
+        report["findings"].append(finding)
+        _append_blocker(
+            report,
+            key="rag_multimodal_e2e_exception",
+            label="RAG multimodal e2e acceptance",
+            reason=finding,
+            action=(
+                "Check multimodal runtime dependencies, sample files, real DASHSCOPE_API_KEY, "
+                "ffmpeg and faster-whisper, then rerun the deep readiness check."
+            ),
+            command=RAG_MULTIMODAL_E2E_READINESS_COMMAND,
+            target="rag_multimodal_e2e",
+        )
+        return report
+
+    e2e_acceptance = readiness.get("e2e_acceptance") or {}
+    e2e_passed = bool(e2e_acceptance.get("passed")) if isinstance(e2e_acceptance, Mapping) else False
+    report["readiness"] = readiness
+    report["e2e_acceptance"] = e2e_acceptance
+    report["findings"] = list(readiness.get("findings") or [])
+    if e2e_passed and readiness.get("status") == "passed":
+        report["status"] = "passed"
+        return report
+
+    report["status"] = "blocked"
+    reason = (
+        "RAG multimodal e2e acceptance did not pass; "
+        f"readiness={readiness.get('status')}, e2e={e2e_acceptance.get('status') if isinstance(e2e_acceptance, Mapping) else 'missing'}."
+    )
+    report["findings"].append(reason)
+    _append_blocker(
+        report,
+        key="rag_multimodal_e2e",
+        label="RAG multimodal e2e acceptance",
+        reason=reason,
+        action=(
+            "Prepare runtime samples, configure real multimodal extraction dependencies, "
+            "then rerun the RAG multimodal e2e readiness check."
+        ),
+        command=RAG_MULTIMODAL_E2E_READINESS_COMMAND,
+        target="rag_multimodal_e2e",
+    )
+    return report
+
+
+def build_rag_mixed_corpus_safety_readiness_report(*, check: bool = True) -> dict[str, Any]:
+    """Run the deterministic public-vs-internal RAG safety gate."""
+
+    report: dict[str, Any] = {
+        "version": RAG_MIXED_CORPUS_SAFETY_READINESS_VERSION,
+        "status": "not_checked",
+        "checked": check,
+        "requires_real_llm": False,
+        "requires_vectorstore": False,
+        "commands": {
+            "check": RAG_MIXED_CORPUS_SAFETY_READINESS_COMMAND,
+        },
+        "findings": [],
+        "blocked_reasons": [],
+        "repair_suggestions": [],
+    }
+    if not check:
+        return report
+
+    try:
+        from app.evaluation.rag_retrieval import (
+            evaluate_rag_mixed_corpus_safety,
+            rag_mixed_corpus_safety_failures,
+        )
+
+        result = evaluate_rag_mixed_corpus_safety(top_k_values=(3,))
+        failures = rag_mixed_corpus_safety_failures(result)
+    except Exception as exc:
+        report["status"] = "blocked"
+        finding = (
+            "RAG mixed-corpus safety gate failed before producing a report: "
+            f"{exc.__class__.__name__}: {exc}"
+        )
+        report["findings"].append(finding)
+        _append_blocker(
+            report,
+            key="rag_mixed_corpus_safety_exception",
+            label="RAG mixed-corpus safety gate",
+            reason=finding,
+            action=(
+                "Repair deterministic RAG retrieval fixtures or evaluation code, "
+                "then rerun the mixed-corpus safety gate."
+            ),
+            command=RAG_MIXED_CORPUS_SAFETY_READINESS_COMMAND,
+            target="rag_mixed_corpus_safety",
+        )
+        return report
+
+    report["scenario_count"] = result.scenario_count
+    report["document_count"] = result.document_count
+    report["top_k_values"] = result.top_k_values
+    report["summaries"] = [summary.to_dict() for summary in result.summaries]
+    report["failed_scenarios"] = failures
+    if failures:
+        report["status"] = "blocked"
+        reason = (
+            "RAG mixed-corpus safety gate failed: public scenarios returned "
+            f"{len(failures)} unsafe or incomplete retrieval result(s)."
+        )
+        report["findings"].append(reason)
+        _append_blocker(
+            report,
+            key="rag_mixed_corpus_safety",
+            label="RAG mixed-corpus safety gate",
+            reason=reason,
+            action=(
+                "Review forbidden public/internal visibility metadata and retrieval filters, "
+                "then rerun the mixed-corpus safety gate."
+            ),
+            command=RAG_MIXED_CORPUS_SAFETY_READINESS_COMMAND,
+            target="rag_mixed_corpus_safety",
+        )
+        return report
+
+    report["status"] = "passed"
+    report["findings"].append(
+        (
+            f"{result.scenario_count} public safety scenario(s) passed across "
+            f"{result.document_count} mixed-corpus document(s)."
+        )
+    )
+    return report
+
+
 def _dependency_status_counts(dependencies: Mapping[str, dict[str, Any]]) -> dict[str, int]:
     counts: dict[str, int] = {}
     for dependency in dependencies.values():
@@ -651,6 +823,8 @@ def _collect_report_blockers(
     target_results: Mapping[str, Mapping[str, Any]],
     database_migrations: Mapping[str, Any],
     docker_compose: Mapping[str, Any],
+    rag_mixed_corpus_safety: Mapping[str, Any],
+    rag_multimodal_e2e: Mapping[str, Any],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     blocked_reasons: list[dict[str, Any]] = []
     repair_suggestions: list[dict[str, Any]] = []
@@ -668,6 +842,8 @@ def _collect_report_blockers(
     for section_name, section in (
         ("database_migrations", database_migrations),
         ("docker_compose", docker_compose),
+        ("rag_mixed_corpus_safety", rag_mixed_corpus_safety),
+        ("rag_multimodal_e2e", rag_multimodal_e2e),
     ):
         for issue in section.get("blocked_reasons") or []:
             payload = dict(issue)
@@ -701,6 +877,8 @@ def build_runtime_readiness_report(
     dotenv_path: Path | None = None,
     check_backend: bool = False,
     check_docker: bool = False,
+    check_rag_mixed_corpus_safety: bool = True,
+    check_rag_multimodal_e2e: bool = False,
 ) -> dict[str, Any]:
     """Build a redacted readiness report for development, acceptance, and production."""
 
@@ -747,11 +925,21 @@ def build_runtime_readiness_report(
     }
     database_migrations = build_database_migration_readiness_report()
     docker_compose = build_docker_compose_readiness_report(check=check_docker)
+    rag_mixed_corpus_safety = build_rag_mixed_corpus_safety_readiness_report(
+        check=check_rag_mixed_corpus_safety
+    )
+    rag_multimodal_e2e = build_rag_multimodal_e2e_readiness_report(
+        check=check_rag_multimodal_e2e
+    )
     if any(status == "blocked" for status in statuses.values()):
         overall_status = "blocked"
     elif database_migrations["status"] == "blocked":
         overall_status = "blocked"
     elif docker_compose["status"] == "blocked":
+        overall_status = "blocked"
+    elif rag_mixed_corpus_safety["status"] == "blocked":
+        overall_status = "blocked"
+    elif rag_multimodal_e2e["status"] == "blocked":
         overall_status = "blocked"
     elif any(status == "skipped" for status in statuses.values()):
         overall_status = "skipped"
@@ -763,6 +951,8 @@ def build_runtime_readiness_report(
         target_results=target_results,
         database_migrations=database_migrations,
         docker_compose=docker_compose,
+        rag_mixed_corpus_safety=rag_mixed_corpus_safety,
+        rag_multimodal_e2e=rag_multimodal_e2e,
     )
 
     return {
@@ -779,6 +969,8 @@ def build_runtime_readiness_report(
         "target_readiness_statuses": readiness_statuses,
         "database_migrations": database_migrations,
         "docker_compose": docker_compose,
+        "rag_mixed_corpus_safety": rag_mixed_corpus_safety,
+        "rag_multimodal_e2e": rag_multimodal_e2e,
         "dependency_matrix": {
             key: spec.to_dict(settings.runtime_environment)
             for key, spec in dependency_specs_by_key().items()
@@ -825,6 +1017,55 @@ def _render_human(report: dict[str, Any]) -> str:
             )
     else:
         lines.append("- Findings: not checked; add --check-docker for local/staging bootstrap.")
+    lines.append("")
+    rag_mixed_corpus_safety = report.get("rag_mixed_corpus_safety") or {}
+    lines.append(f"## rag mixed-corpus safety: {rag_mixed_corpus_safety.get('status')}")
+    if rag_mixed_corpus_safety.get("checked"):
+        findings = rag_mixed_corpus_safety.get("findings") or []
+        lines.append("- Findings: " + ("; ".join(findings) if findings else "-"))
+        summaries = rag_mixed_corpus_safety.get("summaries") or []
+        if summaries:
+            summary_bits = [
+                (
+                    f"{item.get('strategy')}@{item.get('top_k')}: "
+                    f"safety={item.get('safety_pass_rate')}, source={item.get('source_recall')}"
+                )
+                for item in summaries
+            ]
+            lines.append("- Summary: " + " | ".join(summary_bits))
+        if rag_mixed_corpus_safety.get("repair_suggestions"):
+            lines.append(
+                "- Next steps: "
+                + " | ".join(
+                    _render_suggestion(item)
+                    for item in rag_mixed_corpus_safety.get("repair_suggestions") or []
+                )
+            )
+    else:
+        lines.append(
+            "- Findings: not checked; this deterministic gate is enabled by default."
+        )
+    lines.append("")
+    rag_multimodal_e2e = report.get("rag_multimodal_e2e") or {}
+    lines.append(f"## rag multimodal e2e: {rag_multimodal_e2e.get('status')}")
+    if rag_multimodal_e2e.get("checked"):
+        findings = rag_multimodal_e2e.get("findings") or []
+        lines.append("- Findings: " + ("; ".join(findings) if findings else "-"))
+        e2e_acceptance = rag_multimodal_e2e.get("e2e_acceptance") or {}
+        if e2e_acceptance:
+            lines.append(f"- E2E acceptance: {e2e_acceptance.get('status')}")
+        if rag_multimodal_e2e.get("repair_suggestions"):
+            lines.append(
+                "- Next steps: "
+                + " | ".join(
+                    _render_suggestion(item)
+                    for item in rag_multimodal_e2e.get("repair_suggestions") or []
+                )
+            )
+    else:
+        lines.append(
+            "- Findings: not checked; add --check-rag-multimodal-e2e for release deep gate."
+        )
     lines.append("")
     for target, result in report["targets"].items():
         lines.append(f"## {target}: {result['status']} ({result.get('readiness_status')})")
@@ -918,6 +1159,22 @@ def main() -> int:
         help="Also require Docker Desktop and Docker Compose for local/staging dependency bootstrap.",
     )
     parser.add_argument(
+        "--check-rag-multimodal-e2e",
+        action="store_true",
+        help=(
+            "Also run the live RAG multimodal vector-store acceptance check under .runtime. "
+            "This requires real LLM credentials and prepared local samples."
+        ),
+    )
+    parser.add_argument(
+        "--skip-rag-mixed-corpus-safety",
+        action="store_true",
+        help=(
+            "Skip the deterministic RAG public-vs-internal mixed-corpus safety gate. "
+            "The gate is checked by default."
+        ),
+    )
+    parser.add_argument(
         "--json",
         action="store_true",
         help="Print machine-readable JSON.",
@@ -930,6 +1187,8 @@ def main() -> int:
         dotenv_path=args.env_file,
         check_backend=args.check_backend,
         check_docker=args.check_docker,
+        check_rag_mixed_corpus_safety=not args.skip_rag_mixed_corpus_safety,
+        check_rag_multimodal_e2e=args.check_rag_multimodal_e2e,
     )
     if args.json:
         print(json.dumps(report, ensure_ascii=False, indent=2))

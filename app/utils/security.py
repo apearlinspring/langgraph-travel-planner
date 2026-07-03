@@ -70,6 +70,10 @@ API_KEY_PATTERN = re.compile(
     r"\b(?:sk|rk|pk|ak|dashscope|amap|tavily)[-_][A-Za-z0-9][A-Za-z0-9_-]{10,}\b",
     re.IGNORECASE,
 )
+URL_QUERY_SECRET_PATTERN = re.compile(
+    r"(?i)([?&](?:api[_-]?key|apikey|key|access[_-]?token|refresh[_-]?token|"
+    r"token|secret|password|authorization)=)([^&#\s]+)"
+)
 
 
 def is_sensitive_key(key: object) -> bool:
@@ -89,6 +93,10 @@ def redact_sensitive_text(text: str) -> str:
     if not text:
         return text
     redacted = str(text)
+    redacted = URL_QUERY_SECRET_PATTERN.sub(
+        lambda match: f"{match.group(1)}{REDACTED_VALUE}",
+        redacted,
+    )
     redacted = SECRET_ASSIGNMENT_PATTERN.sub(
         lambda match: f"{match.group(1)}={REDACTED_VALUE}",
         redacted,

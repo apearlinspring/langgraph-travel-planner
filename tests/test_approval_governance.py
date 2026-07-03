@@ -421,7 +421,12 @@ def test_generate_order_tool_records_non_blocking_governance_boundary():
     assert report_data["evidence_bundle"]["approval_governance"] == approval_summary
     assert "审批治理" not in update["report"]
     assert "approval_governance" in report_data["evidence_bundle"]
+    mock_checkout = report_data["evidence_bundle"]["m1_mock_checkout"]
+    assert mock_checkout["checkout_url"].startswith("/api/v1/mock-checkout/ORDER-")
+    assert mock_checkout["real_payment"] is False
+    assert mock_checkout["fulfillment_triggered"] is False
     assert "未来接入真实支付或真实预订时必须先完成人工审批" in update["messages"][0].content
+    assert "M1 模拟确认页" in update["messages"][0].content
     assert "pay.example.com" not in update["messages"][0].content
 
     records = approval_store.list_records(user_id="user-1", action="generate_order_id")

@@ -20,6 +20,9 @@ from app.utils.security import (
 TOOL_LABELS = {
     "query_hotel_options": "住宿",
     "query_transport_options": "交通",
+    "query_flight_options": "航班",
+    "query_train_options": "高铁/火车",
+    "query_driving_route": "自驾路线",
     "getHotelDetail": "住宿详情",
     "getHotelSearchTags": "酒店标签",
     "maps_geo": "地图地理编码",

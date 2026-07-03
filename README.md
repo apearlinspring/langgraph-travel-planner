@@ -19,12 +19,12 @@
 
 - 源码：`app/`、`frontend/`、`scripts/`。
 - 测试与夹具：`tests/`。
-- 依赖和运行定义：`pyproject.toml`、`uv.lock`、`Dockerfile`、`docker-compose.yml`、`deploy/`。
+- 依赖和运行定义：`pyproject.toml`、`uv.lock`、`requirements.runtime.txt`、`Dockerfile`、`docker-compose.yml`、`deploy/`。
 - 脱敏样例知识和评估数据：`data/documents/`、`data/evaluation/`。
 - 正式技术文档：`docs/`。
 - 配置样例：`.env.example`。
 
-仓库不包含真实密钥、本地运行状态、数据库备份、向量库、日志、截图、私有部署坐标、聊天记录、未整理 Prompt（提示词）、面试材料或个人准备资料。
+仓库不包含真实密钥、本地运行状态、数据库备份、向量库、日志、截图、私有部署坐标、聊天记录、未整理 Prompt（提示词）或私人准备资料。
 
 ## 数据库边界
 

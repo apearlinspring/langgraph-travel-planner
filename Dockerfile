@@ -10,7 +10,7 @@ RUN apt-get update && \
         curl && \
     rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt /tmp/requirements.txt
+COPY requirements.runtime.txt /tmp/requirements.runtime.txt
 
 RUN python -m venv /opt/venv && \
     /opt/venv/bin/pip install \
@@ -20,20 +20,8 @@ RUN python -m venv /opt/venv && \
         --timeout 120 \
         --index-url ${PIP_INDEX_URL} \
         --trusted-host ${PIP_TRUSTED_HOST} \
-        -r /tmp/requirements.txt && \
-    rm -f /tmp/requirements.txt
-
-RUN /opt/venv/bin/pip install \
-    --no-cache-dir \
-    --disable-pip-version-check \
-    --retries 10 \
-    --timeout 120 \
-    --index-url ${PIP_INDEX_URL} \
-    --trusted-host ${PIP_TRUSTED_HOST} \
-    langchain-core==1.2.31 \
-    langchain-openai==1.1.7 \
-    langgraph-prebuilt==1.0.5 \
-    uv==0.10.11
+        -r /tmp/requirements.runtime.txt && \
+    rm -f /tmp/requirements.runtime.txt
 
 RUN /opt/venv/bin/python -c "import importlib, importlib.metadata as md; assert md.version('aigohotel-mcp') == '0.3.1'; importlib.import_module('aigohotel_mcp.server')"
 
