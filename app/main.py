@@ -12,7 +12,16 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api.v1 import admin, approvals, chat, conversations, guide_import, maps, users
+from app.api.v1 import (
+    admin,
+    approvals,
+    chat,
+    conversations,
+    guide_import,
+    maps,
+    mock_checkout,
+    users,
+)
 from app.config import (
     RUNTIME_READINESS_VERSION,
     runtime_configuration_snapshot,
@@ -20,6 +29,7 @@ from app.config import (
 )
 from app.core.approval import ApprovalGovernanceManager
 from app.core.checkpointer import CheckpointerManager
+from app.core.rate_limit import ApiRateLimitMiddleware
 from app.core.resilience import capture_runtime_step
 from app.core.session_lock import session_lock_manager
 from app.core.store import StoreManager
@@ -542,6 +552,20 @@ app = FastAPI(
 )
 
 app.add_middleware(
+    ApiRateLimitMiddleware,
+    enabled=settings.api_rate_limit_enabled,
+    requests_per_window=settings.api_rate_limit_requests_per_window,
+    window_seconds=settings.api_rate_limit_window_seconds,
+    backend=settings.api_rate_limit_backend,
+    redis_url=settings.redis_url,
+    key_prefix=settings.api_rate_limit_key_prefix,
+    protected_prefixes=settings.api_rate_limit_protected_prefixes,
+    exempt_paths=settings.api_rate_limit_exempt_paths,
+    local_fallback=settings.api_rate_limit_local_fallback,
+    operation_timeout_seconds=settings.api_rate_limit_redis_operation_timeout_seconds,
+)
+
+app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_allowed_origins,
     allow_credentials=True,
@@ -573,6 +597,7 @@ app.include_router(users.router, prefix="/api/v1")
 app.include_router(conversations.router, prefix="/api/v1")
 app.include_router(guide_import.router, prefix="/api/v1")
 app.include_router(maps.router, prefix="/api/v1")
+app.include_router(mock_checkout.router, prefix="/api/v1")
 app.include_router(approvals.router, prefix="/api/v1")
 app.include_router(admin.router, prefix="/api/v1")
 app.include_router(chat.router, prefix="/api/v1")

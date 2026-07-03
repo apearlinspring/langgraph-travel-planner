@@ -671,6 +671,35 @@ class Settings(BaseSettings):
         alias="SESSION_LOCK_REDIS_RETRY_INTERVAL_SECONDS",
     )
 
+    # ============== API 过载保护配置 ==============
+    api_rate_limit_enabled: bool = Field(default=False, alias="API_RATE_LIMIT_ENABLED")
+    api_rate_limit_backend: str = Field(default="redis", alias="API_RATE_LIMIT_BACKEND")
+    api_rate_limit_requests_per_window: int = Field(
+        default=120,
+        alias="API_RATE_LIMIT_REQUESTS_PER_WINDOW",
+    )
+    api_rate_limit_window_seconds: int = Field(default=60, alias="API_RATE_LIMIT_WINDOW_SECONDS")
+    api_rate_limit_key_prefix: str = Field(
+        default="zhixing:rate_limit",
+        alias="API_RATE_LIMIT_KEY_PREFIX",
+    )
+    api_rate_limit_protected_prefixes_raw: str = Field(
+        default="/api/v1",
+        alias="API_RATE_LIMIT_PROTECTED_PREFIXES",
+    )
+    api_rate_limit_exempt_paths_raw: str = Field(
+        default="",
+        alias="API_RATE_LIMIT_EXEMPT_PATHS",
+    )
+    api_rate_limit_local_fallback: bool = Field(
+        default=False,
+        alias="API_RATE_LIMIT_LOCAL_FALLBACK",
+    )
+    api_rate_limit_redis_operation_timeout_seconds: float = Field(
+        default=0.5,
+        alias="API_RATE_LIMIT_REDIS_OPERATION_TIMEOUT_SECONDS",
+    )
+
     # ============== LangGraph 运行配置 ==============
     langgraph_recursion_limit: int = Field(default=60, alias="LANGGRAPH_RECURSION_LIMIT")
 
@@ -712,6 +741,22 @@ class Settings(BaseSettings):
         if self.redis_password:
             return f"redis://:{self.redis_password}@{self.redis_host}:{self.redis_port}/{self.redis_db}"
         return f"redis://{self.redis_host}:{self.redis_port}/{self.redis_db}"
+
+    @property
+    def api_rate_limit_protected_prefixes(self) -> list[str]:
+        return [
+            value.strip()
+            for value in self.api_rate_limit_protected_prefixes_raw.split(",")
+            if value.strip()
+        ] or ["/api/v1"]
+
+    @property
+    def api_rate_limit_exempt_paths(self) -> list[str]:
+        return [
+            value.strip()
+            for value in self.api_rate_limit_exempt_paths_raw.split(",")
+            if value.strip()
+        ]
 
     @property
     def runtime_environment(self) -> RuntimeEnvironment:
