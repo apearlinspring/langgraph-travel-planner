@@ -94,6 +94,12 @@ async def register(
         db: AsyncSession = Depends(get_db)
 ):
     """用户注册"""
+    if not settings.auth_registration_enabled:
+        raise api_error(
+            status_code=status.HTTP_403_FORBIDDEN,
+            code="registration_disabled",
+            message="当前演示站暂未开放自助注册，请使用已分配的体验账号登录",
+        )
 
     # 检查用户名是否存在
     result = await db.execute(select(User).where(User.username == user_data.username))

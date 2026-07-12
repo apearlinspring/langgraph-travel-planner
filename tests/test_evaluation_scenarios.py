@@ -60,6 +60,17 @@ def test_load_scenarios_accepts_runtime_budget_contract():
     assert "aigohotel" in scenario.requirements["external_apis"]
 
 
+def test_tool_fallback_scenarios_explicitly_allow_bounded_runtime_failures():
+    for scenario_id in ("edge_hotel_tool_fallback", "edge_transport_tool_fallback"):
+        budget = get_scenario(scenario_id).runtime_budget
+
+        assert budget["max_tool_failure_count"] == 16
+        assert budget["max_tool_failure_ratio"] == 1.0
+        assert budget["max_fallback_count"] == 16
+
+    assert "max_tool_failure_count" not in get_scenario("free_weekend_nearby").runtime_budget
+
+
 def test_load_rag_quality_scenarios_has_business_coverage():
     scenarios = load_rag_quality_scenarios()
     scenario_ids = {scenario.id for scenario in scenarios}

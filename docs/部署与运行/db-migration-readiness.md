@@ -9,7 +9,7 @@ Alembic 只管理本项目 `app.models` 下的业务表：
 | 范围 | 表 | 说明 |
 |---|---|---|
 | 用户与会话 | `user`、`conversation`、`message` | 登录用户、旅行规划会话、聊天消息。 |
-| 审批治理 | `approval_request`、`approval_event` | HITL（人类在环）审批请求与只追加审批事件。 |
+| 审批治理 | `approval_request`、`approval_event` | 审批请求与只追加审批事件；这些表只证明审批记录可持久化，不代表 LangGraph `interrupt/resume`（中断/恢复）闭环。 |
 | 工具审计 | `tool_audit_event` | 真实查询工具的脱敏输入摘要、输出摘要、状态和证据类型。 |
 
 LangGraph（图式智能体编排框架）相关表不进入 Alembic 迁移：

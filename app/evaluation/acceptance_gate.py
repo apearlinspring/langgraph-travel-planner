@@ -9,6 +9,13 @@ from typing import Any, Iterable
 
 from app.evaluation.preflight import ACCEPTANCE_STATUSES
 from app.evaluation.scenarios import ACCEPTANCE_CORE_TAG, EvaluationScenario
+from app.evaluation.scoring import (
+    as_dict as _as_dict,
+    as_float as _as_number,
+    as_int as _as_int,
+    as_list as _as_list,
+    has_text as _has_text,
+)
 from app.utils.security import redact_sensitive_text
 
 
@@ -54,6 +61,7 @@ DIMENSION_LABELS = {
     "budget_confidence": "Budget confidence contract",
     "internal_evidence": "Internal evidence references",
     "tool_audit": "Tool audit surface",
+    "evidence_closure": "Acceptance evidence closure",
     "live_run": "Live scenario execution",
     "preflight": "Preflight environment check",
     "environment_dependencies": "Environment dependencies",
@@ -105,6 +113,10 @@ DIMENSION_SUGGESTIONS = {
     "tool_audit": (
         "Inspect tool_audit_summary; it must expose used sources, pending checks, "
         "and unsupported actions."
+    ),
+    "evidence_closure": (
+        "Inspect the saved snapshot and evidence_closure checks; a completed live "
+        "scenario must retain report, budget, risk, verification, and required agency evidence."
     ),
     "live_run": (
         "Inspect the saved snapshot, backend logs, SSE stream events, and the final "
@@ -162,30 +174,6 @@ def acceptance_thresholds_from_dict(
                 raise ValueError(f"Acceptance threshold field {key!r} must be between 0 and 100")
             values[key] = float(value)
     return AcceptanceThresholds(**values)
-
-
-def _as_dict(value: Any) -> dict[str, Any]:
-    return value if isinstance(value, dict) else {}
-
-
-def _as_list(value: Any) -> list[Any]:
-    return value if isinstance(value, list) else []
-
-
-def _as_number(value: Any) -> float | None:
-    if isinstance(value, bool):
-        return None
-    return float(value) if isinstance(value, (int, float)) else None
-
-
-def _as_int(value: Any) -> int | None:
-    if isinstance(value, bool):
-        return None
-    return int(value) if isinstance(value, int) else None
-
-
-def _has_text(value: Any) -> bool:
-    return isinstance(value, str) and bool(value.strip())
 
 
 def _redact_acceptance_artifact(value: Any, *, max_depth: int = 12) -> Any:
@@ -838,6 +826,131 @@ def _result_runtime_metrics(result: dict[str, Any]) -> dict[str, Any]:
     return _as_dict(result.get("runtime_metrics"))
 
 
+def _normalized_result_status(value: Any) -> str | None:
+    status = str(value or "").strip().lower()
+    return status if status in ACCEPTANCE_STATUSES else None
+
+
+def _effective_result_status(result: dict[str, Any]) -> str:
+    """Resolve one result status without trusting any single pass surface."""
+
+    gate = _as_dict(result.get("acceptance_gate"))
+    closure = _as_dict(result.get("evidence_closure"))
+    raw_result_status = str(result.get("status") or "").strip().lower()
+    raw_gate_status = str(gate.get("status") or "").strip().lower()
+    result_status = _normalized_result_status(raw_result_status)
+    gate_status = _normalized_result_status(raw_gate_status)
+
+    if raw_result_status and result_status is None:
+        return "failed"
+    if not gate or gate_status is None:
+        return "failed"
+    if "blocked" in {result_status, gate_status}:
+        return "blocked"
+    if "failed" in {result_status, gate_status}:
+        return "failed"
+    if "degraded" in {result_status, gate_status}:
+        return "degraded"
+    if "skipped" in {result_status, gate_status}:
+        return "skipped"
+
+    return (
+        "passed"
+        if result.get("passed") is True
+        and gate.get("passed") is True
+        and result_status in {None, "passed"}
+        and gate_status == "passed"
+        and closure.get("passed") is True
+        else "failed"
+    )
+
+
+def _run_contract_failure(
+    result: dict[str, Any],
+    *,
+    dimension: str,
+    findings: list[str],
+) -> dict[str, Any]:
+    return {
+        "scenario_id": str(result.get("scenario_id") or "-"),
+        "scenario_name": str(result.get("scenario_name") or result.get("scenario_id") or "-"),
+        "dimension": dimension,
+        "dimension_label": DIMENSION_LABELS[dimension],
+        "status": "failed",
+        "score": 0.0,
+        "threshold": 100.0,
+        "findings": findings,
+        "suggestion": DIMENSION_SUGGESTIONS[dimension],
+    }
+
+
+def _result_contract_failures(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Fail closed when result, gate, and evidence-closure surfaces disagree."""
+
+    failures: list[dict[str, Any]] = []
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        gate = _as_dict(result.get("acceptance_gate"))
+        closure = _as_dict(result.get("evidence_closure"))
+        raw_result_status = str(result.get("status") or "").strip().lower()
+        raw_gate_status = str(gate.get("status") or "").strip().lower()
+        result_status = _normalized_result_status(raw_result_status)
+        gate_status = _normalized_result_status(raw_gate_status)
+
+        live_findings: list[str] = []
+        if not gate:
+            live_findings.append("result.acceptance_gate is missing")
+        elif gate_status is None:
+            live_findings.append("result.acceptance_gate.status is missing or invalid")
+        elif gate.get("passed") is not (gate_status == "passed"):
+            live_findings.append("result.acceptance_gate passed/status fields are inconsistent")
+        if raw_result_status and result_status is None:
+            live_findings.append("result.status is invalid")
+        if result_status == "passed" and result.get("passed") is not True:
+            live_findings.append("result.status is passed but result.passed is not true")
+        if result.get("passed") is True and result_status not in {None, "passed"}:
+            live_findings.append("result.passed is true but result.status is not passed")
+        if gate_status == "passed" and result.get("passed") is not True:
+            live_findings.append("acceptance_gate passed but the effective scenario result did not pass")
+        if live_findings:
+            failures.append(
+                _run_contract_failure(
+                    result,
+                    dimension="live_run",
+                    findings=live_findings,
+                )
+            )
+
+        pass_claimed = (
+            result.get("passed") is True
+            or result_status == "passed"
+            or gate.get("passed") is True
+            or gate_status == "passed"
+        )
+        if not pass_claimed:
+            continue
+        if not closure:
+            closure_findings = ["result.evidence_closure is missing for a completed scenario"]
+        elif closure.get("passed") is not True:
+            missing = [str(item) for item in _as_list(closure.get("missing")) if str(item)]
+            closure_findings = [
+                "result.evidence_closure did not pass"
+                + (f"; missing={', '.join(missing)}" if missing else "")
+            ]
+        else:
+            closure_findings = []
+        if closure_findings:
+            failures.append(
+                _run_contract_failure(
+                    result,
+                    dimension="evidence_closure",
+                    findings=closure_findings,
+                )
+            )
+    return failures
+
+
 def _acceptance_runtime_totals(results: list[dict[str, Any]]) -> dict[str, Any]:
     total_elapsed = 0.0
     elapsed_count = 0
@@ -889,6 +1002,11 @@ def _acceptance_runtime_totals(results: list[dict[str, Any]]) -> dict[str, Any]:
         "average_elapsed_seconds": round(total_elapsed / elapsed_count, 3) if elapsed_count else None,
         "tool_call_count": total_tool_calls,
         "tool_failure_count": total_tool_failures,
+        "tool_failure_ratio": (
+            round(total_tool_failures / total_tool_calls, 4)
+            if total_tool_calls
+            else (1.0 if total_tool_failures else 0.0)
+        ),
         "fallback_count": total_fallbacks,
         "estimated_input_tokens": total_input_tokens,
         "estimated_output_tokens": total_output_tokens,
@@ -1072,8 +1190,9 @@ def build_acceptance_run_summary(
             }
         )
 
+    effective_statuses = [_effective_result_status(result) for result in results]
     status_counts = {
-        status: sum(1 for gate in gates if gate.get("status") == status)
+        status: sum(1 for result_status in effective_statuses if result_status == status)
         for status in sorted(ACCEPTANCE_STATUSES)
     }
     llm_judge_status_counts = {
@@ -1094,22 +1213,27 @@ def build_acceptance_run_summary(
     evidence_totals = _acceptance_evidence_totals(results)
     agent_metrics_totals = _acceptance_agent_metric_totals(results)
     preflight_status = _as_dict(preflight).get("status")
+    failures.extend(_result_contract_failures(results))
     if preflight_status == "blocked":
         run_status = "blocked"
-    elif any(gate.get("status") == "blocked" for gate in gates):
+    elif "blocked" in effective_statuses:
         run_status = "blocked"
-    elif preflight_status == "degraded" and gates and all(gate.get("status") == "skipped" for gate in gates):
+    elif preflight_status == "degraded" and effective_statuses and all(
+        status == "skipped" for status in effective_statuses
+    ):
         run_status = "degraded"
-    elif gates and all(gate.get("status") == "skipped" for gate in gates):
+    elif effective_statuses and all(status == "skipped" for status in effective_statuses):
         run_status = "skipped"
     elif preflight_status == "skipped" or (not scenarios and not results):
         run_status = "skipped"
-    elif failures or len(results) != len(scenarios) or not results:
+    elif failures or "failed" in effective_statuses or len(results) != len(scenarios) or not results:
         run_status = "failed"
-    elif preflight_status == "degraded" or any(gate.get("status") == "degraded" for gate in gates):
+    elif preflight_status == "degraded" or "degraded" in effective_statuses:
         run_status = "degraded"
-    else:
+    elif effective_statuses and all(status == "passed" for status in effective_statuses):
         run_status = "passed"
+    else:
+        run_status = "failed"
 
     summary = {
         "version": ACCEPTANCE_SUMMARY_VERSION,
@@ -1155,6 +1279,13 @@ def render_acceptance_markdown(summary: dict[str, Any]) -> str:
         "blocked": "blocked（环境阻塞）",
         "skipped": "skipped（跳过）",
     }.get(status, status)
+    runtime_totals = _as_dict(summary.get("runtime_totals"))
+    tool_failure_ratio = _as_number(runtime_totals.get("tool_failure_ratio"))
+    tool_failure_ratio_label = (
+        f"{round(tool_failure_ratio * 100, 1)}%"
+        if tool_failure_ratio is not None
+        else "-"
+    )
     lines = [
         "# 第一阶段验收质量门禁",
         "",
@@ -1163,9 +1294,12 @@ def render_acceptance_markdown(summary: dict[str, Any]) -> str:
         f"- 状态统计: {summary.get('status_counts')}",
         f"- LLM-as-Judge（大模型评审）补充统计: {summary.get('llm_judge_status_counts')}",
         f"- 平均 Agent（智能体）综合分: {summary.get('average_agent_score')}",
-        f"- 总耗时: {_as_dict(summary.get('runtime_totals')).get('elapsed_seconds')} 秒",
-        f"- 工具调用: {_as_dict(summary.get('runtime_totals')).get('tool_call_count')} 次",
-        f"- 估算 token（文本令牌）: {_as_dict(summary.get('runtime_totals')).get('estimated_total_tokens')}",
+        f"- 总耗时: {runtime_totals.get('elapsed_seconds')} 秒",
+        f"- 工具调用: {runtime_totals.get('tool_call_count')} 次",
+        f"- 工具失败: {runtime_totals.get('tool_failure_count')} 次",
+        f"- 工具失败率: {tool_failure_ratio_label}",
+        f"- fallback（兜底）: {runtime_totals.get('fallback_count')} 次",
+        f"- 估算 token（文本令牌）: {runtime_totals.get('estimated_total_tokens')}",
         f"- 工业指标平均分: {_as_dict(summary.get('agent_metrics_totals')).get('average_score')}",
         f"- 无依据断言率: {_as_dict(summary.get('agent_metrics_totals')).get('unsupported_claim_rate')}",
         f"- 证据闭环: {_as_dict(_as_dict(summary.get('evidence_closure')).get('counts'))}",

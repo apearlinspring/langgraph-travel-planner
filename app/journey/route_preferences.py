@@ -20,6 +20,22 @@ ROUTE_SEGMENT_VERIFICATION_LABELS = {
 }
 
 
+def format_route_distance(distance_meters: float) -> str:
+    if distance_meters >= 1000:
+        return f"{distance_meters / 1000:.1f} 公里"
+    return f"{distance_meters:.0f} 米"
+
+
+def format_route_duration(duration_seconds: float) -> str:
+    total_minutes = max(int(round(duration_seconds / 60)), 1)
+    hours, minutes = divmod(total_minutes, 60)
+    if hours and minutes:
+        return f"{hours}小时{minutes}分钟"
+    if hours:
+        return f"{hours}小时"
+    return f"{minutes}分钟"
+
+
 def normalize_route_segment_mode(value: Any) -> str:
     raw = str(value or "").strip().lower()
     if any(token in raw for token in ("walk", "walking", "步行")):

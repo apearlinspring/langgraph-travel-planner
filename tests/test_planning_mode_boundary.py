@@ -127,6 +127,49 @@ def test_transport_fallback_convenience_wording_stays_free_planning():
     assert command.update["user_requirement"]["planning_mode"] == "free_planning"
 
 
+def test_confirmed_free_mode_ignores_downstream_convenience_wording():
+    state = create_initial_state(user_id="user-1", session_id="session-1")
+    state.update(
+        {
+            "planning_mode": "free_planning",
+            "active_workflow": "free_planning",
+            "planning_mode_confirmed": True,
+            "messages": [
+                HumanMessage(
+                    content=(
+                        "交通按省心和时间合理优先，请直接记录推荐方式；"
+                        "实时班次和价格标注待核验。"
+                    )
+                )
+            ],
+        }
+    )
+
+    decision = resolve_planning_mode(state["messages"][0].content, state=state)
+    command = record_requirement_tool.invoke(
+        {
+            "departure_city": "西安",
+            "destination": "眉县",
+            "departure_date": "2026-07-18",
+            "travel_days": 2,
+            "adult_count": 2,
+            "children_count": 0,
+            "budget_min": 1000.0,
+            "budget_max": 1500.0,
+            "travel_styles": ["自然风景", "本地小吃"],
+            "special_needs": state["messages"][0].content,
+            "planning_mode": "agency_plan",
+            "planning_mode_reason": "模型误判为省心方案",
+            "runtime": _build_runtime(state),
+        }
+    )
+
+    assert decision.mode == "free_planning"
+    assert decision.source == "state"
+    assert command.update["planning_mode"] == "free_planning"
+    assert command.update["active_workflow"] == "free_planning"
+
+
 def test_hotel_fallback_does_not_accept_self_justified_agency_reason():
     state = create_initial_state(user_id="user-1", session_id="session-1")
     state["pending_initial_request_text"] = (

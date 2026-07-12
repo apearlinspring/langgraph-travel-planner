@@ -42,8 +42,10 @@ from app.evaluation.rag_retrieval import (
     RagRetrievalScenario,
     RagRetrievalStrategySummary,
     evaluate_rag_retrieval,
+    evaluate_rag_mixed_corpus_safety,
     load_rag_retrieval_documents,
     load_rag_retrieval_scenarios,
+    rag_mixed_corpus_safety_failures,
     render_rag_retrieval_markdown,
 )
 from app.evaluation.report_quality import (
@@ -156,6 +158,7 @@ __all__ = [
     "collect_runtime_metrics",
     "compare_acceptance_summaries",
     "evaluate_rag_quality",
+    "evaluate_rag_mixed_corpus_safety",
     "evaluate_rag_retrieval",
     "evaluate_report_quality",
     "evaluate_runtime_budget",
@@ -173,6 +176,7 @@ __all__ = [
     "load_scenarios",
     "load_tool_call_scenarios",
     "llm_judge_skipped_result",
+    "rag_mixed_corpus_safety_failures",
     "render_acceptance_markdown",
     "render_comparison_markdown",
     "render_rag_retrieval_markdown",

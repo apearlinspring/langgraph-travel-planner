@@ -24,6 +24,8 @@ from app.core.conversation_summary import (
     summarize_conversation,
     summarize_state_for_context,
 )
+from app.utils.message_utils import message_content as _message_content
+from app.utils.message_utils import message_role as _message_role
 
 
 @dataclass(frozen=True)
@@ -333,25 +335,6 @@ def _trim_message(message: Any, budget: ContextBudget) -> Any:
 
 def _is_human_message(message: Any) -> bool:
     return _message_role(message) in {"human", "user"}
-
-
-def _message_role(message: Any) -> str:
-    if isinstance(message, dict):
-        return str(message.get("role") or message.get("type") or "")
-    msg_type = getattr(message, "type", None)
-    if msg_type:
-        return str(msg_type)
-    return message.__class__.__name__.replace("Message", "").lower()
-
-
-def _message_content(message: Any) -> str:
-    if isinstance(message, dict):
-        content = message.get("content", "")
-    else:
-        content = getattr(message, "content", "")
-    if isinstance(content, list):
-        return "\n".join(str(item) for item in content)
-    return str(content or "")
 
 
 def _latest_human_text(messages: list[Any]) -> str:

@@ -1,8 +1,8 @@
-# HITL（人类在环）与审批治理轻量版
+# 审批治理轻量版（HITL 前置骨架）
 
 ## 目标
 
-本模块只建立敏感动作治理契约，不接真实供应链、不做真实支付、不生成真实客服或支付链接。
+本模块只建立敏感动作治理契约，不接真实供应链、不做真实支付、不生成真实客服或支付链接，也没有接入 LangGraph `interrupt/resume`（中断/恢复）。
 
 当前实现提供：
 
@@ -13,7 +13,7 @@
 - TravelState（旅行规划状态）审批字段。
 - API（应用程序接口）契约：标记、查询、批准、拒绝、过期。
 - 最终报告中的治理边界说明。
-- `/health/ready` 会暴露审批治理 readiness（就绪状态），数据库不可用时不声明 HITL（人类在环）闭环完成。
+- `/health/ready` 会暴露审批持久化 readiness（就绪状态）；该状态只证明审批请求、事件和工具审计可持久化，不代表 Agent HITL（人类在环）闭环完成。
 
 ## 敏感动作策略
 
@@ -28,7 +28,7 @@
 | `send_sms` | 强制审批 | 未来向用户或供应商发送短信前必须审批。 |
 | `export_customer_profile` | 强制审批 | 未来导出客户资料或行程画像前必须审批，并最小化字段。 |
 
-`generate_order_id` 仍被视为敏感动作，但当前只是记录治理边界，不阻塞报告交付。未来只要动作会触发真实支付、真实预订、短信发送或客户资料导出，就必须走 `pending -> approved` 后才能执行。
+`generate_order_id` 仍被视为敏感动作，但当前只是记录治理边界，不阻塞报告交付。未来只要动作会触发真实支付、真实预订、短信发送或客户资料导出，就必须先完成 `pending -> approved`，再由独立的受控执行入口校验审批和动作参数；批准记录本身不会自动恢复 Agent 或执行动作。
 
 ## 状态字段
 
@@ -49,7 +49,7 @@ approval_governance: dict
 
 - `none`：当前动作无需审批或只是记录型治理边界。
 - `pending`：等待人工审批，过期前可批准或拒绝。
-- `approved`：审批通过，未来真实动作可在有效边界内继续。
+- `approved`：审批记录已通过；当前不会自动恢复原 Agent 运行，也不会触发真实动作。
 - `rejected`：审批拒绝，不应继续执行对应真实动作。
 - `expired`：审批超时，不应继续执行对应真实动作。
 
@@ -66,6 +66,8 @@ approval_governance: dict
 - `POST /api/v1/approvals/{approval_id}/expire`：手动过期 `pending` 记录。
 - `GET /api/v1/approvals/{approval_id}/events`：查询单条审批记录的只追加事件。
 
+这些 API 只读写审批记录和事件。当前没有暂停中的 LangGraph run（运行）可供恢复，也不会把审批结果自动回写到 conversation checkpoint（会话检查点）或调用 `Command(resume=...)`。
+
 ## 前端治理台展示
 
 单页前端 `frontend/zhixing.html` 已增加轻量治理台，作为人工确认边界的演示入口：
@@ -76,7 +78,7 @@ approval_governance: dict
 - “演示记录”按钮只调用 `POST /api/v1/approvals` 创建 `real_payment` 占位记录，用于说明未来真实支付、短信通知或客户资料导出前必须人工确认；它不接真实支付、真实预订、短信、客服或供应链。
 - 前端只展示审批理由和事件理由的脱敏短摘要，不展示密钥、完整工具输入输出或客户原始资料。
 
-这个治理台不是独立后台系统，也不是正式审批工作流的最终形态；它用于把当前轻量 HITL（人类在环）契约可视化，便于验收和演示。当前订单号、报告导出和演示记录都不会触发真实下单。
+这个治理台不是独立后台系统，也不是正式审批工作流的最终形态；它用于把当前轻量审批治理契约可视化，便于验收和演示。当前订单号、报告导出和演示记录都不会触发真实下单，也不会恢复 Agent 执行。
 
 ### 角色与权限
 
@@ -105,7 +107,7 @@ approval_governance: dict
 
 审批 API 默认使用 `DatabaseApprovalStore` 写入数据库；测试可以注入同接口的 `ApprovalStore` 内存替身，以保持本地快速回归。这个替身不作为生产审计账本。
 
-生产环境必须使用 PostgreSQL 持久化审批请求、审批事件和工具审计事件，不允许回退到进程内内存存储。开发、测试和本地环境可以启用内存审批存储作为调试替身，但治理状态仍会标记为 `not_ready`，并且 `hitl_closed_loop=false`，表示不能宣称 HITL 闭环已经完成。
+生产环境必须使用 PostgreSQL 持久化审批请求、审批事件和工具审计事件，不允许回退到进程内内存存储。开发、测试和本地环境可以启用内存审批存储作为调试替身，但治理状态仍会标记为 `not_ready`。无论使用 PostgreSQL 还是内存存储，当前都保持 `hitl_closed_loop=false`；数据库就绪只会令 `approval_persistence_ready=true`。
 
 ## 持久化数据模型
 
@@ -121,11 +123,11 @@ approval_governance: dict
 
 ## Readiness 语义
 
-`/health/ready` 的 `services.approval_governance` 字段用于判断审批治理是否可作为生产能力使用：
+`/health/ready` 的 `services.approval_governance` 字段用于判断审批记录和审计事件能否可靠持久化：
 
-- `status="ready"`：审批请求、审批事件和工具审计事件均可访问 PostgreSQL，`persistent=true`，`hitl_closed_loop=true`。
-- `status="not_ready"`：数据库不可用、治理表缺失或工具审计写入失败，`persistent=false`，`hitl_closed_loop=false`。
-- `storage="memory"` 且 `fallback_mode="dev_memory"`：仅表示开发环境允许继续用内存替身调试 API，不代表生产 HITL 闭环完成。
+- `status="ready"`：审批请求、审批事件和工具审计事件均可访问 PostgreSQL，`persistent=true`，`approval_persistence_ready=true`，但 `hitl_closed_loop=false`。
+- `status="not_ready"`：数据库不可用、治理表缺失或工具审计写入失败，`persistent=false`，`approval_persistence_ready=false`，`hitl_closed_loop=false`。
+- `storage="memory"` 且 `fallback_mode="dev_memory"`：仅表示开发环境允许继续用内存替身调试 API，不代表生产审批持久化或 HITL 闭环完成。
 
 当审批治理不是 `ready` 时，整体 readiness 返回 `not_ready`，避免核心依赖已经启动但治理审计能力缺失时被误判为可生产使用。
 
@@ -182,6 +184,7 @@ approval_governance: dict
 
 ## 未覆盖范围
 
+- 不提供 LangGraph `interrupt/resume`、审批结果回写 checkpoint 或审批后自动恢复工具调用。
 - 不提供独立后台审批 UI（用户界面）；当前只有现有单页前端里的轻量治理台演示入口。
 - 不接真实库存、支付、短信、客服或供应链。
 - 不生成支付链接、客服链接、预订凭证或出票凭证。

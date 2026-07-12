@@ -2,7 +2,7 @@ import pytest
 from langchain_core.messages import HumanMessage, ToolMessage
 
 from app.core.intent import detect_travel_intent, resolve_planning_mode
-from app.core.middleware import StepConfigMiddleware
+from app.core.middleware import StepConfigMiddleware, _progress_tool_for_explicit_request
 from app.utils.llm_factory import ModelCompatibility, get_model_compatibility
 
 
@@ -19,6 +19,15 @@ class DummyRequest:
         for key, value in {**self.__dict__, **kwargs}.items():
             setattr(snapshot, key, value)
         return snapshot
+
+
+def _force_supported_tool_choice(monkeypatch):
+    compatibility = ModelCompatibility(supports_forced_tool_choice=True)
+    monkeypatch.setattr(
+        "app.core.middleware.get_model_compatibility",
+        lambda **_: compatibility,
+    )
+    return compatibility
 
 
 def _ready_report_state(**overrides):
@@ -46,6 +55,88 @@ def _ready_report_state(**overrides):
     }
     state.update(overrides)
     return state
+
+
+def test_progress_report_or_export_with_map_nodes_keeps_report_sequence_priority():
+    report_text = (
+        "请生成最终旅游规划报告和 report_data，包含每日地图路线节点。"
+    )
+    free_missing_itinerary = _ready_report_state(itinerary=None, budget=None)
+    agency_overrides = {
+        "active_workflow": "agency_plan",
+        "planning_mode": "agency_plan",
+        "planning_mode_confirmed": True,
+        "agency_step": "agency_report",
+        "user_requirement": {
+            "departure_city": "北京",
+            "destination": "上海",
+            "departure_date": "2026-06-01",
+            "departure_date_confirmed": True,
+            "travel_days": 3,
+            "adult_count": 2,
+            "children_count": 0,
+            "budget_max": 8000,
+            "planning_mode": "agency_plan",
+            "planning_mode_confirmed": True,
+        },
+    }
+    agency_missing_budget = _ready_report_state(
+        **agency_overrides,
+        budget=None,
+    )
+    agency_ready = _ready_report_state(**agency_overrides)
+
+    assert (
+        _progress_tool_for_explicit_request(report_text, free_missing_itinerary)
+        == "generate_itinerary_tool"
+    )
+    assert (
+        _progress_tool_for_explicit_request(report_text, agency_missing_budget)
+        == "summarize_budget_tool"
+    )
+    assert (
+        _progress_tool_for_explicit_request(report_text, agency_ready)
+        == "generate_order_tool"
+    )
+    assert (
+        _progress_tool_for_explicit_request(
+            "请导出 PDF，保留地图路线节点。",
+            _ready_report_state(),
+        )
+        == "generate_order_tool"
+    )
+
+
+def test_progress_structured_itinerary_with_map_nodes_beats_visual_draft():
+    state = _ready_report_state(itinerary=None, budget=None)
+    text = "请生成并记录3天2晚结构化行程，包含每日地图路线节点。"
+
+    assert (
+        _progress_tool_for_explicit_request(text, state)
+        == "generate_itinerary_tool"
+    )
+    assert (
+        _progress_tool_for_explicit_request(
+            text,
+            _ready_report_state(
+                itinerary=None,
+                budget=None,
+                selected_transport=None,
+                selected_accommodation_types=[],
+            ),
+        )
+        is None
+    )
+
+
+def test_progress_pure_visual_route_request_keeps_visual_journey_tool():
+    assert (
+        _progress_tool_for_explicit_request(
+            "先给我路线图和可视化旅程草案。",
+            {"selected_destination": "南京"},
+        )
+        == "generate_visual_journey_tool"
+    )
 
 
 def test_detect_hotel_query_prefers_hotel_tool():
@@ -200,6 +291,43 @@ def test_complete_first_turn_without_mode_asks_for_two_planning_choices():
     assert "个性化旅游规划" in decision.reason
 
 
+def test_pending_fast_split_neutral_confirmation_defaults_to_free():
+    initial_text = (
+        "我想周末从西安出发去附近轻松玩两天，2个人，预算1500，"
+        "想看自然风景和吃点当地小吃。"
+    )
+    state = {
+        "current_step": "requirement_collection",
+        "fast_mode_split_needs_confirmation": True,
+        "pending_initial_request_text": initial_text,
+    }
+
+    decision = resolve_planning_mode(
+        "以上需求确认无误，请先记录需求，然后继续推进规划。",
+        state=state,
+    )
+
+    assert decision.mode == "free_planning"
+    assert decision.confirmed is True
+    assert decision.source == "latest_user"
+
+
+def test_pending_fast_split_explicit_agency_choice_still_wins():
+    state = {
+        "current_step": "requirement_collection",
+        "fast_mode_split_needs_confirmation": True,
+        "pending_initial_request_text": "西安出发周末玩两天，2个人，预算1500。",
+    }
+
+    decision = resolve_planning_mode(
+        "以上需求没问题，我选择旅行社省心方案。",
+        state=state,
+    )
+
+    assert decision.mode == "agency_plan"
+    assert decision.confirmed is True
+
+
 def test_compact_route_first_turn_without_mode_asks_for_two_planning_choices():
     decision = resolve_planning_mode(
         "西安到西藏，下周一，7天，2人，每人5000",
@@ -232,6 +360,74 @@ def test_ready_made_plan_phrase_maps_to_agency_plan():
 
     assert decision.mode == "agency_plan"
     assert decision.confirmed is True
+
+
+def test_unconfirmed_persisted_mode_stays_pending_on_next_turn():
+    decision = resolve_planning_mode(
+        "预算还是按前面说的范围就好。",
+        state={
+            "current_step": "requirement_collection",
+            "planning_mode": "agency_plan",
+            "planning_mode_confirmed": False,
+            "pending_initial_planning_mode": "agency_plan",
+        },
+    )
+
+    assert decision.mode == "agency_plan"
+    assert decision.source == "state"
+    assert decision.confirmed is False
+    assert decision.needs_confirmation is True
+
+
+def test_mixed_free_and_agency_tendency_requires_confirmation():
+    decision = resolve_planning_mode(
+        "我想自己订酒店机票，也希望旅行社顾问帮我定制路线。",
+        state={"current_step": "requirement_collection"},
+    )
+
+    assert decision.mode == "agency_plan"
+    assert decision.confirmed is False
+    assert decision.needs_confirmation is True
+
+
+@pytest.mark.asyncio
+async def test_unconfirmed_agency_preference_does_not_enter_agency_workflow():
+    captured = {}
+    middleware = StepConfigMiddleware(
+        {
+            "requirement_collection": {
+                "prompt": "collect",
+                "tools": ["set_planning_mode_tool", "confirm_planning_mode_tool"],
+                "requires": [],
+            },
+            "agency_requirement": {
+                "prompt": "agency",
+                "tools": ["search_agency_product_templates"],
+                "requires": [],
+            },
+        }
+    )
+    state = {
+        "current_step": "requirement_collection",
+        "agency_step": "agency_requirement",
+        "planning_mode": "agency_plan",
+        "active_workflow": "agency_plan",
+        "planning_mode_confirmed": False,
+    }
+
+    async def handler(request):
+        captured["tools"] = request.tools
+        captured["system_prompt"] = getattr(request, "system_prompt", "")
+        return "ok"
+
+    await middleware.awrap_model_call(
+        DummyRequest(state, [HumanMessage(content="预算还是按前面说的范围就好。")]),
+        handler,
+    )
+
+    assert captured["tools"] == []
+    assert "规划模式表达不够明确" in captured["system_prompt"]
+    assert "旅行社方案工作流已锁定" not in captured["system_prompt"]
 
 
 @pytest.mark.asyncio
@@ -328,6 +524,102 @@ async def test_agency_plan_transport_stage_does_not_force_free_planning_preferen
     assert "select_accommodation_tool" not in captured["tools"]
     assert captured["tool_choice"] not in {"query_transport_options", "select_transport_tool"}
     assert "不要询问用户选择飞机/高铁或酒店偏好" in captured["system_prompt"]
+    assert "不得把高铁、火车、车次或航班写成已确认、有票、可订、准点或已出票" in captured[
+        "system_prompt"
+    ]
+    assert "班次、时刻和票价待二次核验" in captured["system_prompt"]
+    assert "不得写酒店有房、房型可订或已锁房" in captured["system_prompt"]
+    assert "不得写库存、名额、余位或席位有、充足、可订、已预留或已锁定" in captured[
+        "system_prompt"
+    ]
+    assert "‘确认后说明’不能代替核验限定" in captured["system_prompt"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("step", "state", "user_message", "expects_pricing_guard"),
+    [
+        (
+            "transport_planning",
+            {
+                "current_step": "transport_planning",
+                "planning_mode": "free_planning",
+                "active_workflow": "free_planning",
+                "planning_mode_confirmed": True,
+            },
+            "交通按前面说的继续。",
+            False,
+        ),
+        (
+            "agency_product_match",
+            {
+                "current_step": "agency_product_match",
+                "agency_step": "agency_product_match",
+                "planning_mode": "agency_plan",
+                "active_workflow": "agency_plan",
+                "planning_mode_confirmed": True,
+                "user_requirement": {
+                    "planning_mode": "agency_plan",
+                    "planning_mode_confirmed": True,
+                },
+            },
+            "请解释报价、费用包含和库存边界。",
+            True,
+        ),
+        (
+            "requirement_collection",
+            {
+                "current_step": "requirement_collection",
+                "planning_mode": "agency_plan",
+                "active_workflow": "agency_plan",
+                "planning_mode_confirmed": False,
+            },
+            "继续安排下一步。",
+            False,
+        ),
+    ],
+)
+async def test_global_transport_claim_guard_is_last_for_every_mode_and_step(
+    step,
+    state,
+    user_message,
+    expects_pricing_guard,
+):
+    captured = {}
+    middleware = StepConfigMiddleware(
+        {
+            step: {
+                "prompt": f"{step} prompt",
+                "tools": [],
+                "requires": [],
+            },
+        }
+    )
+
+    async def handler(request):
+        captured["system_prompt"] = getattr(request, "system_prompt", "")
+        return "ok"
+
+    await middleware.awrap_model_call(
+        DummyRequest(state, [HumanMessage(content=user_message)]),
+        handler,
+    )
+
+    prompt = captured["system_prompt"]
+    guard_heading = "【动态交通事实逐句输出硬校验（最高优先级）】"
+    assert guard_heading in prompt
+    assert "车次/航班/班次/高铁/火车/机票" in prompt
+    assert "已确认/有票/余票/已出票/可订/准点" in prompt
+    assert "同一句必须明确包含“待二次核验”“未确认”或“以官方为准”" in prompt
+    assert "如果无法在同一句加入核验限定，必须删除整个动态断言" in prompt
+    assert prompt.rstrip().endswith(
+        "也不能用“确认后说明”代替同句限定。"
+    )
+    if expects_pricing_guard:
+        assert "必须同句写明待二次核验、当前未确认" in prompt
+        assert prompt.rfind(guard_heading) > prompt.rfind(
+            "必须同句写明待二次核验、当前未确认"
+        )
 
 
 def test_personalized_travel_planning_phrase_maps_to_free_planning():
@@ -370,6 +662,208 @@ def test_detect_pricing_query_prefers_internal_pricing_rules():
 
     assert intent.name == "pricing_query"
     assert intent.preferred_tool == "search_agency_pricing_rules"
+
+
+@pytest.mark.asyncio
+async def test_agency_pricing_turn_blocks_budget_and_report_without_itinerary():
+    captured = {}
+    middleware = StepConfigMiddleware(
+        {
+            "agency_plan_draft": {
+                "prompt": "省心方案草案",
+                "tools": [
+                    "record_requirement_tool",
+                    "record_evidence_bundle_tool",
+                    "search_agency_pricing_rules",
+                    "search_agency_report_standards",
+                    "query_destination_info",
+                    "scenic_price_lookup_tool",
+                    "generate_itinerary_tool",
+                    "summarize_budget_tool",
+                    "generate_order_tool",
+                ],
+                "requires": ["user_requirement"],
+            }
+        }
+    )
+    state = {
+        "current_step": "requirement_collection",
+        "agency_step": "agency_plan_draft",
+        "active_workflow": "agency_plan",
+        "planning_mode": "agency_plan",
+        "planning_mode_confirmed": True,
+        "selected_destination": "成都",
+        "user_requirement": {
+            "departure_city": "西安",
+            "destination": "成都",
+            "departure_date": "2026-10-23",
+            "departure_date_confirmed": True,
+            "travel_days": 4,
+            "adult_count": 2,
+            "children_count": 0,
+            "budget_text": "总预算 8000 元",
+            "planning_mode": "agency_plan",
+            "planning_mode_confirmed": True,
+        },
+    }
+
+    async def handler(request):
+        captured["tools"] = request.tools
+        captured["tool_choice"] = getattr(request, "tool_choice", None)
+        captured["system_prompt"] = getattr(request, "system_prompt", "")
+        return "ok"
+
+    await middleware.awrap_model_call(
+        DummyRequest(
+            state,
+            [HumanMessage(content="请说明报价费用包含什么、预算依据，并汇总预算。")],
+        ),
+        handler,
+    )
+
+    assert captured["tools"] == [
+        "record_requirement_tool",
+        "record_evidence_bundle_tool",
+        "search_agency_pricing_rules",
+    ]
+    assert "search_agency_report_standards" not in captured["tools"]
+    assert "query_destination_info" not in captured["tools"]
+    assert "scenic_price_lookup_tool" not in captured["tools"]
+    assert "generate_itinerary_tool" not in captured["tools"]
+    assert "summarize_budget_tool" not in captured["tools"]
+    assert "generate_order_tool" not in captured["tools"]
+    assert captured["tool_choice"] not in {
+        "summarize_budget_tool",
+        "generate_order_tool",
+    }
+    assert "本轮只说明内部报价规则" in captured["system_prompt"]
+    assert "不得调用目的地动态搜索" in captured["system_prompt"]
+
+
+@pytest.mark.asyncio
+async def test_agency_pricing_intent_survives_tool_message_and_keeps_tools_narrowed():
+    captured = {}
+    middleware = StepConfigMiddleware(
+        {
+            "agency_plan_draft": {
+                "prompt": "省心方案匹配",
+                "tools": [
+                    "record_evidence_bundle_tool",
+                    "search_agency_pricing_rules",
+                    "search_agency_product_templates",
+                    "query_destination_info",
+                    "scenic_price_lookup_tool",
+                ],
+                "requires": ["user_requirement"],
+            }
+        }
+    )
+    state = {
+        "current_step": "requirement_collection",
+        "agency_step": "agency_product_match",
+        "active_workflow": "agency_plan",
+        "planning_mode": "agency_plan",
+        "planning_mode_confirmed": True,
+        "selected_destination": "成都",
+        "user_requirement": {
+            "departure_city": "西安",
+            "destination": "成都",
+            "departure_date": "2026-10-23",
+            "departure_date_confirmed": True,
+            "travel_days": 4,
+            "adult_count": 2,
+            "children_count": 0,
+            "budget_text": "总预算 8000 元",
+            "planning_mode": "agency_plan",
+            "planning_mode_confirmed": True,
+        },
+    }
+
+    async def handler(request):
+        captured["tools"] = request.tools
+        captured["tool_choice"] = getattr(request, "tool_choice", None)
+        captured["system_prompt"] = getattr(request, "system_prompt", "")
+        return "ok"
+
+    await middleware.awrap_model_call(
+        DummyRequest(
+            state,
+            [
+                HumanMessage(content="请说明报价费用包含什么、预算依据和待核验项。"),
+                ToolMessage(
+                    content="已返回内部报价规则。",
+                    name="search_agency_pricing_rules",
+                    tool_call_id="call-pricing-rules",
+                ),
+            ],
+        ),
+        handler,
+    )
+
+    assert captured["tools"] == ["record_evidence_bundle_tool"]
+    assert captured["tool_choice"] is None
+    assert "本轮用户关注报价、费用包含或预算依据" in captured["system_prompt"]
+    assert "不得调用目的地动态搜索" in captured["system_prompt"]
+
+
+@pytest.mark.asyncio
+async def test_agency_budget_turn_keeps_and_forces_budget_tool_with_itinerary(monkeypatch):
+    captured = {}
+    compatibility = _force_supported_tool_choice(monkeypatch)
+    middleware = StepConfigMiddleware(
+        {
+            "agency_plan_draft": {
+                "prompt": "省心方案草案",
+                "tools": [
+                    "search_agency_pricing_rules",
+                    "generate_itinerary_tool",
+                    "summarize_budget_tool",
+                    "generate_order_tool",
+                ],
+                "requires": ["user_requirement"],
+            }
+        }
+    )
+    state = {
+        "current_step": "requirement_collection",
+        "agency_step": "agency_plan_draft",
+        "active_workflow": "agency_plan",
+        "planning_mode": "agency_plan",
+        "planning_mode_confirmed": True,
+        "selected_destination": "成都",
+        "itinerary": [
+            {"day_number": day, "activities": [f"第 {day} 天行程"]}
+            for day in range(1, 5)
+        ],
+        "user_requirement": {
+            "departure_city": "西安",
+            "destination": "成都",
+            "departure_date": "2026-10-23",
+            "departure_date_confirmed": True,
+            "travel_days": 4,
+            "adult_count": 2,
+            "children_count": 0,
+            "budget_text": "总预算 8000 元",
+            "planning_mode": "agency_plan",
+            "planning_mode_confirmed": True,
+        },
+    }
+
+    async def handler(request):
+        captured["tools"] = request.tools
+        captured["tool_choice"] = getattr(request, "tool_choice", None)
+        return "ok"
+
+    await middleware.awrap_model_call(
+        DummyRequest(state, [HumanMessage(content="请汇总并记录结构化预算。")]),
+        handler,
+    )
+
+    assert captured["tools"] == ["summarize_budget_tool"]
+    if compatibility.supports_forced_tool_choice:
+        assert captured["tool_choice"] == "summarize_budget_tool"
+    else:
+        assert captured["tool_choice"] is None
 
 
 def test_detect_risk_query_prefers_internal_risk_playbook():
@@ -555,6 +1049,7 @@ async def test_middleware_keeps_pricing_tool_in_free_planning_mode():
     assert "search_agency_pricing_rules" in captured["tools"]
     assert "search_agency_product_templates" not in captured["tools"]
     assert "当前规划模式：自由规划" in captured["system_prompt"]
+    assert "必须同句写明待二次核验、当前未确认" in captured["system_prompt"]
 
 
 @pytest.mark.asyncio
@@ -1316,9 +1811,9 @@ async def test_middleware_blocks_freeform_final_report_when_state_is_not_ready()
 
 
 @pytest.mark.asyncio
-async def test_middleware_opens_generate_order_tool_when_report_basics_are_ready():
+async def test_middleware_opens_generate_order_tool_when_report_basics_are_ready(monkeypatch):
     captured = {}
-    compatibility = get_model_compatibility()
+    compatibility = _force_supported_tool_choice(monkeypatch)
     middleware = StepConfigMiddleware(
         {
             "destination_recommendation": {
@@ -1358,9 +1853,9 @@ async def test_middleware_opens_generate_order_tool_when_report_basics_are_ready
 
 
 @pytest.mark.asyncio
-async def test_final_report_request_forces_missing_budget_after_tool_result():
+async def test_final_report_request_forces_missing_budget_after_tool_result(monkeypatch):
     captured = {}
-    compatibility = get_model_compatibility()
+    compatibility = _force_supported_tool_choice(monkeypatch)
     middleware = StepConfigMiddleware(
         {
             "budget_summarization": {
@@ -1410,9 +1905,9 @@ async def test_final_report_request_forces_missing_budget_after_tool_result():
 
 
 @pytest.mark.asyncio
-async def test_final_report_request_forces_missing_itinerary_before_budget():
+async def test_final_report_request_forces_missing_itinerary_before_budget(monkeypatch):
     captured = {}
-    compatibility = get_model_compatibility()
+    compatibility = _force_supported_tool_choice(monkeypatch)
     middleware = StepConfigMiddleware(
         {
             "itinerary_generation": {
@@ -1462,9 +1957,111 @@ async def test_final_report_request_forces_missing_itinerary_before_budget():
 
 
 @pytest.mark.asyncio
-async def test_final_report_intent_overrides_destination_selection_confirmation():
+async def test_explicit_agency_itinerary_request_does_not_require_free_planning_selections(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "app.core.middleware.get_model_compatibility",
+        lambda **_: ModelCompatibility(supports_forced_tool_choice=True),
+    )
     captured = {}
-    compatibility = get_model_compatibility()
+    middleware = StepConfigMiddleware(
+        {
+            "agency_plan_draft": {
+                "prompt": "省心方案草案",
+                "tools": ["generate_itinerary_tool", "summarize_budget_tool"],
+                "requires": ["user_requirement"],
+            },
+        }
+    )
+    state = {
+        "current_step": "destination_recommendation",
+        "agency_step": "agency_plan_draft",
+        "active_workflow": "agency_plan",
+        "planning_mode": "agency_plan",
+        "planning_mode_confirmed": True,
+        "user_requirement": {
+            "destination": "成都",
+            "travel_days": 4,
+            "planning_mode": "agency_plan",
+            "planning_mode_confirmed": True,
+        },
+        "selected_destination": "成都",
+        "selected_transport": None,
+        "selected_accommodation_types": [],
+    }
+
+    async def handler(request):
+        captured["tools"] = request.tools
+        captured["tool_choice"] = getattr(request, "tool_choice", None)
+        return "ok"
+
+    await middleware.awrap_model_call(
+        DummyRequest(state, [HumanMessage(content="请生成并记录4天3晚结构化行程。")]),
+        handler,
+    )
+
+    assert captured["tools"] == ["generate_itinerary_tool"]
+    assert captured["tool_choice"] == "generate_itinerary_tool"
+
+
+@pytest.mark.asyncio
+async def test_explicit_free_itinerary_request_still_requires_transport_and_accommodation(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "app.core.middleware.get_model_compatibility",
+        lambda **_: ModelCompatibility(supports_forced_tool_choice=True),
+    )
+    captured = {}
+    middleware = StepConfigMiddleware(
+        {
+            "food_planning": {
+                "prompt": "餐饮阶段",
+                "tools": ["select_food_tool", "search_food_recommendations"],
+                "requires": ["user_requirement"],
+            },
+            "itinerary_generation": {
+                "prompt": "行程阶段",
+                "tools": ["generate_itinerary_tool"],
+                "requires": ["user_requirement"],
+            },
+        }
+    )
+    state = {
+        "current_step": "food_planning",
+        "active_workflow": "free_planning",
+        "planning_mode": "free_planning",
+        "planning_mode_confirmed": True,
+        "user_requirement": {
+            "destination": "成都",
+            "travel_days": 4,
+            "planning_mode": "free_planning",
+            "planning_mode_confirmed": True,
+        },
+        "selected_destination": "成都",
+        "selected_transport": None,
+        "selected_accommodation_types": [],
+    }
+
+    async def handler(request):
+        captured["tools"] = request.tools
+        captured["tool_choice"] = getattr(request, "tool_choice", None)
+        return "ok"
+
+    await middleware.awrap_model_call(
+        DummyRequest(state, [HumanMessage(content="请生成并记录4天3晚结构化行程。")]),
+        handler,
+    )
+
+    assert "generate_itinerary_tool" not in captured["tools"]
+    assert captured["tool_choice"] is None
+
+
+@pytest.mark.asyncio
+async def test_final_report_intent_overrides_destination_selection_confirmation(monkeypatch):
+    captured = {}
+    compatibility = _force_supported_tool_choice(monkeypatch)
     middleware = StepConfigMiddleware(
         {
             "destination_recommendation": {
@@ -1512,9 +2109,9 @@ async def test_final_report_intent_overrides_destination_selection_confirmation(
 
 
 @pytest.mark.asyncio
-async def test_middleware_opens_generate_order_tool_when_report_state_is_ready():
+async def test_middleware_opens_generate_order_tool_when_report_state_is_ready(monkeypatch):
     captured = {}
-    compatibility = get_model_compatibility()
+    compatibility = _force_supported_tool_choice(monkeypatch)
     middleware = StepConfigMiddleware(
         {
             "budget_summarization": {

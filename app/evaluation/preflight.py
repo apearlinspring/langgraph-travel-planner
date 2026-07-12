@@ -16,6 +16,7 @@ from app.config import (
 )
 from app.evaluation.scenarios import EvaluationScenario
 from app.evaluation.llm_judge import LLM_JUDGE_ENV_VARS
+from app.evaluation.scoring import as_dict as _as_dict
 from app.mcp_core.client import MCPClientManager
 
 
@@ -99,10 +100,6 @@ def _load_effective_env(
 
 def _any_real_env(env: Mapping[str, str], names: tuple[str, ...]) -> bool:
     return any(_has_real_value(env.get(name)) for name in names)
-
-
-def _as_dict(value: Any) -> dict[str, Any]:
-    return value if isinstance(value, dict) else {}
 
 
 def _selected_mcp_entries(
@@ -442,6 +439,71 @@ def _check_runtime_config_matrix(
     )
 
 
+def _check_rag_mixed_corpus_safety() -> PreflightCheck:
+    command = "uv run python scripts\\evaluate_rag_retrieval.py --mixed-corpus-safety --top-k 3 --json"
+    try:
+        from app.evaluation.rag_retrieval import (
+            evaluate_rag_mixed_corpus_safety,
+            rag_mixed_corpus_safety_failures,
+        )
+
+        result = evaluate_rag_mixed_corpus_safety(top_k_values=(3,))
+        failures = rag_mixed_corpus_safety_failures(result)
+    except Exception as exc:
+        finding = (
+            "RAG mixed-corpus safety gate failed before producing a report: "
+            f"{exc.__class__.__name__}: {exc}"
+        )
+        return PreflightCheck(
+            key="rag_mixed_corpus_safety",
+            label="RAG mixed-corpus safety gate",
+            status="blocked",
+            required=True,
+            findings=[finding],
+            suggestion=command,
+            details={"command": command},
+        )
+
+    details = {
+        "scenario_count": result.scenario_count,
+        "document_count": result.document_count,
+        "top_k_values": result.top_k_values,
+        "summaries": [summary.to_dict() for summary in result.summaries],
+        "failures": failures,
+        "command": command,
+    }
+    if failures:
+        return PreflightCheck(
+            key="rag_mixed_corpus_safety",
+            label="RAG mixed-corpus safety gate",
+            status="blocked",
+            required=True,
+            findings=[
+                (
+                    "RAG mixed-corpus safety failed: public scenarios returned "
+                    f"{len(failures)} unsafe or incomplete retrieval result(s)."
+                )
+            ],
+            suggestion=command,
+            details=details,
+        )
+
+    return PreflightCheck(
+        key="rag_mixed_corpus_safety",
+        label="RAG mixed-corpus safety gate",
+        status="passed",
+        required=True,
+        findings=[
+            (
+                f"{result.scenario_count} public safety scenario(s) passed across "
+                f"{result.document_count} mixed-corpus document(s)."
+            )
+        ],
+        suggestion="",
+        details=details,
+    )
+
+
 def run_acceptance_preflight(
     scenarios: list[EvaluationScenario],
     *,
@@ -475,6 +537,7 @@ def run_acceptance_preflight(
         )
 
     checks.append(_check_runtime_config_matrix(env=env, dotenv_path=dotenv_path))
+    checks.append(_check_rag_mixed_corpus_safety())
 
     if capabilities["real_llm"]:
         checks.append(

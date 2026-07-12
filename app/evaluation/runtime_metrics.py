@@ -5,7 +5,14 @@ import math
 from dataclasses import asdict, dataclass
 from typing import Any
 
+from app.core.observability import (
+    TOOL_FAILURE_SEMANTIC_STATUSES,
+    TOOL_FALLBACK_SEMANTIC_STATUSES,
+    resolve_tool_audit_semantic_status,
+)
 from app.evaluation.report_quality import CriterionResult
+from app.evaluation.scoring import grade as _grade, score as _score
+from app.utils.token_estimation import estimate_token_count
 
 
 @dataclass(frozen=True)
@@ -37,6 +44,36 @@ class RuntimeMetrics:
         return asdict(self)
 
 
+def _coerce_optional_float(value: Any, *, field_name: str) -> float | None:
+    if value is None:
+        return None
+    if not isinstance(value, (int, float)):
+        raise ValueError(
+            f"Runtime budget field {field_name!r} must be a finite non-negative number or null"
+        )
+    number = float(value)
+    if not math.isfinite(number) or number < 0:
+        raise ValueError(
+            f"Runtime budget field {field_name!r} must be a finite non-negative number or null"
+        )
+    return number
+
+
+def _coerce_int(value: Any, *, field_name: str) -> int:
+    if not isinstance(value, int) or value < 0:
+        raise ValueError(f"Runtime budget field {field_name!r} must be a non-negative integer")
+    return value
+
+
+def _coerce_ratio(value: Any, *, field_name: str) -> float:
+    if not isinstance(value, (int, float)):
+        raise ValueError(f"Runtime budget field {field_name!r} must be a finite ratio between 0 and 1")
+    number = float(value)
+    if not math.isfinite(number) or not 0 <= number <= 1:
+        raise ValueError(f"Runtime budget field {field_name!r} must be a finite ratio between 0 and 1")
+    return number
+
+
 @dataclass(frozen=True)
 class RuntimeBudget:
     """Deterministic budget thresholds for a live Agent run."""
@@ -46,11 +83,39 @@ class RuntimeBudget:
     max_tool_call_count: int = 32
     max_estimated_total_tokens: int = 120000
     max_error_event_count: int = 0
+    max_tool_failure_count: int = 0
+    max_tool_failure_ratio: float = 0.0
+    max_fallback_count: int = 0
     max_tool_turn_elapsed_seconds: float | None = None
     warning_total_elapsed_ratio: float = 0.8
     warning_first_token_ratio: float = 0.8
     warning_tool_call_ratio: float = 0.8
     warning_token_ratio: float = 0.8
+
+    def __post_init__(self) -> None:
+        if _coerce_optional_float(
+            self.max_total_elapsed_seconds,
+            field_name="max_total_elapsed_seconds",
+        ) is None:
+            raise ValueError("Runtime budget field 'max_total_elapsed_seconds' cannot be null")
+        for field_name in ("max_first_token_seconds", "max_tool_turn_elapsed_seconds"):
+            _coerce_optional_float(getattr(self, field_name), field_name=field_name)
+        for field_name in (
+            "max_tool_call_count",
+            "max_estimated_total_tokens",
+            "max_error_event_count",
+            "max_tool_failure_count",
+            "max_fallback_count",
+        ):
+            _coerce_int(getattr(self, field_name), field_name=field_name)
+        for field_name in (
+            "max_tool_failure_ratio",
+            "warning_total_elapsed_ratio",
+            "warning_first_token_ratio",
+            "warning_tool_call_ratio",
+            "warning_token_ratio",
+        ):
+            _coerce_ratio(getattr(self, field_name), field_name=field_name)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -107,45 +172,6 @@ class RuntimeQualityResult:
         }
 
 
-def _grade(normalized_score: float) -> str:
-    if normalized_score >= 90:
-        return "A"
-    if normalized_score >= 80:
-        return "B"
-    if normalized_score >= 70:
-        return "C"
-    if normalized_score >= 60:
-        return "D"
-    return "F"
-
-
-def _score(condition: bool, points: float, findings: list[str], message: str) -> float:
-    if condition:
-        return points
-    findings.append(message)
-    return 0.0
-
-
-def _coerce_optional_float(value: Any, *, field_name: str) -> float | None:
-    if value is None:
-        return None
-    if not isinstance(value, (int, float)) or float(value) < 0:
-        raise ValueError(f"Runtime budget field {field_name!r} must be a non-negative number or null")
-    return float(value)
-
-
-def _coerce_int(value: Any, *, field_name: str) -> int:
-    if not isinstance(value, int) or value < 0:
-        raise ValueError(f"Runtime budget field {field_name!r} must be a non-negative integer")
-    return value
-
-
-def _coerce_ratio(value: Any, *, field_name: str) -> float:
-    if not isinstance(value, (int, float)) or not 0 <= float(value) <= 1:
-        raise ValueError(f"Runtime budget field {field_name!r} must be a ratio between 0 and 1")
-    return float(value)
-
-
 def runtime_budget_from_dict(
     payload: dict[str, Any] | None,
     *,
@@ -172,21 +198,19 @@ def runtime_budget_from_dict(
                 raise ValueError("Runtime budget field 'max_total_elapsed_seconds' cannot be null")
         elif key in {"max_first_token_seconds", "max_tool_turn_elapsed_seconds"}:
             values[key] = _coerce_optional_float(value, field_name=key)
-        elif key in {"max_tool_call_count", "max_estimated_total_tokens", "max_error_event_count"}:
+        elif key in {
+            "max_tool_call_count",
+            "max_estimated_total_tokens",
+            "max_error_event_count",
+            "max_tool_failure_count",
+            "max_fallback_count",
+        }:
             values[key] = _coerce_int(value, field_name=key)
+        elif key == "max_tool_failure_ratio":
+            values[key] = _coerce_ratio(value, field_name=key)
         elif key.startswith("warning_"):
             values[key] = _coerce_ratio(value, field_name=key)
     return RuntimeBudget(**values)
-
-
-def estimate_token_count(text: str) -> int:
-    """Estimate token usage with a stable character-based approximation."""
-
-    if not text:
-        return 0
-    ascii_chars = sum(1 for char in text if ord(char) < 128)
-    non_ascii_chars = len(text) - ascii_chars
-    return max(1, math.ceil(ascii_chars / 4) + math.ceil(non_ascii_chars / 2))
 
 
 def _event_type(event: dict[str, Any]) -> str:
@@ -281,6 +305,9 @@ def collect_runtime_metrics(
         raise TypeError("turns must be a list")
 
     event_types = [_event_type(event) for event in events if isinstance(event, dict)]
+    direct_tool_call_count = sum(
+        1 for event_type in event_types if event_type == "tool_call"
+    )
     unrecovered_error_event_count = sum(
         1
         for event in events
@@ -311,13 +338,33 @@ def collect_runtime_metrics(
     observed_tool_calls = _sum_observed_metric(events, "tool_call_count")
     observed_tool_failures = _sum_observed_metric(events, "tool_failure_count")
     observed_fallbacks = _sum_observed_metric(events, "fallback_count")
+    observed_error_events = _sum_observed_metric(events, "error_event_count")
+    tool_audit_events = [
+        event
+        for event in events
+        if isinstance(event, dict) and _event_type(event) == "tool_audit"
+    ]
+    tool_event_semantics = [
+        resolve_tool_audit_semantic_status(
+            event.get("status"),
+            event.get("error_type"),
+            event.get("semantic_status"),
+        )
+        for event in tool_audit_events
+    ]
     event_tool_failures = sum(
         1
-        for event in events
-        if isinstance(event, dict)
-        and str(event.get("status") or "").lower()
-        in {"failed", "failure", "timeout", "degraded", "error", "skipped"}
+        for semantic_status in tool_event_semantics
+        if semantic_status in TOOL_FAILURE_SEMANTIC_STATUSES
     )
+    event_fallbacks = sum(
+        1
+        for semantic_status in tool_event_semantics
+        if semantic_status in TOOL_FALLBACK_SEMANTIC_STATUSES
+    )
+    tool_audit_events_are_complete = bool(tool_audit_events) and len(
+        tool_audit_events
+    ) >= max(direct_tool_call_count, observed_tool_calls)
     degraded_event_count = _observed_degraded_event_count(events) + sum(
         1
         for event in events
@@ -342,14 +389,22 @@ def collect_runtime_metrics(
         token_event_count=sum(1 for event_type in event_types if event_type == "token"),
         turn_observability_event_count=turn_observability_event_count,
         tool_call_count=max(
-            sum(1 for event_type in event_types if event_type == "tool_call"),
+            direct_tool_call_count,
             observed_tool_calls,
         ),
-        tool_failure_count=max(observed_tool_failures, event_tool_failures),
-        fallback_count=observed_fallbacks,
+        tool_failure_count=(
+            event_tool_failures
+            if tool_audit_events_are_complete
+            else max(observed_tool_failures, event_tool_failures)
+        ),
+        fallback_count=(
+            event_fallbacks
+            if tool_audit_events_are_complete
+            else max(observed_fallbacks, event_fallbacks)
+        ),
         degraded_event_count=degraded_event_count,
         report_event_count=sum(1 for event_type in event_types if event_type == "report_data"),
-        error_event_count=unrecovered_error_event_count,
+        error_event_count=max(unrecovered_error_event_count, observed_error_events),
         recoverable_error_event_count=recoverable_error_event_count,
         session_busy_event_count=sum(1 for event_type in event_types if event_type == "session_busy"),
         assistant_chars=assistant_chars,
@@ -371,6 +426,12 @@ def _format_ratio(value: float | None) -> str:
     if value is None:
         return "-"
     return f"{round(value * 100, 1)}%"
+
+
+def _tool_failure_ratio(metrics: RuntimeMetrics) -> float:
+    if metrics.tool_call_count <= 0:
+        return 1.0 if metrics.tool_failure_count else 0.0
+    return metrics.tool_failure_count / metrics.tool_call_count
 
 
 def evaluate_runtime_budget(
@@ -436,6 +497,23 @@ def evaluate_runtime_budget(
             "of tool-call budget"
         )
 
+    tool_failure_ratio = _tool_failure_ratio(metrics)
+    if metrics.tool_failure_count > runtime_budget.max_tool_failure_count:
+        violations.append(
+            "Tool failure count "
+            f"{metrics.tool_failure_count} exceeds budget {runtime_budget.max_tool_failure_count}"
+        )
+    if tool_failure_ratio > runtime_budget.max_tool_failure_ratio:
+        violations.append(
+            "Tool failure ratio "
+            f"{_format_ratio(tool_failure_ratio)} exceeds budget "
+            f"{_format_ratio(runtime_budget.max_tool_failure_ratio)}"
+        )
+    if metrics.fallback_count > runtime_budget.max_fallback_count:
+        violations.append(
+            f"Fallback count {metrics.fallback_count} exceeds budget {runtime_budget.max_fallback_count}"
+        )
+
     if metrics.estimated_total_tokens > runtime_budget.max_estimated_total_tokens:
         violations.append(
             "Estimated total tokens "
@@ -492,6 +570,7 @@ def build_runtime_governance_summary(
     first_token_ratio = _ratio(metrics.first_token_seconds or 0.0, runtime_budget.max_first_token_seconds)
     token_ratio = _ratio(metrics.estimated_total_tokens, runtime_budget.max_estimated_total_tokens)
     tool_ratio = _ratio(metrics.tool_call_count, runtime_budget.max_tool_call_count)
+    tool_failure_ratio = _tool_failure_ratio(metrics)
     tool_turn_ratio = _ratio(metrics.tool_turn_elapsed_seconds, metrics.total_elapsed_seconds)
 
     slow_findings: list[str] = []
@@ -555,6 +634,9 @@ def build_runtime_governance_summary(
         "tool_usage": {
             "tool_call_count": metrics.tool_call_count,
             "tool_failure_count": metrics.tool_failure_count,
+            "tool_failure_ratio": round(tool_failure_ratio, 3),
+            "max_tool_failure_count": runtime_budget.max_tool_failure_count,
+            "max_tool_failure_ratio": runtime_budget.max_tool_failure_ratio,
             "tool_call_ratio": round(tool_ratio, 3) if tool_ratio is not None else None,
             "tool_counts": sorted_tool_counts,
             "redundant_calls": redundant_calls or [],
@@ -562,6 +644,7 @@ def build_runtime_governance_summary(
         },
         "fallbacks": {
             "fallback_count": metrics.fallback_count,
+            "max_fallback_count": runtime_budget.max_fallback_count,
             "degraded_event_count": metrics.degraded_event_count,
             "turn_observability_event_count": metrics.turn_observability_event_count,
             "findings": [

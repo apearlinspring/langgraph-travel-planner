@@ -8,9 +8,9 @@ $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 chcp 65001 | Out-Null
 ```
 
-## 当前分支
+## 2026-05-17 历史运行上下文
 
-- 工作树：当前本地验收工作区（不记录绝对路径）
+- 工作树：当时的本地验收工作区（不记录绝对路径）
 - 分支：`codex/acceptance-core-final-gates-fix`
 - 基准：`origin/main@3b02f41`
 - 日期：2026-05-17
@@ -20,7 +20,7 @@ chcp 65001 | Out-Null
 - `blocked（环境阻塞）`：真实依赖、凭据、后端健康检查或配置缺失，不能运行真实链路。
 - `degraded（降级）`：核心链路可运行，但可选依赖、MCP（模型上下文协议）服务或运行预算 warning（警告）触发，不能作为完全通过。
 - `failed（失败）`：真实链路已运行，但确定性门禁失败。
-- `passed（通过）`：真实链路已运行，产出 `report_data`，并通过报告、预算、风险、待核验项、旅行社证据、工具审计和运行时门禁。
+- `passed（通过）`：真实链路已运行，产出 `report_data`，并通过报告、预算、风险、待核验项、旅行社证据、工具审计、工具失败/兜底预算和运行时门禁。
 
 失败分类补充：
 
@@ -32,7 +32,9 @@ chcp 65001 | Out-Null
 
 缺真实依赖或缺 `report_data` 时，任何命令都不能返回 `passed`。
 
-## 2026-05-17 当前真实复跑记录
+run-level gate（整批运行门禁）采用 fail-closed（缺证据即失败）口径：一个场景只有在 `result.status/result.passed`、`acceptance_gate.status/acceptance_gate.passed` 和 `evidence_closure.passed` 一致确认通过时，才能计入 passed。门禁或证据闭环缺失、状态非法、`status` 与 `passed` 矛盾，都会把整批结果判为 failed，并在 `live_run` 或 `evidence_closure` 维度留下原因。
+
+## 2026-05-17 历史真实复跑记录
 
 - `.env`：存在且未被 Git 跟踪；未打印真实值。
 - readiness（就绪检查）：PostgreSQL（关系型数据库）、Redis（内存数据结构存储）、RAG（检索增强生成）、LLM（大语言模型）和 MCP（模型上下文协议）均可用；`/health/live=alive`，`/health/ready=ready`。
@@ -40,7 +42,11 @@ chcp 65001 | Out-Null
 - `acceptance-smoke`（冒烟验收）：`.runtime/acceptance-smoke/20260517-transport-guard/20260516-212958-acceptance-smoke.json`，1/1 passed（通过），`report_data=true`，证据闭环通过。
 - `acceptance-core`（核心验收）：`.runtime/acceptance-core/20260517-transport-guard/20260516-223916-acceptance-core.json`，完整运行 9 场景，9/9 passed（通过），总状态 passed（通过）。
 - 补充：`free_weekend_nearby` 已产出结构化 `report_data`；`edge_hotel_tool_fallback` 和 `edge_transport_tool_fallback` 分别保留 `query_hotel_options` 与 `query_transport_options` 审计式调用。
-- 结论：本轮 smoke 与完整 core 均通过；详见 `docs/评估与验收/acceptance-core-report.md` 与 `docs/评估与验收/predeploy-runtime-acceptance.md`。
+- 历史结论：本轮 smoke 与完整 core 在旧门禁下均通过；详见 `docs/评估与验收/acceptance-core-report.md` 与 `docs/评估与验收/predeploy-runtime-acceptance.md`。这不是当前 commit 的通过结论。
+
+该轮 9/9 同时伴随较高工具失败/兜底比例。当前门禁对普通场景默认不允许工具失败或 fallback，只对两个专门 fallback 场景配置有界预算，因此不能沿用该历史状态。当前本地工作树的最新单次统一跑批见 `docs/评估与验收/acceptance-core-report.md` 中的 2026-07-12 `final-core-6`；它尚未绑定干净 commit，也不代表重复运行稳定或生产就绪。
+
+当前 API 可能先发送固定 ACK（确认收到）。因此 `first_token_seconds` 只表示连接后出现任意首个助手片段的时间，不能证明 LLM 已开始输出有意义内容，也不能替代 `total_elapsed_seconds`。下文历史表格保留当时原始指标口径，不应与当前 ACK 首响直接比较。
 
 Windows 本地后端建议用以下方式启动，避免 direct `uvicorn app.main:app` 在 Windows 事件循环和开发 reload（热重载）上引入干扰：
 
@@ -53,7 +59,7 @@ $env:RUNTIME_MCP_OPTIONAL_STARTUP_TIMEOUT_SECONDS = '45'
 
 ## 2026-05-14 历史部署前真实环境结果
 
-该轮部署前 readiness（就绪检查）和 `acceptance-smoke`（验收冒烟测试）只证明当时的最小报价说明链路 `pricing_agency_quote_explanation` 1/1 passed（通过），不能替代当前 `docs/评估与验收/acceptance-core-report.md` 的最新 9 场景 acceptance-core（核心验收）结论。
+该轮部署前 readiness（就绪检查）和 `acceptance-smoke`（验收冒烟测试）只证明当时的最小报价说明链路 `pricing_agency_quote_explanation` 1/1 passed（通过），不能替代后来按严格门禁执行的完整 acceptance-core（核心验收）；当前本地单次统一结果以 `acceptance-core-report.md` 顶部结论为准。
 
 生产发布前若模型、RAG（检索增强生成）、MCP（模型上下文协议）、报告契约或外部 API（应用程序接口）配置变化，应重跑完整 acceptance-core。所有真实本机 `.env` 只在本地运行时使用，不写入手册、摘要或提交。
 
@@ -61,7 +67,25 @@ $env:RUNTIME_MCP_OPTIONAL_STARTUP_TIMEOUT_SECONDS = '45'
 
 本手册不写真实服务器地址、真实密钥或真实个人信息；`<staging-base-url>` 和 `<production-base-url>` 只表示由部署平台注入或人工临时传入的地址。
 
+### 12306 MCP 地址配置
+
+项目不再内置会过期的 12306 MCP（模型上下文协议）专属地址。需要铁路查询的验收场景必须在启动后端前注入 `ZHIXING_12306_MCP_URL`：
+
+```powershell
+# 本地 SSE（服务器发送事件）sidecar 示例；需先在另一个终端启动对应服务
+$env:ZHIXING_12306_MCP_URL = 'http://127.0.0.1:18081/sse'
+
+# 远端服务使用平台或供应商当前下发的地址，不要把真实专属地址写入仓库
+$env:ZHIXING_12306_MCP_URL = '<remote-12306-mcp-url>'
+```
+
+路径以 `/sse` 结尾时客户端使用 SSE transport（传输方式）；其他地址使用 Streamable HTTP（可流式 HTTP）transport。变量未配置时，`12306-mcp` 作为可选服务会跳过启动；但所选场景声明它为 required（必需）时，preflight（预检）必须 blocked（环境阻塞），不能用跳过结果冒充通过。设置或修改地址后必须重启后端。
+
+本地可用于联调的 sidecar 来自第三方社区项目 [Joooook/12306-mcp](https://github.com/Joooook/12306-mcp)，不是中国铁路 12306 官方服务或官方授权接口。每次 live 验收必须固定并在当次脱敏摘要中记录实际解析版本（以及必要时的源码 commit），不能只写“latest”；本通用 runbook 不永久写死某个版本，避免把一次临时联调版本误当成项目默认依赖。sidecar `healthy` 只证明 MCP 协议连接和工具加载满足探针，不证明返回的是官方实时数据，也不能证明余票库存真实存在、座位可订或已经锁定；车次和余票必须到铁路官方渠道二次核验。
+
 ### Local 本地
+
+以下 `main.py` 需在单独终端持续运行；健康检查和验收命令在另一个终端执行。若场景需要铁路查询，先按上一节设置 `ZHIXING_12306_MCP_URL`。
 
 ```powershell
 .\.venv\Scripts\python scripts\check_runtime_readiness.py --target local --json
@@ -160,7 +184,7 @@ smoke（冒烟测试）失败时先看 JSON（JavaScript Object Notation，结�
    .\.venv\Scripts\python.exe scripts\run_evaluation_scenarios.py --acceptance-smoke --preflight-only --json --no-summary
    ```
 
-   注意：`--preflight-only` 不运行场景，因此 run status（运行状态）可能是 `skipped（跳过）`；应查看 JSON（JavaScript 对象表示法）里的 `preflight.status`。当前真实环境下应为 `passed`。
+   注意：`--preflight-only` 不运行场景，因此 run status（运行状态）可能是 `skipped（跳过）`；应查看 JSON（JavaScript 对象表示法）里的 `preflight.status`。目标环境只有实际满足依赖时才应为 `passed`。
 
 8. 跑 smoke 真实入口。
 
@@ -191,16 +215,23 @@ git log --oneline -5
 uv sync --frozen
 ```
 
-先跑 preflight（预检），不要跳过 blocked（环境阻塞）判定：
+先在单独终端注入本次所需环境变量并启动后端；preflight 会实际探测 `base_url` 的 `/health/live` 和 `/health/ready`，不能在后端尚未启动时运行：
+
+```powershell
+# 所选场景需要铁路查询时先设置；本地 SSE 地址仅为示例
+$env:ZHIXING_12306_MCP_URL = 'http://127.0.0.1:18081/sse'
+.\.venv\Scripts\python.exe main.py
+```
+
+确认后端已启动后，在另一个终端跑 preflight（预检），不要跳过 blocked（环境阻塞）判定：
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\run_evaluation_scenarios.py --acceptance-core --preflight-only --json --no-summary
 ```
 
-再启动后端并跑完整入口：
+preflight 通过后，在后端仍持续运行的情况下执行完整入口：
 
 ```powershell
-.\.venv\Scripts\python.exe main.py
 .\.venv\Scripts\python.exe scripts\run_evaluation_scenarios.py --acceptance-core --base-url http://127.0.0.1:8000 --json --summary-dir .runtime\acceptance-core --scenario-timeout 900 --global-timeout 7200 --continue-on-error
 ```
 
@@ -264,7 +295,7 @@ uv sync --frozen
 
 ## smoke 历史真实结果（仅供参考）
 
-2026-05-13 在当前真实环境完成一次新的 smoke 闭环：
+2026-05-13 曾在当时的真实环境完成一次 smoke 闭环：
 
 - `preflight.status=passed`
 - live smoke status（在线烟测状态）：`passed`
@@ -287,11 +318,11 @@ uv sync --frozen
 - `.runtime\acceptance-smoke\20260513-150047-acceptance-summary.md`
 - `.runtime\evaluations\20260513-230047-pricing_agency_quote_explanation.json`
 
-结论：smoke 已经证明最小旅行社报价说明链路可进入真实聊天 API（应用程序接口）、生成 `report_data` 并通过确定性门禁。下一步应运行 9 个核心场景，不要用 smoke 通过结果直接代表核心验收通过。
+历史结论：该 smoke 证明当时的最小旅行社报价说明链路进入真实聊天 API（应用程序接口）、生成 `report_data` 并通过旧确定性门禁；但 21 次调用中 13 次失败/兜底在当前普通场景默认预算下会失败。它既不能代表核心验收，也不能代表当前版本通过。
 
 ## 2026-05-14 历史验证记录
 
-该轮详细脱敏结果曾集中记录在 `docs/评估与验收/predeploy-runtime-acceptance.md`。以下命令和指标仅作为历史参考，当前 2026-05-17 结论以本文前部的“当前真实复跑记录”和 `docs/评估与验收/acceptance-core-report.md` 为准。实际执行的关键命令包括：
+该轮详细脱敏结果曾集中记录在 `docs/评估与验收/predeploy-runtime-acceptance.md`。以下命令和指标仅作为历史参考；2026-05-17 的记录也已标成历史快照，当前结论必须来自当前 commit 的新跑批。实际执行的关键命令包括：
 
 ```powershell
 git fetch origin main
@@ -342,4 +373,4 @@ git fetch origin main
 
 ## 下一步
 
-当前 2026-05-17 `acceptance-smoke` 和完整 9 场景 `acceptance-core` 均已通过。后续如模型、RAG、MCP、外部 API、报告契约或运行环境变化，仍需先复跑 smoke，再复跑完整 9 场景 core；继续只提交脱敏摘要，不提交 `.runtime/` 原始产物。
+2026-05-17 的 `acceptance-smoke` 和完整 9 场景 `acceptance-core` 是旧门禁下的历史通过记录。2026-07-12 的 `final-core-6` 已在当前未提交工作树上完成一次统一 9/9 跑批；下一步是冻结干净 commit，在相同依赖口径下重新执行 smoke 和完整 core，并对比工具失败、fallback、运行预算和报告质量。目标生产环境仍需独立 readiness、preflight、容量与运维证据。继续只提交脱敏摘要，不提交 `.runtime/` 原始产物。

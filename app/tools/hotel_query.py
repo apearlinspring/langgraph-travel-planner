@@ -14,6 +14,10 @@ from langchain.tools import ToolRuntime, tool
 from langchain_core.messages import ToolMessage
 from langgraph.types import Command
 
+from app.core.requirement_dates import (
+    PENDING_HOTEL_DATE_VALUES,
+    requirement_departure_date_confirmation,
+)
 from app.core.state import TravelState
 from app.mcp_core.client import get_mcp_client
 from app.tools.execution_guard import (
@@ -151,20 +155,6 @@ VALID_PLACE_TYPES = {
     "区/县",
     "详细地址",
 }
-PENDING_DATE_VALUES = {
-    "",
-    "日期",
-    "日期待确认",
-    "入住日期",
-    "入住日期待确认",
-    "出发日期",
-    "出发日期待确认",
-    "待确认",
-    "未确认",
-    "待核验",
-    "待核实",
-}
-
 PREFERENCE_SPLIT_MARKERS = (
     "想住",
     "想要",
@@ -678,17 +668,11 @@ def _requirement_departure_date_confirmation(
     requirement: dict,
     normalized_date: str,
 ) -> tuple[bool | None, str]:
-    if not requirement:
-        return None, ""
-
-    date_text = str(normalized_date or "").strip()
-    if date_text in PENDING_DATE_VALUES:
-        return False, "pending"
-    if requirement.get("departure_date_confirmed") is False:
-        return False, str(requirement.get("departure_date_source") or "unconfirmed")
-    if requirement.get("departure_date_confirmed") is True:
-        return True, str(requirement.get("departure_date_source") or "user_confirmed")
-    return True, str(requirement.get("departure_date_source") or "legacy_confirmed")
+    return requirement_departure_date_confirmation(
+        requirement,
+        normalized_date,
+        pending_date_values=PENDING_HOTEL_DATE_VALUES,
+    )
 
 
 def _normalize_query_args_from_state(

@@ -20,7 +20,7 @@
 
 ## Project Summary
 
-ZhiXing Travel Planner is a multi-agent travel planning system. The backend uses FastAPI (快速应用接口框架). The main conversation flow is coordinated by LangGraph (图式智能体编排框架) and LangChain (大模型应用编排框架). RAG (检索增强生成) provides local knowledge, MCP (模型上下文协议) connects optional external services, and PostgreSQL (关系型数据库) stores users, conversations, messages, checkpoints and long-term memory.
+ZhiXing Travel Planner is a state-driven Agent travel planning application. The backend uses FastAPI (快速应用接口框架). The main conversation flow is one Travel Agent created with LangChain (大模型应用编排框架) and run on the LangGraph (图式智能体编排框架) runtime; a destination Router and nested transport Coordinator are invoked for bounded tasks. RAG (检索增强生成) provides local knowledge, MCP (模型上下文协议) connects optional external services, PostgreSQL (关系型数据库) stores durable business facts, checkpoints and long-term memory, and Redis (缓存数据库) handles locks, caches, rate-limit counters and short-lived runtime state.
 
 The product shape is a travel consultant that can collect requirements over multiple turns, split users into personalized free planning or agency-style packaged planning, query real candidates when configured, and generate structured travel reports.
 

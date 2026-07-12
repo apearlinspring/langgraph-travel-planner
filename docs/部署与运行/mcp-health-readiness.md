@@ -20,11 +20,15 @@
 | `weather` | 高德天气 | optional | 场景声明后 required | `AMAP_API_KEY` |
 | `search` | Tavily 搜索 | optional | 场景声明后 required | `TAVILY_API_KEY` |
 | `amap` | 高德地图 MCP | optional | 场景声明后 required | `AMAP_API_KEY` |
-| `12306-mcp` | 铁路查询 MCP | optional | 场景声明后 required | 无本地密钥变量；依赖远端服务可达 |
+| `12306-mcp` | 铁路查询 MCP | optional | 场景声明后 required | `ZHIXING_12306_MCP_URL`（本地 SSE 或远端地址） |
 | `VariFlight-Aviation` | 航班查询 MCP | optional | 场景声明后 required | `VARIFLIGHT_API_KEY` |
 | `aigohotel-mcp` | 酒店查询 MCP | optional，按需启动 | 场景声明后 required | `AIGOHOTEL_API_KEY`，兼容 `AIGOHOTEL_MCP_API` 或 `AIGOHOTEL_SECRET_KEY` |
 
 `aigohotel-mcp` 没有任一酒店凭据时不会进入核心启动列表，服务表显示 `skipped`；如果 acceptance-core 场景声明它必需，同样状态会映射为 `blocked`。
+
+`12306-mcp` 也只在 `ZHIXING_12306_MCP_URL` 已配置时注册。地址路径以 `/sse` 结尾时使用 SSE（服务器发送事件）transport（传输方式），其他地址使用 Streamable HTTP（可流式 HTTP）；可以指向本地 sidecar 或由平台下发的远端服务。仓库不保存会过期的专属地址，修改该变量后必须重启后端。
+
+当前本地联调 sidecar 的可选来源是第三方社区项目 [Joooook/12306-mcp](https://github.com/Joooook/12306-mcp)，它不是中国铁路 12306 官方服务或官方授权接口。每次验收应固定并记录实际解析版本或源码 commit；本文作为通用 readiness 文档不永久写死具体版本。`healthy` 只说明 MCP 连接、初始化和工具加载通过，不证明上游数据官方、实时或完整，更不能证明余票库存存在、座位可订或已锁定；铁路候选必须标记待核验，并以官方渠道复核为准。
 
 ## 健康输出
 
@@ -45,6 +49,8 @@
 4. 未被选中场景要求的 MCP 服务只会显示为 `degraded` 或 `skipped`，不会让该次验收 blocked。
 
 验收入口：
+
+以下 preflight（预检）会探测后端健康接口，执行前必须先启动后端；需要铁路查询的场景还应在后端启动前配置 `ZHIXING_12306_MCP_URL`。
 
 ```powershell
 .\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-core --preflight-only --json --no-summary

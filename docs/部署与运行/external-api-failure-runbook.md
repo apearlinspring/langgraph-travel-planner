@@ -118,7 +118,7 @@ uv run python scripts\check_external_dependency_resilience_record.py --record-js
 
 该校验器不读取 `.env`、不调用供应商、不连 SSH（安全外壳协议）、不启动服务，也不会打印真实 URL、IP、密钥或供应商响应正文。它会阻断以下情况：超时/重试未设上限、成本预算缺负责人或超过阈值、工具失败监控 blocked、降级演练编造真实库存/锁价/预订、记录中含原始 URL/IP/密钥形态，或把 M1 证据夸大成供应商 SLA（服务等级协议）、强配额、完整生产高可用或长期压测证明。
 
-当前 M1 已形成一份外部依赖韧性补充证据：外部 API readiness、成本预算 guard、工具失败监控、timeout / retry 上限，以及 provider timeout、provider rate limit 429、provider 5xx 三类降级场景均已通过校验。该证据是受控试运行级别，证明系统有“降级、人工核验、待确认、不编造库存/锁价/预订”的处理口径；它仍不证明供应商 SLA、真实配额强约束、所有可选供应商已启用、完整生产高可用或长期稳定性。
+2026-07-03 的 M1 历史快照记录过一份外部依赖韧性补充证据：外部 API readiness、成本预算 guard、工具失败监控、timeout / retry 上限，以及 provider timeout、provider rate limit 429、provider 5xx 三类降级场景当时通过校验。该记录未绑定当前 commit，只能证明当时受控试运行具备“降级、人工核验、待确认、不编造库存/锁价/预订”的处理口径；当前版本需重新验证，也仍不能证明供应商 SLA、真实配额强约束、所有可选供应商已启用、完整生产高可用或长期稳定性。
 
 ## 9. 证据记录模板
 

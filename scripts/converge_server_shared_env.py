@@ -19,6 +19,17 @@ for stream in (sys.stdout, sys.stderr):
         stream.reconfigure(encoding="utf-8", errors="replace")
 
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from scripts._remote_probe_helpers import (  # noqa: E402
+    first_value as _first,
+    parse_tabbed_probe_lines as _parse_probe_lines,
+    run_utf8_command as _run_command,
+)
+
+
 SERVER_SHARED_ENV_CONVERGENCE_VERSION = "server_shared_env_convergence.v1"
 APPROVAL_TOKEN = "APPROVE_SHARED_ENV_CONVERGENCE"
 SERVER_TARGET_PLACEHOLDER = "<server-target>"
@@ -94,44 +105,6 @@ emit shared_env_present_after true
 emit shared_env_mode_after "$shared_mode"
 emit shared_env_size_present_after "$( [ "${shared_size:-0}" -gt 0 ] && echo true || echo false )"
 """
-
-
-def _run_command(
-    args: Sequence[str],
-    *,
-    input_text: str,
-    timeout_seconds: float,
-) -> subprocess.CompletedProcess[str]:
-    normalized_input = str(input_text).replace("\r\n", "\n").replace("\r", "\n")
-    completed = subprocess.run(
-        list(args),
-        input=normalized_input.encode("utf-8"),
-        capture_output=True,
-        text=False,
-        timeout=timeout_seconds,
-        check=False,
-    )
-    return subprocess.CompletedProcess(
-        completed.args,
-        completed.returncode,
-        stdout=completed.stdout.decode("utf-8", "replace"),
-        stderr=completed.stderr.decode("utf-8", "replace"),
-    )
-
-
-def _parse_probe_lines(stdout: str) -> dict[str, list[str]]:
-    parsed: dict[str, list[str]] = {}
-    for raw_line in str(stdout or "").splitlines():
-        if "\t" not in raw_line:
-            continue
-        key, value = raw_line.split("\t", 1)
-        parsed.setdefault(key.strip(), []).append(value.strip())
-    return parsed
-
-
-def _first(values: Mapping[str, list[str]], key: str, default: str = "") -> str:
-    items = values.get(key) or []
-    return str(items[0]) if items else default
 
 
 def _mode_status(mode: str) -> str:

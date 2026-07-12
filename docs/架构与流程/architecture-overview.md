@@ -2,7 +2,7 @@
 
 ## 1. 项目一句话说明
 
-这是一个面向“旅行规划”和“旅行社顾问交付”场景的多智能体系统：
+这是一个面向“旅行规划”和“旅行社顾问交付”场景的状态驱动 Agent 系统。主执行链路由一个 Travel Agent 控制，并按需调用目的地 Router 与交通 Coordinator；它不是“每个规划阶段各运行一个独立 Agent”的结构：
 
 - 后端接口用 `FastAPI`
 - 对话主控用 `LangChain / LangGraph`
@@ -36,7 +36,7 @@ Travel Agent（主控 Agent）
         |
         +---- 状态流转工具（记录需求、选择目的地、回退步骤）
         +---- 目的地 Router（攻略 + 天气）
-        +---- 交通 Coordinator（高铁 / 航班 / 自驾子代理）
+        +---- 交通 Coordinator（高铁 / 航班 / 自驾查询工具）
         +---- RAG 工具（公开目的地知识 + 内部旅行社知识）
         +---- Memory 工具（用户长期偏好）
         +---- MCP 工具（天气、搜索、地图、12306 等）
@@ -58,9 +58,9 @@ Travel Agent（主控 Agent）
 
 - `app/agents/`
   智能体核心。
-  `handoffs/` 是主流程控制。
+  `handoffs/` 保存主 Travel Agent 与阶段配置；目录名是历史命名，当前不是多个 Agent 之间的 handoff 协议。
   `routers/` 是目的地路由。
-  `subagents/` 是交通子代理。
+  `subagents/` 当前只保留在用的交通 Coordinator；航班、高铁和自驾差异由查询工具封装。
 
 - `app/core/`
   全局状态、LangGraph 持久化、长期记忆服务、中间件等“骨架层”。
@@ -162,12 +162,12 @@ Travel Agent（主控 Agent）
 
 这意味着：
 
-- API 层只负责“接入和流式输出”
-- 真正的业务推进发生在 Agent + Tool + State 三层
-- 首轮意图分流和少量省心方案补事实属于 API 层快路径，目的是避开全量 Agent 和 MCP（模型上下文协议）工具初始化，保障首个响应片段速度
+- 业务设计目标是把复杂规划推进放在 Agent + Tool + State 三层，但当前 API 层并不只是“接入和流式输出”
+- `app/api/v1/chat.py` 还集中承担认证后的会话归属检查、消息持久化、配额、会话锁、快路径分流、SSE 事件编排、报告数据保存和异常降级，是当前需要继续拆分的 API 编排债务
+- 首轮意图分流和少量省心方案补事实属于 API 层快路径，目的是避开全量 Agent 和 MCP（模型上下文协议）工具初始化，保障首个响应片段速度；这是一项有意的性能取舍，不代表 API 与业务编排已经完全解耦
 - 完整 Agent 流有事件空闲超时保护，避免模型或上游长时间无事件时前端无限等待
 
-## 6. 多智能体部分怎么分工
+## 6. Agent、Router 与 Coordinator 怎么分工
 
 ### 6.1 主控 Agent
 
@@ -200,17 +200,9 @@ Travel Agent（主控 Agent）
 
 `app/agents/subagents/transport_coordinator.py`
 
-这是另一个“主 Agent + 子 Agent”结构：
+交通 Coordinator 是由主 Travel Agent 通过 `query_transport_options` 工具按需调用的嵌套 Agent。它负责判断交通方式、组织比较和汇总结果，但当前直接调用 `query_flights`、`query_trains`、`plan_driving_route` 等查询工具。
 
-- 航班子代理
-- 高铁子代理
-- 自驾子代理
-
-Coordinator 负责：
-
-- 判断用户更适合哪种交通方式
-- 把问题转给对应子代理
-- 再把结果整理回用户可读的答案
+航班、高铁和自驾差异由 `app/tools/flight_query.py`、`train_query.py`、`driving_query.py` 封装。运行架构不能表述成“Coordinator 再分发给三个交通子 Agent”。
 
 ## 7. 工具层是这个项目的发动机
 
@@ -259,7 +251,7 @@ RAG 主要用于补充本地旅游知识和旅行社内部业务知识，不让 
 - `data/documents/internal/risk/`：风险和合规规则。
 - `data/documents/internal/report/`：报告交付标准。
 
-项目还补了小型离线召回评估：`scripts/evaluate_rag_retrieval.py` 会对 15 条标注查询计算 Top-K recall（召回率）和 MRR（平均倒数排名）。最近复跑结果见 `docs/RAG与知识库/rag-retrieval-evaluation.md`，说明见 `docs/RAG与知识库/rag-demo-evaluation-guide.md`。产品化样板支持目的地级弱匹配，例如用户只说“想去新疆”，也可召回新疆 8 天小团/包车路线候选；用户明确拒绝产品时切回自由规划。
+项目还补了小型离线召回评估：`scripts/evaluate_rag_retrieval.py` 按当前标注集计算 Top-K recall（召回率）、安全命中和 MRR（平均倒数排名）。场景数、文档数和指标以重新生成的 `docs/RAG与知识库/rag-retrieval-evaluation.md` 为准；该报告只验证本地确定性 BM25/metadata 排序，不代表真实 Chroma、Dense（稠密向量检索）、RRF（倒数排名融合）、重排或在线 Agent 已通过。产品化样板支持目的地级弱匹配，例如用户只说“想去新疆”，也可召回新疆 8 天小团/包车路线候选；用户明确拒绝产品时切回自由规划。
 
 ## 9. 数据层分成三类
 
@@ -314,7 +306,7 @@ SQLAlchemy 模型在 `app/models/`：
 
 ## 11. 前端目前是什么状态
 
-`frontend/zhixing.html` 是单页入口，`frontend/app.js` 负责交互逻辑，`frontend/styles.css` 负责样式：
+`frontend/zhixing.html` 是单页入口。请求、聊天、报告、旅程地图和治理台已经拆出一批独立脚本，但 `frontend/app.js` 仍是近 7000 行的遗留主文件，继续承担大量接线和业务交互；`frontend/styles.css` 也仍是大型全局样式文件。当前可见能力包括：
 
 - 注册/登录
 - 会话列表
@@ -324,24 +316,25 @@ SQLAlchemy 模型在 `app/models/`：
 - 地图路线预览和导出
 - 服务治理台和脱敏运行摘要
 
-它已经能体现产品交互链路，但仍属于轻量前端形态：
+它已经能体现产品交互链路，但仍属于轻量前端原型：
 
 - 没有工程化前端框架
-- 适合项目演示和小规模上线展示
-- 如果后续做长期产品化，可以再迁移到组件化前端工程
+- `app.js` 的地图、治理、认证、会话和渲染遗留逻辑尚未完成模块化收口
+- 适合本地、内部或白名单受控演示；不能仅凭浏览器回归写成公开小规模上线已就绪
+- 长期产品化前仍需补组件边界、错误采集、权限路由、可访问性、兼容矩阵和正式前端发布流程
 
 ## 12. 当前项目成熟度判断
 
-从代码结构上看，这个项目已经具备“可扩展产品骨架”，但还不是完全打磨完的生产版。
+从代码结构上看，这个项目已经具备可继续演进的产品骨架，但 API 编排和前端主文件仍有明显巨石债务，还不是完全打磨完的生产版。
 
 比较成熟的部分：
 
-- 分层清晰
+- 已建立分层目标和主要目录边界，但 `chat.py`、`app.js` 等核心文件仍未完全按该边界收敛
 - 主流程和阶段设计明确
 - Agent / Tool / State 的边界比较清楚
 - RAG、MCP、长期记忆和治理边界都有接入口
 - 前端优先消费结构化 `report_data`，不是从自然语言里硬解析报告
-- acceptance-core（核心验收）和 acceptance-smoke（验收烟测）已有可复跑门禁和脱敏证据包
+- acceptance-core（核心验收）和 acceptance-smoke（验收烟测）已有可复跑门禁；仓库内证据包是日期化历史快照，当前状态必须重新运行确认
 - 已有双工作流编排：个性化旅游规划走八阶段状态机，省心方案走独立 `agency_step` 节奏
 - 首轮分流和省心方案基础事实补齐已有快路径，可在不加载完整 Agent 的情况下秒级返回
 
@@ -352,10 +345,14 @@ SQLAlchemy 模型在 `app/models/`：
 - RAG 离线召回评估是小型标注集，不代表全量线上查询分布
 - 轻量前端适合展示，长期产品化仍建议组件化重构
 - 省心方案仍是“成熟路线样板 + 待核验报价口径”，不是旅行社真实库存或真实可售产品
+- 审批治理已有策略、API 和事件账本，但尚未接成 LangGraph `interrupt/resume` 执行闭环
+- acceptance 已收紧普通场景的工具失败数、失败率和 fallback 预算；两个专门降级场景仍允许有界失败。它仍不能证明工具选择轨迹最优、Badcase 可精确归因、重复运行稳定或当前真实环境通过
+- 会话删除当前是 `status=deleted` 的软删除，但读取、修改、聊天、历史和旅程接口尚未由统一 API 契约定义可见性、恢复、`404/410` 与状态枚举；这是业务 API 的一致性债务
+- 聊天入口尚未形成统一的单消息长度/token 上限，SSE 也没有事件 ID、断线重放或从 checkpoint 恢复的公开契约；面向公网前需要补齐请求边界与断线语义
 
 所以更准确地说，这不是只停留在演示层的页面，而是：
 
-“一个已经具备真实链路、治理边界和可复跑验收证据的旅行社智能顾问 Agent 系统。”
+“一个具备可运行链路、治理边界和可复跑验证入口的旅行社智能顾问 Agent 工程原型；是否达到当前验收或部署就绪，必须以目标版本重新运行的结果为准。”
 
 ## 13. 新人最快理解方式
 

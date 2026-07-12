@@ -2,6 +2,7 @@ import asyncio
 
 import pytest
 from langchain.tools import ToolRuntime
+from langchain_core.messages import ToolMessage
 from langchain_core.tools import StructuredTool
 from langgraph.types import Command
 
@@ -22,7 +23,7 @@ from app.utils.security import REDACTED_VALUE
 from app.tools.contracts import classify_tool_governance
 from app.tools.execution_guard import begin_tool_execution, execute_guarded_call
 from app.tools.guardrails import validate_hotel_query_args, validate_transport_query_args
-from app.tools.result_validation import validate_transport_result
+from app.tools.result_validation import validate_tool_output_for_audit, validate_transport_result
 from app.models.approval import ToolAuditEvent
 from app.tools import mcp_tools
 from app.tools import router_query
@@ -147,6 +148,58 @@ def test_empty_transport_audit_is_presented_as_not_found_not_crash():
     assert "不是系统崩溃" in public_event["status_explanation"]
     assert "input_summary" not in public_event
     assert "output_summary" not in public_event
+
+
+def test_not_applied_state_transition_outcome_is_not_audit_success():
+    command = Command(
+        update={
+            "messages": [
+                ToolMessage(
+                    content="预算汇总前需要先生成完整行程。",
+                    tool_call_id="budget-1",
+                    name="summarize_budget_tool",
+                    artifact={
+                        "schema": "state_transition_outcome.v1",
+                        "tool": "summarize_budget_tool",
+                        "status": "not_applied",
+                        "reason": "missing_prerequisites",
+                    },
+                )
+            ]
+        }
+    )
+
+    validation = validate_tool_output_for_audit("summarize_budget_tool", command)
+
+    assert validation.status == "failed"
+    assert validation.error_type == "missing_prerequisites"
+    assert validation.output_summary["state_transition_outcome"]["status"] == "not_applied"
+
+
+@pytest.mark.parametrize("status", ["applied", "already_applied"])
+def test_applied_state_transition_outcome_remains_audit_success(status):
+    command = Command(
+        update={
+            "messages": [
+                ToolMessage(
+                    content="状态已经写入；动态价格仍待核验。",
+                    tool_call_id="transition-1",
+                    name="select_transport_tool",
+                    artifact={
+                        "schema": "state_transition_outcome.v1",
+                        "tool": "select_transport_tool",
+                        "status": status,
+                    },
+                )
+            ]
+        }
+    )
+
+    validation = validate_tool_output_for_audit("select_transport_tool", command)
+
+    assert validation.status == "success"
+    assert validation.error_type is None
+    assert validation.output_summary["state_transition_outcome"]["status"] == status
 
 
 def test_tool_audit_event_redacts_sensitive_output_summary():

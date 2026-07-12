@@ -103,7 +103,7 @@ $env:POSTGRES_PASSWORD='test_password'
 uv run python -m pytest tests\test_context_engineering.py tests\test_step_prompt_rendering.py tests\test_workflow_maintainability.py -q
 ```
 
-结果：`55 passed`。
+测试数量会随项目演进变化，以命令当次输出为准；不要把旧的固定通过数当作当前证据。
 
 注意：无模型密钥环境下通过的是确定性摘要路径，只说明上下文预算、规则摘要、关键历史轮次和记忆审计契约可用；不代表线上 LLM 摘要质量已经通过评估。线上启用 `CONVERSATION_SUMMARY_BACKEND=llm` 后，还需要用真实长对话样例单独验收摘要准确性、遗漏率和成本。
 
@@ -121,3 +121,4 @@ uv run python -m pytest tests\test_context_engineering.py tests\test_step_prompt
 - LLM 摘要虽然已经可配置，但真实模型输出质量仍需要线上样例评估；默认路径仍是确定性摘要。
 - 中间件通过状态对象记录摘要元数据，实际持久化行为依赖 LangGraph（图式智能体编排框架）运行时对 state 的保存方式；当前测试覆盖了注入和状态字段更新。
 - 长期记忆工具仍依赖模型正确传参；prompt 已约束 `memory_scope`，本次新增审计字段，但尚未接入统一工具审计事件表。
+- 会话摘要、长期记忆和证据包最终会进入 system prompt；它们包含用户或外部来源内容，应继续按不可信输入处理。当前已有字段化、裁剪和来源信息，但仍需增加提示注入语料、指令/数据分隔和跨来源冲突评测。

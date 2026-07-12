@@ -7,7 +7,8 @@ from langchain_core.messages import HumanMessage
 from app.agents.handoffs import step_config as step_config_module
 from app.agents.subagents.transport_coordinator import create_transport_coordinator
 from app.agency import product_rules as product_rules_module
-from app.core.state import create_initial_state
+from app.core.middleware import _is_agency_plan_workflow
+from app.core.state import TravelState, create_initial_state
 from app.core.workflow import (
     AGENCY_STEPS,
     FINAL_PLANNING_STEP,
@@ -19,6 +20,7 @@ from app.core.workflow import (
 )
 from app.reports import render_report_markdown, validate_report_data
 from app.tools import state_transition as state_transition_module
+from app.tools.result_validation import validate_tool_output_for_audit
 from app.tools.state_transition import (
     check_current_progress,
     confirm_planning_mode_tool,
@@ -117,6 +119,42 @@ def test_workflow_metadata_covers_every_planning_step():
     assert FINAL_PLANNING_STEP == PLANNING_STEPS[-1]
 
 
+def test_step_state_fields_cover_free_planning_output_steps():
+    free_output_steps = set(PLANNING_STEPS) - {INITIAL_PLANNING_STEP}
+
+    assert free_output_steps <= set(STEP_STATE_FIELDS)
+    for step in free_output_steps:
+        assert STEP_STATE_FIELDS[step], step
+
+
+def test_travel_state_core_fields_match_workflow_contract():
+    state_fields = set(TravelState.__annotations__)
+    workflow_axis_fields = {
+        "active_workflow",
+        "planning_mode",
+        "planning_mode_confirmed",
+        "current_step",
+        "agency_step",
+    }
+
+    assert workflow_axis_fields <= state_fields
+    assert "user_requirement" in state_fields
+    assert "report_data" in state_fields
+    for fields in STEP_STATE_FIELDS.values():
+        assert set(fields) <= state_fields
+
+
+def test_free_and_agency_progress_axes_are_separate_contracts():
+    state = create_initial_state(user_id="user-1", session_id="session-1")
+
+    assert state["active_workflow"] == "free_planning"
+    assert state["current_step"] == INITIAL_PLANNING_STEP
+    assert state["agency_step"] == INITIAL_AGENCY_STEP
+    assert set(PLANNING_STEPS).isdisjoint(AGENCY_STEPS)
+    assert set(STEP_STATE_FIELDS).isdisjoint(AGENCY_STEPS)
+    assert "current_step" != "agency_step"
+
+
 def test_create_initial_state_uses_shared_entry_step():
     state = create_initial_state(user_id="user-1", session_id="session-1")
     assert state["current_step"] == INITIAL_PLANNING_STEP
@@ -143,9 +181,6 @@ def test_qwen_entrypoints_use_shared_compatible_mode_factory():
         "app/agents/handoffs/travel_agent.py",
         "app/agents/routers/destination_router.py",
         "app/agents/subagents/transport_coordinator.py",
-        "app/agents/subagents/flight_agent.py",
-        "app/agents/subagents/train_agent.py",
-        "app/agents/subagents/driving_agent.py",
         "app/rag/query_optimizer.py",
         "app/rag/reranker.py",
         "tests/test_rag_agent_autonomous.py",
@@ -310,22 +345,49 @@ def test_go_back_to_step_clears_fields_from_shared_workflow_metadata():
     assert "交通规划" in command.update["messages"][0].content
 
 
+@pytest.mark.parametrize(
+    ("tool_name", "target_step"),
+    [
+        ("go_back_to_requirement", "requirement_collection"),
+        ("go_back_to_destination", "destination_recommendation"),
+        ("go_back_to_transport", "transport_planning"),
+        ("go_back_to_accommodation", "accommodation_planning"),
+        ("go_back_to_food", "food_planning"),
+        ("go_back_to_itinerary", "itinerary_generation"),
+        ("go_back_to_budget", "budget_summarization"),
+    ],
+)
+def test_go_back_shortcuts_keep_their_public_target(tool_name, target_step):
+    state = create_initial_state(user_id="user-1", session_id="session-1")
+    state["current_step"] = "order_generation"
+
+    command = getattr(state_transition_module, tool_name).invoke(
+        {"reason": "测试回退", "runtime": _build_runtime(state)}
+    )
+
+    assert command.update["current_step"] == target_step
+
+
 def test_planning_mode_tools_persist_mode_reason_and_confirmation():
     state = create_initial_state(user_id="user-1", session_id="session-1")
 
     command = set_planning_mode_tool.invoke(
         {
-            "mode": "自由行",
-            "reason": "用户想自己订酒店机票，只需要攻略建议",
+            "mode": "省心方案",
+            "reason": "用户目前倾向省心安排，但尚未最终确认",
             "runtime": _build_runtime(state),
         }
     )
     state.update(command.update)
 
-    assert command.update["planning_mode"] == "free_planning"
-    assert command.update["active_workflow"] == "free_planning"
+    assert command.update["planning_mode"] == "agency_plan"
+    assert command.update["pending_initial_planning_mode"] == "agency_plan"
+    assert "active_workflow" not in command.update
+    assert "agency_step" not in command.update
     assert command.update["planning_mode_confirmed"] is False
-    assert "个性化旅游规划" in command.update["messages"][0].content
+    assert state["active_workflow"] == "free_planning"
+    assert _is_agency_plan_workflow(state) is False
+    assert "省心方案" in command.update["messages"][0].content
 
     command = confirm_planning_mode_tool.invoke(
         {
@@ -339,6 +401,21 @@ def test_planning_mode_tools_persist_mode_reason_and_confirmation():
     assert command.update["active_workflow"] == "agency_plan"
     assert command.update["planning_mode_confirmed"] is True
     assert command.update["planning_mode_reason"] == "用户改为希望省心安排"
+
+    state.update(command.update)
+    assert _is_agency_plan_workflow(state) is True
+
+    ignored_preference = set_planning_mode_tool.invoke(
+        {
+            "mode": "自由行",
+            "reason": "普通措辞被模型误识别为模式切换",
+            "runtime": _build_runtime(state),
+        }
+    )
+
+    assert "planning_mode" not in ignored_preference.update
+    assert state["active_workflow"] == "agency_plan"
+    assert "不会切换已锁定工作流" in ignored_preference.update["messages"][0].content
 
 
 def test_record_evidence_bundle_tool_persists_structured_bundle():
@@ -472,6 +549,50 @@ def test_generate_order_tool_accepts_confirmed_budget_from_evidence_bundle():
     assert command.update["budget"]["per_person"] == 1850
     assert command.update["budget"]["budget_confidence"]["verification_items"]
     assert command.update["report_data"]["budget"]["per_person"] == 1850
+
+
+def test_generate_order_tool_accepts_state_budget_when_requirement_only_has_budget_text():
+    state = create_initial_state(user_id="user-1", session_id="session-1")
+    state.update(
+        {
+            "planning_mode": "agency_plan",
+            "active_workflow": "agency_plan",
+            "planning_mode_confirmed": True,
+            "agency_step": "agency_report",
+            "user_requirement": {
+                "departure_city": "西安",
+                "destination": "桂林",
+                "departure_date": "2026-08-10",
+                "departure_date_confirmed": True,
+                "travel_days": 3,
+                "adult_count": 2,
+                "children_count": 0,
+                "budget_text": "人均预算5000-7000元",
+            },
+        }
+    )
+    _mark_report_ready(state, destination="桂林")
+    state["user_requirement"].pop("budget_max", None)
+    state["budget"] = {
+        "transport": 2500.0,
+        "accommodation": 4000.0,
+        "food": 2400.0,
+        "attractions": 1600.0,
+        "misc": 1500.0,
+        "total": 12000.0,
+        "per_person": 6000.0,
+        "total_people": 2,
+        "travel_days": 3,
+        "assumptions": ["结构化预算已由 summarize_budget_tool 写入"],
+    }
+
+    command = generate_order_tool.invoke({"runtime": _build_runtime(state)})
+
+    assert "budget_min" not in state["user_requirement"]
+    assert "budget_max" not in state["user_requirement"]
+    assert "budget_level" not in state["user_requirement"]
+    assert command.update["report_data"]["budget"]["total"] == 12000.0
+    assert command.update["report_data"]["budget"]["per_person"] == 6000.0
 
 
 def test_agency_guard_allows_itinerary_and_budget_tools():
@@ -821,6 +942,12 @@ def test_select_destination_tool_can_persist_destination_context():
     assert command.update["current_step"] == "transport_planning"
     assert command.update["destination_options"][0]["weather_info"] == "可能有阵雨，建议准备室内备选"
     assert "上海博物馆" in command.update["destination_options"][0]["attractions"]
+    assert command.update["messages"][0].artifact == {
+        "schema": "state_transition_outcome.v1",
+        "tool": "select_destination_tool",
+        "status": "applied",
+        "next_step": "transport_planning",
+    }
 
 
 def test_select_destination_tool_accepts_structured_attraction_payloads():
@@ -861,6 +988,41 @@ def test_select_transport_tool_normalizes_common_chinese_labels():
 
     assert command.update["selected_transport"] == "train"
     assert command.update["current_step"] == "accommodation_planning"
+
+
+def test_select_transport_tool_coerces_structured_model_arguments():
+    state = create_initial_state(user_id="user-1", session_id="session-1")
+
+    command = select_transport_tool.invoke(
+        {
+            "transport_type": {"mode": "train", "label": "高铁"},
+            "details": {"summary": "G1 上海虹桥 -> 杭州东"},
+            "departure_time": {"value": "08:00"},
+            "arrival_time": ["08:45"],
+            "duration": {"text": "45 分钟"},
+            "price": {"amount": "￥73/人"},
+            "source": {"name": "12306"},
+            "runtime": _build_runtime(state),
+        }
+    )
+
+    option = command.update["selected_transport_option"]
+    assert command.update["selected_transport"] == "train"
+    assert option["details"] == "G1 上海虹桥 -> 杭州东"
+    assert option["departure_time"] == "08:00"
+    assert option["arrival_time"] == "08:45"
+    assert option["duration"] == "45 分钟"
+    assert option["price"] == 73.0
+    assert option["source"] == "12306"
+
+
+def test_select_transport_tool_rejects_missing_choice_without_validation_error():
+    state = create_initial_state(user_id="user-1", session_id="session-1")
+
+    command = select_transport_tool.invoke({"runtime": _build_runtime(state)})
+
+    assert "selected_transport" not in command.update
+    assert "交通方式无效" in command.update["messages"][0].content
 
 
 def test_select_accommodation_tool_can_persist_concrete_hotel_option():
@@ -942,6 +1104,94 @@ def test_select_food_tool_accepts_model_string_argument():
 
     assert command.update["selected_food_types"] == ["specialty", "local"]
     assert command.update["current_step"] == "itinerary_generation"
+
+
+def test_select_food_tool_accepts_json_array_string_and_audits_success():
+    state = create_initial_state(user_id="user-1", session_id="session-1")
+
+    command = select_food_tool.invoke(
+        {
+            "food_types": '["specialty", "local"]',
+            "runtime": _build_runtime(state),
+        }
+    )
+
+    assert command.update["selected_food_types"] == ["specialty", "local"]
+    assert command.update["current_step"] == "itinerary_generation"
+    assert command.update["messages"][0].artifact == {
+        "schema": "state_transition_outcome.v1",
+        "tool": "select_food_tool",
+        "status": "applied",
+        "next_step": "itinerary_generation",
+    }
+    assert validate_tool_output_for_audit("select_food_tool", command).status == "success"
+
+
+@pytest.mark.parametrize(
+    "food_types",
+    [
+        '["local", __import__("os").system("calc")]',
+        '{"food_types": [__import__("os").system("calc")]}',
+    ],
+)
+def test_select_food_tool_rejects_malicious_malformed_json(food_types):
+    state = create_initial_state(user_id="user-1", session_id="session-1")
+
+    command = select_food_tool.invoke(
+        {"food_types": food_types, "runtime": _build_runtime(state)}
+    )
+
+    assert "selected_food_types" not in command.update
+    assert command.update["messages"][0].artifact == {
+        "schema": "state_transition_outcome.v1",
+        "tool": "select_food_tool",
+        "status": "not_applied",
+        "next_step": "food_planning",
+        "reason": "invalid_input",
+    }
+    validation = validate_tool_output_for_audit("select_food_tool", command)
+    assert validation.status == "failed"
+    assert validation.error_type == "invalid_input"
+
+
+def test_select_food_tool_coerces_structured_types_and_poi_names():
+    state = create_initial_state(user_id="user-1", session_id="session-1")
+
+    command = select_food_tool.invoke(
+        {
+            "food_types": {
+                "preferences": [
+                    {"type": "local"},
+                    {"label": "特色美食"},
+                ]
+            },
+            "food_pois": ["黑色经典臭豆腐", {"name": "笨萝卜浏阳菜馆"}],
+            "runtime": _build_runtime(state),
+        }
+    )
+
+    assert command.update["selected_food_types"] == ["local", "specialty"]
+    assert [item["name"] for item in command.update["selected_food_pois"]] == [
+        "黑色经典臭豆腐",
+        "笨萝卜浏阳菜馆",
+    ]
+    assert command.update["current_step"] == "itinerary_generation"
+
+
+def test_select_food_tool_rejects_missing_types_without_validation_error():
+    state = create_initial_state(user_id="user-1", session_id="session-1")
+
+    command = select_food_tool.invoke({"runtime": _build_runtime(state)})
+
+    assert "selected_food_types" not in command.update
+    assert "餐饮类型不能为空" in command.update["messages"][0].content
+    assert command.update["messages"][0].artifact == {
+        "schema": "state_transition_outcome.v1",
+        "tool": "select_food_tool",
+        "status": "not_applied",
+        "next_step": "food_planning",
+        "reason": "invalid_input",
+    }
 
 
 def test_check_current_progress_uses_shared_step_labels():
@@ -1093,6 +1343,12 @@ def test_itinerary_budget_and_order_report_use_selected_real_options():
 
     itinerary_command = generate_itinerary_tool.invoke({"runtime": _build_runtime(state)})
     state.update(itinerary_command.update)
+    assert itinerary_command.update["messages"][0].artifact == {
+        "schema": "state_transition_outcome.v1",
+        "tool": "generate_itinerary_tool",
+        "status": "applied",
+        "next_step": "budget_summarization",
+    }
     assert state["current_step"] == "budget_summarization"
     assert state["itinerary"][0]["accommodation"] == "上海市中心酒店"
     assert "G1 北京南" in state["itinerary"][0]["transport_note"]
@@ -1134,6 +1390,16 @@ def test_itinerary_budget_and_order_report_use_selected_real_options():
 
     budget_command = summarize_budget_tool.invoke({"runtime": _build_runtime(state)})
     state.update(budget_command.update)
+    assert budget_command.update["messages"][0].artifact == {
+        "schema": "state_transition_outcome.v1",
+        "tool": "summarize_budget_tool",
+        "status": "applied",
+        "next_step": "order_generation",
+    }
+    assert validate_tool_output_for_audit(
+        "summarize_budget_tool",
+        budget_command,
+    ).status == "success"
     assert state["current_step"] == "order_generation"
     assert state["budget"]["transport"] == 626.0 * 2
     assert state["budget"]["accommodation"] == 800.0 * 2
@@ -1164,6 +1430,16 @@ def test_itinerary_budget_and_order_report_use_selected_real_options():
     assert "豫园 40 元/人" in budget_message
 
     order_command = generate_order_tool.invoke({"runtime": _build_runtime(state)})
+    assert order_command.update["messages"][0].artifact == {
+        "schema": "state_transition_outcome.v1",
+        "tool": "generate_order_tool",
+        "status": "applied",
+        "next_step": "order_generation",
+    }
+    assert validate_tool_output_for_audit(
+        "generate_order_tool",
+        order_command,
+    ).status == "success"
     assert "report" in order_command.update
     assert "report_data" in order_command.update
     assert "# 个性化旅游规划报告" in order_command.update["report"]
@@ -1226,6 +1502,12 @@ def test_itinerary_budget_and_order_report_use_selected_real_options():
     ]
     assert "pay.example.com" not in order_command.update["messages"][0].content
     assert "未接入真实支付服务" in order_command.update["messages"][0].content
+    assert "M1 模拟确认页" in order_command.update["messages"][0].content
+    mock_checkout = report_data["evidence_bundle"]["m1_mock_checkout"]
+    assert mock_checkout["checkout_url"].startswith("/api/v1/mock-checkout/ORDER-")
+    assert mock_checkout["real_payment"] is False
+    assert mock_checkout["real_booking"] is False
+    assert mock_checkout["inventory_locked"] is False
 
 
 def test_generate_itinerary_persists_safe_accommodation_type_fallback():
@@ -1422,6 +1704,21 @@ def test_final_report_pads_four_day_trip_and_exports_route_bound_data():
     ]
 
 
+def test_summarize_budget_tool_marks_missing_prerequisites_as_not_applied():
+    state = create_initial_state(user_id="user-1", session_id="session-1")
+
+    command = summarize_budget_tool.invoke({"runtime": _build_runtime(state)})
+
+    assert "budget" not in command.update
+    outcome = command.update["messages"][0].artifact
+    assert outcome == {
+        "schema": "state_transition_outcome.v1",
+        "tool": "summarize_budget_tool",
+        "status": "not_applied",
+        "reason": "missing_prerequisites",
+    }
+
+
 def test_generate_order_tool_blocks_pending_report_from_basic_requirement():
     state = create_initial_state(user_id="user-1", session_id="session-1")
     state.update(
@@ -1451,6 +1748,43 @@ def test_generate_order_tool_blocks_pending_report_from_basic_requirement():
     assert "完整行程" in message
     assert "预算汇总" in message
     assert "不会在目的地或产品框架阶段提前生成 report_data" in message
+    outcome = order_command.update["messages"][0].artifact
+    assert outcome["schema"] == "state_transition_outcome.v1"
+    assert outcome["tool"] == "generate_order_tool"
+    assert outcome["status"] == "not_applied"
+    assert outcome["reason"] == "missing_prerequisites"
+
+
+def test_generate_order_tool_marks_report_validation_failure_as_not_applied(monkeypatch):
+    state = create_initial_state(user_id="user-1", session_id="session-1")
+    _mark_report_ready(state, destination="南京")
+
+    class FailedValidation:
+        ok = False
+
+        @staticmethod
+        def to_user_message():
+            return "报告结构校验失败。"
+
+    class FailedReportBundle:
+        validation = FailedValidation()
+
+    monkeypatch.setattr(
+        state_transition_module,
+        "build_report_bundle",
+        lambda report_data: FailedReportBundle(),
+    )
+
+    command = generate_order_tool.invoke({"runtime": _build_runtime(state)})
+
+    assert "report_data" not in command.update
+    outcome = command.update["messages"][0].artifact
+    assert outcome == {
+        "schema": "state_transition_outcome.v1",
+        "tool": "generate_order_tool",
+        "status": "not_applied",
+        "reason": "report_validation_failed",
+    }
 
 
 def test_generate_order_tool_allows_pending_date_as_verification_item():

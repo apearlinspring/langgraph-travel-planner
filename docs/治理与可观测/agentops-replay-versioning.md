@@ -32,7 +32,7 @@
 | `status` | 单轮状态。 | 区分 completed、failed、busy、cancelled 等结果。 |
 | `step` | 当前自由规划阶段。 | 复盘是否停在正确工作流阶段。 |
 | `planning_mode` | 当前规划模式。 | 区分 `free_planning`、`agency_plan` 或待确认模式。 |
-| `first_token_seconds` | 首个响应片段等待时间。 | 判断模型或上游链路是否首响过慢。 |
+| `first_token_seconds` | 任意首个助手响应片段等待时间；该片段可能只是固定 ACK（确认收到）。 | 判断连接与 SSE（服务器发送事件）是否尽快出现首个片段；不能据此判断 LLM 或工具是否已开始产生有意义内容。 |
 | `total_elapsed_seconds` | 本轮总耗时。 | 判断是否触发运行预算风险。 |
 | `tool_call_count` | 工具启动次数。 | 判断工具压力和是否存在重复调用。 |
 | `tool_failure_count` | 工具失败次数。 | 判断工具链质量和兜底原因。 |
@@ -86,7 +86,7 @@
 1. 定位版本：确认 Git commit、分支、场景集、命令参数和摘要 `version`。
 2. 定位场景：确认 `scenario_id`、规划模式、当前阶段和 `turn_id`。
 3. 看 readiness：如果 readiness 或 preflight 是 `blocked`，停止宣称通过，先记录阻塞原因。
-4. 看首响和总耗时：用 `first_token_seconds` 与 `total_elapsed_seconds` 判断慢点。
+4. 看连接首响和总耗时：`first_token_seconds` 可能只对应固定 ACK，只用于判断任意首片段是否出现；用 `total_elapsed_seconds` 判断完整轮次是否变慢，当前没有独立的首个有意义内容耗时指标。
 5. 看工具压力：用 `tool_call_count`、工具名计数和 `runtime_governance.tool_usage` 判断是否过度调用。
 6. 看工具可信度：逐条看 `tool_audit` 的 `status`、`semantic_status`、`evidence_type` 和 `retry_count`。
 7. 看兜底和降级：如果 `fallback_count > 0` 或 `degradation_status != ok`，报告口径必须带“需核验/降级”。

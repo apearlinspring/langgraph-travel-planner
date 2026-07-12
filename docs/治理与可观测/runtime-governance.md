@@ -6,7 +6,7 @@
 
 运行治理回答三个问题：
 
-- 慢在哪里：总耗时、首 token（词元）时间、工具轮次耗时占比。
+- 慢在哪里：总耗时、首个助手响应片段时间、工具轮次耗时占比。
 - 成本风险在哪里：估算输入 token、估算输出 token、估算总 token、工具调用次数。
 - 工具是否过度调用：高成本工具同轮重复调用、总工具调用次数、工具调用预算占比。
 - 兜底和降级在哪里：工具失败次数、fallback（兜底）次数、degraded（降级）轮次。
@@ -20,20 +20,27 @@
 - `RuntimeBudgetGateResult`：预算门禁结果。
 - `RuntimeQualityResult`：运行质量评分和治理摘要。
 
-聊天 API（应用程序接口）会在每轮 `done` 前发送 `turn_observability` 安全摘要。该摘要不包含工具输入、工具输出、密钥、手机号、邮箱、身份证或异常原文，只包含 `turn_id`、阶段、规划模式、耗时、工具计数、失败计数、兜底计数、降级状态和 token 估算。
+聊天 API（应用程序接口）会在每轮 `done` 前发送 `turn_observability` 安全摘要。该摘要不包含工具输入、工具输出、密钥、手机号、邮箱、身份证或异常原文，只包含 `turn_id`、阶段、规划模式、耗时、工具计数、失败计数、兜底计数、安全错误计数、降级状态和 token 估算。
 
 默认阈值：
 
 | 字段 | 默认值 | 含义 |
 |---|---:|---|
 | `max_total_elapsed_seconds` | 900 | 场景最大总耗时 |
-| `max_first_token_seconds` | 60 | 首 token 最大等待时间 |
+| `max_first_token_seconds` | 60 | 任意首个助手响应片段最大等待时间 |
 | `max_tool_call_count` | 32 | 场景最大工具调用次数 |
 | `max_estimated_total_tokens` | 120000 | 估算总 token 上限 |
-| `max_error_event_count` | 0 | SSE 错误事件上限 |
+| `max_error_event_count` | 0 | SSE `error` 与 `turn_observability.error_event_count` 的安全错误计数上限（取最大值防重复） |
+| `max_tool_failure_count` | 0 | `service_exception` 硬失败数上限 |
+| `max_tool_failure_ratio` | 0.0 | 硬失败数除以工具调用数的上限 |
+| `max_fallback_count` | 0 | `not_found` 等显式兜底数上限 |
 | `max_tool_turn_elapsed_seconds` | `null` | 可选工具轮次耗时上限 |
 
 首 token 缺失时会记录 warning（警告），但不直接判失败，因为旧快照或纯 `report_data` 快照可能没有 token 事件。只要首 token 有观测值，就会按阈值判断。
+
+`first_token_seconds` 可能由 API 先发出的固定 ACK（确认收到）触发，因此只能衡量“是否尽快出现任意助手片段”，不能证明 LLM（大语言模型）有意义内容已经开始，更不能替代完整处理延迟。运行预算、回归比较和面试演示都必须保留 `total_elapsed_seconds`；当前尚无独立的 time-to-first-meaningful-content（首个有意义内容耗时）指标。
+
+所有浮点阈值必须是有限数；`NaN` 和正负无穷会在预算构造阶段被拒绝，不能利用浮点比较特性绕过门禁。
 
 ## 场景预算
 
@@ -43,7 +50,7 @@
 
 - 默认使用 `RuntimeBudget`。
 - `long-context` 或 `long_conversation` 场景放宽到 1200 秒、90 秒首 token、45 次工具调用、180000 估算 token。
-- `hotel`、`transport`、`weather`、`fallback` 场景至少允许 36 次工具调用。
+- `hotel`、`transport`、`weather`、`fallback` 场景至少允许 36 次工具调用；两个专门 fallback 场景还显式允许有界的硬失败数、失败率和兜底数。
 - 场景内 `runtime_budget` 拥有最终覆盖权。
 
 ## 质量门禁
@@ -74,7 +81,7 @@
 
 `runtime_governance` 包含四个面向复盘的分组：
 
-- `slow_path`：总耗时、首 token 时间、工具轮次耗时和慢点发现。
+- `slow_path`：总耗时、任意首个助手片段时间、工具轮次耗时和慢点发现；首片段可能只是 ACK，必须结合总耗时解释。
 - `cost_risk`：估算输入、输出、总 token 和成本风险发现。
 - `tool_usage`：工具调用次数、工具计数、冗余调用和过度调用发现。
 - `fallbacks`：fallback 次数、降级轮次数和生产观测事件数量。

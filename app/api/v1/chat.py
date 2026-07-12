@@ -5,7 +5,8 @@ import json
 import asyncio
 import re
 import time
-from datetime import date
+from dataclasses import dataclass
+from datetime import date, datetime, time as datetime_time, timedelta
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -20,6 +21,7 @@ from app.schemas.message import MessageCreate
 from app.api.dependencies import get_current_user
 from app.agents.handoffs.travel_agent import create_travel_agent
 from app.config import settings
+from app.core.permissions import get_user_role
 from app.core.observability import (
     TurnObservation,
     public_tool_audit_event,
@@ -40,6 +42,7 @@ from app.tools.result_validation import (
 )
 from app.journey.route_preferences import extract_route_segment_preferences
 from app.journey.visual_planner import JOURNEY_PLAN_VERSION, validate_journey_plan
+from app.reports.route_builder import normalize_report_route_contract_surfaces
 from app.utils.logger import app_logger
 from app.utils.date_normalization import normalize_travel_date
 from app.utils.security import redact_sensitive_data, redact_sensitive_text
@@ -49,15 +52,33 @@ router = APIRouter(prefix="/chat", tags=["对话"])
 SESSION_BUSY_MESSAGE = "当前会话正在处理上一轮消息，请稍后再试。"
 _THINK_OPEN_TAG = "<think>"
 _THINK_CLOSE_TAG = "</think>"
+_TRANSPORT_CLAIM_QUALIFIER = "（动态班次与票务状态待二次核验，以官方实时结果为准）"
+_TRANSPORT_CLAIM_PATTERN = re.compile(
+    r"(?:车次|航班|班次|高铁|火车|机票).{0,20}"
+    r"(?:已确认|有票|余票|已出票|可订|准点)",
+    re.IGNORECASE,
+)
+_TRANSPORT_CLAIM_QUALIFIED_PATTERN = re.compile(
+    r"待核验|二次核验|待确认|需确认|未确认|以官方|以平台|以实际|"
+    r"以[^。！？；\n]*为准|未锁定|不锁|暂未|不可保证|不能保证|"
+    r"核验|核实|复核|可能|预计|估算|预估|参考",
+    re.IGNORECASE,
+)
+_TRANSPORT_SENTENCE_BOUNDARY_PATTERN = re.compile(r"[。！？；\n]")
 _FAST_MODE_SPLIT_QUESTION = "您想要现成省心方案，还是个性化旅游规划？"
+_INITIAL_COMPLETE_AGENCY_ACK_MESSAGE = "收到，正在为你整理完整省心方案。\n\n"
 _AGENT_EVENT_IDLE_TIMEOUT_SECONDS = 90.0
-_FAST_MEANINGFUL_FACT_KEYS = {
+_FAST_REQUIREMENT_FACT_KEYS = {
     "departure_city",
     "destination",
+    "departure_date_text",
     "departure_date",
     "travel_days",
     "adult_count",
+    "children_count",
     "budget_text",
+}
+_FAST_MEANINGFUL_FACT_KEYS = _FAST_REQUIREMENT_FACT_KEYS | {
     "planning_mode",
     "active_workflow",
     "agency_step",
@@ -74,7 +95,127 @@ _FAST_MODE_CONTEXT_KEYS = {
     "planning_mode_confirmed",
     "pending_initial_planning_mode",
     "pending_initial_planning_mode_reason",
+    "agent_state_initialized",
 }
+_FAST_PERSISTED_FACT_KEYS = _FAST_REQUIREMENT_FACT_KEYS | {
+    "current_step",
+    "agency_step",
+    "planning_mode",
+    "active_workflow",
+    "planning_mode_confirmed",
+}
+_FAST_DURABLE_REQUIREMENT_FACT_KEYS = (
+    "departure_city",
+    "destination",
+    "departure_date",
+    "travel_days",
+    "adult_count",
+    "children_count",
+    "budget_text",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class ChatTurnQuotaDecision:
+    """Daily quota decision for the LLM-capable chat stream endpoint."""
+
+    enabled: bool
+    limit: int
+    used: int
+    remaining_after_accept: int
+    retry_after_seconds: int
+
+
+def _normalize_quota_now(now: datetime | None = None) -> datetime:
+    current = now or datetime.now()
+    if current.tzinfo is not None:
+        current = current.replace(tzinfo=None)
+    return current
+
+
+def _chat_quota_window(now: datetime | None = None) -> tuple[datetime, datetime]:
+    current = _normalize_quota_now(now)
+    window_start = datetime.combine(current.date(), datetime_time.min)
+    return window_start, window_start + timedelta(days=1)
+
+
+def _chat_quota_retry_after_seconds(now: datetime | None = None) -> int:
+    current = _normalize_quota_now(now)
+    _, window_end = _chat_quota_window(current)
+    return max(1, int((window_end - current).total_seconds()))
+
+
+async def _enforce_chat_turn_quota(
+    db: AsyncSession,
+    user: User,
+    *,
+    now: datetime | None = None,
+) -> ChatTurnQuotaDecision:
+    limit = max(1, int(settings.chat_turn_quota_daily_limit))
+    if not settings.chat_turn_quota_enabled:
+        return ChatTurnQuotaDecision(
+            enabled=False,
+            limit=limit,
+            used=0,
+            remaining_after_accept=limit,
+            retry_after_seconds=0,
+        )
+
+    if settings.chat_turn_quota_admin_exempt and get_user_role(user) in {"admin", "approver"}:
+        return ChatTurnQuotaDecision(
+            enabled=True,
+            limit=limit,
+            used=0,
+            remaining_after_accept=limit,
+            retry_after_seconds=0,
+        )
+
+    window_start, window_end = _chat_quota_window(now)
+    result = await db.execute(
+        select(func.count(Message.id))
+        .select_from(Message)
+        .join(Conversation, Message.conversation_id == Conversation.id)
+        .where(Conversation.user_id == user.id)
+        .where(Message.role == "user")
+        .where(Message.created_at >= window_start)
+        .where(Message.created_at < window_end)
+    )
+    if hasattr(result, "scalar_one"):
+        used = int(result.scalar_one() or 0)
+    else:
+        used = int(result.scalar() or 0)
+
+    retry_after = _chat_quota_retry_after_seconds(now)
+    if used >= limit:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail={
+                "code": "chat_daily_quota_exceeded",
+                "message": "今日演示对话额度已用完，请明天再试。",
+            },
+            headers={
+                "Retry-After": str(retry_after),
+                "X-ChatQuota-Limit": str(limit),
+                "X-ChatQuota-Remaining": "0",
+            },
+        )
+
+    return ChatTurnQuotaDecision(
+        enabled=True,
+        limit=limit,
+        used=used,
+        remaining_after_accept=max(0, limit - used - 1),
+        retry_after_seconds=retry_after,
+    )
+
+
+def _chat_quota_headers(decision: ChatTurnQuotaDecision) -> dict[str, str]:
+    if not decision.enabled:
+        return {}
+    return {
+        "X-ChatQuota-Limit": str(decision.limit),
+        "X-ChatQuota-Remaining": str(decision.remaining_after_accept),
+    }
 
 _FAST_DESTINATION_COPY = {
     "杭州": "杭州很适合慢逛和尝鲜，四天左右刚好能把西湖周边和老城区的烟火气走舒服。",
@@ -181,6 +322,45 @@ class _AssistantThinkingFilter:
         return remainder
 
 
+def _qualify_transport_claim_segment(segment: str) -> str:
+    """Add a same-sentence verification qualifier to unsupported live claims."""
+
+    if not _TRANSPORT_CLAIM_PATTERN.search(segment):
+        return segment
+    if _TRANSPORT_CLAIM_QUALIFIED_PATTERN.search(segment):
+        return segment
+    if segment and _TRANSPORT_SENTENCE_BOUNDARY_PATTERN.fullmatch(segment[-1]):
+        return f"{segment[:-1]}{_TRANSPORT_CLAIM_QUALIFIER}{segment[-1]}"
+    return f"{segment}{_TRANSPORT_CLAIM_QUALIFIER}"
+
+
+class _AssistantTransportClaimFilter:
+    """Qualify risky transport claims while preserving streamed sentence layout."""
+
+    def __init__(self) -> None:
+        self._buffer = ""
+
+    def feed(self, value: str) -> str:
+        self._buffer += str(value or "")
+        chunks: list[str] = []
+        while boundary := _TRANSPORT_SENTENCE_BOUNDARY_PATTERN.search(self._buffer):
+            boundary_end = boundary.end()
+            segment = self._buffer[:boundary_end]
+            self._buffer = self._buffer[boundary_end:]
+            chunks.append(_qualify_transport_claim_segment(segment))
+        return "".join(chunks)
+
+    def finish(self) -> str:
+        remainder = _qualify_transport_claim_segment(self._buffer)
+        self._buffer = ""
+        return remainder
+
+
+def _qualify_unsupported_transport_claims(text: str) -> str:
+    claim_filter = _AssistantTransportClaimFilter()
+    return claim_filter.feed(text) + claim_filter.finish()
+
+
 class JourneyDraftUpdate(BaseModel):
     """Persist a user-adjusted journey draft without bypassing report gates."""
 
@@ -251,8 +431,19 @@ def _extract_fast_route_places(text: str) -> tuple[str, str]:
         r"(?=$|[，,。；;\s]|玩|旅游|旅行|游|两个人|二人|[一二两三四五六七八九十\d]+人|"
         r"[一二两三四五六七八九十\d]+天|预算|人均|每人|下周|这周|本周|明天|后天|帮我|规划|安排)"
     )
+    date_between_route = (
+        r"(?:\d{4}[-/年]\d{1,2}[-/月]\d{1,2}(?:日|号)?|"
+        r"\d{1,2}月\d{1,2}(?:日|号)?|"
+        r"(?:今天|明天|后天|大后天|下下周|下周|这周|本周|周末)"
+        r"(?:周|星期|礼拜)?[一二三四五六日天]?)"
+    )
+    dated_departure_bridge = (
+        rf"[，,。；;\s]*(?:(?:出发)?日期(?:为|是|定为|[:：])?\s*)?"
+        rf"{date_between_route}[，,。；;\s]*"
+    )
     patterns = (
         rf"(?:从|自){place}(?:出发)?(?:去|到|前往|飞往|开车去|坐车去){place}{destination_boundary}",
+        rf"(?:从|自){place}出发{dated_departure_bridge}(?:去|到|前往|飞往|开车去|坐车去){place}{destination_boundary}",
         rf"{place}(?:出发)?(?:到|去|前往|->|→){place}{destination_boundary}",
     )
     for pattern in patterns:
@@ -341,7 +532,34 @@ def _extract_fast_days(text: str) -> int | None:
 
 def _extract_fast_people(text: str) -> int | None:
     normalized = " ".join(str(text or "").split())
-    match = re.search(r"([一二两三四五六七八九十\d]+)\s*(?:个)?(?:人|成人|大人)", normalized)
+    number = r"[一二两三四五六七八九十\d]+"
+    explicit_adults = re.search(
+        rf"({number})\s*(?:个|位|名)?\s*(?:成人|大人|老人|长辈)",
+        normalized,
+    ) or re.search(rf"({number})\s*大(?!学)", normalized)
+    if explicit_adults:
+        return _fast_cn_number(explicit_adults.group(1))
+
+    total = re.search(
+        rf"(?:共|一共|总共)\s*({number})\s*(?:个?人|位|名)",
+        normalized,
+    ) or re.search(rf"({number})\s*(?:个|位|名)?\s*人", normalized)
+    if not total:
+        return None
+    total_count = _fast_cn_number(total.group(1))
+    children_count = _extract_fast_children(normalized)
+    if total_count is None or children_count is None:
+        return total_count
+    return max(total_count - children_count, 0)
+
+
+def _extract_fast_children(text: str) -> int | None:
+    normalized = " ".join(str(text or "").split())
+    number = r"[一二两三四五六七八九十\d]+"
+    match = re.search(
+        rf"({number})\s*(?:个|位|名)?\s*(?:儿童|孩子|小孩|小朋友)",
+        normalized,
+    ) or re.search(rf"({number})\s*小(?!时)", normalized)
     if not match:
         return None
     return _fast_cn_number(match.group(1))
@@ -349,15 +567,17 @@ def _extract_fast_people(text: str) -> int | None:
 
 def _extract_fast_budget(text: str) -> str:
     normalized = " ".join(str(text or "").split())
+    amount_pattern = (
+        r"(?:\d+(?:\.\d+)?|[一二两三四五六七八九十百千万]+)"
+        r"\s*(?:万|千)?\s*元?"
+    )
     match = re.search(
-        r"((?:预算\s*(?:人均|每人)?|(?:人均|每人)\s*预算?)\s*[约大概左右]*\s*\d+(?:\.\d+)?\s*(?:万|千)?\s*元?(?:左右|以内|上下)?)",
+        rf"((?:预算\s*(?:人均|每人)?|(?:人均|每人)\s*预算?)"
+        rf"\s*[约大概左右]*\s*{amount_pattern}"
+        rf"(?:\s*(?:-|—|–|~|～|至|到)\s*{amount_pattern})?"
+        r"(?:左右|以内|上下)?)",
         normalized,
     )
-    if not match:
-        match = re.search(
-            r"((?:预算\s*(?:人均|每人)?|(?:人均|每人)\s*预算?)\s*[约大概左右]*\s*[一二两三四五六七八九十百千万\d]+(?:\.\d+)?\s*(?:万|千)?\s*元?(?:左右|以内|上下)?)",
-            normalized,
-        )
     if not match:
         return ""
     budget = re.sub(r"\s+", "", match.group(1)).strip("，,。；;")
@@ -404,6 +624,7 @@ def extract_fast_split_facts(text: str, *, today: date | None = None) -> dict:
         "departure_date": departure_date,
         "travel_days": _extract_fast_days(normalized),
         "adult_count": _extract_fast_people(normalized),
+        "children_count": _extract_fast_children(normalized),
         "budget_text": _extract_fast_budget(normalized),
         "source": "first_turn_fast_split",
     }
@@ -416,6 +637,12 @@ def _has_meaningful_fast_trip_facts(facts: dict | None) -> bool:
     return any(facts.get(key) not in (None, "", [], {}) for key in _FAST_MEANINGFUL_FACT_KEYS)
 
 
+def _has_fast_requirement_facts(facts: dict | None) -> bool:
+    if not isinstance(facts, dict):
+        return False
+    return any(facts.get(key) not in (None, "", [], {}) for key in _FAST_REQUIREMENT_FACT_KEYS)
+
+
 def _should_apply_current_turn_fast_facts(facts: dict | None) -> bool:
     if not _has_meaningful_fast_trip_facts(facts):
         return False
@@ -425,6 +652,7 @@ def _should_apply_current_turn_fast_facts(facts: dict | None) -> bool:
         "departure_date",
         "travel_days",
         "adult_count",
+        "children_count",
         "budget_text",
         "planning_mode",
         "active_workflow",
@@ -471,24 +699,7 @@ def _fast_context_has_selected_planning_mode(context: dict | None) -> bool:
 
     requirement = context.get("user_requirement")
     requirement_dict = requirement if isinstance(requirement, dict) else {}
-    if bool(requirement_dict.get("planning_mode_confirmed")):
-        return True
-
-    mode = str(
-        context.get("planning_mode")
-        or context.get("pending_initial_planning_mode")
-        or requirement_dict.get("planning_mode")
-        or ""
-    ).strip()
-    workflow = str(context.get("active_workflow") or "").strip()
-
-    if workflow == "agency_plan":
-        return True
-    if mode == "agency_plan":
-        return True
-    if mode == "free_planning" and workflow == "free_planning":
-        return True
-    return False
+    return bool(requirement_dict.get("planning_mode_confirmed"))
 
 
 def _agency_requirement_missing_items(facts: dict | None) -> list[str]:
@@ -532,7 +743,8 @@ def _should_use_fast_agency_requirement_reply(
         return False, {}, False
     latest_mode = latest_fast_split_facts.get("planning_mode")
     mode_just_confirmed = (
-        mode_decision.confirmed
+        latest_mode != "agency_plan"
+        and mode_decision.confirmed
         and mode_decision.mode == "agency_plan"
         and getattr(mode_decision, "source", "") == "latest_user"
     )
@@ -543,14 +755,163 @@ def _should_use_fast_agency_requirement_reply(
     merged_facts = _merge_fast_trip_facts(
         latest_fast_split_facts,
         user_facts,
-        {"planning_mode": "agency_plan", "active_workflow": "agency_plan"},
+        {
+            "planning_mode": "agency_plan",
+            "active_workflow": "agency_plan",
+            "planning_mode_confirmed": True,
+        },
     )
     missing = _agency_requirement_missing_items(merged_facts)
     if mode_just_confirmed and missing:
         return True, merged_facts, True
-    if latest_mode == "agency_plan" and _has_meaningful_fast_trip_facts(user_facts):
+    if (
+        latest_mode == "agency_plan"
+        and missing
+        and _has_meaningful_fast_trip_facts(user_facts)
+    ):
         return True, merged_facts, False
     return False, merged_facts, mode_just_confirmed
+
+
+def _should_emit_initial_complete_agency_ack(
+    *,
+    fast_mode_context: dict | None,
+    mode_decision,
+    agency_facts: dict | None,
+    should_fast_agency: bool,
+) -> bool:
+    """Identify the first complete agency turn that will continue through the agent."""
+
+    context = fast_mode_context if isinstance(fast_mode_context, dict) else {}
+    return (
+        not should_fast_agency
+        and not bool(context.get("agent_state_initialized"))
+        and bool(getattr(mode_decision, "confirmed", False))
+        and getattr(mode_decision, "mode", None) == "agency_plan"
+        and not _agency_requirement_missing_items(agency_facts)
+    )
+
+
+def _should_seed_agent_from_fast_facts(
+    fast_mode_context: dict | None,
+    *,
+    mode_just_confirmed: bool,
+) -> bool:
+    """Seed fast facts once without overwriting a durable LangGraph state every turn."""
+
+    if mode_just_confirmed:
+        return True
+    context = fast_mode_context if isinstance(fast_mode_context, dict) else {}
+    return not bool(context.get("agent_state_initialized"))
+
+
+def _fast_durable_requirement_patch(facts: dict | None) -> dict:
+    """Keep only normalized, non-empty requirement fields for durable sparse sync."""
+
+    if not isinstance(facts, dict):
+        return {}
+    return {
+        key: facts[key]
+        for key in _FAST_DURABLE_REQUIREMENT_FACT_KEYS
+        if facts.get(key) not in (None, "", [], {})
+    }
+
+
+async def _sync_fast_facts_to_initialized_agent_state(
+    agent,
+    *,
+    config: dict,
+    fast_mode_context: dict | None,
+    turn_fast_facts: dict | None,
+) -> bool:
+    """Merge current-turn fast facts into an existing LangGraph checkpoint.
+
+    Nested requirement dictionaries have no reducer, so sending a sparse nested
+    dictionary directly would replace previously collected details. Read the
+    checkpoint first, merge only normalized requirement fields, and update only
+    ``user_requirement`` plus ``confirmed_facts``. Workflow stages and selected
+    options remain untouched.
+    """
+
+    context = fast_mode_context if isinstance(fast_mode_context, dict) else {}
+    patch = _fast_durable_requirement_patch(turn_fast_facts)
+    if not bool(context.get("agent_state_initialized")) or not patch:
+        return False
+
+    aget_state = getattr(agent, "aget_state", None)
+    aupdate_state = getattr(agent, "aupdate_state", None)
+    if not callable(aget_state) or not callable(aupdate_state):
+        return False
+
+    try:
+        snapshot = await aget_state(config)
+        values = getattr(snapshot, "values", None)
+        if not isinstance(values, dict):
+            return False
+
+        requirement = values.get("user_requirement")
+        requirement = dict(requirement) if isinstance(requirement, dict) else {}
+        confirmed_facts = values.get("confirmed_facts")
+        confirmed_facts = (
+            dict(confirmed_facts) if isinstance(confirmed_facts, dict) else {}
+        )
+        if all(
+            requirement.get(key) == value and confirmed_facts.get(key) == value
+            for key, value in patch.items()
+        ):
+            return False
+
+        await aupdate_state(
+            config,
+            {
+                "user_requirement": {**requirement, **patch},
+                "confirmed_facts": {**confirmed_facts, **patch},
+            },
+        )
+        return True
+    except Exception as exc:
+        app_logger.warning(
+            "Fast requirement checkpoint sync skipped: "
+            f"error={exc.__class__.__name__}"
+        )
+        return False
+
+
+def _resolve_fast_planning_mode(
+    user_message: str,
+    *,
+    latest_fast_split_facts: dict | None,
+    fast_mode_context: dict | None,
+):
+    facts = latest_fast_split_facts if isinstance(latest_fast_split_facts, dict) else {}
+    context = fast_mode_context if isinstance(fast_mode_context, dict) else {}
+    facts_requirement = facts.get("user_requirement")
+    facts_requirement = facts_requirement if isinstance(facts_requirement, dict) else {}
+    context_requirement = context.get("user_requirement")
+    context_requirement = context_requirement if isinstance(context_requirement, dict) else {}
+    persisted_mode = facts.get("planning_mode")
+    if persisted_mode not in {"agency_plan", "free_planning"}:
+        persisted_mode = context.get("planning_mode")
+    return resolve_planning_mode(
+        user_message,
+        state={
+            "current_step": "requirement_collection",
+            "planning_mode": persisted_mode,
+            "active_workflow": (
+                facts.get("active_workflow") or context.get("active_workflow")
+            ),
+            "planning_mode_confirmed": bool(
+                context.get("planning_mode_confirmed")
+                or facts.get("planning_mode_confirmed")
+                or context_requirement.get("planning_mode_confirmed")
+                or facts_requirement.get("planning_mode_confirmed")
+            ),
+            "fast_mode_split_needs_confirmation": bool(
+                context.get("fast_mode_split_needs_confirmation")
+            ),
+            "pending_initial_request_text": facts.get("raw_text", ""),
+        },
+    )
 
 
 async def _conversation_role_counts(
@@ -623,7 +984,12 @@ async def _persist_fast_mode_context_on_conversation(
         if not conversation:
             return
         extra_info = dict(conversation.extra_info or {})
-        safe_facts = redact_sensitive_data(dict(facts or {}))
+        persisted_facts = {
+            key: value
+            for key, value in dict(facts or {}).items()
+            if key in _FAST_PERSISTED_FACT_KEYS and value not in (None, "", [], {})
+        }
+        safe_facts = redact_sensitive_data(persisted_facts)
         extra_info["fast_mode_split"] = {
             "needs_confirmation": bool(needs_confirmation),
             "question": _FAST_MODE_SPLIT_QUESTION,
@@ -642,6 +1008,55 @@ async def _persist_fast_mode_context_on_conversation(
     except Exception as exc:
         app_logger.info(
             "Fast mode context persist skipped: "
+            f"conversation_id={conversation_id}, error={exc.__class__.__name__}"
+        )
+
+
+async def _persist_agent_state_initialized(
+    db: AsyncSession,
+    *,
+    conversation_id: str,
+    progress_snapshot: dict | None = None,
+    planning_mode_confirmed: bool = False,
+) -> None:
+    """Mark that the LangGraph thread owns durable progress after its first real turn."""
+
+    if not callable(getattr(db, "execute", None)):
+        return
+    try:
+        result = await db.execute(
+            select(Conversation).where(Conversation.id == conversation_id)
+        )
+        conversation = result.scalar_one_or_none()
+        if not conversation:
+            return
+        extra_info = dict(conversation.extra_info or {})
+        extra_info["agent_state_initialized"] = True
+        if planning_mode_confirmed:
+            extra_info["planning_mode_confirmed"] = True
+            fast_split = extra_info.get("fast_mode_split")
+            if isinstance(fast_split, dict):
+                extra_info["fast_mode_split"] = {
+                    **fast_split,
+                    "needs_confirmation": False,
+                }
+        if isinstance(progress_snapshot, dict):
+            for key in ("planning_mode", "active_workflow", "agency_step"):
+                value = progress_snapshot.get(key)
+                if value not in (None, "", [], {}):
+                    extra_info[key] = redact_sensitive_data(value)
+        conversation.extra_info = extra_info
+        db.add(conversation)
+        await db.commit()
+    except Exception as exc:
+        rollback = getattr(db, "rollback", None)
+        if callable(rollback):
+            try:
+                await rollback()
+            except Exception:
+                pass
+        app_logger.info(
+            "Agent state initialization marker persist skipped: "
             f"conversation_id={conversation_id}, error={exc.__class__.__name__}"
         )
 
@@ -700,14 +1115,21 @@ def _progress_snapshot_from_trip_facts(
         ("destination", "目的地"),
         ("departure_date", "出发时间"),
         ("travel_days", "行程天数"),
-        ("adult_count", "人数"),
+        ("adult_count", "成人数"),
+        ("children_count", "儿童数"),
         ("budget_text", "预算"),
     )
     for key, label in labels:
         value = facts.get(key)
         if value in (None, "", [], {}):
             continue
-        display_value = f"{value}天" if key == "travel_days" else f"{value}人" if key == "adult_count" else str(value)
+        display_value = (
+            f"{value}天"
+            if key == "travel_days"
+            else f"{value}人"
+            if key in {"adult_count", "children_count"}
+            else str(value)
+        )
         confirmed.append({"key": key, "label": label, "value": display_value})
     return {
         "version": "travel_progress_snapshot.v1",
@@ -783,6 +1205,11 @@ def _progress_snapshot_from_state(update: dict | None) -> dict:
         "departure_date": requirement.get("departure_date") or confirmed_facts.get("departure_date"),
         "travel_days": requirement.get("travel_days") or confirmed_facts.get("travel_days"),
         "adult_count": requirement.get("adult_count") or confirmed_facts.get("adult_count"),
+        "children_count": (
+            requirement.get("children_count")
+            if requirement.get("children_count") is not None
+            else confirmed_facts.get("children_count")
+        ),
         "budget_text": (
             confirmed_facts.get("budget_text")
             or requirement.get("budget_text")
@@ -891,6 +1318,7 @@ def _fast_split_state_seed(
     facts: dict | None,
     *,
     planning_mode: str | None = None,
+    planning_mode_reason: str = "",
 ) -> dict:
     facts = facts if isinstance(facts, dict) else {}
     if not facts:
@@ -902,6 +1330,7 @@ def _fast_split_state_seed(
         ("departure_date", "departure_date"),
         ("travel_days", "travel_days"),
         ("adult_count", "adult_count"),
+        ("children_count", "children_count"),
     ):
         value = facts.get(source_key)
         if value not in (None, "", [], {}):
@@ -921,6 +1350,7 @@ def _fast_split_state_seed(
             "departure_date": facts.get("departure_date"),
             "travel_days": facts.get("travel_days"),
             "adult_count": facts.get("adult_count"),
+            "children_count": facts.get("children_count"),
             "budget_text": facts.get("budget_text"),
         }.items()
         if value not in (None, "", [], {})
@@ -952,7 +1382,8 @@ def _fast_split_state_seed(
                 "active_workflow": planning_mode,
                 "planning_mode_confirmed": True,
                 "pending_initial_planning_mode": planning_mode,
-                "pending_initial_planning_mode_reason": "用户在首轮分流后明确选择方案类型",
+                "pending_initial_planning_mode_reason": planning_mode_reason
+                or "用户在首轮分流后明确选择方案类型",
             }
         )
         if planning_mode == "agency_plan":
@@ -1109,6 +1540,7 @@ def _report_extra_info_from_tool_output(output) -> dict:
     if not isinstance(report_data, dict):
         return {}
     report_data = redact_sensitive_data(report_data)
+    report_data = normalize_report_route_contract_surfaces(report_data)
 
     extra_info = {
         "message_type": "travel_report",
@@ -1484,9 +1916,11 @@ async def generate_sse_stream(
     emitted_tool_call_names = set()
     assistant_extra_info = {}
     fallback_assistant_message = ""
+    initial_complete_agency_ack_emitted = False
     session_lock = None
     final_report_emitted = False
     thinking_filter = _AssistantThinkingFilter()
+    transport_claim_filter = _AssistantTransportClaimFilter()
 
     def record_assistant_token(token: str) -> dict:
         nonlocal assistant_message, first_token_elapsed
@@ -1505,6 +1939,16 @@ async def generate_sse_stream(
             "turn_id": turn_observation.turn_id,
             "content": token,
         }
+
+    def flush_transport_claim_filter() -> str:
+        return transport_claim_filter.finish()
+
+    def finish_assistant_text_filters() -> str:
+        thinking_tail = thinking_filter.finish()
+        return (
+            transport_claim_filter.feed(thinking_tail)
+            + transport_claim_filter.finish()
+        )
 
     try:
         try:
@@ -1605,21 +2049,17 @@ async def generate_sse_stream(
             yield sse(_turn_done_payload(turn_observation))
             return
 
-        if not latest_fast_split_facts and _has_meaningful_fast_trip_facts(fast_mode_context):
+        if not latest_fast_split_facts and _has_fast_requirement_facts(fast_mode_context):
             latest_fast_split_facts = dict(fast_mode_context)
         if turn_has_fast_fact_updates:
             latest_fast_split_facts = _merge_fast_trip_facts(
                 latest_fast_split_facts,
                 turn_fast_facts,
             )
-        mode_decision = resolve_planning_mode(
+        mode_decision = _resolve_fast_planning_mode(
             user_message,
-            state={
-                "current_step": "requirement_collection",
-                "planning_mode": latest_fast_split_facts.get("planning_mode"),
-                "active_workflow": latest_fast_split_facts.get("active_workflow"),
-                "planning_mode_confirmed": latest_fast_split_facts.get("planning_mode") == "agency_plan",
-            },
+            latest_fast_split_facts=latest_fast_split_facts,
+            fast_mode_context=fast_mode_context,
         )
         should_fast_agency, agency_facts, mode_just_confirmed = (
             _should_use_fast_agency_requirement_reply(
@@ -1675,6 +2115,38 @@ async def generate_sse_stream(
             yield sse(_turn_done_payload(turn_observation))
             return
 
+        if _should_emit_initial_complete_agency_ack(
+            fast_mode_context=fast_mode_context,
+            mode_decision=mode_decision,
+            agency_facts=agency_facts,
+            should_fast_agency=should_fast_agency,
+        ):
+            initial_complete_agency_ack_emitted = True
+            yield sse(
+                record_assistant_token(_INITIAL_COMPLETE_AGENCY_ACK_MESSAGE)
+            )
+
+        if turn_has_fast_fact_updates and latest_fast_split_facts:
+            persisted_fast_facts = agency_facts or latest_fast_split_facts
+            if mode_decision.confirmed and mode_decision.mode in {
+                "agency_plan",
+                "free_planning",
+            }:
+                persisted_fast_facts = _merge_fast_trip_facts(
+                    persisted_fast_facts,
+                    {
+                        "planning_mode": mode_decision.mode,
+                        "active_workflow": mode_decision.mode,
+                        "planning_mode_confirmed": True,
+                    },
+                )
+            await _persist_fast_mode_context_on_conversation(
+                db,
+                conversation_id=conversation_id,
+                facts=persisted_fast_facts,
+                needs_confirmation=bool(mode_decision.needs_confirmation),
+            )
+
         if turn_has_fast_fact_updates:
             snapshot_mode = (
                 latest_fast_split_facts.get("planning_mode")
@@ -1696,9 +2168,20 @@ async def generate_sse_stream(
 
         # 2. 创建 agent
         agent = await create_travel_agent()
+        agent_config = {
+            "recursion_limit": settings.langgraph_recursion_limit,
+            "configurable": {"thread_id": conversation_id},
+        }
 
-        # 3. 关键修复：输入必须是字典格式！
-        # LangGraph StateGraph 期望输入是 state 的部分更新
+        if turn_has_fast_fact_updates:
+            await _sync_fast_facts_to_initialized_agent_state(
+                agent,
+                config=agent_config,
+                fast_mode_context=fast_mode_context,
+                turn_fast_facts=turn_fast_facts,
+            )
+
+        # 3. LangGraph-backed create_agent 接收 TravelState 的部分更新。
         input_data = {
             "messages": [HumanMessage(content=user_message)],
             "user_id": str(user.id),
@@ -1706,12 +2189,16 @@ async def generate_sse_stream(
             "turn_id": turn_observation.turn_id,
         }
         if latest_fast_split_facts:
-            if mode_decision.confirmed:
+            if mode_decision.confirmed and _should_seed_agent_from_fast_facts(
+                fast_mode_context,
+                mode_just_confirmed=mode_just_confirmed,
+            ):
                 selected_mode = mode_decision.mode
                 seed_facts = agency_facts if agency_facts else latest_fast_split_facts
                 fast_seed = _fast_split_state_seed(
                     seed_facts,
                     planning_mode=selected_mode,
+                    planning_mode_reason=mode_decision.reason,
                 )
                 input_data.update(fast_seed)
                 turn_observation.update_context(
@@ -1743,12 +2230,7 @@ async def generate_sse_stream(
         # 4. 使用 astream_events 获取更细粒度的流式输出
         event_stream = agent.astream_events(
             input_data,
-            config={
-                "recursion_limit": settings.langgraph_recursion_limit,
-                "configurable": {
-                    "thread_id": conversation_id
-                }
-            },
+            config=agent_config,
             version="v2",
         )
         while True:
@@ -1765,12 +2247,18 @@ async def generate_sse_stream(
             if kind == "on_chat_model_stream":
                 chunk = event.get("data", {}).get("chunk")
                 if chunk and hasattr(chunk, "content") and chunk.content:
-                    token = thinking_filter.feed(redact_sensitive_text(chunk.content))
+                    visible_text = thinking_filter.feed(
+                        redact_sensitive_text(chunk.content)
+                    )
+                    token = transport_claim_filter.feed(visible_text)
                     if token:
                         yield sse(record_assistant_token(token))
 
             # 或者捕获工具调用信息
             elif kind == "on_tool_start":
+                pending_token = flush_transport_claim_filter()
+                if pending_token:
+                    yield sse(record_assistant_token(pending_token))
                 tool_name = event.get("name", "")
                 run_id = event.get("run_id", "")
                 turn_observation.record_tool_start(tool_name)
@@ -1933,17 +2421,27 @@ async def generate_sse_stream(
             await asyncio.sleep(0)
 
         # 5. 保存 AI 回复
-        tail_token = thinking_filter.finish()
+        tail_token = finish_assistant_text_filters()
         if tail_token:
             yield sse(record_assistant_token(tail_token))
-        if not assistant_message.strip() and fallback_assistant_message:
-            assistant_message = _strip_assistant_thinking_content(
-                fallback_assistant_message
+        assistant_message = _strip_assistant_thinking_content(assistant_message)
+        if fallback_assistant_message and (
+            not assistant_message.strip()
+            or (
+                initial_complete_agency_ack_emitted
+                and assistant_message.strip()
+                == _INITIAL_COMPLETE_AGENCY_ACK_MESSAGE.strip()
             )
-        else:
-            assistant_message = _strip_assistant_thinking_content(
-                assistant_message
+        ):
+            fallback_message = _qualify_unsupported_transport_claims(
+                _strip_assistant_thinking_content(fallback_assistant_message)
             )
+            if assistant_message.strip() and fallback_message.strip():
+                assistant_message = (
+                    f"{assistant_message.rstrip()}\n\n{fallback_message.lstrip()}"
+                )
+            elif fallback_message.strip():
+                assistant_message = fallback_message
         if tool_audit_events:
             assistant_extra_info["tool_audit_events"] = tool_audit_events
             audit_persistence = await _persist_tool_audit_events_safely(
@@ -1954,7 +2452,7 @@ async def generate_sse_stream(
             )
             if audit_persistence.get("status") == "degraded":
                 assistant_extra_info["tool_audit_persistence"] = audit_persistence
-                turn_observation.mark_degraded("tool_audit_persistence_degraded")
+                turn_observation.mark_error("ToolAuditPersistenceError")
         turn_observation.ensure_assistant_text_observed(assistant_message)
         observability_snapshot = turn_observation.finish("completed")
         assistant_extra_info["observability"] = observability_snapshot
@@ -1975,6 +2473,12 @@ async def generate_sse_stream(
                 planning_trace=assistant_extra_info.get("planning_trace"),
                 source="generate_visual_journey_tool",
             )
+        await _persist_agent_state_initialized(
+            db,
+            conversation_id=conversation_id,
+            progress_snapshot=turn_observation.progress_snapshot,
+            planning_mode_confirmed=mode_decision.confirmed,
+        )
 
         total_elapsed = time.perf_counter() - request_started_at
         app_logger.info(
@@ -2017,12 +2521,12 @@ async def generate_sse_stream(
                 f"reason={fallback_reason}"
             )
             turn_observation.mark_fallback(fallback_reason)
-            tail_token = thinking_filter.finish()
+            tail_token = finish_assistant_text_filters()
             if tail_token:
                 yield sse(record_assistant_token(tail_token))
             if not assistant_message.strip() and fallback_assistant_message:
-                assistant_message = _strip_assistant_thinking_content(
-                    fallback_assistant_message
+                assistant_message = _qualify_unsupported_transport_claims(
+                    _strip_assistant_thinking_content(fallback_assistant_message)
                 )
             else:
                 assistant_message = _strip_assistant_thinking_content(
@@ -2057,7 +2561,7 @@ async def generate_sse_stream(
                 )
                 if audit_persistence.get("status") == "degraded":
                     assistant_extra_info["tool_audit_persistence"] = audit_persistence
-                    turn_observation.mark_degraded("tool_audit_persistence_degraded")
+                    turn_observation.mark_error("ToolAuditPersistenceError")
             turn_observation.ensure_assistant_text_observed(assistant_message)
             observability_snapshot = turn_observation.finish("completed")
             assistant_extra_info["observability"] = observability_snapshot
@@ -2135,15 +2639,19 @@ async def stream_chat(
             detail="会话不存在"
         )
 
+    quota_decision = await _enforce_chat_turn_quota(db, user)
+    response_headers = {
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",  # 禁用 Nginx 缓冲
+    }
+    response_headers.update(_chat_quota_headers(quota_decision))
+
     # 返回 SSE 流
     return StreamingResponse(
         generate_sse_stream(conversation_id, data.content, db, user),
         media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no"  # 禁用 Nginx 缓冲
-        }
+        headers=response_headers,
     )
 
 

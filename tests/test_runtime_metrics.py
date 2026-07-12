@@ -154,6 +154,9 @@ def test_runtime_budget_from_dict_overrides_thresholds():
             "max_tool_call_count": 3,
             "max_estimated_total_tokens": 5000,
             "max_error_event_count": 1,
+            "max_tool_failure_count": 2,
+            "max_tool_failure_ratio": 0.5,
+            "max_fallback_count": 2,
         }
     )
 
@@ -162,6 +165,90 @@ def test_runtime_budget_from_dict_overrides_thresholds():
     assert budget.max_tool_call_count == 3
     assert budget.max_estimated_total_tokens == 5000
     assert budget.max_error_event_count == 1
+    assert budget.max_tool_failure_count == 2
+    assert budget.max_tool_failure_ratio == 0.5
+    assert budget.max_fallback_count == 2
+
+
+def test_runtime_budget_blocks_failure_heavy_run_unless_scenario_explicitly_allows_it():
+    metrics = collect_runtime_metrics(
+        events=[
+            {"type": "token", "content": "hello", "elapsed_since_scenario_start": 0.5},
+            {"type": "report_data", "elapsed_since_scenario_start": 1.0},
+            {
+                "type": "turn_observability",
+                "observability": {
+                    "tool_call_count": 21,
+                    "tool_failure_count": 13,
+                    "fallback_count": 13,
+                    "degradation_status": "degraded",
+                    "estimated_input_tokens": 10,
+                    "estimated_output_tokens": 20,
+                    "estimated_total_tokens": 30,
+                },
+            },
+        ],
+        turns=[
+            {
+                "turn_index": 1,
+                "user_message": "Plan with tool evidence",
+                "elapsed_seconds": 1.0,
+                "tool_call_count": 21,
+            }
+        ],
+        assistant_text="hello",
+        elapsed_seconds=1.0,
+    )
+
+    strict_gate = evaluate_runtime_budget(metrics)
+    strict_result = evaluate_runtime_metrics(metrics)
+
+    assert strict_gate.passed is False
+    assert strict_result.passed is False
+    assert strict_result.governance_summary["status"] == "fail"
+    assert any("Tool failure count 13" in item for item in strict_gate.violations)
+    assert any("Tool failure ratio 61.9%" in item for item in strict_gate.violations)
+    assert any("Fallback count 13" in item for item in strict_gate.violations)
+
+    fallback_scenario_budget = runtime_budget_from_dict(
+        {
+            "max_tool_failure_count": 16,
+            "max_tool_failure_ratio": 1.0,
+            "max_fallback_count": 16,
+        }
+    )
+
+    assert evaluate_runtime_budget(metrics, fallback_scenario_budget).passed is True
+    assert evaluate_runtime_metrics(metrics, budget=fallback_scenario_budget).passed is True
+
+
+def test_runtime_budget_rejects_invalid_tool_failure_ratio():
+    with pytest.raises(ValueError, match="max_tool_failure_ratio"):
+        runtime_budget_from_dict({"max_tool_failure_ratio": 1.01})
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    [
+        "max_total_elapsed_seconds",
+        "max_first_token_seconds",
+        "max_tool_turn_elapsed_seconds",
+        "max_tool_failure_ratio",
+        "warning_total_elapsed_ratio",
+        "warning_first_token_ratio",
+        "warning_tool_call_ratio",
+        "warning_token_ratio",
+    ],
+)
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_runtime_budget_rejects_non_finite_float_thresholds(field_name, value):
+    with pytest.raises(ValueError, match=field_name):
+        runtime_budget_from_dict({field_name: value})
+
+
+def test_runtime_budget_constructor_rejects_non_finite_thresholds():
+    with pytest.raises(ValueError, match="max_tool_failure_ratio"):
+        RuntimeBudget(max_tool_failure_ratio=float("nan"))
 
 
 def test_evaluate_runtime_budget_flags_threshold_violations():
@@ -312,7 +399,7 @@ def test_duplicate_loop_guard_skip_is_recoverable_runtime_signal():
                 "type": "turn_observability",
                 "observability": {
                     "tool_call_count": 1,
-                    "tool_failure_count": 1,
+                    "tool_failure_count": 0,
                     "fallback_count": 0,
                     "degradation_status": "degraded",
                     "estimated_input_tokens": 4,
@@ -326,9 +413,136 @@ def test_duplicate_loop_guard_skip_is_recoverable_runtime_signal():
         elapsed_seconds=2.0,
     )
 
-    assert metrics.tool_failure_count == 1
+    assert metrics.tool_failure_count == 0
     assert metrics.error_event_count == 0
     assert metrics.degraded_event_count == 1
+
+
+def test_needs_verification_is_degraded_but_not_a_tool_failure_or_fallback():
+    metrics = collect_runtime_metrics(
+        events=[
+            {"type": "tool_call", "tool": "summarize_budget_tool"},
+            {
+                "type": "tool_audit",
+                "tool": "summarize_budget_tool",
+                "status": "degraded",
+                "semantic_status": "needs_verification",
+                "error_type": "mcp_result_requires_verification",
+            },
+            {
+                "type": "turn_observability",
+                "observability": {
+                    "tool_call_count": 1,
+                    "tool_failure_count": 0,
+                    "fallback_count": 0,
+                    "degradation_status": "degraded",
+                },
+            },
+        ],
+        turns=[{"turn_index": 1, "user_message": "汇总预算", "elapsed_seconds": 1.0}],
+        assistant_text="预算结果待二次核验。",
+        elapsed_seconds=1.0,
+    )
+
+    assert metrics.tool_failure_count == 0
+    assert metrics.fallback_count == 0
+    assert metrics.degraded_event_count == 1
+
+
+def test_empty_result_semantics_override_raw_failed_status_as_fallback_only():
+    events = [
+        {"type": "tool_call", "tool": f"tool_{index}"}
+        for index in range(4)
+    ]
+    events.extend(
+        [
+            {
+                "type": "tool_audit",
+                "status": "failed",
+                "error_type": "empty_rag_result",
+            },
+            {
+                "type": "tool_audit",
+                "status": "failed",
+                "error_type": "empty_mcp_result",
+            },
+            {
+                "type": "tool_audit",
+                "status": "failed",
+                "error_type": "empty_transport_result",
+            },
+            {
+                "type": "tool_audit",
+                "status": "failed",
+                "semantic_status": "not_found",
+            },
+        ]
+    )
+
+    metrics = collect_runtime_metrics(
+        events=events,
+        turns=[{"turn_index": 1, "user_message": "查询候选", "elapsed_seconds": 1.0}],
+        assistant_text="暂未查到候选。",
+        elapsed_seconds=1.0,
+    )
+
+    assert metrics.tool_failure_count == 0
+    assert metrics.fallback_count == 4
+
+
+def test_tool_audit_semantics_override_stale_turn_summary_counts():
+    metrics = collect_runtime_metrics(
+        events=[
+            {"type": "tool_call", "tool": "query_transport_options"},
+            {
+                "type": "tool_audit",
+                "tool": "query_transport_options",
+                "status": "failed",
+                "error_type": "empty_transport_result",
+                "semantic_status": "not_found",
+            },
+            {
+                "type": "turn_observability",
+                "observability": {
+                    "tool_call_count": 1,
+                    "tool_failure_count": 1,
+                    "fallback_count": 1,
+                    "degradation_status": "degraded",
+                },
+            },
+        ],
+        turns=[{"turn_index": 1, "user_message": "查交通", "elapsed_seconds": 1.0}],
+        assistant_text="暂未查到候选。",
+        elapsed_seconds=1.0,
+    )
+
+    assert metrics.tool_failure_count == 0
+    assert metrics.fallback_count == 1
+
+
+def test_observability_error_count_fails_budget_without_sse_error_event():
+    metrics = collect_runtime_metrics(
+        events=[
+            {"type": "token", "content": "ok", "elapsed_since_scenario_start": 0.1},
+            {"type": "report_data"},
+            {
+                "type": "turn_observability",
+                "observability": {
+                    "error_event_count": 1,
+                    "degradation_status": "failed",
+                },
+            },
+        ],
+        turns=[{"turn_index": 1, "user_message": "生成方案", "elapsed_seconds": 1.0}],
+        assistant_text="ok",
+        elapsed_seconds=1.0,
+    )
+
+    gate = evaluate_runtime_budget(metrics)
+
+    assert metrics.error_event_count == 1
+    assert gate.passed is False
+    assert any("Error event count 1" in violation for violation in gate.violations)
 
 
 def test_collect_runtime_metrics_rejects_invalid_inputs():
@@ -389,3 +603,18 @@ def test_turn_observability_defaults_to_named_step_and_mode():
     assert summary["planning_mode"] == "pending_confirmation"
     assert context["current_step"] == "requirement_collection"
     assert context["planning_mode"] == "pending_confirmation"
+
+
+def test_turn_observability_exposes_safe_error_count_without_error_type():
+    observation = TurnObservation(
+        conversation_id="conversation-1",
+        user_id="user-1",
+        user_message="生成方案",
+    )
+    observation.mark_error("ToolAuditPersistenceError")
+
+    summary = observation.to_public_summary()
+
+    assert summary["error_event_count"] == 1
+    assert summary["degradation_status"] == "failed"
+    assert "error_type" not in summary

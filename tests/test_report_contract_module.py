@@ -5,7 +5,11 @@ from app.reports import (
     report_sections,
     validate_report_data,
 )
-from app.reports.route_builder import normalize_report_route_segment
+from app.evaluation.report_quality import evaluate_report_quality
+from app.reports.route_builder import (
+    normalize_report_route_contract_surfaces,
+    normalize_report_route_segment,
+)
 from tests.test_report_quality_evaluation import _valid_report_data
 
 
@@ -31,6 +35,25 @@ def test_report_bundle_renders_markdown_from_valid_report_data():
     assert "路段交通" in bundle.markdown
     assert "打车" in bundle.markdown
     assert "人均：" not in bundle.markdown
+
+
+def test_report_bundle_normalizes_route_contract_before_validation():
+    report_data = _valid_report_data()
+    report_data["itinerary"][0]["route"]["segments"][0]["alternatives"] = [
+        {"mode": "地铁", "label": "公交/地铁"}
+    ]
+    report_data["map_routes"][0]["segments"][0]["alternatives"] = [
+        {"mode": "地铁", "label": "公交/地铁"}
+    ]
+
+    bundle = build_report_bundle(report_data)
+    segment = bundle.report_data["map_routes"][0]["segments"][0]
+
+    assert bundle.validation.ok is True
+    assert bundle.markdown
+    assert segment["selected_mode"] in [
+        option["mode"] for option in segment["alternatives"]
+    ]
 
 
 def test_report_validator_blocks_pseudo_report_without_required_contract():
@@ -116,6 +139,20 @@ def test_route_segment_alternative_does_not_reuse_incompatible_duration():
 
 
 def test_report_builder_assembles_report_data_from_domain_inputs():
+    transport_audit_event = {
+        "name": "query_train_options",
+        "status": "timeout",
+        "elapsed_seconds": 45.0,
+        "error_type": "upstream_timeout",
+        "retry_count": 0,
+        "evidence_type": "live_transport_query",
+        "input_summary": {
+            "origin_city": "北京",
+            "destination_city": "上海",
+            "departure_date": "2026-06-20",
+        },
+        "output_summary": {"message": "12306 查询超时"},
+    }
     route = {
         "day_number": 1,
         "route_points": ["北京", "上海", "人民广场", "外滩"],
@@ -146,7 +183,11 @@ def test_report_builder_assembles_report_data_from_domain_inputs():
     }
 
     report_data = build_travel_report_data(
-        state={"selected_destination": "上海", "selected_transport": "train"},
+        state={
+            "selected_destination": "上海",
+            "selected_transport": "train",
+            "tool_audit_events": [transport_audit_event],
+        },
         requirement={
             "departure_city": "北京",
             "destination": "上海",
@@ -191,6 +232,24 @@ def test_report_builder_assembles_report_data_from_domain_inputs():
     assert any(section["id"] == "product_quote" for section in report_data["sections"])
     assert "budget_confidence" in report_data["advisor_sections"]
     assert "budget_confidence" not in report_data["customer_sections"]
+    assert report_data["evidence_bundle"]["tool_audit_events"] == [
+        {
+            "name": "query_train_options",
+            "status": "timeout",
+            "elapsed_seconds": 45.0,
+            "error_type": "upstream_timeout",
+            "retry_count": 0,
+            "evidence_type": "live_transport_query",
+        }
+    ]
+    assert (
+        report_data["tool_audit_summary"]["events"]
+        == report_data["evidence_bundle"]["tool_audit_events"]
+    )
+    assert any(
+        "高铁/火车" in item and "真实查询超时" in item
+        for item in report_data["tool_audit_summary"]["pending_checks"]
+    )
     assert validate_report_data(report_data).ok is True
 
 
@@ -265,3 +324,97 @@ def test_report_builder_pads_missing_routes_instead_of_zip_truncating():
         "Day 2 缺少地图路线，已按行程内容补齐。"
     ]
     assert validate_report_data(report_data).ok is True
+
+
+def test_report_builder_normalizes_sparse_route_summaries_for_export():
+    itinerary = [
+        {
+            "day_number": 1,
+            "theme": "重庆核心区轻松游",
+            "time_blocks": ["上午：解放碑集合。", "下午：洪崖洞慢游。"],
+            "activities": ["解放碑", "洪崖洞"],
+        }
+    ]
+    sparse_route = {
+        "day_number": 1,
+        "route_points": ["解放碑"],
+        "summary": "解放碑周边轻松游",
+        "map_label": "Day 1：解放碑周边轻松游",
+    }
+    budget = {
+        "currency": "CNY",
+        "total": 2400,
+        "per_person": 600,
+        "line_items": [
+            {"key": "transport", "label": "交通", "amount": 800, "basis": "高铁估算"},
+            {"key": "accommodation", "label": "住宿", "amount": 900, "basis": "舒适型酒店估算"},
+            {"key": "food", "label": "餐饮", "amount": 400, "basis": "本地餐饮估算"},
+            {"key": "attractions", "label": "景点/体验", "amount": 100, "basis": "免费景点为主"},
+            {"key": "misc", "label": "服务预留", "amount": 200, "basis": "市内交通和缓冲"},
+        ],
+        "confidence_level": "中",
+        "estimated_items": ["酒店与交通价格待实时核验。"],
+        "verification_items": ["高铁余票、酒店库存和实时价格需二次核验。"],
+    }
+
+    report_data = build_travel_report_data(
+        state={
+            "planning_mode": "agency_plan",
+            "selected_destination": "重庆",
+            "selected_transport": "train",
+        },
+        requirement={
+            "departure_city": "成都",
+            "destination": "重庆",
+            "travel_days": 1,
+            "adult_count": 4,
+            "budget_min": 1500,
+            "budget_max": 2500,
+            "travel_styles": ["省心"],
+        },
+        budget=budget,
+        itinerary=itinerary,
+        route_summaries=[sparse_route],
+        selected_transport_option={"source": "acceptance_fixture", "price": 200},
+        selected_accommodation={"source": "acceptance_fixture", "price": 450},
+        selected_food_types=["local"],
+        transport_label="高铁",
+        transport_summary="高铁票价待核验",
+        accommodation_summary="核心商圈舒适型酒店待核验",
+        food_preferences_summary="本地小吃加特色餐厅",
+    )
+
+    route = report_data["itinerary"][0]["route"]
+    route_map_day = report_data["route_map"]["days"][0]
+
+    assert len(route["route_points"]) >= 2
+    assert route["segments"]
+    assert len(route_map_day["points"]) >= 2
+    assert route_map_day["segments"]
+    assert validate_report_data(report_data).ok is True
+    assert evaluate_report_quality(report_data, expected_mode="agency_plan").passed is True
+
+
+def test_report_route_contract_export_normalizes_all_report_surfaces():
+    report_data = _valid_report_data()
+    broken_alternatives = [
+        {"mode": "打车", "label": "打车"},
+        {"mode": "地铁", "label": "公交/地铁"},
+    ]
+    report_data["itinerary"][0]["route"]["segments"][0]["alternatives"] = broken_alternatives
+    report_data["route_map"]["days"][0]["segments"][0]["alternatives"] = broken_alternatives
+
+    normalized = normalize_report_route_contract_surfaces(report_data)
+
+    for route in (
+        normalized["itinerary"][0]["route"],
+        normalized["map_routes"][0],
+        normalized["route_map"]["days"][0],
+    ):
+        segment = route["segments"][0]
+        selected_mode = segment["selected_mode"]
+        alternative_modes = [option["mode"] for option in segment["alternatives"]]
+        assert selected_mode in alternative_modes
+
+    assert validate_report_data(normalized).ok is True
+    assert evaluate_report_quality(normalized, expected_mode="agency_plan").passed is True

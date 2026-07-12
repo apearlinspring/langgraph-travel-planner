@@ -1,9 +1,55 @@
-import importlib
 import asyncio
+import importlib
+import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+
+
+@pytest.mark.parametrize(
+    "script_name",
+    (
+        "check_concurrency_rate_limit_evidence_record.py",
+        "check_external_dependency_resilience_record.py",
+        "check_postgres_redis_recovery_record.py",
+        "check_m1_rollout_execution_record.py",
+        "check_m1_operations_review_record.py",
+        "check_production_image_build_execution_record.py",
+        "check_rollback_execution_record.py",
+        "check_incident_tabletop_status.py",
+        "check_disk_remediation_approval.py",
+        "check_docker_build_cache_cleanup_approval.py",
+        "check_live_chat_concurrency_probe_approval.py",
+        "check_live_chat_probe_execution_approval.py",
+        "check_restore_drill_feasibility.py",
+        "collect_backup_schedule_live_probe.py",
+        "collect_docker_build_cache_cleanup_plan.py",
+        "collect_docker_disk_cleanup_plan.py",
+        "collect_live_server_probe.py",
+        "collect_postgres_redis_live_probe.py",
+        "collect_postgres_restore_drill_live_probe.py",
+        "collect_server_capacity_snapshot.py",
+        "converge_server_shared_env.py",
+        "execute_docker_disk_cleanup.py",
+        "prepare_production_image_build_execution.py",
+    ),
+)
+def test_refactored_script_runs_as_direct_script(script_name):
+    project_root = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [sys.executable, str(project_root / "scripts" / script_name), "--help"],
+        cwd=project_root,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=10,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "usage:" in result.stdout.lower()
 
 
 def test_init_db_script_imports_cleanly():
@@ -14,6 +60,23 @@ def test_init_db_script_imports_cleanly():
 def test_init_rag_script_imports_cleanly():
     module = importlib.import_module("scripts.init_rag")
     assert hasattr(module, "main")
+
+
+def test_init_rag_help_does_not_start_initialization():
+    project_root = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [sys.executable, str(project_root / "scripts" / "init_rag.py"), "--help"],
+        cwd=project_root,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=10,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "usage:" in result.stdout.lower()
+    assert "开始初始化 RAG 系统" not in result.stdout
 
 
 def test_validate_rag_knowledge_script_imports_cleanly():

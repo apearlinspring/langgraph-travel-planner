@@ -6,6 +6,12 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from app.evaluation.report_quality import CriterionResult
+from app.evaluation.scoring import (
+    as_dict as _as_dict,
+    as_list as _as_list,
+    grade as _grade,
+    score as _score,
+)
 
 
 FAILURE_STATUSES = {
@@ -30,6 +36,7 @@ REDUNDANCY_TRACKED_TOOLS = frozenset(
         "plan_driving_route",
         "get_weather_forecast",
         "search_travel_info",
+        "scenic_price_lookup_tool",
         "search_destination_guide",
         "search_food_recommendations",
         "search_accommodation_info",
@@ -90,33 +97,6 @@ class ToolQualityResult:
             "tool_overuse": self.tool_overuse,
             "criteria": [criterion.to_dict() for criterion in self.criteria],
         }
-
-
-def _grade(normalized_score: float) -> str:
-    if normalized_score >= 90:
-        return "A"
-    if normalized_score >= 80:
-        return "B"
-    if normalized_score >= 70:
-        return "C"
-    if normalized_score >= 60:
-        return "D"
-    return "F"
-
-
-def _as_dict(value: Any) -> dict[str, Any]:
-    return value if isinstance(value, dict) else {}
-
-
-def _as_list(value: Any) -> list[Any]:
-    return value if isinstance(value, list) else []
-
-
-def _score(condition: bool, points: float, findings: list[str], message: str) -> float:
-    if condition:
-        return points
-    findings.append(message)
-    return 0.0
 
 
 def _tool_name_from_event(event: dict[str, Any]) -> str:

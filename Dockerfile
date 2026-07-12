@@ -10,7 +10,7 @@ RUN apt-get update && \
         curl && \
     rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt /tmp/requirements.txt
+COPY requirements.runtime.txt /tmp/requirements.runtime.txt
 
 RUN python -m venv /opt/venv && \
     /opt/venv/bin/pip install \
@@ -20,8 +20,8 @@ RUN python -m venv /opt/venv && \
         --timeout 120 \
         --index-url ${PIP_INDEX_URL} \
         --trusted-host ${PIP_TRUSTED_HOST} \
-        -r /tmp/requirements.txt && \
-    rm -f /tmp/requirements.txt
+        -r /tmp/requirements.runtime.txt && \
+    rm -f /tmp/requirements.runtime.txt
 
 RUN /opt/venv/bin/pip install \
     --no-cache-dir \

@@ -6,6 +6,10 @@ from typing import Any
 
 from app.tools.audit import summarize_tool_output
 from app.tools.contracts import ToolEvidenceType, ToolResultValidation
+from app.utils.message_utils import (
+    APPLIED_STATE_TRANSITION_STATUSES,
+    state_transition_outcome_from_message,
+)
 
 
 ERROR_HINTS = (
@@ -20,6 +24,56 @@ ERROR_HINTS = (
     "failed",
     "timeout",
 )
+
+
+def _state_transition_outcome_from_tool_output(
+    tool_name: str,
+    output: Any,
+) -> dict[str, Any] | None:
+    candidates = [output]
+    update = (
+        output.get("update")
+        if isinstance(output, dict)
+        else getattr(output, "update", None)
+    )
+    if isinstance(update, dict):
+        messages = update.get("messages") or []
+        if isinstance(messages, (list, tuple)):
+            candidates.extend(reversed(messages))
+
+    for candidate in candidates:
+        outcome = state_transition_outcome_from_message(candidate)
+        if outcome and outcome.get("tool") == tool_name:
+            return outcome
+    return None
+
+
+def _validate_state_transition_outcome(
+    tool_name: str,
+    output: Any,
+) -> ToolResultValidation | None:
+    outcome = _state_transition_outcome_from_tool_output(tool_name, output)
+    if not outcome:
+        return None
+
+    outcome_summary = {
+        key: value
+        for key in ("schema", "tool", "status", "reason", "next_step")
+        if isinstance((value := outcome.get(key)), str) and value
+    }
+    output_summary = summarize_tool_output(output)
+    output_summary["state_transition_outcome"] = outcome_summary
+    if outcome["status"] == "not_applied":
+        reason = str(outcome.get("reason") or "state_transition_not_applied")
+        return ToolResultValidation(
+            status="failed",
+            output_summary=output_summary,
+            error_type=reason,
+            message="状态迁移工具已返回，但状态未应用。",
+        )
+    if outcome["status"] in APPLIED_STATE_TRANSITION_STATUSES:
+        return ToolResultValidation(status="success", output_summary=output_summary)
+    return None
 
 
 def classify_exception(exc: BaseException) -> tuple[str, str]:
@@ -161,6 +215,9 @@ def evidence_type_for_tool_name(tool_name: str) -> ToolEvidenceType:
 
 
 def validate_tool_output_for_audit(tool_name: str, content: Any) -> ToolResultValidation:
+    transition_validation = _validate_state_transition_outcome(tool_name, content)
+    if transition_validation is not None:
+        return transition_validation
     if tool_name == "query_hotel_options":
         return validate_mcp_result(content)
     if tool_name in {

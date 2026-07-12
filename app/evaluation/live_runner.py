@@ -26,7 +26,9 @@ from app.evaluation.runtime_metrics import (
     runtime_budget_from_dict,
 )
 from app.evaluation.scenarios import EvaluationScenario
+from app.evaluation.scoring import as_dict as _as_dict, as_list as _as_list, has_text as _has_text
 from app.evaluation.tool_quality import evaluate_tool_quality, extract_tool_events
+from app.reports.route_builder import normalize_report_route_contract_surfaces
 from app.utils.security import redact_sensitive_data, redact_sensitive_text
 
 
@@ -260,18 +262,6 @@ def _has_conversation_busy_event(events: list[dict[str, Any]]) -> bool:
         and str(event.get("type") or event.get("event") or "") == "session_busy"
         for event in events
     )
-
-
-def _as_dict(value: Any) -> dict[str, Any]:
-    return value if isinstance(value, dict) else {}
-
-
-def _as_list(value: Any) -> list[Any]:
-    return value if isinstance(value, list) else []
-
-
-def _has_text(value: Any) -> bool:
-    return isinstance(value, str) and bool(value.strip())
 
 
 def _agency_evidence_categories(report_data: dict[str, Any] | None) -> list[str]:
@@ -903,7 +893,8 @@ def run_live_scenario(
                             assistant_parts.append(content)
                             turn_assistant_parts.append(content)
                     elif event_type == "report_data" and isinstance(event.get("report_data"), dict):
-                        report_data = event["report_data"]
+                        report_data = normalize_report_route_contract_surfaces(event["report_data"])
+                        event_with_turn["report_data"] = report_data
                     elif event_type == "turn_observability" and isinstance(
                         event.get("observability"),
                         dict,

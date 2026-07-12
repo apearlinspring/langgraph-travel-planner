@@ -1,6 +1,6 @@
 """
 交通查询工具
-调用交通规划协调器（Subagents 主 Agent）
+调用交通规划协调 Agent；Coordinator 直接编排交通查询工具。
 """
 from __future__ import annotations
 
@@ -12,6 +12,9 @@ from langgraph.types import Command
 
 from app.config import settings
 from app.agents.subagents.transport_coordinator import create_transport_coordinator
+from app.core.requirement_dates import (
+    requirement_departure_date_confirmation as _requirement_departure_date_confirmation,
+)
 from app.core.state import TravelState
 from app.tools.execution_guard import audited_command, execute_guarded_call
 from app.tools.guardrails import validate_transport_query_args
@@ -20,17 +23,6 @@ from app.utils.logger import app_logger
 
 
 TRANSPORT_QUERY_TIMEOUT_SECONDS = 60.0
-PENDING_DATE_VALUES = {
-    "",
-    "日期",
-    "日期待确认",
-    "出发日期",
-    "出发日期待确认",
-    "待确认",
-    "未确认",
-    "待核验",
-    "待核实",
-}
 
 
 def _tool_message(content: str, runtime: Optional[ToolRuntime]) -> ToolMessage:
@@ -38,23 +30,6 @@ def _tool_message(content: str, runtime: Optional[ToolRuntime]) -> ToolMessage:
         content=content,
         tool_call_id=getattr(runtime, "tool_call_id", ""),
     )
-
-
-def _requirement_departure_date_confirmation(
-    requirement: dict,
-    normalized_date: str,
-) -> tuple[bool | None, str]:
-    if not requirement:
-        return None, ""
-
-    date_text = str(normalized_date or "").strip()
-    if date_text in PENDING_DATE_VALUES:
-        return False, "pending"
-    if requirement.get("departure_date_confirmed") is False:
-        return False, str(requirement.get("departure_date_source") or "unconfirmed")
-    if requirement.get("departure_date_confirmed") is True:
-        return True, str(requirement.get("departure_date_source") or "user_confirmed")
-    return True, str(requirement.get("departure_date_source") or "legacy_confirmed")
 
 
 def _normalize_args_from_state(

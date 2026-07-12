@@ -147,13 +147,15 @@ READY_APPROVAL_GOVERNANCE = {
     "ready": True,
     "storage": "postgres",
     "persistent": True,
-    "hitl_closed_loop": True,
+    "approval_persistence_ready": True,
+    "hitl_closed_loop": False,
 }
 NOT_READY_APPROVAL_GOVERNANCE = {
     "status": "not_ready",
     "ready": False,
     "storage": "postgres",
     "persistent": False,
+    "approval_persistence_ready": False,
     "hitl_closed_loop": False,
     "last_error": "database unavailable",
 }
@@ -378,6 +380,7 @@ def test_build_readiness_payload_requires_persistent_approval_governance(monkeyp
     assert payload["status"] == "not_ready"
     assert payload["services"]["session_lock"]["status"] == "ready"
     assert payload["services"]["approval_governance"]["status"] == "not_ready"
+    assert payload["services"]["approval_governance"]["approval_persistence_ready"] is False
     assert payload["services"]["approval_governance"]["hitl_closed_loop"] is False
 
 
@@ -487,3 +490,37 @@ def test_turn_observability_records_degraded_fallback_without_readiness_dependen
     assert snapshot["metrics"]["fallback_count"] == 1
     assert snapshot["metadata"]["current_step"] == "requirement_collection"
     assert get_turn_observability_snapshot(observation.turn_id)["turn_id"] == observation.turn_id
+
+
+def test_turn_observability_separates_verification_fallback_and_hard_failure():
+    observation = TurnObservation(
+        conversation_id="conversation-2",
+        user_id="user-2",
+        user_message="生成旅行方案",
+    )
+
+    observation.record_tool_audit_event(
+        {
+            "name": "summarize_budget_tool",
+            "status": "degraded",
+            "error_type": "mcp_result_requires_verification",
+        }
+    )
+    observation.record_tool_audit_event(
+        {
+            "name": "query_transport_options",
+            "status": "degraded",
+            "error_type": "empty_transport_result",
+        }
+    )
+    observation.record_tool_audit_event(
+        {
+            "name": "get_weather_forecast",
+            "status": "timeout",
+            "error_type": "TimeoutError",
+        }
+    )
+
+    assert observation.tool_failure_count == 1
+    assert observation.fallback_count == 1
+    assert observation.degradation_status == "degraded"

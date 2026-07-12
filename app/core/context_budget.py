@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from app.utils.message_utils import message_content as _message_content
+
 
 ContextLayerName = Literal[
     "system_prompt",
@@ -135,13 +137,3 @@ def trim_text_to_token_budget(text: str, token_budget: int) -> str:
     max_chars = max(80, token_budget * 2)
     trimmed = text[:max_chars].rstrip()
     return f"{trimmed}\n...（已按上下文预算截断）"
-
-
-def _message_content(message: Any) -> str:
-    if isinstance(message, dict):
-        content = message.get("content", "")
-    else:
-        content = getattr(message, "content", "")
-    if isinstance(content, list):
-        return "\n".join(str(item) for item in content)
-    return str(content or "")

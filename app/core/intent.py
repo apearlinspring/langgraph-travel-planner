@@ -483,6 +483,33 @@ def _state_planning_mode_confirmed(state: dict[str, Any] | None) -> bool:
     return False
 
 
+def _pending_fast_split_defaults_to_free(
+    text: str,
+    state: dict[str, Any] | None,
+) -> bool:
+    """Keep an unresolved fast split on the non-sales path after neutral confirmation."""
+
+    if not state or not bool(state.get("fast_mode_split_needs_confirmation")):
+        return False
+    normalized = (text or "").strip()
+    if (
+        not normalized
+        or has_explicit_agency_signal(normalized)
+        or has_explicit_free_signal(normalized)
+    ):
+        return False
+    initial_text = str(state.get("pending_initial_request_text") or "").strip()
+    if has_explicit_agency_signal(initial_text) or has_explicit_free_signal(initial_text):
+        return False
+    return bool(
+        re.search(
+            r"(?:以上|上述|前述|这些)?需求.{0,8}(?:确认无误|没有问题|没问题|无误)"
+            r"|(?:确认无误|没有问题|没问题).{0,12}(?:继续|推进|规划)",
+            normalized,
+        )
+    )
+
+
 def _detect_planning_mode_from_text(text: str) -> PlanningModeDecision:
     normalized = (text or "").strip()
     if not normalized:
@@ -568,6 +595,7 @@ def _detect_planning_mode_from_text(text: str) -> PlanningModeDecision:
                 source="latest_user",
                 reason="用户同时表达自由度和顾问托付诉求，倾向旅行社顾问方案",
                 confirmed=False,
+                needs_confirmation=True,
             )
         return PlanningModeDecision(
             confidence=0.55,
@@ -644,17 +672,29 @@ def resolve_planning_mode(
         )
 
     text_decision = _detect_planning_mode_from_text(text)
-    if text_decision.mode or text_decision.needs_confirmation:
+    if text_decision.mode:
+        return text_decision
+    if _pending_fast_split_defaults_to_free(text, state):
+        return PlanningModeDecision(
+            mode="free_planning",
+            confidence=0.78,
+            source="latest_user",
+            reason="待分流需求已获中性确认且没有旅行社托付信号，按非销售边界进入个性化旅游规划",
+            confirmed=True,
+        )
+    if text_decision.needs_confirmation:
         return text_decision
 
     state_mode = _state_planning_mode(state)
     if state_mode:
+        confirmed = _state_planning_mode_confirmed(state)
         return PlanningModeDecision(
             mode=state_mode,
             confidence=0.78,
             source="state",
             reason=_state_planning_mode_reason(state),
-            confirmed=_state_planning_mode_confirmed(state),
+            confirmed=confirmed,
+            needs_confirmation=not confirmed,
         )
 
     return PlanningModeDecision()

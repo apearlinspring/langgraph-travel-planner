@@ -7,7 +7,7 @@
 它回答这些问题：
 
 - 本轮对话的 `turn_id`、`conversation_id`、`user_id`、阶段和规划模式是什么；公开展示时阶段默认是 `requirement_collection`，模式默认是 `pending_confirmation`，不再展示 `unknown`。
-- 首 token（文本令牌）等待了多久，总耗时多久。
+- 首个助手响应片段等待了多久，总耗时多久。
 - 实际工具启动了几次，失败几次，是否触发 fallback（兜底）或 degraded（降级）状态。
 - 输入、输出和总 token 是否有稳定近似估算。
 - 这些指标能否被运行时评分和验收门禁消费。
@@ -45,11 +45,30 @@
 - `agency_step`
 - `active_workflow`
 
-## SSE 安全边界
+`first_token_seconds` 的准确口径是“从本轮开始到任意首个助手 `token` SSE（服务器发送事件）片段的时间”。该片段可能只是 API 固定 ACK（确认收到），不等于 LLM 已开始输出有意义方案，更不等于完整 Agent 已处理完毕。性能复盘必须同时保留并展示 `total_elapsed_seconds`；当前尚未单独采集 time-to-first-meaningful-content（首个有意义内容耗时）。
 
-SSE 只返回安全摘要，不返回完整工具参数、工具输出、错误原文、真实密钥或个人隐私信息。
+## 工具状态统计口径
 
-允许返回：
+工具的原始状态会先归一化为用户可理解的 `semantic_status`（语义状态），再进入观测和验收统计。`degraded（降级）` 表示结果不能直接当作已确认事实，不等于工具执行失败。
+
+| 典型原始状态或情形 | `semantic_status` | 计入 degraded | 计入 `tool_failure_count` | 计入 `fallback_count` |
+|---|---|---:|---:|---:|
+| `success` 且有可用结果 | `success` | 否 | 否 | 否 |
+| 调用成功但为空，如 `empty_transport_result` | `not_found` | 是 | 否 | 是 |
+| `degraded` | `needs_verification` | 是 | 否 | 否 |
+| 参数缺失、占位值或无效参数导致 `skipped` | `insufficient_parameters` | 是 | 否 | 否 |
+| `approval_required` 或治理规则跳过执行 | `skipped` | 是 | 否 | 否 |
+| 无更具体语义的 `failed`、`failure`、`timeout`、`error` | `service_exception` | 是 | 是 | 否 |
+
+分类优先级是显式 `semantic_status`、`error_type`、最后才是原始 `status`。因此，即使原始状态是 `failed`，只要 `error_type=empty_rag_result`、`empty_mcp_result`、`empty_transport_result` 等能明确归类为空结果，就只记 `not_found` fallback（兜底），不记 hard failure（硬失败）。只有 `service_exception` 才进入硬失败统计；`needs_verification`、`insufficient_parameters` 和治理跳过只记录降级，不增加失败数或 fallback 数。后端显式调用 `mark_fallback()` 的非工具兜底也会增加 `fallback_count`。
+
+## SSE 观测事件的安全边界
+
+`tool_audit` 和 `turn_observability` 这两类 SSE（服务器发送事件）观测事件只返回安全摘要，不返回完整工具参数、工具输出、错误原文或真实密钥。这里的承诺只适用于观测事件，不适用于整条 SSE：聊天流还会返回模型正文 token、结构化 `report_data` 和用户可见的降级文案。
+
+模型正文和报告在发送前会经过脱敏处理，但这是 best-effort redaction（尽力脱敏），不能保证所有 PII（个人身份信息）都被识别，尤其不能把按流式分片处理的文本视为跨分片敏感信息检测。前端、日志和下游消费者仍应把正文与报告当作可能包含用户业务内容的数据，按鉴权、最小展示和保留周期要求处理。
+
+观测事件允许返回：
 
 - `turn_id`
 - 工具名
@@ -61,14 +80,14 @@ SSE 只返回安全摘要，不返回完整工具参数、工具输出、错误�
 - token 估算
 - 规划阶段和规划模式
 
-不允许返回：
+观测事件不允许返回：
 
 - API（应用程序接口）密钥、token、cookie、密码等凭据。
 - 手机号、邮箱、身份证、护照等 PII（个人身份信息）。
 - 完整工具输入、完整工具输出或内部审计原文。
 - 未脱敏的异常字符串。
 
-用户侧错误事件使用通用文案；真实异常类型和堆栈只进入后端日志。
+用户侧错误事件使用通用文案；真实异常堆栈只进入受控后端日志。模型正文和 `report_data` 的脱敏属于纵深防御，不应在文档中表述为“整个 SSE 保证不含个人隐私信息”。
 
 ## 聊天链路接入
 
@@ -109,7 +128,9 @@ SSE 只返回安全摘要，不返回完整工具参数、工具输出、错误�
 `app/evaluation/runtime_metrics.py` 会消费 `turn_observability`：
 
 - 如果 SSE 工具提示为了前端体验做了去重，运行时指标仍会使用观测摘要里的真实工具启动次数。
-- `tool_failure_count`、`fallback_count` 和 `degraded_event_count` 会进入 `runtime_governance`。
+- `tool_failure_count` 只统计 `service_exception`；仅当没有更具体语义时，原始 `failed`、`failure`、`timeout`、`error` 才回落为 `service_exception`。`not_found` 只进入 `fallback_count`，其余待核验、参数不足和治理跳过只进入降级观测。
+- `tool_failure_count`、`fallback_count` 和 `degraded_event_count` 会分别进入 `runtime_governance`，三者不能互相替代。
+- 工具审计写入 PostgreSQL 失败会安全地增加 `turn_observability.error_event_count`；运行时采用它与 SSE `error` 事件数的最大值防止重复计数，默认 `max_error_event_count=0` 会 fail-closed（缺失持久化证据即失败）。
 - 缺少 `turn_observability` 会让运行时观测维度扣分，避免评估体系和真实链路脱节。
 
 `app/evaluation/acceptance_gate.py` 继续通过 `runtime_quality` 和 `runtime_budget` 消费运行时结果，不改变 `/health/ready` 的核心依赖判定。
@@ -119,4 +140,4 @@ SSE 只返回安全摘要，不返回完整工具参数、工具输出、错误�
 - token 使用量仍是字符近似估算，不等于供应商真实账单。
 - 内存快照只适合本地排查和单进程验证，重启后会丢失。
 - 还没有接入分布式 trace（链路追踪）或指标数据库。
-- 工具执行统一治理不在本分支实现，后续由 `codex/tool-execution-guard` 负责。
+- 当前文档描述的是进程内安全摘要和验收统计口径，不等于完整的跨服务工具执行链路追踪。

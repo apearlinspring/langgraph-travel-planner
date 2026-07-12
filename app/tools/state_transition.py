@@ -2,15 +2,17 @@
 State transition tools for the travel-planning workflow.
 """
 from datetime import date, datetime, timedelta
-from math import ceil
+import json
+from math import ceil, isfinite
 import re
 import time
-from typing import Any, Optional
+from typing import Annotated, Any, Optional
 from uuid import uuid4
 
 from langchain.tools import ToolRuntime, tool
 from langchain_core.messages import ToolMessage
 from langgraph.types import Command
+from pydantic import BeforeValidator
 
 from app.agency import product_rules as agency_product_rules
 from app.agency.planning_mode import (
@@ -81,6 +83,12 @@ from app.tools.scenic_ticket_provider import (
 )
 from app.utils.date_normalization import normalize_travel_date
 from app.utils.logger import app_logger
+from app.utils.message_utils import (
+    STATE_TRANSITION_OUTCOME_SCHEMA,
+    message_content,
+    message_role,
+    tool_names_from_message as _runtime_message_tool_names,
+)
 
 
 TRANSPORT_LABELS = {
@@ -563,15 +571,143 @@ def _as_string_list(value: Any) -> list[str]:
 
 
 def _as_optional_float(value: Any) -> Optional[float]:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, str):
+        match = re.search(r"[+-]?\d+(?:\.\d+)?", value.replace(",", ""))
+        if not match:
+            return None
+        normalized = float(match.group(0))
+    else:
+        try:
+            normalized = float(value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+    return normalized if isfinite(normalized) else None
+
+
+def _coerce_tool_text(value: Any) -> str | None:
+    """Coerce common structured LLM text arguments without stringifying raw mappings."""
+
     if value is None:
         return None
-    if isinstance(value, (int, float)):
-        return float(value)
     if isinstance(value, str):
-        match = re.search(r"\d+(?:\.\d+)?", value)
-        if match:
-            return float(match.group(0))
+        return value.strip() or None
+    if isinstance(value, dict):
+        for key in (
+            "details",
+            "summary",
+            "description",
+            "text",
+            "content",
+            "value",
+            "name",
+            "label",
+            "time",
+            "source",
+        ):
+            if key in value:
+                text = _coerce_tool_text(value.get(key))
+                if text:
+                    return text
+        return None
+    if isinstance(value, (list, tuple, set)):
+        parts = [text for item in value if (text := _coerce_tool_text(item))]
+        return "；".join(parts) or None
+    return str(value).strip() or None
+
+
+def _coerce_tool_choice(value: Any) -> str | None:
+    if isinstance(value, dict):
+        for key in ("transport_type", "type", "mode", "code", "value", "name", "label"):
+            if key in value:
+                choice = _coerce_tool_choice(value.get(key))
+                if choice:
+                    return choice
+        return None
+    if isinstance(value, (list, tuple, set)):
+        for item in value:
+            choice = _coerce_tool_choice(item)
+            if choice:
+                return choice
+        return None
+    return _coerce_tool_text(value)
+
+
+def _coerce_tool_float(value: Any) -> float | None:
+    if isinstance(value, dict):
+        for key in ("price", "amount", "value"):
+            if key in value:
+                return _coerce_tool_float(value.get(key))
+        return None
+    return _as_optional_float(value)
+
+
+def _coerce_tool_choices(value: Any) -> list[str]:
+    if value is None or isinstance(value, bool):
+        return []
+    if isinstance(value, str):
+        text = value.strip()
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            # Structured-looking malformed input must not fall through to
+            # substring matching, where one valid token could mask the error.
+            if text.startswith(("[", "{", '"')):
+                return []
+        else:
+            if isinstance(parsed, (list, dict, str)):
+                return _coerce_tool_choices(parsed)
+            # Only shapes already supported by this coercion may re-enter it.
+            # Numeric, boolean and null JSON values stay on the invalid path.
+            return []
+    if isinstance(value, dict):
+        for key in ("food_types", "types", "food_preferences", "preferences"):
+            if key in value:
+                return _coerce_tool_choices(value.get(key))
+
+        choices: list[str] = []
+        for key in ("food_type", "type", "code", "value", "name", "label", "preference"):
+            if key in value:
+                choices.extend(_coerce_tool_choices(value.get(key)))
+        if choices:
+            return choices
+        return [str(key) for key, selected in value.items() if selected is True]
+    if isinstance(value, (list, tuple, set)):
+        choices: list[str] = []
+        for item in value:
+            choices.extend(_coerce_tool_choices(item))
+        return choices
+    text = _coerce_tool_text(value)
+    return [text] if text else []
+
+
+def _coerce_food_pois(value: Any) -> list[dict] | None:
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        for key in ("food_pois", "pois", "items", "recommendations"):
+            if key in value:
+                return _coerce_food_pois(value.get(key))
+        return [value]
+    if isinstance(value, str):
+        name = value.strip()
+        return [{"name": name}] if name else None
+    if isinstance(value, (list, tuple, set)):
+        pois: list[dict] = []
+        for item in value:
+            normalized = _coerce_food_pois(item)
+            if normalized:
+                pois.extend(normalized)
+        return pois or None
     return None
+
+
+ToolChoiceInput = Annotated[str | None, BeforeValidator(_coerce_tool_choice)]
+ToolTextInput = Annotated[str | None, BeforeValidator(_coerce_tool_text)]
+ToolFloatInput = Annotated[float | None, BeforeValidator(_coerce_tool_float)]
+ToolChoicesInput = Annotated[list[str] | str | None, BeforeValidator(_coerce_tool_choices)]
+FoodPoisInput = Annotated[list[dict] | None, BeforeValidator(_coerce_food_pois)]
 
 
 def _find_accommodation_option(
@@ -595,21 +731,53 @@ def _first_accommodation_option(state: TravelState) -> Optional[dict]:
     return None
 
 
-def _tool_message(content: str, runtime: Optional[ToolRuntime]) -> ToolMessage:
-    return ToolMessage(
-        content=content,
-        tool_call_id=getattr(runtime, "tool_call_id", ""),
-    )
+def _state_transition_outcome(
+    tool_name: str,
+    status: str,
+    *,
+    next_step: str | None = None,
+    reason: str | None = None,
+) -> dict[str, str]:
+    outcome = {
+        "schema": STATE_TRANSITION_OUTCOME_SCHEMA,
+        "tool": tool_name,
+        "status": status,
+    }
+    if next_step:
+        outcome["next_step"] = next_step
+    if reason:
+        outcome["reason"] = reason
+    return outcome
+
+
+def _tool_message(
+    content: str,
+    runtime: Optional[ToolRuntime],
+    *,
+    tool_outcome: dict[str, str] | None = None,
+) -> ToolMessage:
+    message_kwargs: dict[str, Any] = {
+        "content": content,
+        "tool_call_id": getattr(runtime, "tool_call_id", ""),
+    }
+    if tool_outcome:
+        message_kwargs["artifact"] = dict(tool_outcome)
+        message_kwargs["name"] = tool_outcome["tool"]
+    return ToolMessage(**message_kwargs)
 
 
 def _command_with_message(
     content: str,
     runtime: Optional[ToolRuntime],
+    *,
+    tool_outcome: dict[str, str] | None = None,
     **state_update,
 ) -> Command:
     return Command(
         update={
-            "messages": [_tool_message(content, runtime)],
+            "messages": [
+                _tool_message(content, runtime, tool_outcome=tool_outcome)
+            ],
             **state_update,
         }
     )
@@ -667,6 +835,12 @@ def _duplicate_state_command(
     return _command_with_message(
         messages.get(tool_name, "本轮已经写入等价状态，已跳过重复状态迁移。"),
         runtime,
+        tool_outcome=_state_transition_outcome(
+            tool_name,
+            "already_applied",
+            next_step=state_update.get("current_step"),
+            reason="duplicate_state",
+        ),
     )
 
 
@@ -679,24 +853,54 @@ def _planning_mode_state_update(
 ) -> dict:
     update = {
         "planning_mode": planning_mode,
-        "active_workflow": planning_mode,
         "planning_mode_reason": planning_mode_reason,
         "planning_mode_confirmed": planning_mode_confirmed,
     }
-    if planning_mode == "agency_plan":
-        update["agency_step"] = state.get("agency_step") or "agency_requirement"
-    elif planning_mode == "free_planning":
-        update["agency_step"] = "agency_requirement"
+    if planning_mode_confirmed:
+        update.update(
+            {
+                "active_workflow": planning_mode,
+                "pending_initial_planning_mode": None,
+                "pending_initial_planning_mode_reason": "",
+            }
+        )
+        if planning_mode == "agency_plan":
+            update["agency_step"] = state.get("agency_step") or "agency_requirement"
+        elif planning_mode == "free_planning":
+            update["agency_step"] = "agency_requirement"
+    else:
+        update.update(
+            {
+                "pending_initial_planning_mode": planning_mode,
+                "pending_initial_planning_mode_reason": planning_mode_reason,
+            }
+        )
     requirement = state.get("user_requirement")
     if isinstance(requirement, dict) and requirement:
-        update["user_requirement"] = {
+        requirement_update = {
             **requirement,
             "planning_mode": planning_mode,
-            "active_workflow": planning_mode,
             "planning_mode_reason": planning_mode_reason,
             "planning_mode_confirmed": planning_mode_confirmed,
         }
+        if planning_mode_confirmed:
+            requirement_update["active_workflow"] = planning_mode
+        else:
+            requirement_update.pop("active_workflow", None)
+        update["user_requirement"] = requirement_update
     return update
+
+
+def _state_has_confirmed_planning_mode(state: TravelState | dict[str, Any] | None) -> bool:
+    if not isinstance(state, dict):
+        return False
+    if _coerce_bool(state.get("planning_mode_confirmed"), default=False):
+        return True
+    requirement = state.get("user_requirement")
+    return isinstance(requirement, dict) and _coerce_bool(
+        requirement.get("planning_mode_confirmed"),
+        default=False,
+    )
 
 
 def _state_confirmed_facts(state: TravelState | dict[str, Any] | None) -> dict[str, Any]:
@@ -846,6 +1050,12 @@ def _set_planning_mode_command(
     state = _runtime_state(runtime)
     label = PLANNING_MODE_LABELS[normalized_mode]
     mode_reason = reason or f"用户选择{label}"
+    if not confirmed and _state_has_confirmed_planning_mode(state):
+        return _command_with_message(
+            "当前规划模式已经确认；仅记录倾向不会切换已锁定工作流。"
+            "如果用户明确改选，请调用 confirm_planning_mode_tool 完成切换。",
+            runtime,
+        )
     state_update = _planning_mode_state_update(
         state,
         planning_mode=normalized_mode,
@@ -1030,42 +1240,20 @@ def _is_pending_requirement_value(value: Any) -> bool:
 
 def _runtime_recent_human_text(runtime: Optional[ToolRuntime]) -> str:
     state = runtime.state if runtime and runtime.state else {}
-    texts: list[str] = []
-    for message in (state.get("messages") or [])[-8:]:
-        content = None
-        if isinstance(message, dict):
-            role = message.get("role") or message.get("type")
-            if role in {"user", "human"}:
-                content = message.get("content")
-        elif getattr(message, "type", None) == "human" or getattr(message, "role", None) == "user":
-            content = getattr(message, "content", None)
-        if content:
-            texts.append(content if isinstance(content, str) else str(content))
+    texts = [
+        message_content(message)
+        for message in (state.get("messages") or [])[-8:]
+        if message_role(message) in {"user", "human"} and message_content(message)
+    ]
     return "\n".join(texts)
 
 
-def _runtime_message_tool_names(message: Any) -> set[str]:
-    names: set[str] = set()
-    if isinstance(message, ToolMessage):
-        name = getattr(message, "name", None)
-        if name:
-            names.add(str(name))
-
-    if isinstance(message, dict):
-        if message.get("type") == "tool" and message.get("name"):
-            names.add(str(message["name"]))
-        tool_calls = message.get("tool_calls") or []
-    else:
-        tool_calls = getattr(message, "tool_calls", None) or []
-
-    for tool_call in tool_calls:
-        if isinstance(tool_call, dict):
-            name = tool_call.get("name") or tool_call.get("function", {}).get("name")
-        else:
-            name = getattr(tool_call, "name", None)
-        if name:
-            names.add(str(name))
-    return names
+def _runtime_latest_human_text(runtime: Optional[ToolRuntime]) -> str:
+    state = runtime.state if runtime and runtime.state else {}
+    for message in reversed(state.get("messages") or []):
+        if message_role(message) in {"user", "human"}:
+            return message_content(message)
+    return ""
 
 
 def _runtime_has_tool_result(runtime: Optional[ToolRuntime], tool_name: str) -> bool:
@@ -1073,6 +1261,34 @@ def _runtime_has_tool_result(runtime: Optional[ToolRuntime], tool_name: str) -> 
     return any(
         tool_name in _runtime_message_tool_names(message)
         for message in (state.get("messages") or [])
+    )
+
+
+def _explicitly_requests_static_selection_only(text: str) -> bool:
+    """Allow preference-only writes when the user explicitly opts out of live facts."""
+
+    no_query_phrases = (
+        "本轮不查询",
+        "不要调用实时",
+        "不调用实时",
+        "不调用实时查询",
+        "不查实时",
+        "无需实时查询",
+        "不用查询实时",
+    )
+    unconfirmed_fact_phrases = (
+        "待核验",
+        "待二次核验",
+        "不写具体动态事实",
+        "不要记录任何具体",
+        "不确认具体班次",
+        "不确认具体房态",
+        "不锁价",
+    )
+    return any(
+        any(phrase in segment for phrase in no_query_phrases)
+        and any(phrase in segment for phrase in unconfirmed_fact_phrases)
+        for segment in text.splitlines()
     )
 
 
@@ -1085,6 +1301,10 @@ def _needs_hotel_audit_before_accommodation_selection(runtime: Optional[ToolRunt
 
     text = _runtime_recent_human_text(runtime)
     if not text:
+        return False
+    if _explicitly_requests_static_selection_only(
+        _runtime_latest_human_text(runtime)
+    ):
         return False
 
     hotel_keywords = ("酒店", "住宿", "住", "江景", "海景", "房", "民宿", "锁价")
@@ -1116,6 +1336,10 @@ def _needs_transport_audit_before_transport_selection(runtime: Optional[ToolRunt
 
     text = _runtime_recent_human_text(runtime)
     if not text:
+        return False
+    if _explicitly_requests_static_selection_only(
+        _runtime_latest_human_text(runtime)
+    ):
         return False
 
     transport_keywords = ("交通", "高铁", "火车", "车次", "航班", "飞机", "班次", "票价", "自驾")
@@ -1233,14 +1457,26 @@ def _normalize_requirement_date(
     return parsed_date, False, True
 
 
-def _coerce_positive_int(value: Any, default: int) -> tuple[int, bool]:
+def _as_optional_int(value: Any) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
     if isinstance(value, str):
-        match = re.search(r"\d+", value)
-        if match:
-            value = match.group(0)
+        match = re.search(r"[+-]?\d+(?:\.\d+)?", value.replace(",", ""))
+        if not match:
+            return None
+        value = match.group(0)
     try:
-        normalized = int(value)
-    except (TypeError, ValueError):
+        numeric = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not isfinite(numeric) or not numeric.is_integer():
+        return None
+    return int(numeric)
+
+
+def _coerce_positive_int(value: Any, default: int) -> tuple[int, bool]:
+    normalized = _as_optional_int(value)
+    if normalized is None:
         return default, True
     if normalized <= 0:
         return default, True
@@ -1248,13 +1484,8 @@ def _coerce_positive_int(value: Any, default: int) -> tuple[int, bool]:
 
 
 def _coerce_non_negative_int(value: Any, default: int = 0) -> tuple[int, bool]:
-    if isinstance(value, str):
-        match = re.search(r"\d+", value)
-        if match:
-            value = match.group(0)
-    try:
-        normalized = int(value)
-    except (TypeError, ValueError):
+    normalized = _as_optional_int(value)
+    if normalized is None:
         return default, True
     if normalized < 0:
         return default, True
@@ -1262,17 +1493,12 @@ def _coerce_non_negative_int(value: Any, default: int = 0) -> tuple[int, bool]:
 
 
 def _coerce_float(value: Any) -> float | None:
-    if isinstance(value, str):
-        text = value.strip()
-        match = re.search(r"\d+(?:\.\d+)?", text)
-        if not match:
-            return None
-        parsed = float(match.group(0))
-        return parsed * 10000 if "万" in text else parsed
-    try:
-        return float(value)
-    except (TypeError, ValueError):
+    parsed = _as_optional_float(value)
+    if parsed is None:
         return None
+    if isinstance(value, str) and "万" in value:
+        parsed *= 10000
+    return parsed if isfinite(parsed) else None
 
 
 def _normalize_requirement_text(value: Any) -> str:
@@ -1291,13 +1517,17 @@ def _normalize_requirement_styles(value: Any) -> list[str]:
     return [str(item).strip() for item in raw_items if str(item).strip()]
 
 
-def _coerce_bool(value: Any, default: bool = True) -> bool:
+def _coerce_bool(value: Any, default: bool = False) -> bool:
     if isinstance(value, bool):
         return value
-    text = str(value or "").strip().lower()
-    if text in {"true", "1", "yes", "y", "确认", "是"}:
+    if not isinstance(value, (str, int, float)) or isinstance(value, bool):
+        return default
+    if isinstance(value, float) and not isfinite(value):
+        return default
+    text = str(value).strip().lower()
+    if text in {"true", "1", "yes", "y", "on", "确认", "已确认", "是", "同意"}:
         return True
-    if text in {"false", "0", "no", "n", "否"}:
+    if text in {"false", "0", "no", "n", "off", "未确认", "否", "不同意"}:
         return False
     return default
 
@@ -2484,7 +2714,10 @@ def _state_planning_mode(state: TravelState | None) -> str | None:
     state_mode = _normalize_planning_mode(state.get("active_workflow"))
     if state_mode == "agency_plan":
         return state_mode
-    if state_mode == "free_planning" and bool(state.get("planning_mode_confirmed")):
+    if state_mode == "free_planning" and _coerce_bool(
+        state.get("planning_mode_confirmed"),
+        default=False,
+    ):
         return state_mode
 
     state_mode = _normalize_planning_mode(state.get("planning_mode"))
@@ -2503,7 +2736,7 @@ def _agency_workflow_transition_guard(
     attempted_tool: str,
 ) -> Command | None:
     state = _runtime_state(runtime)
-    if _state_planning_mode(state) != "agency_plan":
+    if not _state_has_confirmed_planning_mode(state) or _state_planning_mode(state) != "agency_plan":
         return None
     if attempted_tool in {"generate_itinerary_tool", "summarize_budget_tool"}:
         return None
@@ -2515,6 +2748,12 @@ def _agency_workflow_transition_guard(
             "交通和住宿只作为产品口径说明，除非用户明确要求实时查询。"
         ),
         runtime,
+        tool_outcome=_state_transition_outcome(
+            attempted_tool,
+            "not_applied",
+            next_step="requirement_collection",
+            reason="workflow_guard",
+        ),
         active_workflow="agency_plan",
         planning_mode="agency_plan",
         planning_mode_confirmed=True,
@@ -2851,8 +3090,6 @@ def _infer_selected_accommodation_types_for_state(state: TravelState) -> list[st
             normalized = _normalize_accommodation_type_for_state(option.get(key))
             if normalized:
                 return [normalized]
-    if accommodation_sources:
-        return ["star_hotel"]
     return ["star_hotel"]
 
 
@@ -2929,7 +3166,6 @@ def _seed_agency_productized_selection_state(
 
     if not state.get("selected_food_types"):
         state["selected_food_types"] = ["local", "specialty"]
-    return []
 
 
 @tool
@@ -2971,7 +3207,7 @@ def record_requirement_tool(
     if _is_pending_requirement_value(planning_mode):
         planning_mode = None
     planning_mode_reason = _normalize_requirement_text(planning_mode_reason)
-    planning_mode_confirmed = _coerce_bool(planning_mode_confirmed, default=True)
+    planning_mode_confirmed = _coerce_bool(planning_mode_confirmed, default=False)
 
     departure_date_input = departure_date
     if (
@@ -3276,19 +3512,24 @@ def select_destination_tool(
     return _command_with_message(
         f"目的地已确认：{destination}",
         runtime,
+        tool_outcome=_state_transition_outcome(
+            "select_destination_tool",
+            "applied",
+            next_step="transport_planning",
+        ),
         **state_update,
     )
 
 
 @tool
 def select_transport_tool(
-    transport_type: str,
-    details: Optional[str] = None,
-    departure_time: Optional[str] = None,
-    arrival_time: Optional[str] = None,
-    duration: Optional[str] = None,
-    price: Optional[float] = None,
-    source: Optional[str] = None,
+    transport_type: ToolChoiceInput = None,
+    details: ToolTextInput = None,
+    departure_time: ToolTextInput = None,
+    arrival_time: ToolTextInput = None,
+    duration: ToolTextInput = None,
+    price: ToolFloatInput = None,
+    source: ToolTextInput = None,
     runtime: ToolRuntime[None, TravelState] = None,
 ) -> Command:
     """Persist the selected transport mode or concrete transport option and move to accommodation planning."""
@@ -3306,15 +3547,27 @@ def select_transport_tool(
             "请先调用 query_transport_options；如果日期仍未确认，就用“日期待确认”让工具返回 skipped 审计结果，"
             "再记录高铁优先或可执行交通兜底方案。",
             runtime,
+            tool_outcome=_state_transition_outcome(
+                "select_transport_tool",
+                "not_applied",
+                next_step="transport_planning",
+                reason="audit_required",
+            ),
             current_step="transport_planning",
         )
 
     app_logger.info(f"用户选择交通方式: {transport_type}")
-    transport_type = _normalize_choice(transport_type, TRANSPORT_LABELS, TRANSPORT_ALIASES)
+    transport_type = _normalize_choice(transport_type or "", TRANSPORT_LABELS, TRANSPORT_ALIASES)
     if transport_type not in TRANSPORT_LABELS:
         return _command_with_message(
             "交通方式无效，请选择 flight、train 或 driving。",
             runtime,
+            tool_outcome=_state_transition_outcome(
+                "select_transport_tool",
+                "not_applied",
+                next_step="transport_planning",
+                reason="invalid_input",
+            ),
         )
 
     state_update = {
@@ -3349,7 +3602,16 @@ def select_transport_tool(
     if duplicate_command is not None:
         return duplicate_command
 
-    return _command_with_message(response, runtime, **state_update)
+    return _command_with_message(
+        response,
+        runtime,
+        tool_outcome=_state_transition_outcome(
+            "select_transport_tool",
+            "applied",
+            next_step="accommodation_planning",
+        ),
+        **state_update,
+    )
 
 
 @tool
@@ -3380,6 +3642,45 @@ def select_accommodation_tool(
             "请先调用 query_hotel_options；如果日期仍未确认，就用“日期待确认”让工具返回 skipped 审计结果，"
             "再记录湘江边/核心商圈等可执行住宿兜底方案。",
             runtime,
+            tool_outcome=_state_transition_outcome(
+                "select_accommodation_tool",
+                "not_applied",
+                next_step="accommodation_planning",
+                reason="audit_required",
+            ),
+        )
+
+    price_is_pending = _is_pending_requirement_value(price_per_night)
+    rating_is_pending = _is_pending_requirement_value(rating)
+    normalized_price = None if price_is_pending else _as_optional_float(price_per_night)
+    normalized_rating = None if rating_is_pending else _as_optional_float(rating)
+    if (
+        price_per_night is not None
+        and not price_is_pending
+        and (normalized_price is None or normalized_price < 0)
+    ):
+        return _command_with_message(
+            "住宿价格无效：每晚价格必须是有限且不小于 0 的数字；未写入住宿选择，也未推进流程。",
+            runtime,
+            tool_outcome=_state_transition_outcome(
+                "select_accommodation_tool",
+                "not_applied",
+                next_step="accommodation_planning",
+                reason="invalid_input",
+            ),
+        )
+    if rating is not None and not rating_is_pending and (
+        normalized_rating is None or not 0 <= normalized_rating <= 5
+    ):
+        return _command_with_message(
+            "住宿评分无效：评分必须是 0 到 5 之间的有限数字；未写入住宿选择，也未推进流程。",
+            runtime,
+            tool_outcome=_state_transition_outcome(
+                "select_accommodation_tool",
+                "not_applied",
+                next_step="accommodation_planning",
+                reason="invalid_input",
+            ),
         )
 
     selected_option = _find_accommodation_option(
@@ -3389,9 +3690,38 @@ def select_accommodation_tool(
     )
     if selected_option is None and hotel_id is None and not hotel_name:
         selected_option = _first_accommodation_option(state)
+    if selected_option is not None:
+        if price_per_night is None and selected_option.get("price_per_night") is not None:
+            candidate_price = _as_optional_float(selected_option["price_per_night"])
+            if candidate_price is None or candidate_price < 0:
+                return _command_with_message(
+                    "候选住宿价格无效：每晚价格必须是有限且不小于 0 的数字；"
+                    "未写入住宿选择，也未推进流程。",
+                    runtime,
+                    tool_outcome=_state_transition_outcome(
+                        "select_accommodation_tool",
+                        "not_applied",
+                        next_step="accommodation_planning",
+                        reason="invalid_input",
+                    ),
+                )
+            selected_option["price_per_night"] = candidate_price
+        if rating is None and selected_option.get("rating") is not None:
+            candidate_rating = _as_optional_float(selected_option["rating"])
+            if candidate_rating is None or not 0 <= candidate_rating <= 5:
+                return _command_with_message(
+                    "候选住宿评分无效：评分必须是 0 到 5 之间的有限数字；"
+                    "未写入住宿选择，也未推进流程。",
+                    runtime,
+                    tool_outcome=_state_transition_outcome(
+                        "select_accommodation_tool",
+                        "not_applied",
+                        next_step="accommodation_planning",
+                        reason="invalid_input",
+                    ),
+                )
+            selected_option["rating"] = candidate_rating
 
-    normalized_price = _as_optional_float(price_per_night)
-    normalized_rating = _as_optional_float(rating)
     normalized_amenities = _as_string_list(amenities)
     raw_accommodation_types = _as_string_list(accommodation_types)
     if not raw_accommodation_types:
@@ -3413,6 +3743,12 @@ def select_accommodation_tool(
         return _command_with_message(
             f"住宿类型无效：{', '.join(invalid_types)}。可选值为：{valid_types}",
             runtime,
+            tool_outcome=_state_transition_outcome(
+                "select_accommodation_tool",
+                "not_applied",
+                next_step="accommodation_planning",
+                reason="invalid_input",
+            ),
         )
 
     selected_labels = [ACCOMMODATION_LABELS[item] for item in accommodation_types]
@@ -3423,7 +3759,9 @@ def select_accommodation_tool(
                 "name": hotel_name or f"酒店ID {hotel_id}",
                 "type": accommodation_types[0],
                 "location": location or "位置待确认",
-                "price_per_night": normalized_price or 0.0,
+                "price_per_night": (
+                    normalized_price if normalized_price is not None else 0.0
+                ),
                 "rating": normalized_rating,
                 "amenities": normalized_amenities,
             }
@@ -3463,14 +3801,19 @@ def select_accommodation_tool(
     return _command_with_message(
         response,
         runtime,
+        tool_outcome=_state_transition_outcome(
+            "select_accommodation_tool",
+            "applied",
+            next_step="food_planning",
+        ),
         **state_update,
     )
 
 
 @tool
 def select_food_tool(
-    food_types: list[str] | str,
-    food_pois: Optional[list[dict]] = None,
+    food_types: ToolChoicesInput = None,
+    food_pois: FoodPoisInput = None,
     runtime: ToolRuntime[None, TravelState] = None,
 ) -> Command:
     """Persist food preferences and move to itinerary generation."""
@@ -3481,6 +3824,33 @@ def select_food_tool(
     )
     if guard_command is not None:
         return guard_command
+
+    app_logger.info(f"用户选择餐饮偏好: {food_types}")
+    food_types = _normalize_choices(_as_string_list(food_types), FOOD_LABELS, FOOD_ALIASES)
+    if not food_types:
+        return _command_with_message(
+            "餐饮类型不能为空，请选择 specialty、local 或 chain。",
+            runtime,
+            tool_outcome=_state_transition_outcome(
+                "select_food_tool",
+                "not_applied",
+                next_step="food_planning",
+                reason="invalid_input",
+            ),
+        )
+    invalid_types = sorted(set(food_types) - set(FOOD_LABELS))
+    if invalid_types:
+        valid_types = ", ".join(sorted(FOOD_LABELS))
+        return _command_with_message(
+            f"餐饮类型无效：{', '.join(invalid_types)}。可选值为：{valid_types}",
+            runtime,
+            tool_outcome=_state_transition_outcome(
+                "select_food_tool",
+                "not_applied",
+                next_step="food_planning",
+                reason="invalid_input",
+            ),
+        )
 
     state = _runtime_state(runtime)
     if state.get("current_step") == "food_planning" and not _has_confirmed_accommodation_state(
@@ -3493,16 +3863,6 @@ def select_food_tool(
             "再调用 select_accommodation_tool 记录兜底住宿方案。",
             runtime,
             current_step="accommodation_planning",
-        )
-
-    app_logger.info(f"用户选择餐饮偏好: {food_types}")
-    food_types = _normalize_choices(_as_string_list(food_types), FOOD_LABELS, FOOD_ALIASES)
-    invalid_types = sorted(set(food_types) - set(FOOD_LABELS))
-    if invalid_types:
-        valid_types = ", ".join(sorted(FOOD_LABELS))
-        return _command_with_message(
-            f"餐饮类型无效：{', '.join(invalid_types)}。可选值为：{valid_types}",
-            runtime,
         )
 
     selected_labels = [FOOD_LABELS[item] for item in food_types]
@@ -3530,6 +3890,11 @@ def select_food_tool(
     return _command_with_message(
         f"餐饮偏好已确认：{', '.join(selected_labels)}",
         runtime,
+        tool_outcome=_state_transition_outcome(
+            "select_food_tool",
+            "applied",
+            next_step="itinerary_generation",
+        ),
         **state_update,
     )
 
@@ -3609,6 +3974,11 @@ def generate_itinerary_tool(
                 f"路线逻辑：{overview.get('route_label') or overview.get('summary') or '按地图草案顺序执行'}。"
             ),
             runtime,
+            tool_outcome=_state_transition_outcome(
+                "generate_itinerary_tool",
+                "applied",
+                next_step="budget_summarization",
+            ),
             itinerary=itinerary,
             journey_plan=journey_plan,
             selected_destination=destination,
@@ -3748,6 +4118,11 @@ def generate_itinerary_tool(
     return _command_with_message(
         f"已生成 {travel_days} 天的行程草案。",
         runtime,
+        tool_outcome=_state_transition_outcome(
+            "generate_itinerary_tool",
+            "applied",
+            next_step="budget_summarization",
+        ),
         itinerary=itinerary,
         selected_destination=destination,
         selected_transport=selected_transport,
@@ -3780,6 +4155,11 @@ def summarize_budget_tool(
         return _command_with_message(
             "预算汇总前需要先生成完整行程。",
             runtime,
+            tool_outcome=_state_transition_outcome(
+                "summarize_budget_tool",
+                "not_applied",
+                reason="missing_prerequisites",
+            ),
         )
 
     total_people = (requirement.get("adult_count") or 0) + (
@@ -3878,6 +4258,11 @@ def summarize_budget_tool(
     return _command_with_message(
         budget_summary,
         runtime,
+        tool_outcome=_state_transition_outcome(
+            "summarize_budget_tool",
+            "applied",
+            next_step="order_generation",
+        ),
         itinerary=itinerary,
         budget=budget_breakdown,
         current_step="order_generation",
@@ -3965,6 +4350,11 @@ def generate_order_tool(
         return _command_with_message(
             f"生成最终报告前还需要先确认：{'、'.join(missing_items)}。不会在目的地或产品框架阶段提前生成 report_data。",
             runtime,
+            tool_outcome=_state_transition_outcome(
+                "generate_order_tool",
+                "not_applied",
+                reason="missing_prerequisites",
+            ),
         )
 
     order_id = f"ORDER-{uuid4().hex[:8].upper()}"
@@ -4019,6 +4409,11 @@ def generate_order_tool(
         return _command_with_message(
             report_bundle.validation.to_user_message(),
             runtime,
+            tool_outcome=_state_transition_outcome(
+                "generate_order_tool",
+                "not_applied",
+                reason="report_validation_failed",
+            ),
         )
     report_data = report_bundle.report_data
     mock_checkout = {
@@ -4053,6 +4448,11 @@ def generate_order_tool(
     return _command_with_message(
         message,
         runtime,
+        tool_outcome=_state_transition_outcome(
+            "generate_order_tool",
+            "applied",
+            next_step="order_generation",
+        ),
         order_id=order_id,
         selected_destination=selected_destination,
         selected_accommodation_option=selected_accommodation,
@@ -4120,6 +4520,21 @@ def go_back_to_step(
     return Command(update=state_update)
 
 
+def _go_back_to(
+    target_step: RollbackTargetStep,
+    reason: str,
+    runtime: Optional[ToolRuntime],
+) -> Command:
+    return go_back_to_step.invoke(
+        {
+            "target_step": target_step,
+            "reason": reason,
+            "clear_subsequent_data": True,
+            "runtime": runtime,
+        }
+    )
+
+
 @tool
 def go_back_to_requirement(
     reason: str = "用户需要修改旅行需求",
@@ -4127,14 +4542,7 @@ def go_back_to_requirement(
 ) -> Command:
     """Shortcut rollback to the requirement-collection step."""
 
-    return go_back_to_step.invoke(
-        {
-            "target_step": "requirement_collection",
-            "reason": reason,
-            "clear_subsequent_data": True,
-            "runtime": runtime,
-        }
-    )
+    return _go_back_to("requirement_collection", reason, runtime)
 
 
 @tool
@@ -4144,14 +4552,7 @@ def go_back_to_destination(
 ) -> Command:
     """Shortcut rollback to the destination-recommendation step."""
 
-    return go_back_to_step.invoke(
-        {
-            "target_step": "destination_recommendation",
-            "reason": reason,
-            "clear_subsequent_data": True,
-            "runtime": runtime,
-        }
-    )
+    return _go_back_to("destination_recommendation", reason, runtime)
 
 
 @tool
@@ -4161,14 +4562,7 @@ def go_back_to_transport(
 ) -> Command:
     """Shortcut rollback to the transport-planning step."""
 
-    return go_back_to_step.invoke(
-        {
-            "target_step": "transport_planning",
-            "reason": reason,
-            "clear_subsequent_data": True,
-            "runtime": runtime,
-        }
-    )
+    return _go_back_to("transport_planning", reason, runtime)
 
 
 @tool
@@ -4178,14 +4572,7 @@ def go_back_to_accommodation(
 ) -> Command:
     """Shortcut rollback to the accommodation-planning step."""
 
-    return go_back_to_step.invoke(
-        {
-            "target_step": "accommodation_planning",
-            "reason": reason,
-            "clear_subsequent_data": True,
-            "runtime": runtime,
-        }
-    )
+    return _go_back_to("accommodation_planning", reason, runtime)
 
 
 @tool
@@ -4195,14 +4582,7 @@ def go_back_to_food(
 ) -> Command:
     """Shortcut rollback to the food-planning step."""
 
-    return go_back_to_step.invoke(
-        {
-            "target_step": "food_planning",
-            "reason": reason,
-            "clear_subsequent_data": True,
-            "runtime": runtime,
-        }
-    )
+    return _go_back_to("food_planning", reason, runtime)
 
 
 @tool
@@ -4212,14 +4592,7 @@ def go_back_to_itinerary(
 ) -> Command:
     """Shortcut rollback to the itinerary-generation step."""
 
-    return go_back_to_step.invoke(
-        {
-            "target_step": "itinerary_generation",
-            "reason": reason,
-            "clear_subsequent_data": True,
-            "runtime": runtime,
-        }
-    )
+    return _go_back_to("itinerary_generation", reason, runtime)
 
 
 @tool
@@ -4229,14 +4602,7 @@ def go_back_to_budget(
 ) -> Command:
     """Shortcut rollback to the budget-summarization step."""
 
-    return go_back_to_step.invoke(
-        {
-            "target_step": "budget_summarization",
-            "reason": reason,
-            "clear_subsequent_data": True,
-            "runtime": runtime,
-        }
-    )
+    return _go_back_to("budget_summarization", reason, runtime)
 
 
 @tool

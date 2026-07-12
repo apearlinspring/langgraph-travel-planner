@@ -6,7 +6,13 @@
     normalizeReportBudgetItems,
     formatReportDataMoney,
     getStatusLabel,
+    escapeAttribute,
   } = {}) {
+    function toSafeAttribute(value) {
+      if (typeof escapeAttribute === "function") return escapeAttribute(value);
+      return escapeHtml(value).replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+    }
+
     function renderReportDataInsightGroup({
       title = "",
       items = [],
@@ -104,6 +110,11 @@
 
     function renderReportDataGovernancePanel(viewModel) {
       const approval = viewModel.approval || {};
+      const mockCheckout = viewModel.mockCheckout || {};
+      const hasMockCheckout = Boolean(mockCheckout.enabled && mockCheckout.checkoutUrl);
+      const mockCheckoutBoundary =
+        mockCheckout.boundary ||
+        "M1 模拟确认页只验证站内跳转，不代表真实支付、真实预订、真实锁价或履约成功。";
       const unsupported = [
         "不接真实支付，不生成支付链接。",
         "不接真实预订、短信、客服或供应链下单。",
@@ -136,6 +147,29 @@
               <p>${escapeHtml(approval.boundary)}</p>
               ${renderReportDataList(unsupported, "暂无额外不可承诺项。")}
             </div>
+            ${
+              hasMockCheckout
+                ? `
+                  <div class="travel-report-governance-boundary">
+                    <strong>M1 模拟确认页（非支付链接）</strong>
+                    <p>${escapeHtml(mockCheckoutBoundary)}</p>
+                    <a class="travel-report-inline-action" href="${toSafeAttribute(
+                      mockCheckout.checkoutUrl
+                    )}" target="_blank" rel="noopener">打开模拟确认页</a>
+                    ${renderReportDataList(
+                      [
+                        `订单编号：${mockCheckout.orderId || "待生成"}`,
+                        `真实支付：${mockCheckout.realPayment ? "是" : "否"}`,
+                        `真实预订：${mockCheckout.realBooking ? "是" : "否"}`,
+                        `库存锁定：${mockCheckout.inventoryLocked ? "是" : "否"}`,
+                        `履约触发：${mockCheckout.fulfillmentTriggered ? "是" : "否"}`,
+                      ],
+                      "暂无模拟订单状态。"
+                    )}
+                  </div>
+                `
+                : ""
+            }
           </div>
         `;
     }

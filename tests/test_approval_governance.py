@@ -88,6 +88,7 @@ def test_governance_status_does_not_claim_hitl_closed_loop_without_database():
     assert production_snapshot["status"] == "not_ready"
     assert production_snapshot["storage"] == "postgres"
     assert production_snapshot["persistent"] is False
+    assert production_snapshot["approval_persistence_ready"] is False
     assert production_snapshot["hitl_closed_loop"] is False
     assert production_snapshot["memory_fallback_allowed"] is False
 
@@ -101,7 +102,21 @@ def test_governance_status_does_not_claim_hitl_closed_loop_without_database():
     assert development_snapshot["storage"] == "memory"
     assert development_snapshot["fallback_mode"] == "dev_memory"
     assert development_snapshot["memory_fallback_allowed"] is True
+    assert development_snapshot["approval_persistence_ready"] is False
     assert development_snapshot["hitl_closed_loop"] is False
+
+    ApprovalGovernanceManager.configure_uninitialized(app_env="development")
+
+
+def test_database_readiness_only_claims_approval_persistence():
+    ApprovalGovernanceManager.mark_database_ready(app_env="production")
+
+    snapshot = ApprovalGovernanceManager.get_status_snapshot()
+
+    assert snapshot["status"] == "ready"
+    assert snapshot["persistent"] is True
+    assert snapshot["approval_persistence_ready"] is True
+    assert snapshot["hitl_closed_loop"] is False
 
     ApprovalGovernanceManager.configure_uninitialized(app_env="development")
 

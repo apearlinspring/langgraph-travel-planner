@@ -1,7 +1,6 @@
 """Turn-level observability helpers for Agent chat runs."""
 from __future__ import annotations
 
-import math
 import time
 import uuid
 from collections import deque
@@ -11,6 +10,7 @@ from threading import Lock
 from typing import Any
 
 from app.utils.security import is_sensitive_key, redact_sensitive_text
+from app.utils.token_estimation import estimate_token_count
 
 
 TURN_OBSERVABILITY_VERSION = "turn_observability.v1"
@@ -20,12 +20,25 @@ OBSERVABILITY_CONTEXT_VERSION = "observability_context.v1"
 DEFAULT_OBSERVABILITY_STEP = "requirement_collection"
 DEFAULT_PLANNING_MODE = "pending_confirmation"
 
-TOOL_FAILURE_STATUSES = {
+TOOL_DEGRADED_STATUSES = {
     "failed",
+    "failure",
     "timeout",
+    "error",
     "degraded",
     "skipped",
     "approval_required",
+}
+
+TOOL_FAILURE_SEMANTIC_STATUSES = {"service_exception"}
+TOOL_FALLBACK_SEMANTIC_STATUSES = {"not_found"}
+TOOL_SEMANTIC_STATUSES = {
+    "success",
+    "service_exception",
+    "not_found",
+    "needs_verification",
+    "insufficient_parameters",
+    "skipped",
 }
 
 
@@ -46,12 +59,6 @@ def classify_public_tool_audit_status(
     raw_error = str(error_type or "").strip()
     error = raw_error.lower()
 
-    if raw_status == "success":
-        return {
-            "semantic_status": "success",
-            "status_label": "成功",
-            "status_explanation": "工具返回了可用结果。",
-        }
     if error == "empty_transport_result":
         return {
             "semantic_status": "not_found",
@@ -63,6 +70,12 @@ def classify_public_tool_audit_status(
             "semantic_status": "not_found",
             "status_label": "未查到",
             "status_explanation": "工具已完成调用，但没有返回可直接采用的候选结果。",
+        }
+    if raw_status == "success":
+        return {
+            "semantic_status": "success",
+            "status_label": "成功",
+            "status_explanation": "工具返回了可用结果。",
         }
     if raw_status == "degraded":
         return {
@@ -88,7 +101,7 @@ def classify_public_tool_audit_status(
             "status_label": "已跳过",
             "status_explanation": "命中人工确认边界，当前没有继续执行真实支付、短信或下单。",
         }
-    if raw_status in {"failed", "timeout"}:
+    if raw_status in {"failed", "failure", "timeout", "error"}:
         return {
             "semantic_status": "service_exception",
             "status_label": "服务异常",
@@ -101,18 +114,29 @@ def classify_public_tool_audit_status(
     }
 
 
+def resolve_tool_audit_semantic_status(
+    status: str | None,
+    error_type: str | None = None,
+    semantic_status: str | None = None,
+) -> str:
+    """Resolve tool semantics before applying raw failure-status fallback rules."""
+
+    explicit_semantic = str(semantic_status or "").strip().lower()
+    if explicit_semantic in TOOL_SEMANTIC_STATUSES:
+        return explicit_semantic
+    raw_status = str(status or "").strip().lower()
+    classified_semantic = str(
+        classify_public_tool_audit_status(status, error_type)["semantic_status"]
+    )
+    if str(error_type or "").strip():
+        return classified_semantic
+    if raw_status in TOOL_SEMANTIC_STATUSES:
+        return raw_status
+    return classified_semantic
+
+
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-def estimate_token_count(text: str) -> int:
-    """Estimate token usage with a stable character-based approximation."""
-
-    if not text:
-        return 0
-    ascii_chars = sum(1 for char in text if ord(char) < 128)
-    non_ascii_chars = len(text) - ascii_chars
-    return max(1, math.ceil(ascii_chars / 4) + math.ceil(non_ascii_chars / 2))
 
 
 def _is_sensitive_key(key: Any) -> bool:
@@ -189,7 +213,7 @@ def public_tool_audit_event(event: dict[str, Any]) -> dict[str, Any]:
     status = str(event.get("status") or "unknown")
     error_type = (
         str(event.get("error_type"))
-        if event.get("error_type") is not None and status in TOOL_FAILURE_STATUSES
+        if event.get("error_type") is not None and status in TOOL_DEGRADED_STATUSES
         else None
     )
     public_status = classify_public_tool_audit_status(status, error_type)
@@ -203,7 +227,7 @@ def public_tool_audit_event(event: dict[str, Any]) -> dict[str, Any]:
         "retry_count": max(int(event.get("retry_count") or 0), 0),
         "evidence_type": str(event.get("evidence_type") or "unknown"),
         "error_type": error_type,
-        "degraded": status in TOOL_FAILURE_STATUSES,
+        "degraded": status in TOOL_DEGRADED_STATUSES,
     }
 
 
@@ -312,10 +336,13 @@ class TurnObservation:
     def record_tool_audit_event(self, event: dict[str, Any]) -> None:
         public_event = public_tool_audit_event(event)
         self.tool_events.append(public_event)
-        if public_event["status"] in TOOL_FAILURE_STATUSES:
+        semantic_status = public_event["semantic_status"]
+        if semantic_status in TOOL_FAILURE_SEMANTIC_STATUSES:
             self.tool_failure_count += 1
+        if semantic_status in TOOL_FALLBACK_SEMANTIC_STATUSES:
             self.fallback_count += 1
-            self.mark_degraded(f"tool_{public_event['status']}:{public_event['tool']}")
+        if semantic_status != "success":
+            self.mark_degraded(f"tool_{semantic_status}:{public_event['tool']}")
 
     def mark_fallback(self, reason: str) -> None:
         self.fallback_count += 1
@@ -362,6 +389,7 @@ class TurnObservation:
             "tool_call_count": self.tool_call_count,
             "tool_failure_count": self.tool_failure_count,
             "fallback_count": self.fallback_count,
+            "error_event_count": self.error_event_count,
             "degradation_status": self.degradation_status,
             "estimated_input_tokens": self.estimated_input_tokens,
             "estimated_output_tokens": self.estimated_output_tokens,

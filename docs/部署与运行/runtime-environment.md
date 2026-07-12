@@ -26,7 +26,7 @@
 | 搜索 / Tavily | optional | optional | optional | optional | 缺少时搜索能力降级 |
 | 酒店 / aigohotel | optional | optional | optional | optional | 缺少时酒店真实候选标记待二次核实 |
 | 航班 / VariFlight | optional | optional | optional | optional | 缺少时航班真实候选标记待二次核实 |
-| 铁路 / 12306 MCP | optional | optional | optional | optional | 缺少时高铁候选标记待二次核实 |
+| 铁路 / 12306 MCP（模型上下文协议） | optional | optional | optional | optional | 可配置本地或远端服务；当前本地联调可使用非官方社区 sidecar，缺少或返回候选时都要标记待二次核实 |
 | LangSmith（LangChain 可观测平台） | optional | optional | optional | optional | 缺少时降低排障可观测性 |
 | Auth（认证）/ JWT（JSON Web Token，令牌认证） | optional | optional | required | required | 生产和验收必须使用非默认、非占位密钥 |
 
@@ -71,7 +71,7 @@ RAG_INTERNAL_VECTORSTORE_PATH=data/vectorstore_internal
 RAG_INTERNAL_COLLECTION_NAME=agency_internal_knowledge
 ```
 
-`RUNTIME_MCP_STARTUP_TIMEOUT_SECONDS` 是非密钥配置。真实 acceptance-core（核心验收）会依赖高德、12306、航班和酒店等远端 MCP 服务；这些服务冷启动或握手偶尔会超过 8 秒，因此默认设置为 25 秒，避免把可恢复的冷启动误判为 degraded（降级）。
+`RUNTIME_MCP_STARTUP_TIMEOUT_SECONDS` 是非密钥配置。acceptance-core（核心验收）会按所选场景声明高德、铁路、航班和酒店等 MCP 服务为必需或可选；地址既可以指向本地 sidecar（伴随服务），也可以由平台注入远端服务。当前本地铁路联调可使用第三方社区 12306 sidecar，它不是中国铁路 12306 官方服务或官方授权接口，输出只能作为待二次核验的候选。MCP 冷启动或握手偶尔会超过 8 秒，因此默认超时为 25 秒，避免把可恢复冷启动误判为 degraded（降级）；详细边界见 `docs/部署与运行/mcp-health-readiness.md`。
 
 ## 命令入口
 

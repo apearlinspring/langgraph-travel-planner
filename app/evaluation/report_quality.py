@@ -5,6 +5,13 @@ import re
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from app.evaluation.scoring import (
+    as_dict as _as_dict,
+    as_list as _as_list,
+    grade as _grade,
+    has_text as _has_text,
+    score as _score,
+)
 from app.reports.contracts import (
     REPORT_PLANNING_MODES,
     REPORT_VERSION,
@@ -29,6 +36,7 @@ REQUIRED_AGENCY_CATEGORIES = {"products", "sop", "pricing", "risk", "report"}
 VERIFY_KEYWORDS = (
     "verify",
     "confirm",
+    "\u6838\u9a8c",
     "\u590d\u6838",
     "\u6838\u5b9e",
     "\u786e\u8ba4",
@@ -94,25 +102,6 @@ class ReportEvaluationResult:
             "summary": self.summary,
             "criteria": [criterion.to_dict() for criterion in self.criteria],
         }
-
-
-def _score(condition: bool, points: float, findings: list[str], message: str) -> float:
-    if condition:
-        return points
-    findings.append(message)
-    return 0.0
-
-
-def _as_list(value: Any) -> list[Any]:
-    return value if isinstance(value, list) else []
-
-
-def _as_dict(value: Any) -> dict[str, Any]:
-    return value if isinstance(value, dict) else {}
-
-
-def _has_text(value: Any) -> bool:
-    return isinstance(value, str) and bool(value.strip())
 
 
 def _text_contains_any(text: str, keywords: tuple[str, ...]) -> bool:
@@ -523,18 +512,6 @@ def _criterion_frontend_export(report_data: dict[str, Any]) -> CriterionResult:
         "Export sections must include map_routes, budget, and risk",
     )
     return CriterionResult("frontend_export_readiness", score, 10, findings)
-
-
-def _grade(normalized_score: float) -> str:
-    if normalized_score >= 90:
-        return "A"
-    if normalized_score >= 80:
-        return "B"
-    if normalized_score >= 70:
-        return "C"
-    if normalized_score >= 60:
-        return "D"
-    return "F"
 
 
 def evaluate_report_quality(

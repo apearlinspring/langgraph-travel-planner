@@ -1,10 +1,8 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-Transport coordinator that orchestrates flight, train, and driving subagents.
+Transport coordinator that orchestrates flight, train, and driving query tools.
 """
-import asyncio
-
 from langchain.agents import create_agent
 from langchain.tools import tool
 
@@ -47,7 +45,7 @@ async def create_transport_coordinator():
 
     @tool("query_flights", description="查询航班信息，需要提供出发城市、目的地城市、出发日期。")
     async def query_flights_tool(origin: str, destination: str, departure_date: str) -> str:
-        app_logger.info(f"Transport coordinator calling flight subagent: {origin} -> {destination}")
+        app_logger.info(f"Transport coordinator calling flight query wrapper: {origin} -> {destination}")
         try:
             normalized_date = normalize_travel_date(departure_date)
         except ValueError as exc:
@@ -135,29 +133,3 @@ async def create_transport_coordinator():
         f"flight_enabled={flight_enabled}, total_tools={len(tools)}"
     )
     return coordinator
-
-
-if __name__ == "__main__":
-    async def main():
-        print("\n" + "=" * 50)
-        print("Initializing transport coordinator...")
-        print("=" * 50)
-
-        coordinator = await create_transport_coordinator()
-        test_query = "我想从北京去上海，明天出发，帮我推荐交通方式"
-
-        print(f"\nUser: {test_query}")
-        print("-" * 30)
-
-        response = await coordinator.ainvoke(
-            {"messages": [{"role": "user", "content": test_query}]}
-        )
-
-        print("-" * 30)
-        print("Coordinator response:")
-        print(response["messages"][-1].content)
-        print("\n" + "=" * 50)
-        print("Done")
-        print("=" * 50)
-
-    asyncio.run(main())

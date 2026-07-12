@@ -1,17 +1,5 @@
 (function (global) {
-  const sessionApi = global.ZhiXingSessionApi;
-
-  async function parseJsonSafe(response) {
-    try {
-      return await response.json();
-    } catch (error) {
-      return null;
-    }
-  }
-
-  function buildOptions(stateToken, options = {}) {
-    return sessionApi.buildApiRequestOptions(stateToken, options);
-  }
+  const { parseJsonSafe, requestJson } = global.ZhiXingSessionApi;
 
   async function fetchReadiness({ apiBase, signal }) {
     const response = await fetch(`${apiBase}/health/ready`, {
@@ -25,14 +13,10 @@
   }
 
   async function fetchApprovalEvents({ apiBase, stateToken = "", approvalId }) {
-    const response = await fetch(
+    return requestJson(
       `${apiBase}/api/v1/approvals/${encodeURIComponent(approvalId)}/events`,
-      buildOptions(stateToken)
+      stateToken
     );
-    return {
-      response,
-      data: await parseJsonSafe(response),
-    };
   }
 
   async function fetchApprovals({
@@ -50,14 +34,10 @@
     params.set("limit", String(limit));
     params.set("offset", String(offset));
     if (queryText.trim()) params.set("q", queryText.trim());
-    const response = await fetch(
+    return requestJson(
       `${apiBase}/api/v1/approvals?${params}`,
-      buildOptions(stateToken)
+      stateToken
     );
-    return {
-      response,
-      data: await parseJsonSafe(response),
-    };
   }
 
   async function createDemoApproval({
@@ -65,9 +45,10 @@
     stateToken = "",
     conversationId = null,
   }) {
-    const response = await fetch(
+    return requestJson(
       `${apiBase}/api/v1/approvals`,
-      buildOptions(stateToken, {
+      stateToken,
+      {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -82,12 +63,8 @@
           },
           expires_in_seconds: 3600,
         }),
-      })
+      }
     );
-    return {
-      response,
-      data: await parseJsonSafe(response),
-    };
   }
 
   async function submitApprovalDecision({
@@ -97,20 +74,17 @@
     decisionPath,
     reason,
   }) {
-    const response = await fetch(
+    return requestJson(
       `${apiBase}/api/v1/approvals/${encodeURIComponent(approvalId)}/${decisionPath}`,
-      buildOptions(stateToken, {
+      stateToken,
+      {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         body: reason ? JSON.stringify({ reason }) : undefined,
-      })
+      }
     );
-    return {
-      response,
-      data: await parseJsonSafe(response),
-    };
   }
 
   global.ZhiXingGovernanceApi = {

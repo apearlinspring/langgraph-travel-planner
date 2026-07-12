@@ -70,6 +70,20 @@ def _scenario(scenario_id: str, mode: str = "agency_plan") -> EvaluationScenario
     )
 
 
+def _minimal_passing_gate(scenario: EvaluationScenario) -> dict:
+    return {
+        "version": "acceptance_quality_gate.v1",
+        "scenario_id": scenario.id,
+        "scenario_name": scenario.name,
+        "status": "passed",
+        "passed": True,
+        "dimensions": {"agent_quality": {"score": 100.0}},
+        "supplemental_dimensions": {},
+        "failures": [],
+        "degradations": [],
+    }
+
+
 def test_select_scenarios_preserves_catalog_order():
     scenarios = [_scenario("a"), _scenario("b"), _scenario("c")]
 
@@ -197,20 +211,190 @@ def test_scenario_message_sequence_uses_scenario_followups():
     assert scenario_message_sequence(scenario) == ["Plan a trip", "Finalize now"]
 
 
+def test_free_weekend_nearby_uses_complete_free_planning_progression():
+    scenario = get_scenario("free_weekend_nearby")
+    messages = scenario_message_sequence(scenario)
+
+    assert messages[0] == scenario.prompt
+    assert len(messages) == 9
+    assert scenario.expected_mode == "free_planning"
+    assert "free_planning" in messages[1]
+    assert "从西安出发" in messages[1]
+    assert "2026-09-19" in messages[1]
+    assert "共2位成人" in messages[1]
+    assert "总预算1500元" in messages[1]
+    assert "自然风景和当地小吃" in messages[1]
+    assert "目的地确认汉中" in messages[2]
+    assert "不要调用实时班次查询工具" in messages[3]
+    assert "不要记录任何具体车次、时刻或价格" in messages[3]
+    assert "不要调用实时酒店库存查询工具" in messages[4]
+    assert "不要记录任何具体酒店、房态或价格" in messages[4]
+    assert "餐饮" in messages[5]
+    assert "2天1晚结构化行程" in messages[6]
+    assert "汇总预算" in messages[7]
+    assert "report_data" in messages[8]
+    assert "真实班次、房态和价格均待核验" in messages[8]
+    assert not any("旅行社" in message or "省心方案" in message for message in messages)
+
+
+def test_free_city_three_days_supplies_facts_and_complete_free_progression():
+    scenario = get_scenario("free_city_three_days")
+    messages = scenario_message_sequence(scenario)
+
+    assert messages[0] == scenario.prompt
+    assert len(messages) == 9
+    assert scenario.expected_mode == "free_planning"
+    assert "free_planning" in messages[1]
+    assert "从上海出发" in messages[1]
+    assert "2026-10-16" in messages[1]
+    assert "共2位成人" in messages[1]
+    assert "总预算5000元" in messages[1]
+    assert "第一次去南京" in messages[1]
+    assert "文化和美食且不赶行程" in messages[1]
+    assert "目的地确认南京" in messages[2]
+    assert "不要调用实时班次查询工具" in messages[3]
+    assert "不要记录任何具体车次、时刻或价格" in messages[3]
+    assert "不要调用实时酒店库存查询工具" in messages[4]
+    assert "不要记录任何具体酒店、房态或价格" in messages[4]
+    assert "餐饮" in messages[5]
+    assert "3天2晚结构化行程" in messages[6]
+    assert "汇总预算" in messages[7]
+    assert "report_data" in messages[8]
+    assert "真实班次、房态和价格均待核验" in messages[8]
+    assert not any("旅行社" in message or "省心方案" in message for message in messages)
+
+
+def test_edge_transport_fallback_uses_complete_free_planning_progression():
+    scenario = get_scenario("edge_transport_tool_fallback")
+    messages = scenario_message_sequence(scenario)
+
+    assert len(messages) == 9
+    assert scenario.expected_mode == "free_planning"
+    assert "free_planning" in messages[1]
+    assert "2026-11-12" in messages[1]
+    assert "共2位成人" in messages[1]
+    assert "总预算6000元" in messages[1]
+    assert "目的地确认张家界" in messages[2]
+    assert "只查询一次" in messages[3]
+    assert "具体车次、时刻与价格均待二次核验" in messages[3]
+    assert "不要调用实时酒店库存查询工具" in messages[4]
+    assert "4天3晚结构化行程" in messages[6]
+    assert "汇总预算" in messages[7]
+    assert "report_data" in messages[8]
+    assert not any("旅行社" in message or "省心方案" in message for message in messages)
+
+
+def test_agency_couple_uses_complete_safe_agency_progression():
+    scenario = get_scenario("agency_couple_relaxed")
+    messages = scenario_message_sequence(scenario)
+
+    assert len(messages) == 9
+    assert scenario.expected_mode == "agency_plan"
+    assert "2026年10月23日" in messages[0]
+    assert "agency_plan" in messages[1]
+    assert "共2位成人" in messages[1]
+    assert "总预算7000元" in messages[1]
+    assert "成熟路线样板" in messages[2]
+    assert "具体班次、时刻与价格未锁定" in messages[3]
+    assert "具体酒店、房型与价格未锁定" in messages[4]
+    assert "4天3晚结构化行程" in messages[6]
+    assert "汇总预算" in messages[7]
+    assert "report_data" in messages[8]
+
+
+def test_pricing_agency_quote_uses_future_date_and_one_itinerary_turn():
+    scenario = get_scenario("pricing_agency_quote_explanation")
+    messages = scenario_message_sequence(scenario)
+
+    assert len(messages) == 8
+    assert "2026-11-20" in messages[0]
+    assert "2026-11-20" in messages[1]
+    assert "2026-06-20" not in "\n".join(messages)
+    assert "仅记录餐饮偏好和产品口径" in messages[4]
+    assert "结构化行程" not in messages[4]
+    assert "3天2晚结构化行程" in messages[5]
+    assert "汇总预算" in messages[6]
+    assert "report_data" in messages[7]
+
+
 def test_risk_weather_disruption_uses_explicit_stage_progression_followups():
     scenario = get_scenario("risk_weather_disruption")
     messages = scenario_message_sequence(scenario)
 
     assert messages[0] == scenario.prompt
     assert messages[1].startswith("需求确认")
-    assert "2026-07-10" in messages[1]
+    assert "10月" in messages[0]
+    assert "2026-10-10" in messages[1]
+    assert "2026-07-10" not in "\n".join(messages)
     assert "天气" in messages[2]
+    assert "桂林10月天气" in messages[2]
     assert "室内Plan B" in messages[2]
+    assert "不要描述班次准点、余票、航班可订或酒店有房" in messages[2]
+    assert "待二次核验" in messages[2]
     assert "目的地确认桂林" in messages[3]
     assert any("低强度路线" in message and "天气Plan B" in message for message in messages)
     assert "汇总预算" in messages[-1]
     assert "report_data" in messages[-1]
     assert "旅行社业务证据" in messages[-1]
+    assert scenario.metric_expectations["tools"]["required"] == [
+        "query_destination_info"
+    ]
+
+
+def test_edge_hotel_fallback_uses_complete_free_planning_progression():
+    scenario = get_scenario("edge_hotel_tool_fallback")
+    messages = scenario_message_sequence(scenario)
+
+    assert messages[0] == scenario.prompt
+    assert len(messages) == 9
+    assert "从武汉出发" in messages[1]
+    assert "2026-11-12" in messages[1]
+    assert "个性化自由规划" in messages[1]
+    assert "目的地确认长沙" in messages[2]
+    assert "交通" in messages[3]
+    assert "湘江边江景房" in messages[4]
+    assert "查不到具体酒店" in messages[4]
+    assert "4天3晚结构化行程" in messages[6]
+    assert "汇总预算" in messages[7]
+    assert "report_data" in messages[-1]
+    assert "酒店查询兜底方案" in messages[-1]
+
+
+def test_standard_city_and_weather_scenarios_keep_fail_closed_fallback_budget():
+    for scenario_id in ("free_city_three_days", "risk_weather_disruption"):
+        budget = runtime_budget_for_scenario(get_scenario(scenario_id))
+        assert budget.max_tool_failure_count == 0
+        assert budget.max_fallback_count == 0
+
+
+def test_agency_core_scenarios_supply_required_facts_before_report_closure():
+    expected = {
+        "agency_family_parent_child": ("2026-09-12", "共3位"),
+        "agency_senior_low_stress": ("2026-10-12", "共2位成人"),
+    }
+
+    for scenario_id, (departure_date, people_text) in expected.items():
+        messages = scenario_message_sequence(get_scenario(scenario_id))
+
+        assert len(messages) == 9
+        assert messages[1].startswith("需求确认")
+        assert departure_date in messages[1]
+        assert people_text in messages[1]
+        assert "人均预算" in messages[1]
+        assert any("结构化行程" in message for message in messages)
+        assert any("汇总预算" in message for message in messages)
+        assert "report_data" in messages[-1]
+
+
+def test_agency_senior_uses_one_explicit_itinerary_generation_turn():
+    messages = scenario_message_sequence(get_scenario("agency_senior_low_stress"))
+
+    meal_followup = messages[5]
+    assert "生成" not in meal_followup
+    assert "行程" not in meal_followup
+    assert [
+        index for index, message in enumerate(messages) if "结构化行程" in message
+    ] == [6]
 
 
 def test_runtime_budget_for_scenario_uses_long_context_profile_and_overrides():
@@ -453,6 +637,88 @@ def test_build_quality_summary_fails_aggregate_when_runtime_budget_fails():
     assert summary["aggregate"]["passed"] is False
 
 
+def test_tool_failure_budget_reaches_acceptance_gate_and_run_summary(tmp_path: Path):
+    scenario = _scenario("tool_failure_gate")
+    report_data = _valid_report_data()
+    report_evaluation = {
+        "normalized_score": 100,
+        "passed": True,
+        "grade": "A",
+        "total_score": 100,
+        "max_score": 100,
+        "summary": [],
+        "criteria": [],
+    }
+    quality_summary = build_quality_summary(
+        scenario=scenario,
+        events=[
+            {"type": "token", "content": "hello", "elapsed_since_scenario_start": 0.5},
+            {"type": "report_data", "elapsed_since_scenario_start": 1.0},
+            {
+                "type": "turn_observability",
+                "observability": {
+                    "tool_call_count": 21,
+                    "tool_failure_count": 13,
+                    "fallback_count": 13,
+                    "degradation_status": "degraded",
+                    "estimated_input_tokens": 10,
+                    "estimated_output_tokens": 20,
+                    "estimated_total_tokens": 30,
+                },
+            },
+        ],
+        turns=[
+            {
+                "turn_index": 1,
+                "user_message": "Plan with tool evidence",
+                "elapsed_seconds": 1.0,
+                "tool_call_count": 21,
+            }
+        ],
+        assistant_text="hello",
+        report_data=report_data,
+        report_evaluation=report_evaluation,
+        elapsed_seconds=1.0,
+        timeout_seconds=900.0,
+    )
+    gate = build_acceptance_gate_result(
+        scenario=scenario,
+        quality_summary=quality_summary,
+        report_data=report_data,
+        snapshot_path="snapshot.json",
+    )
+    evidence_closure = build_acceptance_evidence_closure(
+        scenario=scenario,
+        report_data=report_data,
+        snapshot_path="snapshot.json",
+    )
+    summary = build_acceptance_run_summary(
+        results=[
+            {
+                "scenario_id": scenario.id,
+                "scenario_name": scenario.name,
+                "status": "failed",
+                "passed": False,
+                "runtime_metrics": quality_summary["runtime_metrics"],
+                "evidence_closure": evidence_closure,
+                "acceptance_gate": gate,
+            }
+        ],
+        scenarios=[scenario],
+        base_url="http://127.0.0.1:8000",
+        output_dir=tmp_path,
+    )
+
+    assert quality_summary["runtime_quality"]["budget_gate"]["passed"] is False
+    assert gate["dimensions"]["runtime_budget"]["passed"] is False
+    assert gate["passed"] is False
+    assert summary["status"] == "failed"
+    assert summary["passed"] is False
+    assert summary["runtime_totals"]["tool_failure_count"] == 13
+    assert summary["runtime_totals"]["tool_failure_ratio"] == pytest.approx(0.619, abs=0.0001)
+    assert summary["runtime_totals"]["fallback_count"] == 13
+
+
 def test_acceptance_gate_passes_valid_quality_summary(tmp_path: Path):
     scenario = _scenario("agency_couple")
     report_data = _valid_report_data()
@@ -497,13 +763,20 @@ def test_acceptance_gate_passes_valid_quality_summary(tmp_path: Path):
         report_data=report_data,
         snapshot_path="snapshot.json",
     )
+    evidence_closure = build_acceptance_evidence_closure(
+        scenario=scenario,
+        report_data=report_data,
+        snapshot_path="snapshot.json",
+    )
     run_summary = build_acceptance_run_summary(
         results=[
             {
                 "scenario_id": scenario.id,
                 "scenario_name": scenario.name,
+                "status": "passed",
                 "passed": True,
                 "snapshot_path": "snapshot.json",
+                "evidence_closure": evidence_closure,
                 "acceptance_gate": gate,
             }
         ],
@@ -522,11 +795,82 @@ def test_acceptance_gate_passes_valid_quality_summary(tmp_path: Path):
     assert gate["passed"] is True
     assert run_summary["passed"] is True
     assert run_summary["agent_metrics_totals"]["result_count"] == 1
-    assert run_summary["evidence_closure"]["result_count"] == 0
+    assert run_summary["evidence_closure"]["result_count"] == 1
+    assert run_summary["evidence_closure"]["passed_count"] == 1
     assert "RAG（检索增强生成）" in markdown
     assert "Agent 工业指标" in markdown
     assert Path(paths["json"]).exists()
     assert Path(paths["markdown"]).exists()
+
+
+def test_run_summary_fails_closed_on_evidence_closure_and_shows_tool_failures(tmp_path: Path):
+    scenario = _scenario("closure_failed")
+    result = {
+        "scenario_id": scenario.id,
+        "scenario_name": scenario.name,
+        "status": "failed",
+        "passed": False,
+        "elapsed_seconds": 10.0,
+        "runtime_metrics": {
+            "total_elapsed_seconds": 10.0,
+            "tool_call_count": 21,
+            "tool_failure_count": 13,
+            "fallback_count": 13,
+        },
+        "evidence_closure": {
+            "passed": False,
+            "missing": ["risk", "verification_items"],
+            "checks": {"risk": False, "verification_items": False},
+        },
+        "acceptance_gate": _minimal_passing_gate(scenario),
+    }
+
+    summary = build_acceptance_run_summary(
+        results=[result],
+        scenarios=[scenario],
+        base_url="http://127.0.0.1:8000",
+        output_dir=tmp_path,
+    )
+    markdown = render_acceptance_markdown(summary)
+
+    assert summary["status"] == "failed"
+    assert summary["passed"] is False
+    assert summary["passed_count"] == 0
+    assert summary["status_counts"]["failed"] == 1
+    assert summary["runtime_totals"]["tool_failure_count"] == 13
+    assert summary["runtime_totals"]["tool_failure_ratio"] == pytest.approx(0.619, abs=0.0001)
+    assert summary["runtime_totals"]["fallback_count"] == 13
+    assert any(failure["dimension"] == "evidence_closure" for failure in summary["failures"])
+    assert "工具失败: 13 次" in markdown
+    assert "工具失败率: 61.9%" in markdown
+    assert "fallback（兜底）: 13 次" in markdown
+
+
+def test_run_summary_fails_closed_when_acceptance_gate_is_missing(tmp_path: Path):
+    scenario = _scenario("missing_gate")
+    summary = build_acceptance_run_summary(
+        results=[
+            {
+                "scenario_id": scenario.id,
+                "scenario_name": scenario.name,
+                "status": "passed",
+                "passed": True,
+                "evidence_closure": {"passed": True, "missing": [], "checks": {}},
+            }
+        ],
+        scenarios=[scenario],
+        base_url="http://127.0.0.1:8000",
+        output_dir=tmp_path,
+    )
+
+    assert summary["status"] == "failed"
+    assert summary["passed"] is False
+    assert summary["status_counts"]["failed"] == 1
+    assert any(
+        failure["dimension"] == "live_run"
+        and "acceptance_gate is missing" in " ".join(failure["findings"])
+        for failure in summary["failures"]
+    )
 
 
 def test_acceptance_gate_does_not_fail_non_strict_stage_transition_finding():
@@ -1098,6 +1442,56 @@ def test_live_runner_stops_reading_each_turn_after_done(monkeypatch, tmp_path: P
     assert result.evidence_closure["checks"]["report_data"] is True
 
 
+def test_live_runner_normalizes_report_route_contract_from_sse(monkeypatch, tmp_path: Path):
+    scenario = _scenario("route_contract_from_sse")
+    report_data = _valid_report_data()
+    report_data["itinerary"][0]["route"]["segments"][0]["alternatives"] = [
+        {"mode": "地铁", "label": "公交/地铁"}
+    ]
+
+    class RouteContractClient:
+        def __init__(self, base_url: str, timeout_seconds: float = 900.0):
+            self.base_url = base_url
+            self.timeout_seconds = timeout_seconds
+
+        def post_json(self, path, payload, *, token=None, timeout_seconds=None):
+            if path.endswith("/login"):
+                return {"access_token": "token"}
+            return {"id": "conversation-id"}
+
+        def stream_json_events(self, path, payload, *, token, timeout_seconds=None):
+            yield {"type": "token", "content": "路线报告已生成。"}
+            yield {"type": "report_data", "report_data": report_data}
+            yield {"type": "turn_observability", "observability": {"degradation_status": "ok"}}
+            yield {"type": "done", "turn_id": "turn-1"}
+
+    monkeypatch.setattr("app.evaluation.live_runner.EvaluationApiClient", RouteContractClient)
+
+    result = run_live_scenario(
+        scenario,
+        LiveRunConfig(
+            output_dir=tmp_path,
+            timeout_seconds=1.0,
+            scenario_timeout_seconds=1.0,
+        ),
+    )
+
+    assert result.snapshot_path is not None
+    snapshot = json.loads(Path(result.snapshot_path).read_text(encoding="utf-8"))
+    evaluation = snapshot["summary"]["evaluation"]
+    findings = [
+        finding
+        for criterion in evaluation.get("criteria", [])
+        for finding in criterion.get("findings", [])
+    ]
+    assert evaluation["passed"] is True
+    assert "Some itinerary days lack route segment mode alternatives" not in findings
+    assert (
+        "route_map.days must align with itinerary and include typed route points plus route segments"
+        not in findings
+    )
+
+
 def test_failure_category_prefers_runtime_budget_and_evidence_closure():
     runtime_gate = {
         "passed": False,
@@ -1245,7 +1639,7 @@ def test_acceptance_smoke_scenarios_select_minimal_live_contract():
         "省心" in scenario.prompt and ("费用" in scenario.prompt or "报价" in scenario.name)
         for scenario in scenarios
     )
-    assert "2026-06-20" in pricing_smoke.prompt
+    assert "2026-11-20" in pricing_smoke.prompt
     assert "人均预算1500-2500元" in pricing_smoke.prompt
     assert any("高铁" in followup for followup in pricing_smoke.followups)
     assert any("舒适型酒店" in followup for followup in pricing_smoke.followups)

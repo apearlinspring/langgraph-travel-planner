@@ -26,6 +26,12 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROJECT_ROOT = Path(BASE_DIR)
 DEFAULT_DOTENV_PATH = PROJECT_ROOT / ".env"
 
+
+def _settings_env_file() -> str | None:
+    if os.getenv("ZHIXING_DISABLE_DOTENV") == "1":
+        return None
+    return os.path.join(BASE_DIR, ".env")
+
 RuntimeEnvironment = Literal["development", "test", "staging", "production"]
 DependencyRequirement = Literal["required", "optional"]
 ValuePolicy = Literal["configured", "real"]
@@ -635,6 +641,31 @@ class Settings(BaseSettings):
         default="agency_internal_knowledge",
         alias="RAG_INTERNAL_COLLECTION_NAME",
     )
+    rag_enable_multimodal_auto_extract: bool = Field(
+        default=False,
+        alias="RAG_ENABLE_MULTIMODAL_AUTO_EXTRACT",
+    )
+    rag_multimodal_cache_path: str = Field(
+        default=".runtime/rag_multimodal_cache",
+        alias="RAG_MULTIMODAL_CACHE_PATH",
+    )
+    rag_multimodal_max_image_bytes: int = Field(
+        default=6_000_000,
+        alias="RAG_MULTIMODAL_MAX_IMAGE_BYTES",
+    )
+    rag_multimodal_video_frame_count: int = Field(
+        default=3,
+        alias="RAG_MULTIMODAL_VIDEO_FRAME_COUNT",
+    )
+    rag_multimodal_video_frame_width: int = Field(
+        default=640,
+        alias="RAG_MULTIMODAL_VIDEO_FRAME_WIDTH",
+    )
+    rag_ffmpeg_path: str = Field(default="", alias="RAG_FFMPEG_PATH")
+    rag_multimodal_transcript_command: str = Field(
+        default="",
+        alias="RAG_MULTIMODAL_TRANSCRIPT_COMMAND",
+    )
 
     # ============== 会话一致性配置 ==============
     session_lock_backend: str = Field(default="auto", alias="SESSION_LOCK_BACKEND")
@@ -699,6 +730,12 @@ class Settings(BaseSettings):
         default=0.5,
         alias="API_RATE_LIMIT_REDIS_OPERATION_TIMEOUT_SECONDS",
     )
+    chat_turn_quota_enabled: bool = Field(default=False, alias="CHAT_TURN_QUOTA_ENABLED")
+    chat_turn_quota_daily_limit: int = Field(default=30, alias="CHAT_TURN_QUOTA_DAILY_LIMIT")
+    chat_turn_quota_admin_exempt: bool = Field(
+        default=True,
+        alias="CHAT_TURN_QUOTA_ADMIN_EXEMPT",
+    )
 
     # ============== LangGraph 运行配置 ==============
     langgraph_recursion_limit: int = Field(default=60, alias="LANGGRAPH_RECURSION_LIMIT")
@@ -717,11 +754,12 @@ class Settings(BaseSettings):
     auth_cookie_name: str = Field(default="zhixing_access_token", alias="AUTH_COOKIE_NAME")
     auth_cookie_secure: bool = Field(default=False, alias="AUTH_COOKIE_SECURE")
     auth_cookie_samesite: str = Field(default="lax", alias="AUTH_COOKIE_SAMESITE")
+    auth_registration_enabled: bool = Field(default=True, alias="AUTH_REGISTRATION_ENABLED")
     auth_rate_limit_max_attempts: int = Field(default=5, alias="AUTH_RATE_LIMIT_MAX_ATTEMPTS")
     auth_rate_limit_window_seconds: int = Field(default=600, alias="AUTH_RATE_LIMIT_WINDOW_SECONDS")
 
     model_config = SettingsConfigDict(
-        env_file=os.path.join(BASE_DIR, ".env"),     # 自动拼接路径，不管代码在哪运行都能找到
+        env_file=_settings_env_file(),     # 自动拼接路径，不管代码在哪运行都能找到
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore"              # 忽略 .env 中多余的字段，防止报错

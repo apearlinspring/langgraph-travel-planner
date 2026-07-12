@@ -76,3 +76,30 @@ class VectorStoreManager:
                 app_logger.warning("⚠️ 向量数据库不存在，需先创建")
                 raise RuntimeError("向量数据库未初始化")
         return self.vectorstore
+
+    def close(self) -> None:
+        """关闭本地 Chroma 资源并释放持久化索引文件句柄。
+
+        Chroma 0.5 没有公开的 ``close`` API。持久化客户端会把 System
+        缓存在进程级注册表中，仅删除 Python 包装对象无法释放 Windows 上的
+        HNSW 文件句柄，因此这里需要停止该实例并只移除它自己的缓存项。
+        """
+
+        vectorstore = self.vectorstore
+        self.vectorstore = None
+        if vectorstore is None:
+            return
+
+        client = getattr(vectorstore, "_client", None)
+        if client is None:
+            return
+
+        identifier = getattr(client, "_identifier", None)
+        system = getattr(client, "_system", None)
+        try:
+            if system is not None:
+                system.stop()
+        finally:
+            systems = getattr(type(client), "_identifier_to_system", None)
+            if isinstance(systems, dict) and identifier is not None:
+                systems.pop(identifier, None)

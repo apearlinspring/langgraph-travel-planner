@@ -16,8 +16,24 @@ for stream in (sys.stdout, sys.stderr):
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from scripts._evidence_record_helpers import (  # noqa: E402
+    READY_VALUES,
+    as_list as _as_list,
+    as_mapping as _as_mapping,
+    has_text as _has_text,
+    is_ready as _is_ready,
+    make_final_text_checker,
+    make_json_object_reader,
+    make_path_arg,
+    make_placeholder_checker,
+    status_from_checks as _status_from_checks,
+)
+
+
 ROLLBACK_EXECUTION_RECORD_VERSION = "rollback_execution_record.v1"
-READY_VALUES = {"1", "true", "yes", "y", "ready", "passed", "completed", "verified", "ok", "done"}
 VALID_MODES = {"real_rollback"}
 PLACEHOLDER_PREFIXES = ("todo", "your-", "example", "change-me", "placeholder", "<", "${")
 PLACEHOLDER_FRAGMENTS = ("yyyy-", "release id", "owner role", "previous release", "backup id")
@@ -31,41 +47,16 @@ SECRET_PATTERNS = (
 )
 
 
-def _read_json(path: Path) -> Mapping[str, Any]:
-    with path.open(encoding="utf-8") as handle:
-        payload = json.load(handle)
-    if not isinstance(payload, Mapping):
-        raise ValueError("Rollback execution record must be a JSON object.")
-    return payload
-
-
-def _has_text(value: Any) -> bool:
-    return bool(str(value or "").strip())
-
-
-def _looks_placeholder(value: Any) -> bool:
-    lowered = str(value or "").strip().strip("'\"").lower()
-    if lowered in {"", "unknown", "tbd", "null", "none", "n/a", "na"}:
-        return True
-    return any(lowered.startswith(prefix) for prefix in PLACEHOLDER_PREFIXES) or any(
-        fragment in lowered for fragment in PLACEHOLDER_FRAGMENTS
-    )
-
-
-def _has_final_text(value: Any) -> bool:
-    return _has_text(value) and not _looks_placeholder(value)
-
-
-def _is_ready(value: Any) -> bool:
-    return str(value or "").strip().lower() in READY_VALUES
-
-
-def _as_mapping(value: Any) -> Mapping[str, Any]:
-    return value if isinstance(value, Mapping) else {}
-
-
-def _as_list(value: Any) -> list[Any]:
-    return value if isinstance(value, list) else []
+_path_arg = make_path_arg(PROJECT_ROOT)
+_read_json = make_json_object_reader(
+    object_error="Rollback execution record must be a JSON object.",
+    encoding="utf-8",
+)
+_looks_placeholder = make_placeholder_checker(
+    prefixes=PLACEHOLDER_PREFIXES,
+    fragments=PLACEHOLDER_FRAGMENTS,
+)
+_has_final_text = make_final_text_checker(_looks_placeholder)
 
 
 def _required_fields_check(record: Mapping[str, Any]) -> dict[str, Any]:
@@ -241,19 +232,6 @@ def _redaction_boundary_check(record: Mapping[str, Any], raw_text: str) -> dict[
     }
 
 
-def _status_from_checks(checks: Mapping[str, Mapping[str, Any]]) -> tuple[str, list[dict[str, Any]]]:
-    blockers = []
-    for name, check in checks.items():
-        if check.get("status") != "blocked":
-            continue
-        for item in check.get("blocked_reasons") or []:
-            if isinstance(item, Mapping):
-                blockers.append({"check": name, **dict(item)})
-        if not check.get("blocked_reasons"):
-            blockers.append({"check": name, "finding": check.get("finding") or "blocked"})
-    return ("blocked" if blockers else "passed", blockers)
-
-
 def build_rollback_execution_record_report(record: Mapping[str, Any], *, raw_text: str = "") -> dict[str, Any]:
     """Build a redacted validation report for one real rollback execution record."""
 
@@ -378,11 +356,6 @@ def _template_record() -> dict[str, Any]:
             "secret_values_included": False,
         },
     }
-
-
-def _path_arg(value: str) -> Path:
-    path = Path(value)
-    return path if path.is_absolute() else PROJECT_ROOT / path
 
 
 def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:

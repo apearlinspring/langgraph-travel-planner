@@ -130,6 +130,25 @@ def test_register_sets_http_only_cookie_and_cookie_can_access_me():
     assert me_response.json()["username"] == "traveler"
 
 
+def test_register_can_be_disabled_for_public_demo(monkeypatch: pytest.MonkeyPatch):
+    fake_db = _FakeAsyncSession()
+    client = _build_client(fake_db)
+    monkeypatch.setattr(settings, "auth_registration_enabled", False)
+
+    response = client.post(
+        "/api/v1/users/register",
+        json={
+            "username": "blocked-traveler",
+            "email": "blocked@example.com",
+            "password": "strong-pass-123",
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "registration_disabled"
+    assert fake_db.users == []
+
+
 def test_logout_clears_auth_cookie():
     fake_db = _FakeAsyncSession()
     client = _build_client(fake_db)

@@ -2,6 +2,7 @@
 完整的 Advanced RAG 管道
 整合所有优化策略
 """
+from time import perf_counter
 from typing import Any, List
 from dotenv import load_dotenv
 from langchain_core.documents import Document
@@ -77,6 +78,34 @@ class AdvancedRAGPipeline:
 
         # 6. 缓存层
         self.cache = RAGCache(enabled=enable_cache)
+        self.last_trace: dict[str, Any] = {}
+
+    def _set_trace(
+        self,
+        *,
+        query: str,
+        metadata_filter: dict[str, Any] | None,
+        cache_hit: bool,
+        optimized_queries: list[str],
+        child_count: int,
+        final_docs: list[Document],
+        started_at: float,
+    ) -> None:
+        sources = [
+            str((doc.metadata or {}).get("source") or "unknown")
+            for doc in final_docs
+        ]
+        self.last_trace = {
+            "query_preview": query[:120],
+            "metadata_filter": dict(metadata_filter or {}),
+            "cache_hit": cache_hit,
+            "query_strategy": getattr(self.query_optimizer, "strategy", "unknown"),
+            "optimized_query_count": len(optimized_queries),
+            "child_candidate_count": child_count,
+            "final_document_count": len(final_docs),
+            "sources": sources,
+            "latency_ms": round((perf_counter() - started_at) * 1000, 2),
+        }
 
     def _annotate_governance_metadata(self, documents: List[Document]) -> List[Document]:
         """Add retrieval-time governance flags for old or low-confidence evidence."""
@@ -112,6 +141,8 @@ class AdvancedRAGPipeline:
             优化后的上下文文档列表
         """
 
+        started_at = perf_counter()
+
         # 尝试从缓存获取
         cache_query = (
             query
@@ -120,6 +151,15 @@ class AdvancedRAGPipeline:
         )
         cached_result = self.cache.get(cache_query, self.top_k)
         if cached_result:
+            self._set_trace(
+                query=query,
+                metadata_filter=metadata_filter,
+                cache_hit=True,
+                optimized_queries=[query],
+                child_count=len(cached_result),
+                final_docs=cached_result,
+                started_at=started_at,
+            )
             return cached_result
 
         app_logger.info(f"✅ 开始 Advanced RAG 检索: {query}")
@@ -165,6 +205,15 @@ class AdvancedRAGPipeline:
         final_docs = self.context_reorder.reorder(parent_docs[:self.top_k])
         final_docs = self._annotate_governance_metadata(final_docs)
         app_logger.info(f"✅ RAG 检索完成，最终返回 {len(final_docs)} 个文档")
+        self._set_trace(
+            query=query,
+            metadata_filter=metadata_filter,
+            cache_hit=False,
+            optimized_queries=optimized_queries,
+            child_count=len(child_docs),
+            final_docs=final_docs,
+            started_at=started_at,
+        )
 
         # 缓存结果
         self.cache.set(cache_query, self.top_k, final_docs)

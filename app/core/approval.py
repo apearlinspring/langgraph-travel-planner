@@ -118,7 +118,7 @@ def _timestamp_from_datetime(value: datetime | None) -> float | None:
 
 
 class ApprovalGovernanceManager:
-    """Track whether HITL governance is backed by durable storage."""
+    """Track approval persistence readiness without claiming Agent resume support."""
 
     MEMORY_ALLOWED_ENVS = {"development", "test"}
     _lock = RLock()
@@ -127,6 +127,7 @@ class ApprovalGovernanceManager:
         "ready": False,
         "storage": "postgres",
         "persistent": False,
+        "approval_persistence_ready": False,
         "database_required": True,
         "memory_fallback_allowed": False,
         "fallback_mode": None,
@@ -153,6 +154,7 @@ class ApprovalGovernanceManager:
                 "ready": False,
                 "storage": "postgres",
                 "persistent": False,
+                "approval_persistence_ready": False,
                 "database_required": not memory_allowed,
                 "memory_fallback_allowed": memory_allowed,
                 "fallback_mode": None,
@@ -169,10 +171,11 @@ class ApprovalGovernanceManager:
                 "ready": True,
                 "storage": "postgres",
                 "persistent": True,
+                "approval_persistence_ready": True,
                 "database_required": not memory_allowed,
                 "memory_fallback_allowed": memory_allowed,
                 "fallback_mode": None,
-                "hitl_closed_loop": True,
+                "hitl_closed_loop": False,
                 "last_error": None,
             }
 
@@ -190,6 +193,7 @@ class ApprovalGovernanceManager:
                 "ready": False,
                 "storage": "memory" if memory_allowed else "postgres",
                 "persistent": False,
+                "approval_persistence_ready": False,
                 "database_required": not memory_allowed,
                 "memory_fallback_allowed": memory_allowed,
                 "fallback_mode": "dev_memory" if memory_allowed else None,
@@ -224,7 +228,7 @@ class ApprovalGovernanceManager:
 
     @classmethod
     async def verify_database(cls) -> dict[str, Any]:
-        """Check that all governance tables are readable before declaring ready."""
+        """Check that governance tables are readable before declaring persistence ready."""
 
         from app.config import settings
         from app.models.base import async_session_maker

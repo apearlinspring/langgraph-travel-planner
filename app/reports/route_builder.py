@@ -4,7 +4,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from app.journey.route_preferences import route_segment_duration_matches_mode
+from app.journey.route_preferences import (
+    normalize_route_segment_mode,
+    route_segment_duration_matches_mode,
+    route_segment_mode_label,
+)
 
 
 @dataclass(frozen=True)
@@ -45,14 +49,6 @@ ROUTE_POINT_TYPE_LABELS = {
     "other": "路线点",
 }
 
-ROUTE_SEGMENT_MODE_LABELS = {
-    "walking": "步行",
-    "transit": "公交/地铁",
-    "taxi": "打车",
-    "rail": "铁路",
-    "flight": "航班",
-}
-
 ROUTE_SEGMENT_VERIFICATION_LABELS = {
     "verified": "已核验",
     "estimated": "估算",
@@ -70,27 +66,6 @@ def dedupe_route_points(points: list[str], max_items: int = 6) -> list[str]:
         if len(picked) >= max_items:
             break
     return picked
-
-
-def normalize_route_segment_mode(value: Any) -> str:
-    raw = str(value or "").strip().lower()
-    if any(token in raw for token in ("walk", "walking", "步行")):
-        return "walking"
-    if any(token in raw for token in ("bus", "公交", "metro", "subway", "地铁", "transit")):
-        return "transit"
-    if any(token in raw for token in ("taxi", "ride", "打车", "网约车")):
-        return "taxi"
-    if any(token in raw for token in ("drive", "driving", "car", "驾车", "自驾")):
-        return "taxi"
-    if any(token in raw for token in ("train", "rail", "火车", "高铁")):
-        return "rail"
-    if any(token in raw for token in ("flight", "air", "航班", "飞机")):
-        return "flight"
-    return raw or "taxi"
-
-
-def route_segment_mode_label(mode: str) -> str:
-    return ROUTE_SEGMENT_MODE_LABELS.get(normalize_route_segment_mode(mode), "交通")
 
 
 def normalize_route_segment_verification_status(segment: dict[str, Any]) -> str:
@@ -876,18 +851,37 @@ def build_route_summaries(
     ]
 
 
+def _coerce_route_summary_points(
+    raw_points: Any,
+    day: dict[str, Any],
+    day_number: int,
+) -> list[str]:
+    source_points = raw_points if isinstance(raw_points, list) else []
+    points = dedupe_route_points([_route_point_name(point) for point in source_points])
+    if not points:
+        title = day.get("title") or day.get("theme") or f"Day {day_number}"
+        activities = [str(item) for item in (day.get("activities") or [])[:1] if str(item).strip()]
+        points = dedupe_route_points([str(title), *activities, "待核验路线"])
+    if len(points) < 2:
+        title = str(day.get("title") or day.get("theme") or f"Day {day_number} 衔接点")
+        points = dedupe_route_points([*points, title, "待核验路线"])
+    if len(points) < 2:
+        points.append(f"Day {day_number} 待核验路线")
+    return points
+
+
 def _route_summary_from_day(day: dict[str, Any], fallback_day_number: int) -> dict[str, Any]:
     day_number = day.get("day_number") or fallback_day_number
     existing_route = day.get("route")
     if isinstance(existing_route, dict) and existing_route.get("summary"):
         route = dict(existing_route)
         route.setdefault("day_number", day_number)
-        points = route.get("route_points")
-        if not isinstance(points, list) or not points:
-            route["route_points"] = dedupe_route_points(
-                [str(day.get("title") or day.get("theme") or f"Day {day_number}"), "待核验路线"]
-            )
-        route_points = dedupe_route_points([str(point) for point in route.get("route_points") or []])
+        route_points = _coerce_route_summary_points(
+            route.get("route_points") or route.get("points"),
+            day,
+            int(day_number or fallback_day_number or 0),
+        )
+        route["route_points"] = route_points
         route.setdefault("map_label", f"Day {day_number}：{route['summary']}")
         route.setdefault("route_note", day.get("route_note") or day.get("transport_note") or "")
         route["segments"] = normalize_report_route_segments(
@@ -897,15 +891,11 @@ def _route_summary_from_day(day: dict[str, Any], fallback_day_number: int) -> di
         )
         return route
 
-    route_points = day.get("route_points")
-    if isinstance(route_points, list) and route_points:
-        points = dedupe_route_points([str(point) for point in route_points])
-    else:
-        title = day.get("title") or day.get("theme") or f"Day {day_number}"
-        activities = [str(item) for item in (day.get("activities") or [])[:1] if str(item).strip()]
-        points = dedupe_route_points([str(title), *activities, "待核验路线"])
-    if len(points) < 2:
-        points.append("待核验路线")
+    points = _coerce_route_summary_points(
+        day.get("route_points"),
+        day,
+        int(day_number or fallback_day_number or 0),
+    )
 
     summary = " → ".join(points)
     return {
@@ -963,18 +953,16 @@ def normalize_report_route_alignment(
     for index, day in enumerate(normalized_days):
         if index >= len(normalized_routes):
             break
-        route = normalized_routes[index]
+        route = dict(normalized_routes[index])
         day_number = day.get("day_number") or route.get("day_number") or index + 1
         route.setdefault("day_number", day_number)
-        route.setdefault("route_points", _route_summary_from_day(day, index + 1)["route_points"])
-        route.setdefault("summary", " → ".join(route.get("route_points") or []) or f"Day {day_number} 路线待核验")
-        route.setdefault("map_label", f"Day {day_number}：{route['summary']}")
-        route.setdefault("route_note", day.get("route_note") or day.get("transport_note") or "")
-        route["segments"] = normalize_report_route_segments(
-            dedupe_route_points([str(point) for point in route.get("route_points") or []]),
-            day_number=int(day_number or 0),
-            raw_segments=route.get("segments") or _as_dict(day.get("route")).get("segments") or day.get("segments"),
+        route.setdefault(
+            "summary",
+            " → ".join(_coerce_route_summary_points(route.get("route_points"), day, int(day_number or 0)))
+            or f"Day {day_number} 路线待核验",
         )
+        route = _route_summary_from_day({**day, "route": route}, index + 1)
+        normalized_routes[index] = route
         day["route"] = route
 
     return RouteAlignmentResult(
@@ -982,3 +970,35 @@ def normalize_report_route_alignment(
         route_summaries=normalized_routes,
         findings=findings,
     )
+
+
+def normalize_report_route_contract_surfaces(report_data: dict[str, Any]) -> dict[str, Any]:
+    """Return report_data with itinerary, map routes, and route_map sharing one route contract."""
+
+    normalized = dict(report_data)
+    itinerary = [
+        dict(day)
+        for day in normalized.get("itinerary") or []
+        if isinstance(day, dict)
+    ]
+    map_routes = [
+        dict(route)
+        for route in normalized.get("map_routes") or []
+        if isinstance(route, dict)
+    ]
+    if not itinerary and not map_routes:
+        return normalized
+
+    route_alignment = normalize_report_route_alignment(itinerary, map_routes)
+    itinerary = route_alignment.itinerary
+    map_routes = route_alignment.route_summaries
+
+    for index, day in enumerate(itinerary):
+        if index >= len(map_routes):
+            break
+        day["route"] = map_routes[index]
+
+    normalized["itinerary"] = itinerary
+    normalized["map_routes"] = map_routes
+    normalized["route_map"] = build_route_map(itinerary, map_routes)
+    return normalized

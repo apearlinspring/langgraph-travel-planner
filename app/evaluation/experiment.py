@@ -6,6 +6,12 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
+from app.evaluation.scoring import (
+    as_dict as _as_dict,
+    as_float as _as_float,
+    as_int as _as_int,
+    as_list as _as_list,
+)
 from app.utils.security import REDACTED_VALUE, is_sensitive_key, redact_sensitive_text
 
 
@@ -154,26 +160,6 @@ class AcceptanceRunMetrics:
 
     def to_dict(self) -> dict[str, Any]:
         return _redact_experiment_payload(asdict(self))
-
-
-def _as_dict(value: Any) -> dict[str, Any]:
-    return value if isinstance(value, dict) else {}
-
-
-def _as_list(value: Any) -> list[Any]:
-    return value if isinstance(value, list) else []
-
-
-def _as_float(value: Any) -> float | None:
-    if isinstance(value, bool):
-        return None
-    return float(value) if isinstance(value, (int, float)) else None
-
-
-def _as_int(value: Any) -> int | None:
-    if isinstance(value, bool):
-        return None
-    return int(value) if isinstance(value, int) else None
 
 
 def _string_tuple(value: Any) -> tuple[str, ...]:

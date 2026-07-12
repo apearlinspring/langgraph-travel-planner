@@ -1,25 +1,34 @@
 # RAG（检索增强生成）演示与评测指南
 
-## 2026-05-23 文档校准复跑结果
+## 2026-07-12 北京公开样例校准复跑结果
 
-本轮文档校准只复跑轻量召回评测，不重建向量库，不连接真实模型或外部 API（应用程序接口），也不更新服务器服务。当前仓库资产快照为：`data/evaluation/rag_retrieval_scenarios.json` 包含 17 条召回场景，`data/documents/` 下共有 21 份 Markdown（标记文本）知识文档，其中 `data/documents/internal/products/` 下有 11 份产品/路线样板。
+本轮文档校准只复跑轻量召回评测，不重建向量库，不连接真实模型或外部 API（应用程序接口），也不更新服务器服务。当前仓库资产快照为：`data/evaluation/rag_retrieval_scenarios.json` 包含 27 条召回场景，`data/documents/` 下共有 26 份 Markdown（标记文本）知识文档，其中公开目的地样例覆盖西安、杭州、厦门、桂林、南京和北京 6 份，`data/documents/internal/products/` 下有 11 份产品/路线样板。
 
 执行命令：
 
 ```powershell
 uv run python scripts\evaluate_rag_retrieval.py --json
+uv run python scripts\evaluate_rag_retrieval.py --mixed-corpus-safety --top-k 3 --json
 uv run python scripts\evaluate_rag_retrieval.py --output docs\RAG与知识库\rag-retrieval-evaluation.md
 ```
 
 当前 `metadata_aware_bm25` 在 top-5 下的结果：
 
-- `source_recall`: 91.18%
-- `category_recall`: 94.12%
-- `source_type_recall`: 94.12%
-- `hit_rate`: 94.12%
-- `mrr`: 0.9118
+- `source_recall`: 100.00%
+- `category_recall`: 100.00%
+- `source_type_recall`: 100.00%
+- `visibility_recall`: 100.00%
+- `hit_rate`: 100.00%
+- `safety_pass_rate`: 100.00%
+- `mrr`: 0.9815
 
-当前主要缺口是 `retrieval_public_xian_culture_food` 被内部产品/规则样板压过，没有召回公开西安目的地文档；后续可以从公开目的地查询的 metadata（元数据）路由和本地知识权重上优化。下方 2026-05-17 结果保留为历史真实环境参考，不代表当前轻量召回报告。
+当前 mixed-corpus safety gate（公开+内部混合候选库安全门）覆盖 11 个公开安全场景、26 份候选文档，`metadata_aware_bm25` top-3 的 source/category/source_type/visibility recall 均为 100%，`safety_pass_rate` 为 100%。这只表示这 11 条标注查询在当前离线候选库中没有返回场景禁止的内部产品、报价、SOP（标准作业流程）、风控、报告规范或内部门票参考知识；未知查询、提示注入、真实向量检索和线上链路仍需单独验证。
+
+当前轻量评测的剩余缺口不是“召回失败”，而是样本仍是小规模公开模拟语料：西安、杭州、厦门、桂林、南京和北京样例用于工程验收，不代表真实库存、实时价格、供应商承诺或官方预约结果。
+
+## 2026-07-11 南京样例校准结果（历史快照）
+
+本轮扩充前的快照为 26 条召回场景、25 份 Markdown 文档、5 个公开目的地（西安、杭州、厦门、桂林和南京）与 10 个 mixed-corpus safety 场景；`metadata_aware_bm25` top-5 的 source/category/source type/visibility recall 和 safety pass rate 均为 100%，MRR 为 0.9808。这些数字只是 2026-07-11 历史离线快照，不是当前规模，也不代表真实向量库或在线 Agent 验收。
 
 ## 2026-05-17 真实环境刷新结果（历史参考）
 
@@ -50,7 +59,7 @@ uv run python scripts\evaluate_rag_retrieval.py --output docs\RAG与知识库\ra
 
 ## 怎么看评测
 
-当前仓库资产快照：`data/evaluation/rag_retrieval_scenarios.json` 包含 17 条召回场景，`data/documents/` 下共有 21 份 Markdown（标记文本）知识文档，其中 `data/documents/internal/products/` 下有 11 份产品/路线样板。历史运行结果只代表当时知识库与场景规模，实际结论以重新运行脚本输出为准。
+当前仓库资产快照：`data/evaluation/rag_retrieval_scenarios.json` 包含 27 条召回场景，`data/documents/` 下共有 26 份 Markdown（标记文本）知识文档，其中公开目的地样例覆盖西安、杭州、厦门、桂林、南京和北京 6 份，`data/documents/internal/products/` 下有 11 份产品/路线样板。历史运行结果只代表当时知识库与场景规模，实际结论以重新运行脚本输出为准。
 
 运行命令：
 
@@ -59,6 +68,7 @@ uv run python scripts\evaluate_rag_retrieval.py --output docs\RAG与知识库\ra
 $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 chcp 65001 | Out-Null
 uv run python scripts\evaluate_rag_retrieval.py --json
+uv run python scripts\evaluate_rag_retrieval.py --mixed-corpus-safety --top-k 3 --json
 uv run python scripts\evaluate_rag_retrieval.py --output docs\RAG与知识库\rag-retrieval-evaluation.md
 ```
 
@@ -69,10 +79,14 @@ uv run python scripts\evaluate_rag_retrieval.py --output docs\RAG与知识库\ra
 | `source recall@K` | 前 K 个结果里是否召回到标注的具体知识文档。 |
 | `category recall@K` | 前 K 个结果里是否覆盖正确知识类别，例如 `products`、`pricing`、`risk`。 |
 | `source type recall@K` | 是否召回正确来源类型，例如公开目的地知识或内部业务知识。 |
+| `visibility recall@K` | 是否召回正确可见性，例如 `public` 或 `internal`。 |
 | `hit rate@K` | 前 K 个结果里是否至少有一个相关依据。 |
+| `safety pass rate` | 返回结果中没有命中场景标记的 forbidden（禁止）类别、来源类型或可见性。 |
 | `MRR`（平均倒数排名） | 第一个相关结果越靠前，分数越高。 |
 
 不要把它解释成线上全量效果。它是轻量标注集，用于证明知识组织、metadata（元数据）和检索策略能稳定命中关键证据。
+
+`passed` 只表示当前命令在当前本地知识文档和标注场景下通过；如果缺真实向量库、缺真实密钥、后端不可达或 mixed-corpus safety gate 失败，应记为 `blocked`，不能包装成真实验收通过。
 
 ## 产品化查询样例
 

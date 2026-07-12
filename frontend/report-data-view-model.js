@@ -166,6 +166,16 @@
         toolAudit.approval ||
         reportData.evidence_bundle?.approval_governance ||
         {};
+      const rawMockCheckout =
+        toolAudit.m1_mock_checkout ||
+        reportData.evidence_bundle?.m1_mock_checkout ||
+        {};
+      const mockCheckoutUrl = String(
+        rawMockCheckout.checkout_url || rawMockCheckout.checkoutUrl || ""
+      ).trim();
+      const mockStatusUrl = String(
+        rawMockCheckout.status_url || rawMockCheckout.statusUrl || ""
+      ).trim();
       const pendingChecks = normalizeReportDataList([
         ...normalizeReportDataList(budgetConfidence.verification_items),
         ...normalizeReportDataList(toolAudit.pending_checks),
@@ -205,6 +215,22 @@
           unsupportedWithoutIntegration: normalizeReportDataList(
             approval.unsupported_without_integration
           ),
+        },
+        mockCheckout: {
+          enabled:
+            rawMockCheckout.enabled === true ||
+            Boolean(mockCheckoutUrl || mockStatusUrl),
+          mode: String(rawMockCheckout.mode || "").trim(),
+          orderId: String(
+            rawMockCheckout.order_id || rawMockCheckout.orderId || ""
+          ).trim(),
+          checkoutUrl: mockCheckoutUrl,
+          statusUrl: mockStatusUrl,
+          realPayment: rawMockCheckout.real_payment === true,
+          realBooking: rawMockCheckout.real_booking === true,
+          inventoryLocked: rawMockCheckout.inventory_locked === true,
+          fulfillmentTriggered: rawMockCheckout.fulfillment_triggered === true,
+          boundary: String(rawMockCheckout.boundary || "").trim(),
         },
         agency: {
           summary: String(agencyContext.summary || "").trim(),

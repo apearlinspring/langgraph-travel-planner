@@ -81,14 +81,14 @@ LLM（大语言模型）创建统一走 `app/utils/llm_factory.py` 的 `build_ch
 - `data/evaluation/tool_call_scenarios.json`：检查交通、酒店、目的地天气等工具是否按用户意图调用，是否避免同轮重复调用高成本查询工具，以及失败后是否进入待核验兜底。
 - `data/evaluation/rag_retrieval_scenarios.json`：小型 RAG（检索增强生成）召回率评估集，标注查询应命中的知识源、知识分类和来源类型，用 Top-K source recall（来源召回）、category recall（分类召回）和 MRR（平均倒数排名）对比纯正文 BM25（词频检索算法）与 metadata-aware BM25（带元数据的词频检索算法）。
 
-当前召回评测样本规模是 12 条查询、16 份本地 Markdown（标记文本）文档，覆盖公开目的地攻略、内部产品目录、SOP（标准作业流程）、报价、风险和报告交付。2026-05-16 复跑 `uv run python scripts\evaluate_rag_retrieval.py --json` 的 Top-3（前三）结果为：
+当前召回评测样本规模是 27 条查询、26 份本地 Markdown（标记文本）文档，覆盖西安、杭州、厦门、桂林、南京和北京 6 个公开目的地样例，以及内部产品目录、SOP（标准作业流程）、报价、风险和报告交付。其中 11 条公开场景带 forbidden（禁止命中）护栏，会进入 mixed-corpus safety（公开+内部混合库安全）门禁。当前生成报告 `docs/RAG与知识库/rag-retrieval-evaluation.md` 的结果为：
 
-| strategy | source recall@3 | category recall@3 | hit rate@3 | MRR |
-|---|---:|---:|---:|---:|
-| `baseline_bm25`（纯正文） | 83.33% | 87.50% | 91.67% | 0.9167 |
-| `metadata_aware_bm25`（带元数据） | 95.83% | 100.00% | 100.00% | 0.9444 |
+| strategy | top-k | source recall | category recall | source type recall | visibility recall | hit rate | safety pass | MRR |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `baseline_bm25`（纯正文） | 5 | 98.15% | 98.15% | 100.00% | 100.00% | 100.00% | 100.00% | 0.9630 |
+| `metadata_aware_bm25`（带元数据） | 5 | 100.00% | 100.00% | 100.00% | 100.00% | 100.00% | 100.00% | 0.9815 |
 
-这些指标由脚本现场计算，不是硬写 100%；由于样本较小，它只能证明当前产品目录和元数据契约在小型离线集上的改进方向，不能外推为线上全量召回率。
+这些指标由脚本计算，不是运行时 Hybrid Retrieval（混合检索）的端到端指标。由于样本较小且为人工构造，它只能证明当前本地语料和元数据策略在离线集上的回归结果，不能外推为线上全量召回率、Dense 检索质量或最终回答正确率。
 
 列出场景：
 
@@ -147,7 +147,7 @@ LLM（大语言模型）创建统一走 `app/utils/llm_factory.py` 的 `build_ch
 .\.venv\Scripts\python.exe scripts\export_acceptance_evidence.py --runtime-dir .runtime --output docs\评估与验收\acceptance-core-report.md
 ```
 
-导出脚本会自动扫描 `.runtime` 下最新的 `acceptance_run_summary.v1` JSON（JavaScript 对象表示法）摘要，生成稳定的 9 场景状态地图，包含每个场景的状态、首 token（文本令牌）、工具调用数、证据闭环、运行预算和工业指标结论。脚本只输出脱敏后的聚合字段，不读取或写入 `.env`，也不会把真实密钥、手机号、邮箱、JWT（JSON Web Token，令牌认证）或原始工具响应写进文档。
+导出脚本会自动扫描 `.runtime` 下最新的 `acceptance_run_summary.v1` JSON（JavaScript 对象表示法）摘要，生成稳定的 9 场景状态地图，包含每个场景的状态、任意首个助手片段时间、工具调用数、证据闭环、运行预算和工业指标结论。首片段可能只是固定 ACK（确认收到），不能解释为首个有意义内容或完整处理耗时；脚本只输出脱敏后的聚合字段，不读取或写入 `.env`，也不会把真实密钥、手机号、邮箱、JWT（JSON Web Token，令牌认证）或原始工具响应写进文档。
 
 缺文件或只存在 partial summary（部分摘要）时，证据包不会假装通过：
 
@@ -160,7 +160,7 @@ LLM（大语言模型）创建统一走 `app/utils/llm_factory.py` 的 `build_ch
 - `timeout`：单场景超时或网络读取超时，通常看场景快照、后端日志和最后一个 SSE 事件。
 - `global_timeout`：整批运行预算耗尽，摘要保留已完成场景和未运行场景。
 - `conversation_busy`：后端返回 `session_busy`，表示同一会话仍被上一轮执行占用。
-- `runtime_budget`：场景产出 `report_data`，但运行预算门禁失败，例如总耗时、首 token（文本令牌）时间、工具调用数或估算 token 超阈值。
+- `runtime_budget`：场景产出 `report_data`，但运行预算门禁失败，例如总耗时、任意首个助手片段时间、工具调用数或估算 token 超阈值；首片段阈值只检查连接首响，不能替代有意义内容或完整处理延迟。
 - `evidence_closure`：证据闭环失败，例如缺少快照、预算、风险、待核验项或旅行社内部证据类别。
 
 脚本会先执行 preflight（预检）。预检会读取当前进程环境变量和 `.env`，但只输出环境变量名和状态，不输出真实密钥值。核心场景的 `requirements` 字段会声明它需要的真实能力：
@@ -230,6 +230,10 @@ workflow（工作流）总是上传 `.runtime/acceptance-smoke` 作为 artifact�
 - 旅行社省心方案：至少覆盖 3 类内部证据。
 - 工具审计：必须暴露使用来源、待核验项和不支持承诺。
 
+动态价格、库存、班次、酒店房态和天气等断言不能只凭“某工具曾被调用”判为有依据。`agent_metrics` 只接受同时满足三项的工具证据：对应 `tool_audit` 的原始 `status=success`、`semantic_status=success`，并且 `evidence_type` 与该工具及断言类别匹配。`failed`、`not_found`、`needs_verification`、参数不足、治理跳过或证据类型不匹配的调用都不能为确定性断言背书；这类内容只有明确写成估算、待确认或待核验动作时才不计为 unsupported claim（无依据断言）。当前系统没有真实预订证据，因此 booking（预订完成）类断言始终不能由普通工具调用支持。
+
+整批摘要不会信任单一 `passed` 字段。一个场景只有在结果层的 `status/passed`、`acceptance_gate` 的 `status/passed` 和 `evidence_closure.passed` 一致通过时，才计入 passed（通过）。门禁或证据闭环缺失、状态非法、`status` 与 `passed` 自相矛盾，都会 fail closed（缺证据即失败）：整批状态变为 failed（失败），并新增 `live_run` 或 `evidence_closure` 失败记录。被明确标记为 blocked（环境阻塞）、degraded（降级）或 skipped（跳过）的场景仍保留原状态，不会被上述规则改写成通过。
+
 失败时摘要会明确给出：
 
 - 失败场景。
@@ -245,6 +249,8 @@ workflow（工作流）总是上传 `.runtime/acceptance-smoke` 作为 artifact�
 - `degraded`（降级）：核心门禁未失败，但存在非阻塞预检、运行预算 warning（警告）或运行治理风险；不等同于 passed（通过）。
 - `blocked`（环境阻塞）：缺少真实密钥、后端不可达或核心依赖不足，不能生成有效通过结论。
 - `skipped`（跳过）：场景没有执行，常见原因是 blocked（环境阻塞）或只运行 preflight（预检）。
+
+确定性场景门禁不能单独证明轨迹最优、重复运行稳定、线上用户满意度或生产可靠性。历史 2026-05-17 跑批虽然在旧门禁下 9/9 passed，但 161 次工具调用中有 108 次失败并进入 fallback（约 67.1%），暴露了假阳性。当前普通场景默认要求工具失败数、失败率和 fallback 数都为 0；只有 `edge_hotel_tool_fallback` 和 `edge_transport_tool_fallback` 显式配置有界预算。场景通过后仍需看 badcase（坏案例）、人工标注和多次运行分布。
 
 先查看将要运行的场景，不调用后端：
 
@@ -272,7 +278,7 @@ $env:ZHIXING_EVAL_USERNAME="test"
 $env:ZHIXING_EVAL_PASSWORD="000000"
 ```
 
-脚本会把快照写入 `.runtime/evaluations/`，用于复盘首 token 时间、工具调用、最终报告结构和评分结果。
+脚本会把快照写入 `.runtime/evaluations/`，用于复盘任意首个助手片段时间、总耗时、工具调用、最终报告结构和评分结果；固定 ACK 只算连接首响。
 
 默认每个场景会先发送原始需求。如果第一轮没有生成结构化报告，脚本会在同一个会话里按阶段追加确认消息：记录需求、确认目的地、记录交通/住宿/餐饮、生成行程、汇总预算、最终报告。这样测试目标更接近真实验收：不是只看模型第一轮回复，而是看它能否稳定走到最终交付物。
 
@@ -287,7 +293,7 @@ $env:ZHIXING_EVAL_PASSWORD="000000"
 - `summary.quality_summary.report_quality`：原有结构化报告评分。
 - `summary.quality_summary.rag_quality`：证据契约、类别覆盖、模式适配、费用可追溯和安全交付评分。
 - `summary.quality_summary.tool_quality`：工具意图覆盖、禁用工具规避、同轮高成本查询重复调用、失败兜底和审计可见性评分。
-- `summary.quality_summary.runtime_quality`：是否产出 `report_data`、总耗时、首 token（词元）时间、事件计数、工具调用次数、错误事件数和 token 近似成本评分。
+- `summary.quality_summary.runtime_quality`：是否产出 `report_data`、总耗时、任意首个助手片段时间、事件计数、工具调用次数、错误事件数和 token 近似成本评分；首片段可能是固定 ACK。
 - `summary.quality_summary.agent_metrics`：intent accuracy（意图准确率）、tool call precision/recall（工具调用精确率/召回率）、stage transition accuracy（阶段迁移准确率）和 unsupported claim rate（无依据断言率）。
 - `summary.quality_summary.runtime_quality.budget_gate`：确定性运行预算门禁，包含 `passed`、`violations`、`warnings` 和实际采用的预算阈值。
 - `summary.quality_summary.runtime_governance`：运行治理摘要，用于回答“慢在哪里、成本风险在哪里、工具是否过度调用”。
@@ -297,12 +303,21 @@ $env:ZHIXING_EVAL_PASSWORD="000000"
 默认运行预算是：
 
 - 最大总耗时：900 秒。
-- 最大首 token 时间：60 秒，缺失时给出警告，不直接判失败。
+- 最大任意首个助手片段时间：60 秒，缺失时给出警告，不直接判失败；该片段可能是固定 ACK，只能衡量连接首响。
 - 最大工具调用次数：32 次。
 - 最大估算 token 数：120000。
 - 最大错误事件数：0。
+- 最大工具失败数：0。
+- 最大工具失败率：0.0。
+- 最大 fallback（兜底）数：0。
 
-长对话和工具降级类场景可以在 `data/evaluation/report_quality_scenarios.json` 的 `runtime_budget` 中覆盖阈值。例如长上下文场景允许 1200 秒总耗时、45 次工具调用和 180000 估算 token。
+当前尚未单独采集 time-to-first-meaningful-content（首个有意义内容耗时）。性能结论必须同时展示 `total_elapsed_seconds`，不能用固定 ACK 触发的低 `first_token_seconds` 代替端到端处理时延。
+
+`tool_failure_count` 只统计 `service_exception`，或没有语义字段时的原始 `failed`、`failure`、`timeout`、`error`。`not_found` 只计入 fallback，`needs_verification`、参数不足和治理跳过只计入 degraded（降级），不会抬高工具失败数或 fallback 数。`tool_failure_ratio = tool_failure_count / tool_call_count`；没有工具调用时，失败数为 0 则比率为 0.0，反常地出现失败记录则按 1.0 处理。整批摘要使用所有场景的失败数除以所有场景的工具调用数，场景预算门禁则使用该场景自己的比率。
+
+所有运行预算浮点阈值必须是有限数；`NaN`、正无穷和负无穷会在构造预算时被拒绝，避免 Python 浮点比较使门禁失效放行。
+
+长对话和专门工具降级场景可以在 `data/evaluation/report_quality_scenarios.json` 的 `runtime_budget` 中覆盖阈值。例如长上下文场景允许更高耗时、工具调用和 token；两个专门 fallback 场景分别显式允许工具失败数、fallback 数最多 16，失败率最多 1.0。普通场景不能因为最终仍生成 `report_data` 就绕过这些阈值。
 
 `evaluate_report_snapshot.py` 读取旧快照时仍会输出原有报告评分；如果快照里有 `events`、`turns` 和 `assistant_text`，还会补充 Agent 运行质量摘要。需要把运行预算也作为退出码门禁时，使用：
 

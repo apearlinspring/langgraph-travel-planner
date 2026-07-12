@@ -744,7 +744,21 @@ def test_original_query_optimizer_does_not_call_llm(monkeypatch):
     assert optimizer.optimize("省心路线") == ["省心路线"]
 
 
-def test_public_rag_pipeline_defaults_to_original_query_strategy(monkeypatch):
+def test_local_query_optimizer_expands_common_travel_intents_without_llm(monkeypatch):
+    monkeypatch.setattr(
+        "app.rag.query_optimizer._get_rag_model",
+        lambda: (_ for _ in ()).throw(AssertionError("RAG model should not be loaded")),
+    )
+
+    optimizer = AdvancedQueryOptimizer(strategy="local_multi_query")
+    queries = optimizer.optimize("西安亲子美食攻略")
+
+    assert queries[0] == "西安亲子美食攻略"
+    assert any("本地小吃" in query for query in queries)
+    assert any("短动线" in query for query in queries)
+
+
+def test_public_rag_pipeline_defaults_to_local_query_strategy(monkeypatch):
     captured = {}
 
     class FakeParentSplitter:
@@ -777,7 +791,7 @@ def test_public_rag_pipeline_defaults_to_original_query_strategy(monkeypatch):
         label="公开攻略 RAG",
     )
 
-    assert captured["query_strategy"] == "original"
+    assert captured["query_strategy"] == "local_multi_query"
     assert captured["use_llm_reranker"] is False
 
 

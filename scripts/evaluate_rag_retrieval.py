@@ -20,6 +20,7 @@ warnings.filterwarnings("ignore", category=UserWarning, module=r"jieba.*")
 from app.evaluation.rag_retrieval import (  # noqa: E402
     DEFAULT_DOCUMENTS_DIR,
     DEFAULT_RAG_RETRIEVAL_SCENARIO_FILE,
+    evaluate_rag_mixed_corpus_safety,
     evaluate_rag_retrieval,
     render_rag_retrieval_markdown,
 )
@@ -57,6 +58,14 @@ def _parse_args() -> argparse.Namespace:
         help="Print machine-readable JSON instead of Markdown.",
     )
     parser.add_argument(
+        "--mixed-corpus-safety",
+        action="store_true",
+        help=(
+            "Run the public mixed-corpus safety gate: keep public and internal "
+            "documents in the candidate set, then enforce forbidden-hit guardrails."
+        ),
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         help="Optional output file. Parent directories are created as needed.",
@@ -66,7 +75,12 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = _parse_args()
-    result = evaluate_rag_retrieval(
+    evaluator = (
+        evaluate_rag_mixed_corpus_safety
+        if args.mixed_corpus_safety
+        else evaluate_rag_retrieval
+    )
+    result = evaluator(
         scenario_path=args.catalog,
         documents_dir=args.documents_dir,
         top_k_values=args.top_k,

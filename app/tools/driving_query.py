@@ -1,12 +1,13 @@
 """
 Deterministic driving-route query wrapper for AMap MCP tools.
 """
-import json
 from typing import Any, Optional
 
 from langchain.tools import tool
 
+from app.journey.route_preferences import format_route_distance as _format_distance
 from app.mcp_core.client import get_mcp_client
+from app.mcp_core.result_parsing import parse_json_text as _parse_json_text
 from app.tools.execution_guard import execute_guarded_call
 from app.tools.guardrails import validate_driving_query_args
 from app.tools.result_validation import validate_transport_result
@@ -15,32 +16,6 @@ from app.utils.logger import app_logger
 
 TOOL_AUDIT_EVENTS_ARTIFACT_KEY = "tool_audit_events"
 DRIVING_QUERY_TIMEOUT_SECONDS = 30.0
-
-
-def _extract_text_payload(result: Any) -> str:
-    if isinstance(result, str):
-        return result
-    if isinstance(result, list):
-        for item in result:
-            if isinstance(item, dict) and item.get("type") == "text":
-                return str(item.get("text", ""))
-    if isinstance(result, dict) and result.get("type") == "text":
-        return str(result.get("text", ""))
-    return str(result)
-
-
-def _parse_json_text(result: Any) -> dict[str, Any]:
-    text = _extract_text_payload(result)
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        return {}
-
-
-def _format_distance(distance_meters: float) -> str:
-    if distance_meters >= 1000:
-        return f"{distance_meters / 1000:.1f} 公里"
-    return f"{distance_meters:.0f} 米"
 
 
 def _format_duration(duration_seconds: float) -> str:

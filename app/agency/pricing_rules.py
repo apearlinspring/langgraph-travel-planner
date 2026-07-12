@@ -31,7 +31,7 @@ def _confidence_payload(budget: dict[str, Any]) -> dict[str, Any]:
     return budget_confidence_payload(budget)
 
 
-def _format_money(value: Any) -> str:
+def format_money(value: Any) -> str:
     if isinstance(value, (int, float)):
         return f"{value:.2f} 元"
     return "待确认"
@@ -69,7 +69,7 @@ BUDGET_DISPLAY_GROUPS = (
 )
 
 
-def _budget_display_group(item: dict[str, Any]) -> str:
+def budget_group_key(item: dict[str, Any]) -> str:
     source = f"{item.get('key') or item.get('category') or ''} {item.get('label') or ''}".lower()
     if any(token in source for token in ("transport", "traffic", "交通", "高铁", "航班", "机票")):
         return "transport"
@@ -102,7 +102,7 @@ def _budget_display_items(budget: dict[str, Any]) -> list[dict[str, Any]]:
     for item in budget.get("line_items") or []:
         if not isinstance(item, dict):
             continue
-        target = grouped[_budget_display_group(item)]
+        target = grouped[budget_group_key(item)]
         amount = item.get("amount")
         if isinstance(amount, (int, float)):
             target["amount"] += float(amount)
@@ -125,8 +125,8 @@ def _budget_display_items(budget: dict[str, Any]) -> list[dict[str, Any]]:
             grouped[key]["amount"] = float(amount)
 
     defaults = {
-        "transport": "交通实时票价和余票需复核。",
-        "accommodation": "住宿房型、晚数和取消政策需复核。",
+        "transport": "交通实时票价和余票待二次核验，以官方/平台实时结果为准。",
+        "accommodation": "住宿房型、晚数和取消政策待二次核验，以酒店/平台实时结果为准。",
         "food": "按餐饮偏好和餐次估算。",
         "attractions": "按门票、预约项目和临时展览估算。",
         "service_reserve": "覆盖市内交通、寄存、临时休息和价格波动缓冲。",
@@ -167,7 +167,7 @@ def build_budget_quality_notes(
         estimated_items.append(
             "交通：缺少具体票价，交通 API 未提供具体票价或查询失败，当前按交通方式基准价做兜底估算。"
         )
-    verification_items.append("交通：正式购票前复核实时票价、余票、退改签规则和行李限制。")
+    verification_items.append("交通：正式购票前待二次核验实时票价、余票、退改签规则和行李限制，以官方/平台实时结果为准。")
 
     hotel_price = selected_accommodation.get("price_per_night")
     hotel_name = selected_accommodation.get("name", "已选酒店")
@@ -179,7 +179,7 @@ def build_budget_quality_notes(
         estimated_items.append(
             "住宿：缺少已选酒店价格，酒店 MCP 未提供可追溯价格或查询失败，当前按兜底每间夜价格估算。"
         )
-    verification_items.append("住宿：入住前复核房型、税费、取消政策、押金和儿童/加床规则。")
+    verification_items.append("住宿：入住前待二次核验房型、税费、取消政策、押金和儿童/加床规则，以酒店/平台实时结果为准。")
 
     matched_food_names: list[str] = []
     for food_poi in food_pois:
@@ -250,13 +250,13 @@ def format_budget_breakdown(budget: dict[str, Any]) -> list[str]:
             lines.append(
                 "| {label} | {amount} | {confidence} | {basis} |".format(
                     label=_budget_table_cell(item.get("label", "费用")),
-                    amount=_format_money(item.get("amount")),
+                    amount=format_money(item.get("amount")),
                     confidence=_budget_table_cell(item.get("confidence", "估算")),
                     basis=_budget_table_cell(item.get("basis", "依据待补充")),
                 )
             )
         lines.append(
-            f"| 合计 | {_format_money(budget.get('total'))} | 待正式锁价 | 当前为规划估算，正式预订前需复核。 |"
+            f"| 合计 | {format_money(budget.get('total'))} | 待正式锁价 | 当前为规划估算，正式预订前需复核。 |"
         )
         return lines
 
@@ -264,7 +264,7 @@ def format_budget_breakdown(budget: dict[str, Any]) -> list[str]:
         return [
             "| 类别 | 金额 | 置信度 | 依据 |",
             "| --- | ---: | --- | --- |",
-            f"| 合计 | {_format_money(budget.get('total'))} | 待正式锁价 | 当前为规划估算，正式预订前需复核。 |",
+            f"| 合计 | {format_money(budget.get('total'))} | 待正式锁价 | 当前为规划估算，正式预订前需复核。 |",
         ]
 
     lines = [
@@ -275,13 +275,13 @@ def format_budget_breakdown(budget: dict[str, Any]) -> list[str]:
         lines.append(
             "| {label} | {amount} | {confidence} | {basis} |".format(
                 label=_budget_table_cell(item.get("label")),
-                amount=_format_money(item.get("amount")),
+                amount=format_money(item.get("amount")),
                 confidence=_budget_table_cell(item.get("confidence")),
                 basis=_budget_table_cell(item.get("basis")),
             )
         )
     lines.append(
-        f"| 合计 | {_format_money(budget.get('total'))} | 待正式锁价 | 当前为规划估算，正式预订前需复核。 |"
+        f"| 合计 | {format_money(budget.get('total'))} | 待正式锁价 | 当前为规划估算，正式预订前需复核。 |"
     )
     return lines
 
@@ -315,7 +315,7 @@ def format_budget_verification_items(budget: dict[str, Any]) -> list[str]:
     verification_items = budget_confidence_payload(budget).get("verification_items") or []
     lines = ["- 待核验项："]
     if not verification_items:
-        lines.append("  - 正式预订或出发前复核票价、酒店、景点开放和天气。")
+        lines.append("  - 正式预订或出发前待二次核验票价、酒店、景点开放和天气，以官方/平台实时结果为准。")
         return lines
     lines.extend(f"  - {item}" for item in verification_items)
     return lines

@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.agency.pricing_rules import format_money as _format_money
+
 
 def _as_list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
@@ -10,12 +12,6 @@ def _as_list(value: Any) -> list[Any]:
 
 def _as_dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
-
-
-def _format_money(value: Any) -> str:
-    if isinstance(value, (int, float)):
-        return f"{value:.2f} 元"
-    return "待确认"
 
 
 def _table_cell(value: Any) -> str:

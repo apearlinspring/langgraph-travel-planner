@@ -2,6 +2,8 @@
 
 本文记录 ZhiXing Travel Planner 在 Agent（智能体）和 AI 应用工程化方向上的改进计划。它面向公开项目维护，重点写工程短板、交付证据、验收标准和协作分工，不包含本地草稿、原始运行证据、密钥、真实用户数据或本地环境坐标。
 
+其中带日期的“已完成”行是实施历史，不自动代表当前 commit、目标环境或线上状态仍通过。当前能力与验收结论以源码、重新执行的测试/评估和日期化证据快照为准。
+
 ## 1. 改进目标
 
 当前项目已经具备阶段化旅行规划、RAG（检索增强生成）、MCP（模型上下文协议）工具、结构化 `report_data`（报告数据）、前端报告展示和评估入口。下一阶段目标不是继续堆叠功能，而是把这些能力收束成更可维护、可验证、可审计的 AI 应用工程闭环。
@@ -24,19 +26,19 @@
 | 报告交付 | `report_data` 已是核心契约，但仍需继续统一报告、前端和评估口径 | 结构化报告成为前端、导出、评估共用事实来源 | P0 | 报告契约测试、前端渲染验证 |
 | AgentOps 与可观测 | 已有轻量运行指标，但缺少更完整的 trace（链路追踪）、成本和版本治理 | 形成运行质量指标、Prompt/模型变更记录和回放思路 | P1 | 评估系统文档、快照摘要、运行指标测试 |
 | 前端工程化 | 单页原型可演示，但组件化、可访问性和构建治理不足 | 保持原型定位，优先保证结构化报告体验和导出可信 | P1 | 前端验证脚本、移动端/桌面端检查说明 |
-| 部署与运行 | readiness（就绪检查）已有基础，生产高可用、扩缩容和密钥系统仍是模板级 | 保持部署模板诚实，明确哪些能力需要真实环境 | P1 | runtime/deployment 文档和 readiness 结果 |
-| 部署后 smoke 证据 | 已有 M1 gate 和验收记录生成器，但缺一份把 health、gate、acceptance smoke 收束到同一脱敏摘要的记录器 | 在目标环境显式执行后形成可复查证据；默认计划模式不冒充通过 | P0 | `scripts/collect_m1_smoke_evidence.py --json` 和目标环境 smoke 摘要 |
-| 备份恢复演练证据 | readiness 只能证明备份策略声明和目录可写，不能证明有可读 dump 或恢复演练 | 记录最新 PostgreSQL dump 元数据、catalog 可读性、恢复演练声明和数据丢失窗口 | P0 | `scripts/collect_backup_restore_drill_evidence.py --json` 和非生产恢复演练摘要 |
-| 监控告警投递证据 | readiness 只能证明监控供应商、告警渠道和预算声明，不能证明告警真的投递或指标已保留 | 记录 health/readiness 告警投递、核心指标监控、成本/备份/日志脱敏状态 | P0 | `scripts/collect_monitoring_alerting_evidence.py --json` 和告警演练摘要 |
-| 事故响应和回滚演练 | 部署模板有回滚命令示例，但缺负责人、回滚目标、回滚后复验和事故复盘的机器化证据 | 把 P0/P1 响应、发布回滚、回滚后 health/gate/smoke 和事故复盘收束成脱敏摘要 | P0 | `scripts/collect_incident_rollback_evidence.py --json` 和回滚演练摘要 |
-| M1 go/no-go 总判定 | 各类生产化证据已经分散在多个脚本中，但缺一个最终严格判定入口 | 汇总 M1 gate、smoke、备份恢复、监控告警、事故回滚证据；请求 section 的 `not_checked` 直接阻断放行 | P0 | `scripts/collect_m1_go_no_go_evidence.py --json` 和目标环境最终 `decision` |
-| M1 资源申请包 | 用户需要准备的服务器、env、数据、密钥托管、验收和运维资源分散在多份文档中 | 生成一份可发送给部署/运维负责人的资源清单，明确只收状态和变量名，不收真实密钥值 | P0 | `scripts/render_m1_resource_request.py --markdown` 和 `docs/部署与运行/m1-resource-request-pack.md` |
-| M1 首部署 dry-run | 资源收集后仍缺一个不连服务器、不上传文件的首次部署预演入口 | 本地检查目标输入、发布工具、git 工作区、Compose 模板和公开边界，输出远端部署命令计划 | P0 | `scripts/check_m1_first_deploy_dry_run.py --json` 和 `docs/部署与运行/m1-first-deploy-dry-run.md` |
-| M1 发布包 manifest | 首部署脚本需要可审计 archive，不应只依赖手工 tar 文件名 | 从干净 Git `HEAD` 生成 archive 和 manifest，记录 commit、tree、tracked file count 和 sha256 | P0 | `scripts/build_release_artifact.py --execute --output-dir <release-output-dir> --json` |
-| M1 服务器首部署脚本 | dry-run 之后仍缺服务器侧标准执行入口，手工解压容易覆盖运行时数据 | 用 `deploy/first-deploy.sh` 固化 release/current/shared 模型，默认 dry-run，显式执行才切换 release 和启动 Compose | P0 | `deploy/first-deploy.sh`、部署文档和脚本契约测试 |
+| 部署与运行 | readiness（就绪检查）、部署模板和历史 M1 受控试运行证据已存在，但当前候选尚未绑定干净 commit，也没有目标环境的新鲜执行与签核证据；生产高可用、扩缩容和密钥系统仍不完整 | 保持部署模板诚实，冻结候选后在目标环境重跑 readiness、preflight、smoke/core 和运维证据链 | P1 | runtime/deployment 文档、绑定 commit 的 readiness 结果和目标环境脱敏摘要 |
+| 部署后 smoke 证据 | `collect_m1_smoke_evidence.py` 已能把 health、M1 gate 和 acceptance smoke 收束为脱敏摘要；当前缺口是尚未对冻结后的候选在目标环境执行并由负责人复核 | 在目标环境显式执行后形成绑定 commit、时间窗和配置口径的可复查证据；默认计划模式不冒充通过 | P0 | `scripts/collect_m1_smoke_evidence.py --json`、目标环境 smoke 摘要和复核记录 |
+| 备份恢复演练证据 | readiness 与 `collect_backup_restore_drill_evidence.py` 已覆盖备份声明、dump 元数据和 catalog 检查；当前缺少绑定当前候选的目标环境新鲜备份、实际非生产恢复、恢复后校验和负责人签核 | 在隔离环境执行恢复，记录备份新鲜度、恢复耗时、数据丢失窗口、恢复后 readiness/smoke 和签核 | P0 | `scripts/collect_backup_restore_drill_evidence.py --json`、非生产恢复演练摘要和签核记录 |
+| 监控告警投递证据 | readiness 与 `collect_monitoring_alerting_evidence.py` 已能收束监控声明；当前缺少目标环境真实告警投递、指标持续留存、值班升级和成本/备份告警闭环证据 | 对冻结候选执行受控告警演练，验证 health/readiness、错误率、工具失败、成本和备份告警的投递与处置 | P0 | `scripts/collect_monitoring_alerting_evidence.py --json`、告警送达证据和负责人签核 |
+| 事故响应和回滚演练 | `collect_incident_rollback_evidence.py` 已提供机器化收束入口；当前缺少冻结候选在目标环境的真实回滚执行、回滚后 health/gate/smoke、事故复盘和 owner（负责人）签核 | 受控执行 P0/P1 响应和发布回滚，记录目标版本、数据安全边界、复验结果、根因与后续负责人 | P0 | `scripts/collect_incident_rollback_evidence.py --json`、回滚演练摘要、复盘和签核记录 |
+| M1 go/no-go 总判定 | `collect_m1_go_no_go_evidence.py` 已能聚合 M1 gate、smoke、备份恢复、监控告警和事故回滚，并对 `not_checked` fail-closed（缺证据即阻断）；当前缺少当前候选的完整目标环境输入与最终 release-owner（发布负责人）签核 | 为冻结 commit 收齐同一时间窗的目标环境证据，生成最终 `decision` 并完成人工风险接受或阻断 | P0 | `scripts/collect_m1_go_no_go_evidence.py --json`、目标环境最终 `decision` 和 release-owner 签核 |
+| M1 资源申请包 | `render_m1_resource_request.py` 和正式资源申请文档已存在；当前缺少由实际部署、运维和安全负责人填写并确认的仓库外资源状态、目标服务器输入和密钥托管责任 | 用现有模板收齐非密钥状态与 owner，阻止缺服务器、数据、备份、监控或外部依赖输入时进入部署 | P0 | `scripts/render_m1_resource_request.py --markdown`、`docs/部署与运行/m1-resource-request-pack.md` 和已确认的私有资源记录 |
+| M1 首部署 dry-run | `check_m1_first_deploy_dry_run.py` 已提供不连接服务器、不上传文件的预演入口，并会对脏工作树或缺目标输入 fail-closed；当前工作树尚未冻结，缺少针对最终候选和真实目标输入的通过记录 | 冻结干净 commit，补齐目标输入后执行 dry-run，复核发布工具、Compose、公开边界和远端命令计划 | P0 | `scripts/check_m1_first_deploy_dry_run.py --json`、`docs/部署与运行/m1-first-deploy-dry-run.md` 和绑定候选的通过摘要 |
+| M1 发布包 manifest | `build_release_artifact.py` 已能从干净 Git `HEAD` 生成 archive 和 manifest 并记录 commit、tree、tracked file count 与 sha256；当前脏工作树不能生成可对外复现的候选发布包 | 冻结并评审干净 commit，生成不可变发布包，校验哈希并让部署记录引用同一 artifact（发布制品） | P0 | `scripts/build_release_artifact.py --execute --output-dir <release-output-dir> --json`、发布包 manifest 和哈希复核 |
+| M1 服务器首部署脚本 | `deploy/first-deploy.sh` 已固化 release/current/shared 模型并默认 dry-run；当前缺少最终发布包在目标服务器的 dry-run、显式执行、切换后健康检查、回滚准备和 owner 签核 | 使用同一 manifest 发布包完成目标服务器预演与受控切换，验证运行时数据不被覆盖并留存回滚证据 | P0 | `deploy/first-deploy.sh`、目标服务器执行摘要、健康检查、回滚准备和签核记录 |
 | 生产化差距 | 当前更接近工程样板和受控演示，距离真实生产系统还有密钥、数据、安全、可观测、业务履约等硬缺口 | 按 P0/P1/P2 明确真实上线前阻断项和验收标准 | P0 | `docs/部署与运行/production-readiness-gap.md` |
-| 生产运行依赖范围 | 默认 API 镜像需要和开发/测试、多模态深门禁、本地 embedding、GPU/model 重依赖解耦 | `pyproject.toml` 默认依赖瘦身，新增 `requirements.runtime.txt`，Dockerfile 改用 runtime-only requirements，并用门禁阻断 `pytest`、`faster-whisper`、`sentence-transformers`、`torch`、`nvidia-*` 等回流默认 API 镜像 | P0 | `scripts/check_runtime_dependency_scope.py --json` 和依赖范围测试 |
-| 生产镜像构建策略 | 下一次完整镜像重建需要明确镜像源、后台构建、超时、日志、PID、镜像大小和失败回滚证据，避免 SSH 断开或构建失败影响当前 release | 新增静态策略门禁、真实构建执行记录门禁和 approval-gated 远程后台 build 启动器，要求 `PIP_INDEX_URL` / `PIP_TRUSTED_HOST` 可配置、远程后台构建、磁盘保护、镜像 ID/大小/健康探针证据和禁止清理边界 | P0 | `scripts/check_production_image_build_policy.py --json`、`scripts/prepare_production_image_build_execution.py --markdown`、`scripts/check_production_image_build_execution_record.py --record-json ... --json` 和构建记录测试 |
+| 生产运行依赖范围 | runtime-only requirements（仅运行时依赖）拆分和 `check_runtime_dependency_scope.py` 静态门禁已实现；当前缺少基于冻结候选的完整镜像重建、体积/时长记录、目标运行时启动与回归证据 | 保持默认 API 镜像与开发/测试、多模态深门禁、本地 embedding、GPU/model 重依赖解耦，并用实际镜像验证门禁结果 | P0 | `scripts/check_runtime_dependency_scope.py --json`、依赖范围测试、镜像 manifest、体积和健康探针记录 |
+| 生产镜像构建策略 | 静态策略门禁、构建执行记录门禁和 approval-gated（需批准）远程后台 build 启动器已实现；当前未针对冻结候选获得执行批准，也没有远程构建、镜像 ID/大小、健康探针和失败回滚的当前证据 | 在不影响现有 release 的前提下受控执行远程后台构建，固定镜像源、超时、日志/PID、磁盘保护和回滚边界，并完成执行记录签核 | P0 | `scripts/check_production_image_build_policy.py --json`、`scripts/prepare_production_image_build_execution.py --markdown`、`scripts/check_production_image_build_execution_record.py --record-json ... --json`、构建摘要和签核 |
 
 ## 3. 子Agent分工
 
@@ -109,9 +111,11 @@
 
 | 日期 | 方向 | 子Agent任务 | 当前状态 | Coordinator关注点 |
 |---|---|---|---|---|
-| 2026-06-23 | RAG/Evaluation | 统一 RAG 评测规模、blocked / passed 语义、真实向量库验收口径和场景覆盖说明 | 已完成第一轮 | 当前离线召回为 19 场景、21 文档；mixed-corpus safety gate 覆盖 3 个公开安全场景，不能解释为真实向量库或在线 Agent 验收通过 |
+| 2026-06-23 | RAG/Evaluation | 统一 RAG 评测规模、blocked / passed 语义、真实向量库验收口径和场景覆盖说明 | 已完成第一轮 | 第一轮快照为 19 场景、21 文档和 3 个公开安全场景；截至 2026-06-23 第二轮扩到 25 场景、24 文档和 9 个公开安全场景，两轮都不能解释为真实向量库或在线 Agent 验收通过 |
 | 2026-06-23 | Tool/Security | 检查 URL query key 脱敏、MCP 错误输出脱敏、未知工具策略和失败审计口径 | 已完成第一轮 | 已补 URL query 参数脱敏、MCP 错误脱敏和测试；未知工具全局默认策略本轮不收紧，保留为后续有回归保护的改进项 |
 | 2026-06-23 | RAG/Evaluation 第二轮 | 扩充公开目的地样例，把公开安全负样本从西安扩到更多目的地 | 已完成 | 公开目的地扩到西安、杭州、厦门、桂林；离线评测为 25 场景、24 文档、9 个公开安全场景，仍不代表真实向量库或在线 Agent 验收 |
+| 2026-07-11 | RAG/Evaluation 南京样例校准（历史快照） | 新增南京公开目的地样例和精确目的地消歧场景，重新生成离线召回报告并校准旧口径 | 已完成离线校准 | 该轮历史快照为 26 场景、25 文档、5 个公开目的地和 10 个 mixed-corpus safety 场景；当时离线脚本通过不代表真实向量库、在线 Agent 或生产环境验收通过 |
+| 2026-07-12 | RAG/Evaluation 北京银发样例校准 | 新增北京公开低强度、午休、无障碍/电梯和天气 Plan B 安全样例，补精确召回场景并复跑离线门禁 | 已完成离线校准 | 当前为 27 场景、26 文档、6 个公开目的地和 11 个 mixed-corpus safety 场景；2026-07-11 的 26/25/5/10 保留为历史快照；离线通过不代表真实向量库或在线 Agent 通过 |
 | 2026-06-23 | Tool/Security 第二轮 | 补外部 MCP 服务目录、required / optional / degraded 策略表，并与 `SERVICE_DEFINITIONS` 口径对齐 | 已完成 | MCP 目录只写变量名和状态语义；`required_when_declared` 只在被选中验收场景声明必需时阻塞 |
 | 2026-06-23 | Agent State/Architecture 第三轮 | 新增状态契约和 Prompt 规则清单，补双工作流轴、阶段字段、工具白名单和报告红线维护性测试 | 已完成 | `active_workflow` 决定读 `current_step` 或 `agency_step`；`step_config.py` 仍是静态配置来源，运行态还要依赖中间件和工具守卫 |
 | 2026-06-23 | Report/Frontend 第四轮 | 新增 `report_data` 交付契约文档，补前端渲染、复制摘要、导出 HTML 和浏览器回归边界断言 | 已完成 | 前端演示证明结构化报告可渲染、可复制摘要、可导出，不证明真实支付、预订、库存、锁价或履约 |

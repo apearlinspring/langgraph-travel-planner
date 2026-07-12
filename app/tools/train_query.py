@@ -12,6 +12,7 @@ from typing import Any
 from langchain.tools import tool
 
 from app.mcp_core.client import get_mcp_client
+from app.mcp_core.result_parsing import extract_text_blocks as _extract_text_blocks
 from app.tools.execution_guard import execute_guarded_call
 from app.tools.guardrails import validate_transport_query_args
 from app.tools.result_validation import validate_transport_result
@@ -29,18 +30,6 @@ class StationResolution:
     name: str
     code: str
     source: str
-
-
-def _extract_text_blocks(result: Any) -> str:
-    if isinstance(result, list):
-        text_blocks = []
-        for item in result:
-            if isinstance(item, dict) and item.get("type") == "text":
-                text_blocks.append(item.get("text", ""))
-            else:
-                text_blocks.append(str(item))
-        return "\n".join(text_blocks)
-    return str(result)
 
 
 def _parse_loose_payload(text: str) -> Any:

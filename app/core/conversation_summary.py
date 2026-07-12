@@ -19,6 +19,8 @@ from app.core.context_budget import (
     estimate_tokens,
     trim_text_to_token_budget,
 )
+from app.utils.message_utils import message_content as _message_content
+from app.utils.message_utils import message_role as _message_role
 
 logger = logging.getLogger(__name__)
 
@@ -458,25 +460,6 @@ def _important_query_terms(query: str) -> set[str]:
         return set()
     terms = set(re.findall(r"[\u4e00-\u9fff]{2,}|[A-Za-z][A-Za-z0-9_-]{2,}", text))
     return {term for term in terms if term not in {"请帮我", "这个", "一下"}}
-
-
-def _message_role(message: Any) -> str:
-    if isinstance(message, dict):
-        return str(message.get("role") or message.get("type") or "")
-    msg_type = getattr(message, "type", None)
-    if msg_type:
-        return str(msg_type)
-    return message.__class__.__name__.replace("Message", "").lower()
-
-
-def _message_content(message: Any) -> str:
-    if isinstance(message, dict):
-        content = message.get("content", "")
-    else:
-        content = getattr(message, "content", "")
-    if isinstance(content, list):
-        return "\n".join(str(item) for item in content)
-    return str(content or "")
 
 
 def _normalize_text(text: str) -> str:

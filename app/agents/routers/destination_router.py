@@ -6,7 +6,6 @@ import json
 from operator import add
 from typing import Annotated, Literal, TypedDict
 
-from langchain.agents import create_agent
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 from pydantic import BaseModel, Field
@@ -33,12 +32,6 @@ class DestinationRouterState(TypedDict):
     classifications: list[Classification]
     agent_results: Annotated[list[AgentOutput], add]
     final_report: str
-
-
-class ClassificationResult(BaseModel):
-    classifications: list[Classification] = Field(
-        description="需要调用的 Agent 列表，以及每个 Agent 的子查询。"
-    )
 
 
 class ClassificationDecision(BaseModel):
@@ -235,10 +228,6 @@ def route_to_agents(state: DestinationRouterState) -> list[Send]:
     return sends
 
 
-async def _get_explore_tools():
-    return await _get_explore_tools_for_query(include_live_search=True)
-
-
 def _should_include_live_search(query: str) -> bool:
     normalized = (query or "").strip()
     return _contains_any_keyword(normalized, LIVE_SEARCH_KEYWORDS)
@@ -293,46 +282,6 @@ async def _run_live_search_query(destination: str, query: str) -> str | None:
         "实时搜索补充如下；只用于动态信息校验，价格、开放和预约仍需出发前二次核实。\n\n"
         f"{result}"
     )
-
-
-async def _get_explore_tools_for_query(*, include_live_search: bool):
-    tools = list(get_rag_tools())
-    if not include_live_search:
-        return tools
-    try:
-        tools.extend(await get_search_tools())
-    except Exception as exc:
-        app_logger.warning(f"Failed to load live search tools for destination router: {exc}")
-    return tools
-
-
-_explore_agent = None
-_explore_agent_signature: tuple[str, ...] | None = None
-
-
-def _create_explore_agent(tools):
-    return create_agent(
-        model=_build_llm(),
-        tools=tools,
-        system_prompt=(
-            "你是一位旅行顾问，需要把知识库信息和必要的外部补充信息整合成可靠答案。"
-            "优先使用知识库工具回答相对稳定的内容，比如景点、美食、住宿、常规攻略。"
-            "当用户问题明显带有时效性，比如“最近”“当季”“最新”“现在”等，再调用 "
-            "search_travel_info 补充实时信息。"
-            "不要为了显得完整而编造最新情况；如果外部搜索不可用，要明确说明。"
-        ),
-    )
-
-
-async def _get_or_create_explore_agent(*, include_live_search: bool):
-    global _explore_agent, _explore_agent_signature
-
-    tools = await _get_explore_tools_for_query(include_live_search=include_live_search)
-    signature = tuple(sorted(tool.name for tool in tools))
-    if _explore_agent is None or signature != _explore_agent_signature:
-        _explore_agent = _create_explore_agent(tools)
-        _explore_agent_signature = signature
-    return _explore_agent
 
 
 async def explore_agent_node(state: dict) -> dict:

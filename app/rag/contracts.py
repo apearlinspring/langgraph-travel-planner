@@ -11,6 +11,12 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Mapping, NotRequired, TypedDict
 
+from app.rag.document_formats import (
+    extract_knowledge_document,
+    is_sidecar_document,
+    is_supported_knowledge_file,
+)
+
 try:  # PyYAML is present in requirements.txt, but keep a tiny fallback for scripts.
     import yaml
 except Exception:  # pragma: no cover - exercised only in minimal dependency shells
@@ -76,6 +82,29 @@ PRODUCT_METADATA_FIELDS = {
     "excluded",
     "transport_lodging_basis",
     "verification_items",
+}
+SOURCE_METADATA_FIELDS = {
+    "attribution",
+    "content_boundary",
+    "data_origin",
+    "license",
+    "retrieved_at",
+    "source_key",
+    "source_name",
+    "source_url",
+}
+RUNTIME_METADATA_FIELDS = {
+    "auto_extraction_method",
+    "multimodal_auto_extract_error",
+    "multimodal_auto_extract_status",
+    "multimodal_cache_hit",
+    "multimodal_transcript_error",
+    "transcript_command_configured",
+    "video_frame_count",
+    "video_frame_width",
+    "video_keyframe_count",
+    "video_keyframe_error",
+    "vision_model",
 }
 PROHIBITED_DYNAMIC_COMMITMENTS = (
     "锁价",
@@ -563,6 +592,12 @@ def metadata_for_document(
     for field in sorted(PRODUCT_METADATA_FIELDS):
         if field in declared_metadata:
             metadata[field] = _metadata_value(declared_metadata[field])
+    for field in sorted(SOURCE_METADATA_FIELDS):
+        if field in declared_metadata:
+            metadata[field] = _metadata_value(declared_metadata[field])
+    for field in sorted(RUNTIME_METADATA_FIELDS):
+        if field in declared_metadata:
+            metadata[field] = _metadata_value(declared_metadata[field])
     if effective_category == "products" and "source" in declared_metadata:
         metadata["product_source"] = _metadata_value(declared_metadata["source"])
 
@@ -777,12 +812,18 @@ def validate_internal_document_file(
     today: date | None = None,
     max_age_days: int = INTERNAL_REVIEW_MAX_AGE_DAYS,
 ) -> list[KnowledgeValidationFinding]:
-    """Validate one internal Markdown knowledge document."""
+    """Validate one internal knowledge document."""
 
-    text = path.read_text(encoding="utf-8")
-    parsed = parse_markdown_metadata(text)
+    if path.suffix.lower() in {".md", ".markdown"}:
+        text = path.read_text(encoding="utf-8")
+        parsed = parse_markdown_metadata(text)
+        metadata = parsed.metadata
+    else:
+        extracted = extract_knowledge_document(path, auto_extract=False)
+        text = extracted.text
+        metadata = extracted.metadata
     findings = validate_internal_metadata(
-        parsed.metadata,
+        metadata,
         path=path,
         internal_root=internal_root,
         today=today,
@@ -811,7 +852,15 @@ def validate_internal_knowledge_base(
 
     root = Path(internal_dir)
     findings: list[KnowledgeValidationFinding] = []
-    files = sorted(root.rglob("*.md")) if root.exists() else []
+    files = (
+        sorted(
+            path
+            for path in root.rglob("*")
+            if is_supported_knowledge_file(path) and not is_sidecar_document(path)
+        )
+        if root.exists()
+        else []
+    )
     if not root.exists():
         findings.append(
             KnowledgeValidationFinding(

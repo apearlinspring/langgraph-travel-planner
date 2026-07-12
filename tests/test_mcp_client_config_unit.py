@@ -92,6 +92,38 @@ def test_local_stdio_servers_use_stable_runtime_dirs(monkeypatch):
     assert MCPClientManager.SERVER_TOOL_LOAD_TIMEOUTS["aigohotel-mcp"] == 25.0
 
 
+def test_12306_server_uses_configured_exclusive_url(monkeypatch):
+    endpoint = "https://example.invalid/exclusive-rail/mcp"
+    monkeypatch.setenv("ZHIXING_12306_MCP_URL", endpoint)
+
+    MCPClientManager.refresh_server_configs()
+
+    rail_config = MCPClientManager.SERVER_CONFIGS["12306-mcp"]
+    assert rail_config == {"url": endpoint, "transport": "streamable_http"}
+    assert MCPClientManager.SERVER_TOOL_LOAD_TIMEOUTS["12306-mcp"] == 25.0
+    assert MCPClientManager.MCP_RETRY_ATTEMPTS == 2
+
+
+def test_12306_server_supports_explicit_sse_endpoint(monkeypatch):
+    endpoint = "http://127.0.0.1:18081/sse"
+    monkeypatch.setenv("ZHIXING_12306_MCP_URL", endpoint)
+
+    MCPClientManager.refresh_server_configs()
+
+    assert MCPClientManager.SERVER_CONFIGS["12306-mcp"] == {
+        "url": endpoint,
+        "transport": "sse",
+    }
+
+
+def test_12306_server_is_omitted_without_exclusive_url(monkeypatch):
+    monkeypatch.delenv("ZHIXING_12306_MCP_URL", raising=False)
+
+    MCPClientManager.refresh_server_configs()
+
+    assert "12306-mcp" not in MCPClientManager.SERVER_CONFIGS
+
+
 def test_uv_defaults_to_public_pypi_when_no_index_is_configured(monkeypatch):
     monkeypatch.setenv("AIGOHOTEL_API_KEY", "new-key")
     monkeypatch.delenv("UV_DEFAULT_INDEX", raising=False)
@@ -113,6 +145,7 @@ def test_service_health_table_marks_optional_hotel_as_skipped_without_credential
     monkeypatch.delenv("AIGOHOTEL_API_KEY", raising=False)
     monkeypatch.delenv("AIGOHOTEL_MCP_API", raising=False)
     monkeypatch.delenv("AIGOHOTEL_SECRET_KEY", raising=False)
+    monkeypatch.delenv("ZHIXING_12306_MCP_URL", raising=False)
 
     MCPClientManager.refresh_server_configs()
     service_health = MCPClientManager.build_service_health_table(
@@ -123,13 +156,31 @@ def test_service_health_table_marks_optional_hotel_as_skipped_without_credential
     assert set(service_health) == set(MCPClientManager.SERVICE_DEFINITIONS)
     assert service_health["weather"]["status"] == "healthy"
     assert service_health["search"]["status"] == "healthy"
-    assert service_health["12306-mcp"]["status"] == "healthy"
+    assert service_health["12306-mcp"]["status"] == "skipped"
     assert service_health["aigohotel-mcp"]["status"] == "skipped"
     assert service_health["aigohotel-mcp"]["core_requirement"] == "optional"
     assert all(
         entry["status"] in MCPClientManager.SERVICE_HEALTH_STATUSES
         for entry in service_health.values()
     )
+
+
+def test_service_health_blocks_required_12306_without_exclusive_url(monkeypatch):
+    monkeypatch.delenv("ZHIXING_12306_MCP_URL", raising=False)
+    env: dict[str, str] = {}
+
+    service_health = MCPClientManager.build_service_health_table(
+        required_servers=["12306-mcp"],
+        configured_servers=MCPClientManager.configured_server_names_for_env(env),
+        env=env,
+        require_probe=False,
+    )
+
+    rail = service_health["12306-mcp"]
+    assert rail["status"] == "blocked"
+    assert rail["required"] is True
+    assert rail["configured"] is False
+    assert rail["env_vars"] == ["ZHIXING_12306_MCP_URL"]
 
 
 def test_service_health_table_blocks_required_hotel_when_acceptance_declares_it(monkeypatch):
@@ -197,6 +248,18 @@ def test_mcp_error_formatter_redacts_url_credentials():
 
     assert "amap-secret-1234567890" not in formatted
     assert f"key={REDACTED_VALUE}" in formatted
+
+
+def test_mcp_error_formatter_redacts_exclusive_12306_url(monkeypatch):
+    endpoint = "https://example.invalid/exclusive-rail/mcp"
+    monkeypatch.setenv("ZHIXING_12306_MCP_URL", endpoint)
+
+    formatted = MCPClientManager._format_error(
+        RuntimeError(f"upstream failed for {endpoint}")
+    )
+
+    assert endpoint not in formatted
+    assert REDACTED_VALUE in formatted
 
 
 @pytest.mark.asyncio

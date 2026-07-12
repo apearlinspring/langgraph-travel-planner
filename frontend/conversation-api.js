@@ -1,102 +1,70 @@
 (function (global) {
   const sessionApi = global.ZhiXingSessionApi;
-
-  async function parseJsonSafe(response) {
-    try {
-      return await response.json();
-    } catch (error) {
-      return null;
-    }
-  }
-
-  function buildOptions(stateToken, options = {}) {
-    return sessionApi.buildApiRequestOptions(stateToken, options);
-  }
+  const { requestJson } = sessionApi;
 
   async function fetchConversations({ apiBase, stateToken = "" }) {
-    const response = await fetch(
+    return requestJson(
       `${apiBase}/api/v1/conversations`,
-      buildOptions(stateToken)
+      stateToken
     );
-    return {
-      response,
-      data: await parseJsonSafe(response),
-    };
   }
 
   async function createConversation({ apiBase, stateToken = "", title }) {
-    const response = await fetch(
+    return requestJson(
       `${apiBase}/api/v1/conversations`,
-      buildOptions(stateToken, {
+      stateToken,
+      {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({ title }),
-      })
+      }
     );
-    return {
-      response,
-      data: await parseJsonSafe(response),
-    };
   }
 
   async function updateConversation({ apiBase, stateToken = "", id, payload }) {
-    const response = await fetch(
+    return requestJson(
       `${apiBase}/api/v1/conversations/${id}`,
-      buildOptions(stateToken, {
+      stateToken,
+      {
         method: "PATCH",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify(payload),
-      })
+      }
     );
-    return {
-      response,
-      data: await parseJsonSafe(response),
-    };
   }
 
   async function deleteConversation({ apiBase, stateToken = "", id }) {
-    const response = await fetch(
+    return requestJson(
       `${apiBase}/api/v1/conversations/${id}`,
-      buildOptions(stateToken, {
+      stateToken,
+      {
         method: "DELETE",
-      })
+      }
     );
-    return {
-      response,
-      data: await parseJsonSafe(response),
-    };
   }
 
   async function fetchConversationDetail({ apiBase, stateToken = "", id }) {
-    const response = await fetch(
+    return requestJson(
       `${apiBase}/api/v1/conversations/${id}`,
-      buildOptions(stateToken)
+      stateToken
     );
-    return {
-      response,
-      data: await parseJsonSafe(response),
-    };
   }
 
   async function fetchChatHistory({ apiBase, stateToken = "", id }) {
-    const response = await fetch(
+    return requestJson(
       `${apiBase}/api/v1/chat/history/${id}`,
-      buildOptions(stateToken)
+      stateToken
     );
-    return {
-      response,
-      data: await parseJsonSafe(response),
-    };
   }
 
   async function openChatStream({ apiBase, stateToken = "", conversationId, content }) {
     return fetch(
       `${apiBase}/api/v1/chat/stream/${conversationId}`,
-      buildOptions(stateToken, {
+      sessionApi.buildApiRequestOptions(stateToken, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -112,9 +80,10 @@
     conversationId,
     journeyData,
   }) {
-    const response = await fetch(
+    return requestJson(
       `${apiBase}/api/v1/chat/journey/${conversationId}`,
-      buildOptions(stateToken, {
+      stateToken,
+      {
         method: "PATCH",
         headers: {
           "Content-Type": "application/json",
@@ -123,12 +92,8 @@
           journey_data: journeyData,
           source: "frontend_visual_editor",
         }),
-      })
+      }
     );
-    return {
-      response,
-      data: await parseJsonSafe(response),
-    };
   }
 
   global.ZhiXingConversationApi = {

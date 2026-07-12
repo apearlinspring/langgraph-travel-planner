@@ -29,6 +29,17 @@
     }
   }
 
+  async function requestJson(url, stateToken = "", options = {}) {
+    const response = await fetch(
+      url,
+      buildApiRequestOptions(stateToken, options)
+    );
+    return {
+      response,
+      data: await parseJsonSafe(response),
+    };
+  }
+
   async function restoreSessionFromCookie({ apiBase, stateToken = "" }) {
     try {
       const response = await fetch(
@@ -61,19 +72,16 @@
   }
 
   async function submitAuthForm({ apiBase, endpoint, body, stateToken = "" }) {
-    const response = await fetch(
+    return requestJson(
       `${apiBase}${endpoint}`,
-      buildApiRequestOptions(stateToken, {
+      stateToken,
+      {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
         attachAuth: false,
-      })
+      }
     );
-    return {
-      response,
-      data: await parseJsonSafe(response),
-    };
   }
 
   async function remoteLogout({ apiBase, stateToken = "" }) {
@@ -89,6 +97,8 @@
   global.ZhiXingSessionApi = {
     getRequestCredentials,
     buildApiRequestOptions,
+    parseJsonSafe,
+    requestJson,
     restoreSessionFromCookie,
     submitAuthForm,
     remoteLogout,

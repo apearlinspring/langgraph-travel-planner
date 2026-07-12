@@ -6,8 +6,12 @@ from typing import List
 from langchain_core.documents import Document
 from app.rag.contracts import (
     metadata_for_document,
-    parse_markdown_metadata,
     validate_internal_knowledge_base,
+)
+from app.rag.document_formats import (
+    extract_knowledge_document,
+    is_sidecar_document,
+    is_supported_knowledge_file,
 )
 from app.utils.logger import app_logger
 
@@ -24,7 +28,7 @@ class DocumentManager:
         else:
             self.base_dir = Path(base_dir)
 
-    def _load_markdown_documents(
+    def _load_knowledge_documents(
         self,
         directory: Path,
         *,
@@ -33,7 +37,7 @@ class DocumentManager:
         visibility: str,
         validate_internal_metadata: bool = False,
     ) -> List[Document]:
-        """加载指定目录下的 Markdown 文档，并补充统一元数据。"""
+        """加载指定目录下的知识文档，并补充统一元数据。"""
 
         if not directory.exists():
             app_logger.warning(f"文档目录不存在: {directory}")
@@ -49,15 +53,26 @@ class DocumentManager:
                 raise ValueError(f"内部知识库 metadata 校验失败: {summary}")
 
         documents: list[Document] = []
-        for path in sorted(directory.rglob("*.md")):
-            parsed = parse_markdown_metadata(path.read_text(encoding="utf-8"))
+        for path in sorted(directory.rglob("*")):
+            if not is_supported_knowledge_file(path) or is_sidecar_document(path):
+                continue
+            extracted = extract_knowledge_document(path)
+            if not extracted.text.strip():
+                app_logger.warning(f"文档内容为空，已跳过: {path}")
+                continue
+            metadata = {
+                "source": str(path),
+                "declared_metadata": extracted.metadata,
+                "source_format": extracted.source_format,
+                "content_modality": extracted.modality,
+                "extraction_method": extracted.extraction_method,
+            }
+            if extracted.sidecar_source:
+                metadata["sidecar_source"] = extracted.sidecar_source
             documents.append(
                 Document(
-                    page_content=parsed.body,
-                    metadata={
-                        "source": str(path),
-                        "declared_metadata": parsed.metadata,
-                    },
+                    page_content=extracted.text,
+                    metadata=metadata,
                 )
             )
 
@@ -91,7 +106,7 @@ class DocumentManager:
 
     def load_destination_documents(self) -> List[Document]:
         """加载所有目的地文档"""
-        return self._load_markdown_documents(
+        return self._load_knowledge_documents(
             self.base_dir / "destinations",
             source_type="destination_guide",
             default_category="destinations",
@@ -101,7 +116,7 @@ class DocumentManager:
     def load_internal_documents(self, category: str | None = None) -> List[Document]:
         """加载旅行社内部知识库文档，可按 category 过滤。"""
 
-        documents = self._load_markdown_documents(
+        documents = self._load_knowledge_documents(
             self.base_dir / "internal",
             source_type="agency_internal",
             default_category="general",

@@ -23,6 +23,17 @@ const reportFixture = JSON.parse(fs.readFileSync(reportFixturePath, "utf8"));
 const runningInCi = ["1", "true"].includes(String(process.env.CI || "").toLowerCase());
 const strictMissingBrowser =
   process.env.ZHIXING_FRONTEND_BROWSER_STRICT === "1" || runningInCi;
+const publicReportInternalLabels = [
+  "预算置信度",
+  "交付清单",
+  "顾问核验与下一步",
+  "治理边界",
+  "人工确认边界",
+  "current_step",
+  "agency_step",
+  "tool_audit_summary",
+  "query_transport_options",
+];
 
 function finishMissingDependency(message, details = []) {
   const header = strictMissingBrowser
@@ -150,7 +161,24 @@ function addRouteSegmentContract(reportData) {
 }
 
 function sampleReportData() {
-  return addRouteSegmentContract(JSON.parse(JSON.stringify(reportFixture)));
+  const reportData = addRouteSegmentContract(JSON.parse(JSON.stringify(reportFixture)));
+  reportData.tool_audit_summary = {
+    ...(reportData.tool_audit_summary || {}),
+    pending_checks: [
+      "高铁/火车：真实查询超时（upstream_timeout），出发前需要重新查询并二次核验。",
+    ],
+    events: [
+      {
+        name: "query_train_options",
+        status: "timeout",
+        elapsed_seconds: 45,
+        error_type: "upstream_timeout",
+        retry_count: 0,
+        evidence_type: "live_transport_query",
+      },
+    ],
+  };
+  return reportData;
 }
 
 function responseJson(payload, status = 200) {
@@ -722,7 +750,13 @@ async function checkReportSurface(page) {
   await expectContainsText(
     page,
     ".travel-report-card.warning",
-    ["风险提醒", "重要提醒", "出发前 24-48 小时"],
+    [
+      "风险提醒",
+      "重要提醒",
+      "出发前 24-48 小时",
+      "高铁/火车：真实查询超时",
+      "当前报告不代表真实支付",
+    ],
     "risk card"
   );
   await expectContainsText(
@@ -767,7 +801,12 @@ async function checkReportSurface(page) {
     throw new Error("Default customer report should hide confidence, handoff, and governance cards.");
   }
   const reportText = (await page.locator('[data-report-source="structured"]').textContent()) || "";
-  ["预算置信度", "交付清单", "治理边界", "人工确认边界"].forEach((internalLabel) => {
+  ["待核验", "真实预订", "真实锁价"].forEach((boundaryLabel) => {
+    if (!reportText.includes(boundaryLabel)) {
+      throw new Error(`Default customer report missing delivery boundary: ${boundaryLabel}`);
+    }
+  });
+  publicReportInternalLabels.forEach((internalLabel) => {
     if (reportText.includes(internalLabel)) {
       throw new Error(`Default customer report leaked internal label: ${internalLabel}`);
     }
@@ -806,6 +845,9 @@ async function checkReportShareSummary(page, viewport) {
     "待核验项",
     "交付边界",
     "不代表真实支付",
+    "预订",
+    "锁价",
+    "履约成功",
   ];
   const missing = requiredFragments.filter((fragment) => !copiedText.includes(fragment));
   if (missing.length) {
@@ -871,10 +913,13 @@ async function checkReportExport(page, viewport) {
     "来源：结构化 report_data 报告",
     "待核验项",
     "导出不代表真实支付",
+    "预订、出票、锁价",
+    "履约完成",
     'data-report-source="structured"',
     "北京到成都 4 日顾问方案（脱敏演示）",
     "预算明细与依据",
     "重要提醒",
+    "高铁/火车：真实查询超时",
     "路线预览",
   ];
   const missing = requiredFragments.filter((fragment) => !html.includes(fragment));
@@ -884,7 +929,10 @@ async function checkReportExport(page, viewport) {
   if (/<button[\s>]/i.test(html)) {
     throw new Error(`${viewport.name} export should not keep interactive buttons.`);
   }
-  ["预算置信度", "交付清单", "治理边界", "人工确认边界"].forEach((internalLabel) => {
+  if (html.includes("data-report-action")) {
+    throw new Error(`${viewport.name} export should not keep report action handlers.`);
+  }
+  publicReportInternalLabels.forEach((internalLabel) => {
     if (html.includes(internalLabel)) {
       throw new Error(`${viewport.name} export leaked internal label: ${internalLabel}`);
     }

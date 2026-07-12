@@ -109,6 +109,75 @@ def test_report_content_from_command_output_falls_back_to_tool_message():
     assert _report_content_from_tool_output(output) == "工具消息报告"
 
 
+def test_transport_claim_filter_qualifies_claim_split_across_chunks():
+    claim_filter = chat._AssistantTransportClaimFilter()
+
+    assert claim_filter.feed("推荐高") == ""
+    assert claim_filter.feed("铁有票。") == (
+        "推荐高铁有票（动态班次与票务状态待二次核验，以官方实时结果为准）。"
+    )
+    assert claim_filter.finish() == ""
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "高铁余票待核验。",
+        "航班已确认，但仍需二次核验。",
+        "火车可订情况未确认。",
+        "机票已出票，以官方实时结果为准。",
+        "车次准点情况请复核。",
+        "班次已确认，请出发前核验。",
+    ],
+)
+def test_transport_claim_filter_preserves_qualified_claims(text):
+    assert chat._qualify_unsupported_transport_claims(text) == text
+
+
+def test_transport_claim_filter_handles_multiple_sentences_and_markdown_lines():
+    text = "### 交通\n- 高铁有票；航班可订待确认。\n普通建议保持不变"
+
+    assert chat._qualify_unsupported_transport_claims(text) == (
+        "### 交通\n"
+        "- 高铁有票（动态班次与票务状态待二次核验，以官方实时结果为准）；"
+        "航班可订待确认。\n"
+        "普通建议保持不变"
+    )
+
+
+def test_transport_claim_filter_qualifies_unpunctuated_text_on_finish():
+    claim_filter = chat._AssistantTransportClaimFilter()
+
+    assert claim_filter.feed("当前车次已确认") == ""
+    assert claim_filter.finish() == (
+        "当前车次已确认（动态班次与票务状态待二次核验，以官方实时结果为准）"
+    )
+
+
+def test_transport_claim_filter_preserves_safe_stream_text_and_layout():
+    chunks = ["### 出行建议\n", "- 优先公共交通；", "换乘预留时间\n", "祝旅途愉快"]
+    claim_filter = chat._AssistantTransportClaimFilter()
+
+    streamed = "".join(claim_filter.feed(chunk) for chunk in chunks)
+    streamed += claim_filter.finish()
+
+    assert streamed == "".join(chunks)
+
+
+def test_transport_claim_tool_boundary_flush_keeps_thinking_state():
+    thinking_filter = chat._AssistantThinkingFilter()
+    claim_filter = chat._AssistantTransportClaimFilter()
+
+    claim_filter.feed(thinking_filter.feed("公开内容<think>内部"))
+    before_tool = claim_filter.finish()
+    after_tool = claim_filter.feed(
+        thinking_filter.feed("推理内容</think>继续给用户。")
+    )
+    after_tool += claim_filter.feed(thinking_filter.finish()) + claim_filter.finish()
+
+    assert before_tool + after_tool == "公开内容继续给用户。"
+
+
 def test_fast_split_directional_route_uses_destination_not_first_place():
     facts = extract_fast_split_facts("我想从西安去南京，两个人，预算1万左右，下周一出发，你帮我规划一下")
 
@@ -117,6 +186,456 @@ def test_fast_split_directional_route_uses_destination_not_first_place():
     assert facts["departure_date"]
     assert facts["adult_count"] == 2
     assert "口径待确认" in facts["budget_text"]
+
+
+def test_fast_split_route_accepts_date_between_origin_and_destination():
+    facts = extract_fast_split_facts(
+        "我们两个人想从西安出发，2026年10月23日去长沙4天3晚，"
+        "总预算7000，希望省心一点。"
+    )
+
+    assert facts["departure_city"] == "西安"
+    assert facts["destination"] == "长沙"
+    assert facts["departure_date"] == "2026-10-23"
+
+
+def test_fast_split_budget_range_is_preserved_in_agent_seed():
+    facts = extract_fast_split_facts(
+        "我想从广州去桂林玩4天，3位成人，预算3000-4500元，2026-07-20出发"
+    )
+
+    assert facts["budget_text"] == "预算3000-4500元（口径待确认）"
+
+    seed = chat._fast_split_state_seed(facts, planning_mode="agency_plan")
+    assert seed["user_requirement"]["budget_text"] == facts["budget_text"]
+    assert seed["user_requirement"]["special_needs"] == f"预算：{facts['budget_text']}"
+    assert seed["confirmed_facts"]["budget_text"] == facts["budget_text"]
+    progress_facts = {
+        item["key"]: item["value"]
+        for item in seed["progress_snapshot"]["confirmed_facts"]
+    }
+    assert progress_facts["budget_text"] == facts["budget_text"]
+
+
+def test_fast_split_people_accepts_measure_word_wei():
+    facts = extract_fast_split_facts(
+        "需求确认：2026-07-10出发，共3位成人，其中2位老人。"
+    )
+
+    assert facts["adult_count"] == 3
+
+
+def test_fast_split_preserves_adult_and_child_counts_from_total_breakdown():
+    facts = extract_fast_split_facts(
+        "需求确认：2026-09-12出发，共3位（2位成人、1名儿童），人均预算3000-4500元。"
+    )
+
+    assert facts["adult_count"] == 2
+    assert facts["children_count"] == 1
+
+    seed = chat._fast_split_state_seed(facts, planning_mode="agency_plan")
+    assert seed["user_requirement"]["adult_count"] == 2
+    assert seed["user_requirement"]["children_count"] == 1
+    assert seed["confirmed_facts"]["children_count"] == 1
+    progress = {
+        item["key"]: item["value"]
+        for item in seed["progress_snapshot"]["confirmed_facts"]
+    }
+    assert progress["adult_count"] == "2人"
+    assert progress["children_count"] == "1人"
+
+
+def test_fast_split_preserves_compact_adult_child_counts():
+    facts = extract_fast_split_facts("亲子游，2大1小，从上海去杭州3天2晚。")
+
+    assert facts["adult_count"] == 2
+    assert facts["children_count"] == 1
+
+
+def test_fast_split_neutral_confirmation_seeds_free_mode_with_original_facts():
+    facts = extract_fast_split_facts(
+        "我想周末从西安出发去附近轻松玩两天，2个人，预算1500，"
+        "想看自然风景和吃点当地小吃。"
+    )
+    decision = chat._resolve_fast_planning_mode(
+        "以上需求确认无误，请先记录需求，然后继续推进规划。",
+        latest_fast_split_facts=facts,
+        fast_mode_context={"fast_mode_split_needs_confirmation": True},
+    )
+
+    assert decision.mode == "free_planning"
+    assert decision.confirmed is True
+
+    seed = chat._fast_split_state_seed(
+        facts,
+        planning_mode=decision.mode,
+        planning_mode_reason=decision.reason,
+    )
+    assert seed["planning_mode"] == "free_planning"
+    assert seed["user_requirement"]["adult_count"] == 2
+    assert seed["user_requirement"]["budget_text"] == "预算1500（口径待确认）"
+    assert "非销售边界" in seed["pending_initial_planning_mode_reason"]
+
+
+def test_fast_mode_resolution_does_not_auto_confirm_persisted_mode_value():
+    decision = chat._resolve_fast_planning_mode(
+        "预算还是按前面说的范围就好。",
+        latest_fast_split_facts={"planning_mode": "agency_plan"},
+        fast_mode_context={
+            "planning_mode": "agency_plan",
+            "active_workflow": "agency_plan",
+            "planning_mode_confirmed": False,
+        },
+    )
+
+    assert decision.mode == "agency_plan"
+    assert decision.source == "state"
+    assert decision.confirmed is False
+    assert decision.needs_confirmation is True
+    assert chat._fast_context_has_selected_planning_mode(
+        {"planning_mode": "agency_plan", "active_workflow": "agency_plan"}
+    ) is False
+
+
+def test_fast_agency_requirement_does_not_reconfirm_complete_or_existing_mode():
+    existing = {
+        "planning_mode": "agency_plan",
+        "active_workflow": "agency_plan",
+        "departure_city": "广州",
+        "destination": "桂林",
+        "departure_date": "2026-07-10",
+        "travel_days": 4,
+        "adult_count": 3,
+        "budget_text": "人均预算2500元",
+    }
+
+    should_reply, merged, mode_just_confirmed = (
+        chat._should_use_fast_agency_requirement_reply(
+            latest_fast_split_facts=existing,
+            user_message="继续按旅行社省心方案生成行程。",
+            mode_decision=SimpleNamespace(
+                confirmed=True,
+                mode="agency_plan",
+                source="latest_user",
+            ),
+        )
+    )
+
+    assert should_reply is False
+    assert merged["adult_count"] == 3
+    assert mode_just_confirmed is False
+
+
+def test_initial_complete_agency_ack_requires_first_complete_confirmed_agent_turn():
+    complete_facts = {
+        "destination": "桂林",
+        "departure_date": "2026-07-10",
+        "travel_days": 4,
+        "adult_count": 3,
+        "budget_text": "人均预算2500元",
+    }
+    confirmed_agency = SimpleNamespace(confirmed=True, mode="agency_plan")
+
+    assert chat._should_emit_initial_complete_agency_ack(
+        fast_mode_context={},
+        mode_decision=confirmed_agency,
+        agency_facts=complete_facts,
+        should_fast_agency=False,
+    ) is True
+    assert chat._should_emit_initial_complete_agency_ack(
+        fast_mode_context={"agent_state_initialized": True},
+        mode_decision=confirmed_agency,
+        agency_facts=complete_facts,
+        should_fast_agency=False,
+    ) is False
+    assert chat._should_emit_initial_complete_agency_ack(
+        fast_mode_context={},
+        mode_decision=confirmed_agency,
+        agency_facts={key: value for key, value in complete_facts.items() if key != "budget_text"},
+        should_fast_agency=False,
+    ) is False
+    assert chat._should_emit_initial_complete_agency_ack(
+        fast_mode_context={},
+        mode_decision=SimpleNamespace(confirmed=True, mode="free_planning"),
+        agency_facts=complete_facts,
+        should_fast_agency=False,
+    ) is False
+    assert chat._should_emit_initial_complete_agency_ack(
+        fast_mode_context={},
+        mode_decision=confirmed_agency,
+        agency_facts=complete_facts,
+        should_fast_agency=True,
+    ) is False
+
+
+def test_fast_facts_seed_only_before_agent_initialization_or_real_mode_switch():
+    assert chat._should_seed_agent_from_fast_facts(
+        {},
+        mode_just_confirmed=False,
+    ) is True
+    assert chat._should_seed_agent_from_fast_facts(
+        {"agent_state_initialized": True},
+        mode_just_confirmed=False,
+    ) is False
+    assert chat._should_seed_agent_from_fast_facts(
+        {"agent_state_initialized": True},
+        mode_just_confirmed=True,
+    ) is True
+
+
+@pytest.mark.asyncio
+async def test_fast_facts_sparse_sync_merges_initialized_durable_requirements_only():
+    config = {"configurable": {"thread_id": "conversation-existing"}}
+    existing_state = {
+        "current_step": "itinerary_generation",
+        "agency_step": "agency_plan_draft",
+        "selected_destination": "长沙",
+        "selected_transport": "train",
+        "selected_accommodation_option": {"name": "已有酒店"},
+        "user_requirement": {
+            "destination": "长沙",
+            "travel_styles": ["relaxation"],
+            "special_needs": "节奏轻松",
+        },
+        "confirmed_facts": {
+            "destination": "长沙",
+            "active_workflow": "agency_plan",
+        },
+    }
+
+    class FakeAgent:
+        def __init__(self):
+            self.update = None
+            self.update_config = None
+
+        async def aget_state(self, received_config):
+            assert received_config is config
+            return SimpleNamespace(values=existing_state)
+
+        async def aupdate_state(self, received_config, update):
+            self.update_config = received_config
+            self.update = update
+
+    agent = FakeAgent()
+    synced = await chat._sync_fast_facts_to_initialized_agent_state(
+        agent,
+        config=config,
+        fast_mode_context={"agent_state_initialized": True},
+        turn_fast_facts={
+            "raw_text": "不应写入 checkpoint",
+            "source": "first_turn_fast_split",
+            "departure_city": "西安",
+            "destination": "长沙",
+            "departure_date_text": "2026年10月23日",
+            "departure_date": "2026-10-23",
+            "travel_days": 4,
+            "adult_count": 2,
+            "children_count": 0,
+            "budget_text": "预算7000（口径待确认）",
+            "unknown": "不应写入",
+        },
+    )
+
+    assert synced is True
+    assert agent.update_config is config
+    assert set(agent.update) == {"user_requirement", "confirmed_facts"}
+    assert agent.update["user_requirement"] == {
+        "destination": "长沙",
+        "travel_styles": ["relaxation"],
+        "special_needs": "节奏轻松",
+        "departure_city": "西安",
+        "departure_date": "2026-10-23",
+        "travel_days": 4,
+        "adult_count": 2,
+        "children_count": 0,
+        "budget_text": "预算7000（口径待确认）",
+    }
+    assert agent.update["confirmed_facts"] == {
+        "destination": "长沙",
+        "active_workflow": "agency_plan",
+        "departure_city": "西安",
+        "departure_date": "2026-10-23",
+        "travel_days": 4,
+        "adult_count": 2,
+        "children_count": 0,
+        "budget_text": "预算7000（口径待确认）",
+    }
+    assert "current_step" not in agent.update
+    assert "agency_step" not in agent.update
+    assert "selected_destination" not in agent.update
+    assert existing_state["current_step"] == "itinerary_generation"
+    assert existing_state["selected_accommodation_option"] == {"name": "已有酒店"}
+
+
+@pytest.mark.asyncio
+async def test_fast_facts_sparse_sync_skips_uninitialized_or_empty_turn():
+    class UnexpectedAgent:
+        async def aget_state(self, config):
+            raise AssertionError("uninitialized state must not be read")
+
+        async def aupdate_state(self, config, update):
+            raise AssertionError("uninitialized state must not be updated")
+
+    assert await chat._sync_fast_facts_to_initialized_agent_state(
+        UnexpectedAgent(),
+        config={"configurable": {"thread_id": "not-initialized"}},
+        fast_mode_context={"agent_state_initialized": False},
+        turn_fast_facts={"departure_city": "西安"},
+    ) is False
+    assert await chat._sync_fast_facts_to_initialized_agent_state(
+        UnexpectedAgent(),
+        config={"configurable": {"thread_id": "initialized"}},
+        fast_mode_context={"agent_state_initialized": True},
+        turn_fast_facts={"departure_city": ""},
+    ) is False
+
+
+def test_mode_only_fast_context_is_not_treated_as_trip_requirements():
+    mode_only_context = {
+        "planning_mode": "agency_plan",
+        "active_workflow": "agency_plan",
+        "planning_mode_confirmed": True,
+        "agency_step": "agency_plan_draft",
+    }
+
+    assert chat._has_meaningful_fast_trip_facts(mode_only_context) is True
+    assert chat._has_fast_requirement_facts(mode_only_context) is False
+    assert chat._has_fast_requirement_facts({**mode_only_context, "travel_days": 4}) is True
+
+
+@pytest.mark.asyncio
+async def test_persist_fast_mode_context_keeps_only_structured_allowed_facts():
+    conversation = SimpleNamespace(extra_info={"existing": "preserved"})
+
+    class FakeResult:
+        def scalar_one_or_none(self):
+            return conversation
+
+    class FakeDb:
+        def __init__(self):
+            self.added = []
+            self.commit_count = 0
+
+        async def execute(self, statement):
+            return FakeResult()
+
+        def add(self, item):
+            self.added.append(item)
+
+        async def commit(self):
+            self.commit_count += 1
+
+    db = FakeDb()
+    await chat._persist_fast_mode_context_on_conversation(
+        db,
+        conversation_id="conversation-fast-facts",
+        facts={
+            "raw_text": "包含完整用户原文，不应重复持久化",
+            "source": "first_turn_fast_split",
+            "destination": "杭州",
+            "departure_date_text": "下周一",
+            "departure_date": "2026-07-20",
+            "travel_days": 4,
+            "planning_mode": "agency_plan",
+            "active_workflow": "agency_plan",
+            "planning_mode_confirmed": True,
+            "unknown_field": "not allowed",
+        },
+        needs_confirmation=False,
+    )
+
+    persisted = conversation.extra_info["fast_mode_split"]["facts"]
+    assert persisted == {
+        "destination": "杭州",
+        "departure_date_text": "下周一",
+        "departure_date": "2026-07-20",
+        "travel_days": 4,
+        "planning_mode": "agency_plan",
+        "active_workflow": "agency_plan",
+        "planning_mode_confirmed": True,
+    }
+    assert "raw_text" not in persisted
+    assert "source" not in persisted
+    assert conversation.extra_info["existing"] == "preserved"
+    assert db.added == [conversation]
+    assert db.commit_count == 1
+
+
+@pytest.mark.asyncio
+async def test_persist_agent_state_initialized_commits_marker_before_next_turn():
+    conversation = SimpleNamespace(
+        extra_info={"fast_mode_split": {"needs_confirmation": True}}
+    )
+
+    class FakeResult:
+        def scalar_one_or_none(self):
+            return conversation
+
+    class FakeDb:
+        def __init__(self):
+            self.added = []
+            self.commit_count = 0
+
+        async def execute(self, statement):
+            return FakeResult()
+
+        def add(self, item):
+            self.added.append(item)
+
+        async def commit(self):
+            self.commit_count += 1
+
+    db = FakeDb()
+    await chat._persist_agent_state_initialized(
+        db,
+        conversation_id="conversation-1",
+        progress_snapshot={
+            "planning_mode": "agency_plan",
+            "active_workflow": "agency_plan",
+            "agency_step": "agency_product_match",
+        },
+        planning_mode_confirmed=True,
+    )
+
+    assert conversation.extra_info["agent_state_initialized"] is True
+    assert conversation.extra_info["planning_mode_confirmed"] is True
+    assert conversation.extra_info["fast_mode_split"]["needs_confirmation"] is False
+    assert conversation.extra_info["agency_step"] == "agency_product_match"
+    assert db.added == [conversation]
+    assert db.commit_count == 1
+
+
+@pytest.mark.asyncio
+async def test_persist_agent_state_initialized_rolls_back_failed_marker_commit():
+    conversation = SimpleNamespace(extra_info={})
+
+    class FakeResult:
+        def scalar_one_or_none(self):
+            return conversation
+
+    class FailingDb:
+        def __init__(self):
+            self.rollback_count = 0
+
+        async def execute(self, statement):
+            return FakeResult()
+
+        def add(self, item):
+            pass
+
+        async def commit(self):
+            raise RuntimeError("marker commit failed")
+
+        async def rollback(self):
+            self.rollback_count += 1
+
+    db = FailingDb()
+    await chat._persist_agent_state_initialized(
+        db,
+        conversation_id="conversation-1",
+    )
+
+    assert db.rollback_count == 1
 
 
 def test_fast_split_month_day_date_does_not_fall_back_to_weekday():
@@ -446,17 +965,26 @@ async def test_chat_stream_fast_agency_confirmation_sets_mode_without_agent(monk
     assert events[1]["observability"]["progress_snapshot"]["planning_mode"] == "agency_plan"
     assert saved_messages[-1]["extra_info"]["fast_mode_split"]["needs_confirmation"] is False
     assert saved_messages[-1]["extra_info"]["fast_mode_split"]["facts"]["planning_mode"] == "agency_plan"
+    assert saved_messages[-1]["extra_info"]["fast_mode_split"]["facts"]["planning_mode_confirmed"] is True
     assert saved_messages[-1]["extra_info"]["fast_mode_split"]["facts"]["destination"] == "杭州"
 
 
 @pytest.mark.asyncio
-async def test_chat_stream_fast_agency_date_update_sets_progress_without_agent(monkeypatch):
+async def test_chat_stream_complete_fast_agency_date_update_initializes_agent(monkeypatch):
     await reset_session_locks_for_tests()
     saved_messages = []
+    captured_input = {}
+    persisted_fast_context = {}
     initial_facts = extract_fast_split_facts(
         "我想从西安去杭州，两个人，四天左右，人均预算3500，请你帮我规划一下"
     )
-    initial_facts.update({"planning_mode": "agency_plan", "active_workflow": "agency_plan"})
+    initial_facts.update(
+        {
+            "planning_mode": "agency_plan",
+            "active_workflow": "agency_plan",
+            "planning_mode_confirmed": True,
+        }
+    )
 
     async def fake_save_message(db, conversation_id, role, content, extra_info=None):
         saved_messages.append(
@@ -474,12 +1002,47 @@ async def test_chat_stream_fast_agency_date_update_sets_progress_without_agent(m
     async def fake_load_fast_facts(db, *, conversation_id):
         return dict(initial_facts)
 
+    class FakeAgent:
+        def astream_events(self, input_data, **kwargs):
+            captured_input.update(input_data)
+
+            async def response_stream():
+                yield {
+                    "event": "on_chat_model_stream",
+                    "data": {"chunk": SimpleNamespace(content="方案正文")},
+                }
+
+            return response_stream()
+
     async def fake_create_travel_agent():
-        raise AssertionError("agency date fast path should not create the full agent")
+        assert events
+        assert events[0]["type"] == "token"
+        assert events[0]["content"] == chat._INITIAL_COMPLETE_AGENCY_ACK_MESSAGE
+        return FakeAgent()
+
+    async def fake_persist_fast_context(
+        db,
+        *,
+        conversation_id,
+        facts,
+        needs_confirmation,
+    ):
+        persisted_fast_context.update(
+            {
+                "conversation_id": conversation_id,
+                "facts": facts,
+                "needs_confirmation": needs_confirmation,
+            }
+        )
 
     monkeypatch.setattr(chat, "save_message", fake_save_message)
     monkeypatch.setattr(chat, "_conversation_role_counts", fake_role_counts)
     monkeypatch.setattr(chat, "_load_latest_fast_split_facts_for_turn", fake_load_fast_facts)
+    monkeypatch.setattr(
+        chat,
+        "_persist_fast_mode_context_on_conversation",
+        fake_persist_fast_context,
+    )
     monkeypatch.setattr(chat, "create_travel_agent", fake_create_travel_agent)
 
     events = []
@@ -491,18 +1054,96 @@ async def test_chat_stream_fast_agency_date_update_sets_progress_without_agent(m
     ):
         events.append(json.loads(frame.removeprefix("data: ").strip()))
 
-    assert [event["type"] for event in events] == ["token", "turn_observability", "done"]
-    assert "出发时间按" in events[0]["content"]
-    assert events[1]["observability"]["planning_mode"] == "agency_plan"
-    progress = events[1]["observability"]["progress_snapshot"]
-    assert progress["agency_step"] == "agency_requirement"
-    confirmed = {
-        item["key"]: item["value"]
-        for item in progress["confirmed_facts"]
-        if isinstance(item, dict)
+    assert captured_input["active_workflow"] == "agency_plan"
+    assert captured_input["agency_step"] == "agency_product_match"
+    assert captured_input["user_requirement"]["departure_date"]
+    assert persisted_fast_context["conversation_id"] == "conversation-agency-date"
+    assert persisted_fast_context["facts"]["destination"] == "杭州"
+    assert persisted_fast_context["facts"]["departure_date"]
+    assert persisted_fast_context["facts"]["planning_mode"] == "agency_plan"
+    assert persisted_fast_context["needs_confirmation"] is False
+    token_events = [event for event in events if event["type"] == "token"]
+    assert [event["content"] for event in token_events] == [
+        chat._INITIAL_COMPLETE_AGENCY_ACK_MESSAGE,
+        "方案正文",
+    ]
+    assert saved_messages[-1]["content"] == (
+        f"{chat._INITIAL_COMPLETE_AGENCY_ACK_MESSAGE}方案正文"
+    )
+    assert any(event["type"] == "turn_observability" for event in events)
+    assert events[-1]["type"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_sparse_syncs_fast_facts_after_agent_initialization(monkeypatch):
+    await reset_session_locks_for_tests()
+    captured = {}
+    durable_context = {
+        "agent_state_initialized": True,
+        "planning_mode": "agency_plan",
+        "active_workflow": "agency_plan",
+        "planning_mode_confirmed": True,
+        "agency_step": "agency_plan_draft",
+        "destination": "长沙",
+        "departure_date": "2026-10-23",
+        "travel_days": 4,
+        "adult_count": 2,
+        "budget_text": "预算7000（口径待确认）",
     }
-    assert confirmed["departure_date"]
-    assert saved_messages[-1]["extra_info"]["fast_mode_split"]["facts"]["departure_date"]
+
+    async def fake_save_message(db, conversation_id, role, content, extra_info=None):
+        return SimpleNamespace()
+
+    async def fake_load_context(db, *, conversation_id):
+        return dict(durable_context)
+
+    async def fake_load_fast_facts(db, *, conversation_id):
+        return dict(durable_context)
+
+    async def fake_sync(agent, *, config, fast_mode_context, turn_fast_facts):
+        captured["sync_config"] = config
+        captured["sync_context"] = fast_mode_context
+        captured["sync_facts"] = turn_fast_facts
+        return True
+
+    class FakeAgent:
+        def astream_events(self, input_data, *, config, version):
+            captured["input"] = input_data
+            captured["stream_config"] = config
+
+            async def response_stream():
+                yield {
+                    "event": "on_chat_model_stream",
+                    "data": {"chunk": SimpleNamespace(content="继续推进")},
+                }
+
+            return response_stream()
+
+    async def fake_create_travel_agent():
+        return FakeAgent()
+
+    monkeypatch.setattr(chat, "save_message", fake_save_message)
+    monkeypatch.setattr(chat, "_load_fast_mode_context_for_turn", fake_load_context)
+    monkeypatch.setattr(chat, "_load_latest_fast_split_facts_for_turn", fake_load_fast_facts)
+    monkeypatch.setattr(chat, "_sync_fast_facts_to_initialized_agent_state", fake_sync)
+    monkeypatch.setattr(chat, "create_travel_agent", fake_create_travel_agent)
+
+    async for _ in chat.generate_sse_stream(
+        "conversation-durable-fast-sync",
+        "我们两个人想从西安出发，2026年10月23日去长沙4天3晚，"
+        "总预算7000，希望省心一点，帮我按旅行社方案安排。",
+        db=SimpleNamespace(),
+        user=SimpleNamespace(id="user-1"),
+    ):
+        pass
+
+    assert captured["sync_context"]["agent_state_initialized"] is True
+    assert captured["sync_facts"]["departure_city"] == "西安"
+    assert captured["sync_facts"]["destination"] == "长沙"
+    assert captured["sync_config"] is captured["stream_config"]
+    assert "user_requirement" not in captured["input"]
+    assert "current_step" not in captured["input"]
+    assert "agency_step" not in captured["input"]
 
 
 def test_strip_assistant_thinking_content_removes_complete_and_unclosed_blocks():
@@ -554,6 +1195,7 @@ async def test_tool_audit_persistence_failure_records_degradation():
     assert "PostgreSQL" in result["message"]
     assert db.rolled_back is True
     assert snapshot["status"] == "not_ready"
+    assert snapshot["approval_persistence_ready"] is False
     assert snapshot["hitl_closed_loop"] is False
     ApprovalGovernanceManager.configure_uninitialized(app_env="development")
 
@@ -593,7 +1235,7 @@ async def test_chat_stream_stops_after_structured_report_event(monkeypatch):
                     "output": SimpleNamespace(
                         update={
                             "order_id": "ORDER-1234",
-                            "report": "# 完整报告",
+                            "report": "# 完整报告\n高铁有票。",
                             "report_data": report_data,
                         }
                     )
@@ -632,7 +1274,10 @@ async def test_chat_stream_stops_after_structured_report_event(monkeypatch):
     assert "output_summary" not in events[2]
     assert events[3]["observability"]["tool_call_count"] == 1
     assert saved_messages[-1]["role"] == "assistant"
-    assert saved_messages[-1]["content"] == "# 完整报告"
+    assert saved_messages[-1]["content"] == (
+        "# 完整报告\n"
+        "高铁有票（动态班次与票务状态待二次核验，以官方实时结果为准）。"
+    )
     assert saved_messages[-1]["extra_info"]["report_data"] == report_data
     assert saved_messages[-1]["extra_info"]["observability"]["turn_id"] == events[-1]["turn_id"]
     assert get_turn_observability_snapshot(events[-1]["turn_id"]) is not None
@@ -726,11 +1371,121 @@ async def test_chat_stream_filters_thinking_blocks_across_token_chunks(monkeypat
     serialized = json.dumps(events, ensure_ascii=False)
     saved_assistant = [item for item in saved_messages if item["role"] == "assistant"][-1]
 
-    assert token_contents == ["公开开头", "继续给用户看的内容。"]
+    assert "".join(token_contents) == "公开开头继续给用户看的内容。"
     assert saved_assistant["content"] == "公开开头继续给用户看的内容。"
     assert "<think" not in serialized
     assert "query_transport_options" not in serialized
     assert "内部推理" not in saved_assistant["content"]
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_transport_claim_tokens_match_saved_assistant(monkeypatch):
+    await reset_session_locks_for_tests()
+    saved_messages = []
+
+    async def fake_save_message(db, conversation_id, role, content, extra_info=None):
+        saved_messages.append({"role": role, "content": content, "extra_info": extra_info or {}})
+        return SimpleNamespace()
+
+    class FakeAgent:
+        async def astream_events(self, *args, **kwargs):
+            for chunk in ["推荐高", "铁有票。", "其余安排保持不变"]:
+                yield {
+                    "event": "on_chat_model_stream",
+                    "data": {"chunk": SimpleNamespace(content=chunk)},
+                }
+
+    async def fake_create_travel_agent():
+        return FakeAgent()
+
+    monkeypatch.setattr(chat, "save_message", fake_save_message)
+    monkeypatch.setattr(chat, "create_travel_agent", fake_create_travel_agent)
+
+    events = []
+    async for frame in chat.generate_sse_stream(
+        "conversation-transport-claim-filter",
+        "继续规划交通",
+        db=SimpleNamespace(),
+        user=SimpleNamespace(id="user-1"),
+    ):
+        events.append(json.loads(frame.removeprefix("data: ").strip()))
+
+    streamed_text = "".join(
+        event["content"] for event in events if event["type"] == "token"
+    )
+    saved_assistant = [item for item in saved_messages if item["role"] == "assistant"][-1]
+    expected = (
+        "推荐高铁有票（动态班次与票务状态待二次核验，以官方实时结果为准）。"
+        "其余安排保持不变"
+    )
+
+    assert streamed_text == expected
+    assert saved_assistant["content"] == expected
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_tool_start_flush_preserves_open_thinking_block(monkeypatch):
+    await reset_session_locks_for_tests()
+    saved_messages = []
+
+    async def fake_save_message(db, conversation_id, role, content, extra_info=None):
+        saved_messages.append({"role": role, "content": content, "extra_info": extra_info or {}})
+        return SimpleNamespace()
+
+    class FakeAgent:
+        async def astream_events(self, *args, **kwargs):
+            yield {
+                "event": "on_chat_model_stream",
+                "data": {"chunk": SimpleNamespace(content="公开内容<think>内部")},
+            }
+            yield {
+                "event": "on_tool_start",
+                "name": "search_travel_info",
+                "run_id": "run-thinking-boundary",
+                "data": {"input": {"query": "杭州"}},
+            }
+            yield {
+                "event": "on_tool_end",
+                "name": "search_travel_info",
+                "run_id": "run-thinking-boundary",
+                "data": {"output": "ok"},
+            }
+            yield {
+                "event": "on_chat_model_stream",
+                "data": {
+                    "chunk": SimpleNamespace(
+                        content="推理内容</think>高铁有票"
+                    )
+                },
+            }
+
+    async def fake_create_travel_agent():
+        return FakeAgent()
+
+    monkeypatch.setattr(chat, "save_message", fake_save_message)
+    monkeypatch.setattr(chat, "create_travel_agent", fake_create_travel_agent)
+
+    events = []
+    async for frame in chat.generate_sse_stream(
+        "conversation-thinking-tool-boundary",
+        "继续规划交通",
+        db=SimpleNamespace(),
+        user=SimpleNamespace(id="user-1"),
+    ):
+        events.append(json.loads(frame.removeprefix("data: ").strip()))
+
+    token_text = "".join(
+        event["content"] for event in events if event["type"] == "token"
+    )
+    expected = (
+        "公开内容高铁有票"
+        "（动态班次与票务状态待二次核验，以官方实时结果为准）"
+    )
+
+    assert token_text == expected
+    assert saved_messages[-1]["content"] == expected
+    assert "内部" not in json.dumps(events, ensure_ascii=False)
+    assert "推理内容" not in saved_messages[-1]["content"]
 
 
 @pytest.mark.asyncio

@@ -21,6 +21,18 @@ for stream in (sys.stdout, sys.stderr):
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from scripts._evidence_record_helpers import (  # noqa: E402
+    as_mapping as _as_mapping,
+    make_final_text_checker,
+    make_path_arg,
+    make_placeholder_checker,
+    read_optional_json_object as _read_json,
+)
+
+
 LIVE_CHAT_PROBE_EXECUTION_APPROVAL_VERSION = "live_chat_probe_execution_approval.v1"
 APPROVAL_ID_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._:-]{5,80}$")
 PLACEHOLDER_PREFIXES = ("todo", "your-", "example", "change-me", "placeholder", "<", "${")
@@ -34,40 +46,16 @@ SECRET_SHAPE_PATTERN = re.compile(
 LOCAL_PATH_PATTERN = re.compile(r"(?i)([a-z]:\\Users\\|/home/|/root/|\.env|\.runtime|\.venv|vectorstore)")
 
 
-def _path_arg(value: str) -> Path:
-    path = Path(value)
-    return path if path.is_absolute() else PROJECT_ROOT / path
-
-
-def _read_json(path: Path | None, *, label: str) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
-    if path is None:
-        return None, {"key": f"missing_{label}", "finding": f"{label} JSON path is required.", "path_echoed": False}
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8-sig"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        return None, {"key": f"unreadable_{label}", "finding": f"{label} JSON could not be read.", "path_echoed": False}
-    if not isinstance(payload, dict):
-        return None, {"key": f"invalid_{label}", "finding": f"{label} JSON must be an object.", "path_echoed": False}
-    return payload, None
-
-
-def _as_mapping(value: Any) -> Mapping[str, Any]:
-    return value if isinstance(value, Mapping) else {}
+_path_arg = make_path_arg(PROJECT_ROOT)
+_looks_placeholder = make_placeholder_checker(
+    prefixes=PLACEHOLDER_PREFIXES,
+    fragments=(),
+)
+_has_final_text = make_final_text_checker(_looks_placeholder)
 
 
 def _status(value: Any) -> str:
     return str(value or "").strip().lower()
-
-
-def _looks_placeholder(value: Any) -> bool:
-    text = str(value or "").strip().strip("'\"").lower()
-    if text in {"", "unknown", "tbd", "null", "none", "n/a", "na"}:
-        return True
-    return any(text.startswith(prefix) for prefix in PLACEHOLDER_PREFIXES)
-
-
-def _has_final_text(value: Any) -> bool:
-    return bool(str(value or "").strip()) and not _looks_placeholder(value)
 
 
 def _blocker(key: str, finding: str) -> dict[str, str]:

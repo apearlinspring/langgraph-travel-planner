@@ -1,6 +1,6 @@
 # Production Readiness Gap（生产化差距清单）
 
-本文从真实生产系统视角审视 ZhiXing Travel Planner 当前状态。它不是演示稿，也不是功能宣传页；目标是明确哪些能力已经有工程证据，哪些仍只是模板、原型或离线验证，以及从当前项目走向可控试运行还需要补什么。
+本文从真实生产系统视角审视 ZhiXing Travel Planner 当前版本。它不是演示稿，也不是功能宣传页；目标是明确哪些能力有当前代码证据、哪些只有日期化历史证据、哪些仍只是模板或离线验证，以及从当前工作树走向可控试运行还需要补什么。
 
 ## 结论
 
@@ -9,16 +9,16 @@
 当前项目还不是完整生产系统。主要原因是：
 
 - 没有真实供应链闭环：不接真实支付、预订、出票、库存、锁价或客服履约。
-- 没有生产级平台能力：缺少密钥托管、集中日志、指标告警、分布式 trace（链路追踪）、备份恢复和事故流程。
+- 当前版本没有一套与 commit 绑定的新鲜生产证据：2026-07-03 的私有快照记录过备份恢复、短窗口探针和事故治理，但它不能自动覆盖当前工作树；密钥托管、集中日志、指标告警和分布式 trace（链路追踪）仍不完整。
 - Agent 治理仍偏轻量：Prompt（提示词）和模型版本、工具权限、回放评估、灰度发布和回滚还没有形成生产 registry（注册表）。
-- 真实环境验收仍需现场跑：离线评测 `passed` 不能替代真实向量库 `configured`、acceptance preflight（验收预检）和 live smoke/core（真实链路冒烟/核心验收）。
+- 真实环境验收仍需按当前 commit 现场跑：离线评测或历史 `passed` 不能替代当前向量库 `configured`、acceptance preflight（验收预检）和 live smoke/core（真实链路冒烟/核心验收）。
 
 ## 分级定义
 
 | 等级 | 含义 | 当前状态 |
 |---|---|---|
 | M0 工程样板 | 本地可运行、文档清晰、关键链路有测试和离线验收。 | 基本达到。 |
-| M1 受控试运行 | 使用真实环境和真实依赖，但只面向内部或少量白名单用户，人工兜底强。 | 仍有 P0 缺口。 |
+| M1 受控试运行 | 使用真实环境和真实依赖，但只面向内部或少量白名单用户，人工兜底强。 | 2026-07-03 目标版本有一次历史就绪快照；当前工作树待冻结、绑定 commit 并完整复验。 |
 | M2 有限生产 | 支持有限真实用户、稳定部署、数据安全、监控告警、备份恢复和明确人工运营流程。 | 尚未达到。 |
 | M3 规模化生产 | 多环境治理、容量规划、成本治理、灰度发布、SLA（服务等级协议）和完整合规闭环。 | 尚未启动。 |
 
@@ -26,13 +26,13 @@
 
 | 方向 | 当前证据 | 生产缺口 | 最低验收 |
 |---|---|---|---|
-| 真实环境基线 | 有 `check_runtime_readiness.py`、部署模板和 RAG release checklist。 | 还没有一份当前目标环境的脱敏 readiness 通过记录；真实 Chroma（向量库组件）、PostgreSQL（关系型数据库）、Redis（缓存数据库）、LLM（大语言模型）和关键 MCP 服务需要现场确认。 | 在目标环境运行 production readiness、acceptance preflight 和 smoke，并保留脱敏摘要；`blocked` 不得改写成 `passed`。 |
+| 真实环境基线 | 有 `check_runtime_readiness.py`、部署模板、RAG release checklist 和 2026-07-03 历史私有快照。 | 还没有一份绑定当前 commit 的目标环境 readiness 通过记录；真实 Chroma（向量库组件）、PostgreSQL（关系型数据库）、Redis（缓存数据库）、LLM（大语言模型）和关键 MCP 服务需要重新确认。 | 冻结当前候选后，在目标环境运行 production readiness、acceptance preflight 和 smoke，并保留 commit、时间窗和脱敏摘要；`blocked` 不得改写成 `passed`。 |
 | 密钥与配置 | 有 `.env.example`、脱敏规则和公开提交边界。 | 没有接入密钥管理系统、密钥轮换、最小权限账号和配置审计。 | 真实密钥进入 CI secrets 或部署密钥系统；文档和日志只出现变量名，不出现密钥值。 |
-| 数据安全 | 有 PostgreSQL/Redis 运行边界和不提交数据产物规则。 | 缺备份恢复演练、数据保留策略、PII（个人可识别信息）分类、数据访问审批和删除流程。 | 完成一次备份恢复演练；明确哪些字段属于 PII、保留多久、谁能访问、如何删除。 |
-| Agent 高风险动作 | 当前明确不接真实支付、预订、锁价和履约。 | 如果要接真实业务动作，缺权限策略、HITL（人类在环）审批、幂等键、撤销流程和审计账本。 | 所有真实支付、预订、短信、客户资料导出动作默认禁止；上线前必须有审批和审计闭环。 |
-| 外部工具可靠性 | 有 MCP 服务目录、可选/降级口径和工具失败审计。 | 缺服务级超时预算、限流、熔断、重试退避、配额监控和供应商故障 runbook（运行手册）。 | 为每类外部 API 定义超时、重试、降级文案、预算上限和故障处理步骤。 |
+| 数据安全 | 有 PostgreSQL/Redis 运行边界、不提交数据产物规则和一次历史恢复演练摘要。 | 当前目标版本缺新鲜恢复证据；数据保留策略、PII（个人可识别信息）分类、数据访问审批和删除流程仍不完整。 | 对当前候选完成一次非生产恢复演练；明确哪些字段属于 PII、保留多久、谁能访问、如何删除。 |
+| Agent 高风险动作 | 当前明确不接真实支付、预订、锁价和履约；已有审批记录与事件骨架。 | 没有 LangGraph `interrupt/resume`、checkpoint 回写和审批后动作恢复；若接真实业务动作，还缺幂等键、撤销/补偿和完整审计。 | 所有真实支付、预订、短信、客户资料导出动作默认禁止；上线前必须完成 HITL（人类在环）执行闭环、权限、幂等和补偿。 |
+| 外部工具可靠性 | 有 MCP 服务目录、可选/降级口径、工具失败审计、故障 runbook 和一份历史韧性摘要。 | 当前版本缺新鲜供应商验证、熔断、配额监控和长窗口数据；旧验收曾出现约 67.1% 工具失败/兜底。 | 按当前失败/兜底门禁重跑；为每类外部 API 验证超时、重试、降级文案、预算上限和故障处理步骤。 |
 | 可观测和告警 | 有 turn 级观测、工具审计摘要和运行预算测试。 | 没有集中日志、指标看板、告警规则、分布式 trace 或值班流程。 | 至少接入集中日志和基础指标告警：错误率、P95 耗时、外部工具失败率、队列/请求积压和 token 估算异常。 |
-| 发布与回滚 | 有部署模板、本地/远端命令示例、发布候选冻结检查、首部署 dry-run、发布包 manifest 和服务器侧 `deploy/first-deploy.sh`。 | 缺目标服务器真实执行记录、回滚演练、数据库迁移前备份和版本兼容策略；未冻结工作区不能生成正式发布包。 | 每次发布有候选冻结记录、变更单、archive sha256、manifest、服务器脚本 dry-run / execute 摘要、回滚路径、迁移计划、验收摘要和负责人。 |
+| 发布与回滚 | 有部署模板、本地/远端命令示例、发布候选冻结检查、发布包 manifest、服务器脚本和历史上线记录。 | 当前工作树未冻结，历史执行记录未绑定当前 commit；回滚执行、迁移前备份和版本兼容仍需按本次候选确认。 | 每次发布有候选冻结记录、变更单、archive sha256、manifest、服务器脚本 dry-run / execute 摘要、回滚路径、迁移计划、验收摘要和负责人。 |
 | 法务与用户边界 | 文档已声明不承诺库存、锁价、支付、出票或履约。 | 缺正式用户协议、隐私政策、免责声明、客服流程和投诉处理。 | 对真实用户开放前必须有可见条款和人工联系渠道。 |
 
 ## P1：有限生产能力
@@ -41,7 +41,7 @@
 |---|---|---|---|
 | RAG 生命周期 | 有离线召回评测、mixed-corpus safety、安全门和向量库 readiness 文档。 | 缺定期重建、增量更新、索引版本、向量库备份、漂移监控和回滚策略。 | 记录每次 RAG 发布的文档版本、embedding 模型、collection、指标、回滚方式和 safety 结果。 |
 | Prompt / 模型治理 | 有阶段 Prompt 规则清单和 AgentOps 版本记录建议。 | 缺 Prompt registry、模型配置 registry、灰度实验、质量对比和一键回滚。 | 每次 Prompt/模型变更都有版本号、影响范围、对比指标、回滚记录和失败门禁。 |
-| 评估体系 | 有报告质量、RAG 质量、工具质量、运行预算和 acceptance 入口。 | 缺定期线上抽样、人工标注闭环、失败案例归档和质量趋势看板。 | 建立周级评估批次：固定场景、线上脱敏样本、失败原因分类和趋势报告。 |
+| 评估体系 | 有报告质量、RAG 质量、工具质量、工具失败/兜底预算、运行预算和 acceptance 入口。 | 缺定期线上抽样、人工标注闭环、重复运行分布、失败案例归档和质量趋势看板。 | 建立周级评估批次：固定场景、线上脱敏样本、人工复核、失败原因分类和趋势报告。 |
 | 前端工程化 | 有单页前端、结构化报告渲染、导出和浏览器回归。 | 缺构建链路、组件边界、权限路由、可访问性审计、浏览器兼容矩阵和错误上报。 | 建立正式前端构建、错误采集、关键页面 E2E、移动端适配和基本可访问性检查。 |
 | 性能与容量 | 有运行预算和工具调用统计。 | 缺压测、容量规划、并发限制、队列削峰和成本预算。 | 对登录、聊天、报告导出、RAG 检索和地图预览做基础压测，并定义并发上限和降级策略。 |
 | 安全测试 | 有密钥脱敏和公开边界。 | 缺 SAST（静态安全扫描）、依赖漏洞扫描、接口鉴权测试、SSRF（服务端请求伪造）复核和越权测试。 | CI 或发布前跑依赖漏洞和关键接口鉴权测试；公开攻略抓取等入口复查 SSRF 边界。 |
@@ -89,9 +89,9 @@
 
 ## 建议推进顺序
 
-1. 先做 M1 受控试运行准备：真实环境 readiness、密钥托管、数据备份恢复、外部工具 runbook 和基础告警。
+1. 先冻结当前发布候选并复验 M1：绑定 commit，重跑真实环境 readiness、备份恢复、外部工具门禁、smoke/core 和基础告警；历史快照只作参考。
 2. 再做 Agent 治理硬化：Prompt/模型 registry、RAG 发布版本、验收批次和失败案例归档。
-3. 再做真实业务动作接入评估：支付、预订、库存、短信和客户资料导出必须先有 HITL、权限、幂等和审计。
+3. 再做真实业务动作接入评估：支付、预订、库存、短信和客户资料导出必须先有完整 `interrupt/resume` HITL、权限、幂等、补偿和审计。
 4. 最后做规模化能力：灰度、压测、成本治理、高可用和合规审计。
 
 M1 受控试运行所需的服务器、密钥、数据、验收和运维输入见 `docs/部署与运行/production-deployment-inputs.md`，资源申请包见 `docs/部署与运行/m1-resource-request-pack.md`，执行前私有输入缺口清单见 `docs/部署与运行/m1-execution-input-gap-checklist.md`，发布候选冻结见 `docs/部署与运行/m1-release-candidate-freeze.md`，首次部署预演见 `docs/部署与运行/m1-first-deploy-dry-run.md`，上线前总检查表见 `docs/部署与运行/m1-launch-checklist.md`，执行步骤见 `docs/部署与运行/m1-controlled-trial-runbook.md`，外部 API 故障处理见 `docs/部署与运行/external-api-failure-runbook.md`，备份和恢复演练见 `docs/部署与运行/backup-restore-runbook.md`，监控告警见 `docs/部署与运行/monitoring-alerting-runbook.md`，事故响应和回滚演练见 `docs/部署与运行/incident-response-rollback-runbook.md`，安全发布和密钥轮换见 `docs/部署与运行/security-release-key-rotation-runbook.md`，验收记录模板见 `docs/部署与运行/m1-acceptance-record-template.md`。`scripts/render_m1_resource_request.py` 只把服务器、DNS/TLS、运行配置、密钥变量、RAG 数据、外部 API、验收、备份、监控和回滚需求整理成可发送资源申请包，不证明这些资源已经存在；`docs/部署与运行/m1-execution-input-gap-checklist.md` 只把真实执行前仍需准备的 SSH 目标、公网 URL、部署目录、私有证据目录、probe 凭据、备份目录、预算、验收窗口和负责人收束成检查表，不证明这些私有输入已经齐备；`scripts/check_release_candidate_freeze.py` 只按 Git 工作区状态归类发布候选，不读取文件内容、不证明代码审查或服务器部署已经完成；`scripts/check_m1_first_deploy_dry_run.py` 只做本地部署预演和命令计划，不 SSH、不 SCP、不生成发布包、不启动服务，不能替代真实上传、远端备份、容器启动或 health 验收；`scripts/build_release_artifact.py` 只从干净 Git `HEAD` 生成 archive 和 manifest，记录 commit、tree、tracked file count 和 archive `sha256`，不证明服务器已收到发布包或服务已启动；`deploy/first-deploy.sh` 是服务器侧首部署脚本，默认只 dry-run，提供 `--archive-sha256` 时会校验上传包，显式 `--execute --start-services` 后才会解压 release、切换 `current` 并启动 Compose，但 dry-run 本身不证明服务器已部署成功；`scripts/check_m1_launch_inputs.py` 只证明 M1 非密钥输入已声明；`scripts/check_server_preflight_readiness.py` 只证明服务器、部署目录、域名、TLS、端口、反向代理和 Docker 状态已经声明，显式开启时可探测 Docker、部署目录和公开 health endpoint，不证明当前版本已经部署成功或服务依赖健康；`scripts/collect_docker_disk_cleanup_plan.py` 只通过 SSH 做只读 Docker 镜像候选清理计划，保护所有容器引用镜像，不执行删除或 prune，镜像大小只是虚拟估算；`scripts/execute_docker_disk_cleanup.py` 默认只 dry-run，真实删除必须显式传入 `--execute` 和批准 token，且再次跳过所有容器引用镜像，不 prune 容器、卷、日志、备份、`.env` 或向量库；`scripts/collect_docker_build_cache_cleanup_plan.py` 只通过 SSH 读取 `docker system df` 的 build-cache 聚合大小和可回收空间，不删除 build cache 或任何运行资源；`scripts/execute_docker_build_cache_cleanup.py` 默认只 dry-run，真实清理必须显式传入 `--execute` 和批准 token，只运行 `docker builder prune -a -f`，不运行 `docker system prune`，不删除镜像、容器、卷、日志、备份、`.env` 或向量库；`scripts/collect_server_capacity_snapshot.py` 只做 SSH 只读容量快照，记录 CPU、负载、内存、磁盘、容器状态和单次 `docker stats`，不证明真实高并发或长时间稳定性；`scripts/check_backup_restore_readiness.py` 只证明备份目标、目录、保留策略和 RAG 恢复策略已经声明，显式开启时可验证目录可写；`scripts/collect_backup_restore_drill_evidence.py` 默认只输出备份恢复演练计划，显式开启时可记录最新 dump 元数据、`pg_restore --list` catalog 可读性和恢复演练状态声明，但仍不等于非生产库完整恢复；`scripts/check_external_api_readiness.py` 只证明必需/可选外部 API、配额预算、控制台负责人、支持渠道、降级策略和 timeout/retry 策略已经声明，不证明真实供应商从目标服务器调用成功、配额实际生效或数据可用于生产履约；`scripts/check_monitoring_alerting_readiness.py` 只证明监控供应商、告警渠道和成本预算已经声明，显式开启时可探测公开 health endpoint，不证明真实告警投递、指标看板或成本封顶已生效；`scripts/collect_monitoring_alerting_evidence.py` 默认只输出监控告警证据计划，显式开启时可记录 health/readiness 投递声明和错误率、P95、工具失败、成本、备份、日志脱敏监控声明，但不会主动发送告警，也不证明完整 APM；`scripts/collect_incident_rollback_evidence.py` 默认只输出事故/回滚执行计划，显式开启时可记录负责人、回滚目标、回滚后 health/gate/smoke 和事故复盘声明，但不会执行回滚、启动服务或恢复数据；`scripts/check_security_release_readiness.py` 只证明密钥托管、轮换周期、泄露响应负责人、来源限制和高风险动作关闭声明齐备，不证明真实密钥有效、旧 key 已撤销、最小权限已在供应商控制台生效或泄露演练已完成；`scripts/check_m1_deployment_gate.py` 只聚合公开边界、发布候选冻结、M1 输入、服务器 preflight、备份前置、外部 API 前置、监控告警前置、安全发布前置、Compose 配置和 readiness；`scripts/render_m1_acceptance_record.py` 只把门禁结果整理成脱敏记录；`scripts/collect_m1_smoke_evidence.py` 默认只输出部署后 smoke 执行计划，只有显式开启 health、gate 和 acceptance smoke 后才记录目标环境脱敏摘要；`scripts/collect_m1_go_no_go_evidence.py` 只做最终证据汇总和 `decision` 判定，默认计划模式不能放行，请求 section 只要仍是 `not_checked` 或 `blocked` 就必须 `no_go`。它们都不证明真实密钥、服务器健康、备份恢复演练或在线验收通过。这些文档只记录资源类型、变量名和脱敏验收口径，不记录真实密钥或真实客户资料。

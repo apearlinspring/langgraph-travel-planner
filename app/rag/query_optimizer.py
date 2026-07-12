@@ -25,6 +25,47 @@ def _get_rag_model():
     return _rag_model
 
 
+LOCAL_EXPANSION_RULES: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
+    (("美食", "小吃", "餐厅", "吃"), ("特色美食", "本地小吃", "餐厅街区")),
+    (("住宿", "酒店", "民宿", "住哪"), ("住宿区域", "酒店", "民宿", "交通便利")),
+    (("景点", "景区", "门票", "开放时间"), ("景点介绍", "门票", "开放时间", "预约")),
+    (("历史", "文化", "博物馆", "古城"), ("历史文化", "博物馆", "古迹", "城市漫游")),
+    (("亲子", "孩子", "带娃"), ("亲子", "少排队", "短动线", "可午休")),
+    (("老人", "银发", "长辈"), ("低强度", "少步行", "休息点", "无障碍")),
+    (("省心", "旅行社", "产品", "小团"), ("产品路线", "成熟路线", "适合人群", "服务边界")),
+    (("预算", "报价", "费用", "价格"), ("费用包含", "费用不含", "预算置信度", "待核验")),
+    (("风险", "避坑", "天气", "预约失败"), ("风险提示", "Plan B", "预约", "二次核验")),
+    (("报告", "导出", "交付"), ("报告结构", "预算明细", "待核验项", "风险提示")),
+)
+
+
+class LocalQueryExpander:
+    """Deterministic query expansion for common travel-planning intents."""
+
+    def __init__(self, max_variants: int = 3):
+        self.max_variants = max_variants
+
+    def optimize(self, query: str) -> List[str]:
+        normalized = query.lower()
+        variants: list[str] = [query]
+        for triggers, expansions in LOCAL_EXPANSION_RULES:
+            if not any(trigger.lower() in normalized for trigger in triggers):
+                continue
+            expanded_terms = " ".join(expansions)
+            variants.append(f"{query} {expanded_terms}")
+            if len(variants) > self.max_variants:
+                break
+
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for item in variants:
+            normalized_item = " ".join(item.split())
+            if normalized_item and normalized_item not in seen:
+                seen.add(normalized_item)
+                deduped.append(normalized_item)
+        return deduped[: self.max_variants + 1]
+
+
 class MultiQueryOptimizer:
     """
     Multi-Query 优化器
@@ -207,12 +248,14 @@ class AdvancedQueryOptimizer:
         Args:
             strategy: 优化策略
                 - "original": 直接使用原始查询
+                - "local_multi_query": 使用本地规则生成查询变体
                 - "multi_query": 使用 Multi-Query
                 - "hyde": 使用 HyDE
                 - "rewrite": 使用查询改写
                 - "hybrid": 组合使用
         """
         self.strategy = strategy
+        self.local_expander = LocalQueryExpander()
         self.multi_query = MultiQueryOptimizer()
         self.hyde = HyDEOptimizer()
         self.rewriter = QueryRewriter()
@@ -227,6 +270,9 @@ class AdvancedQueryOptimizer:
 
         if self.strategy in {"original", "none", "direct"}:
             return [query]
+
+        if self.strategy in {"local_multi_query", "auto"}:
+            return self.local_expander.optimize(query)
 
         if self.strategy == "multi_query":
             return self.multi_query.optimize(query)

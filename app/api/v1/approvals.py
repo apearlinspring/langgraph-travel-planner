@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import inspect
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
@@ -231,6 +232,31 @@ async def list_approvals(
     )
 
 
+async def _decide_approval_record(
+    approval_service: DatabaseApprovalStore | ApprovalStore,
+    approval_id: str,
+    user: User,
+    decision: Literal["approve", "reject", "expire"],
+    reason: str | None = None,
+) -> ApprovalResponse:
+    try:
+        record = await _maybe_await(approval_service.get(approval_id))
+        _ensure_can_decide_approval(user, record)
+        if decision == "expire":
+            record = await _maybe_await(approval_service.expire(approval_id))
+        else:
+            record = await _maybe_await(
+                getattr(approval_service, decision)(
+                    approval_id,
+                    decided_by=str(user.id),
+                    decision_reason=reason,
+                )
+            )
+    except (ApprovalNotFound, ApprovalStateError, ApprovalPersistenceError) as error:
+        raise _approval_error_to_http(error) from error
+    return _record_response(record)
+
+
 @router.get("/{approval_id}", response_model=ApprovalResponse)
 async def get_approval(
     approval_id: str,
@@ -259,20 +285,9 @@ async def approve_approval(
     ),
 ):
     """Approve a pending sensitive action."""
-
-    try:
-        record = await _maybe_await(approval_service.get(approval_id))
-        _ensure_can_decide_approval(user, record)
-        record = await _maybe_await(
-            approval_service.approve(
-                approval_id,
-                decided_by=str(user.id),
-                decision_reason=data.reason if data else None,
-            )
-        )
-    except (ApprovalNotFound, ApprovalStateError, ApprovalPersistenceError) as error:
-        raise _approval_error_to_http(error) from error
-    return _record_response(record)
+    return await _decide_approval_record(
+        approval_service, approval_id, user, "approve", data.reason if data else None
+    )
 
 
 @router.post("/{approval_id}/reject", response_model=ApprovalResponse)
@@ -285,20 +300,9 @@ async def reject_approval(
     ),
 ):
     """Reject a pending sensitive action."""
-
-    try:
-        record = await _maybe_await(approval_service.get(approval_id))
-        _ensure_can_decide_approval(user, record)
-        record = await _maybe_await(
-            approval_service.reject(
-                approval_id,
-                decided_by=str(user.id),
-                decision_reason=data.reason if data else None,
-            )
-        )
-    except (ApprovalNotFound, ApprovalStateError, ApprovalPersistenceError) as error:
-        raise _approval_error_to_http(error) from error
-    return _record_response(record)
+    return await _decide_approval_record(
+        approval_service, approval_id, user, "reject", data.reason if data else None
+    )
 
 
 @router.post("/{approval_id}/expire", response_model=ApprovalResponse)
@@ -310,14 +314,7 @@ async def expire_approval(
     ),
 ):
     """Manually expire a pending sensitive action."""
-
-    try:
-        record = await _maybe_await(approval_service.get(approval_id))
-        _ensure_can_decide_approval(user, record)
-        record = await _maybe_await(approval_service.expire(approval_id))
-    except (ApprovalNotFound, ApprovalStateError, ApprovalPersistenceError) as error:
-        raise _approval_error_to_http(error) from error
-    return _record_response(record)
+    return await _decide_approval_record(approval_service, approval_id, user, "expire")
 
 
 @router.get("/{approval_id}/events", response_model=ApprovalEventListResponse)

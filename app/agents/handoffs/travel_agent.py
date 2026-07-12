@@ -1,6 +1,4 @@
-"""
-Main handoff-style travel planning agent.
-"""
+"""Main stage-configured travel planning agent."""
 import asyncio
 
 from langchain.agents import create_agent

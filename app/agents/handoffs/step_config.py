@@ -1,6 +1,6 @@
 """
-Handoffs 步骤配置
-定义每个步骤的 Prompt、Tools 和前置依赖
+主 Agent 阶段配置。
+定义每个步骤的 Prompt、Tools 和前置依赖。
 """
 from app.tools.router_query import query_destination_info
 from app.tools.hotel_query import query_hotel_options
@@ -788,8 +788,9 @@ async def get_step_config():
 - 优先检索成熟产品模板、服务 SOP、报价规则、风险手册和景点票价参考。
 - 如果资料不足，也要给保守的成熟路线样板，并明确“示例价、采集/来源、待核验、不锁价”；预算必须优先贴合用户已确认预算，不能用样板价覆盖用户预算。
 - 输出 1 个主推方案，最多 1 个备选方案；不要拆成自由规划阶段问题。
-""",
+                """,
                 "tools": [
+                    query_destination_info,
                     scenic_price_lookup_tool,
                     record_evidence_bundle_tool,
                     *internal_rag_tools,
@@ -812,7 +813,9 @@ async def get_step_config():
 - 下一步：请用户评价满意/想改哪里
 
 如果用户明确要求“生成并记录结构化行程/Day 1-Day N/路线和 Plan B”，必须调用 generate_itinerary_tool，把结构化 itinerary 写入状态后，再基于工具结果做简短说明。
-如果用户在这个阶段明确要求“汇总预算/看报价/解释费用包含与不包含/列出估算项和待核验项”，必须调用 summarize_budget_tool，先写入结构化 budget，再按“预算明细、预算匹配、费用依据、关键假设、预算置信度、出发前待核验”输出。
+如果用户在这个阶段明确要求“看报价/解释费用包含与不包含/列出估算项和待核验项”：
+- 结构化 itinerary 尚未写入时，只检索并说明报价规则、费用包含/不包含、估算边界和待核验项；不得调用 summarize_budget_tool，也不得声称已经生成结构化 budget。
+- 只有结构化 itinerary 已写入后，才调用 summarize_budget_tool 汇总结构化 budget，并按“预算明细、预算匹配、费用依据、关键假设、预算置信度、出发前待核验”输出。
 """,
                 "tools": [
                     generate_itinerary_tool,
@@ -831,7 +834,9 @@ async def get_step_config():
 如果用户说满意、没问题、就按这个，简短确认并准备生成报告。
 如果用户提出修改意见，记录修改点并输出修订版方案；不要改走自由规划交通/住宿阶段。
 如果用户要求把当前方案正式落成结构化行程，必须调用 generate_itinerary_tool；不要只保留自然语言方案。
-如果用户要求先看预算、报价说明、费用包含/不包含、估算项或待核验项，必须调用 summarize_budget_tool；不要只手写一段预算口语说明。
+如果用户要求先看预算、报价说明、费用包含/不包含、估算项或待核验项：
+- 结构化 itinerary 尚未写入时，只检索并说明报价规则、费用边界和待核验项；不得调用 summarize_budget_tool，也不得声称已经生成结构化 budget。
+- 只有结构化 itinerary 已写入后，才调用 summarize_budget_tool；不要只手写一段预算口语说明。
 """,
                 "tools": [
                     generate_itinerary_tool,

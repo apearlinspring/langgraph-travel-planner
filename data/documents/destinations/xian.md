@@ -1,4 +1,24 @@
+---
+title: 西安公开目的地知识样例
+category: destinations
+source_type: destination_guide
+visibility: public
+applicable_modes:
+  - free_planning
+  - agency_plan
+evidence_level: guide
+last_reviewed: 2026-06-23
+source_key: zhixing_curated_sample
+source_name: ZhiXing curated public destination sample
+license: Project demo sample
+attribution: ZhiXing demo dataset
+data_origin: curated_public_sample
+content_boundary: reference_only_no_inventory_or_price_lock
+---
+
 # 西安旅游攻略
+
+> 本文是用于 RAG 召回评估的公开目的地知识样例，不代表真实库存、实时价格、供应商承诺或官方预约结果。自由行用户可以据此自己订酒店和门票；本文不提供旅行社产品、内部报价、供应商 SOP 或风险手册。
 
 ## 城市概况
 

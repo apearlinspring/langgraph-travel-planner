@@ -220,7 +220,7 @@ def test_agent_metrics_allows_qualified_dynamic_claims():
         metric_expectations={
             "unsupported_claims": {
                 "strict": True,
-                "categories": ["price", "hotel_availability"],
+                "categories": ["price", "transport_schedule", "hotel_availability"],
             }
         }
     )
@@ -229,11 +229,383 @@ def test_agent_metrics_allows_qualified_dynamic_claims():
         [],
         scenario=scenario,
         report_data=_valid_report_data(),
-        assistant_text="酒店房间和688元/晚价格均为估算，需二次核验。",
+        assistant_text=(
+            "酒店房间和688元/晚价格均为估算，需二次核验。\n"
+            "- **大交通**：高铁班次余票及价格波动（建议提前 15-30 天核验）。\n"
+            "- 高铁班次与余票：确认成都东⇌重庆北/西具体车次、时段与票价。\n"
+            "- 酒店库存与房型：确认核心商圈舒适型酒店可订房型、含早权益与取消政策。"
+        ),
     ).to_dict()
 
     assert result["passed"] is True
     assert result["unsupported_claims"]["unsupported_claim_count"] == 0
+
+
+def test_agent_metrics_requires_successful_audit_evidence_for_dynamic_claims():
+    scenario = _scenario(
+        metric_expectations={
+            "unsupported_claims": {
+                "strict": True,
+                "categories": ["price", "hotel_availability"],
+            }
+        }
+    )
+    events = [
+        {"type": "tool_call", "tool": "query_hotel_options", "turn_index": 1},
+        {
+            "type": "tool_audit",
+            "tool": "query_hotel_options",
+            "status": "success",
+            "semantic_status": "success",
+            "evidence_type": "live_hotel_search",
+            "turn_index": 1,
+        },
+    ]
+
+    result = evaluate_agent_metrics(
+        events,
+        scenario=scenario,
+        report_data=_valid_report_data(),
+        assistant_text="酒店房间已锁房，价格已确认为688元/晚。",
+    ).to_dict()
+
+    assert result["passed"] is True
+    assert result["unsupported_claims"]["unsupported_claim_count"] == 0
+    assert all(
+        claim["support_reason"].startswith("supported_by_successful_tool_evidence:")
+        for claim in result["unsupported_claims"]["claims"]
+        if claim["source"] == "assistant_text"
+    )
+
+
+@pytest.mark.parametrize(
+    ("status", "semantic_status"),
+    [
+        ("failed", "service_exception"),
+        ("timeout", "service_exception"),
+        ("degraded", "not_found"),
+        ("degraded", "needs_verification"),
+        ("success", "not_found"),
+    ],
+)
+def test_agent_metrics_rejects_unsuccessful_or_empty_audit_evidence(
+    status: str,
+    semantic_status: str,
+):
+    scenario = _scenario(
+        metric_expectations={
+            "unsupported_claims": {
+                "strict": True,
+                "categories": ["price", "hotel_availability"],
+            }
+        }
+    )
+    events = [
+        {"type": "tool_call", "tool": "query_hotel_options", "turn_index": 1},
+        {
+            "type": "tool_audit",
+            "tool": "query_hotel_options",
+            "status": status,
+            "semantic_status": semantic_status,
+            "evidence_type": "live_hotel_search",
+            "error_type": "empty_hotel_result" if semantic_status == "not_found" else None,
+            "turn_index": 1,
+        },
+    ]
+
+    result = evaluate_agent_metrics(
+        events,
+        scenario=scenario,
+        report_data=_valid_report_data(),
+        assistant_text="酒店房间已锁房，价格已确认为688元/晚。",
+    ).to_dict()
+
+    assert result["passed"] is False
+    assert result["unsupported_claims"]["unsupported_claim_count"] >= 1
+    assert all(
+        claim["support_reason"] == "missing_successful_compatible_tool_evidence"
+        for claim in result["unsupported_claims"]["unsupported"]
+        if claim["source"] == "assistant_text"
+    )
+
+
+def test_agent_metrics_rejects_called_tool_without_compatible_audit_type():
+    scenario = _scenario(
+        metric_expectations={
+            "unsupported_claims": {
+                "strict": True,
+                "categories": ["hotel_availability"],
+            }
+        }
+    )
+    events = [
+        {"type": "tool_call", "tool": "query_hotel_options", "turn_index": 1},
+        {
+            "type": "tool_audit",
+            "tool": "query_hotel_options",
+            "status": "success",
+            "semantic_status": "success",
+            "evidence_type": "live_transport_query",
+            "turn_index": 1,
+        },
+    ]
+
+    result = evaluate_agent_metrics(
+        events,
+        scenario=scenario,
+        report_data=_valid_report_data(),
+        assistant_text="酒店房间已锁房。",
+    ).to_dict()
+
+    assert result["passed"] is False
+    assert result["unsupported_claims"]["unsupported_claim_count"] >= 1
+
+
+def test_agent_metrics_keeps_honest_verification_claim_with_failed_tool():
+    scenario = _scenario(
+        metric_expectations={
+            "unsupported_claims": {
+                "strict": True,
+                "categories": ["price", "hotel_availability"],
+            }
+        }
+    )
+
+    result = evaluate_agent_metrics(
+        [
+            {"type": "tool_call", "tool": "query_hotel_options", "turn_index": 1},
+            {
+                "type": "tool_audit",
+                "tool": "query_hotel_options",
+                "status": "failed",
+                "semantic_status": "service_exception",
+                "evidence_type": "live_hotel_search",
+                "turn_index": 1,
+            },
+        ],
+        scenario=scenario,
+        report_data=_valid_report_data(),
+        assistant_text="酒店房间与688元/晚价格均待核验，当前没有锁房。",
+    ).to_dict()
+
+    assert result["passed"] is True
+    assert result["unsupported_claims"]["unsupported_claim_count"] == 0
+
+
+def test_agent_metrics_treats_approximate_number_as_estimate_not_booking_word():
+    scenario = _scenario(
+        metric_expectations={
+            "unsupported_claims": {
+                "strict": True,
+                "categories": ["transport_schedule", "hotel_availability"],
+            }
+        }
+    )
+
+    approximate = evaluate_agent_metrics(
+        [],
+        scenario=scenario,
+        report_data=_valid_report_data(),
+        assistant_text="高铁具体班次与余票价格，往返约300元/人。",
+    ).to_dict()
+    booking_word = evaluate_agent_metrics(
+        [],
+        scenario=scenario,
+        report_data=_valid_report_data(),
+        assistant_text="酒店已锁房，后续需预约景点。",
+    ).to_dict()
+
+    assert approximate["unsupported_claims"]["unsupported_claim_count"] == 0
+    assert booking_word["unsupported_claims"]["unsupported_claim_count"] == 1
+
+
+def test_agent_metrics_inventory_includes_current_state_and_scenic_tools():
+    result = evaluate_agent_metrics(
+        [
+            {"type": "tool_call", "tool": "confirm_planning_mode_tool", "turn_index": 1},
+            {"type": "tool_call", "tool": "record_evidence_bundle_tool", "turn_index": 1},
+            {"type": "tool_call", "tool": "scenic_price_lookup_tool", "turn_index": 2},
+        ],
+        scenario=_scenario(),
+        report_data=_valid_report_data(),
+        assistant_text="景点票价为参考，出发前需二次核验。",
+    ).to_dict()
+
+    assert result["metric_values"]["tool_call_precision"] == 1.0
+    assert result["observed"]["unexpected_tools"] == []
+
+
+def test_agent_metrics_counts_real_fallback_tools_as_stage_not_precision_noise():
+    fallback_tools = [
+        "go_back_to_requirement",
+        "go_back_to_destination",
+        "go_back_to_transport",
+        "go_back_to_accommodation",
+        "go_back_to_food",
+        "go_back_to_itinerary",
+        "go_back_to_budget",
+    ]
+    scenario = _scenario(
+        metric_expectations={
+            "tools": {"strict": True},
+            "stage": {
+                "strict": True,
+                "expected_transition_tools": fallback_tools,
+            },
+        }
+    )
+
+    result = evaluate_agent_metrics(
+        [
+            {"type": "tool_call", "tool": tool, "turn_index": index}
+            for index, tool in enumerate(fallback_tools, start=1)
+        ],
+        scenario=scenario,
+        report_data=_valid_report_data(),
+    ).to_dict()
+
+    assert result["passed"] is True
+    assert result["metric_values"]["tool_call_precision"] == 1.0
+    assert result["metric_values"]["stage_transition_accuracy"] == 1.0
+    assert result["observed"]["unexpected_tools"] == []
+    assert result["observed"]["transition_tools"] == fallback_tools
+
+
+def test_agent_metrics_preserves_markdown_verification_section_context():
+    scenario = _scenario(
+        metric_expectations={
+            "unsupported_claims": {
+                "strict": True,
+                "categories": ["transport_schedule", "inventory", "hotel_availability"],
+            }
+        }
+    )
+
+    verification_list = evaluate_agent_metrics(
+        [],
+        scenario=scenario,
+        report_data=_valid_report_data(),
+        assistant_text=(
+            "### 二次核验项（出发前需确认）\n"
+            "- 高铁班次与余票：具体车次、票价、是否需提前抢票\n"
+            "- 酒店库存与价格：实际可订房型、含早权益、连住优惠"
+        ),
+    ).to_dict()
+    confirmed_list = evaluate_agent_metrics(
+        [],
+        scenario=scenario,
+        report_data=_valid_report_data(),
+        assistant_text="### 已确认方案\n- 酒店库存充足，房型可订。",
+    ).to_dict()
+    bold_verification_list = evaluate_agent_metrics(
+        [],
+        scenario=scenario,
+        report_data=_valid_report_data(),
+        assistant_text=(
+            "**出发前二次核验清单**\n"
+            "- 高铁班次与票价：具体车次余票与实时票价\n"
+            "- 酒店房态与权益：实际可订房型、是否含早及取消政策"
+        ),
+    ).to_dict()
+
+    assert verification_list["unsupported_claims"]["unsupported_claim_count"] == 0
+    assert bold_verification_list["unsupported_claims"]["unsupported_claim_count"] == 0
+    assert confirmed_list["unsupported_claims"]["unsupported_claim_count"] >= 1
+
+
+def test_agent_metrics_keeps_verification_context_across_paragraphs_and_table_rows():
+    scenario = _scenario(
+        metric_expectations={
+            "unsupported_claims": {
+                "strict": True,
+                "categories": ["transport_schedule"],
+            }
+        }
+    )
+
+    result = evaluate_agent_metrics(
+        [],
+        scenario=scenario,
+        report_data=_valid_report_data(),
+        assistant_text=(
+            "### 二次核验项\n"
+            "以下内容将在出发前复核。\n"
+            "| 项目 | 当前记录 |\n"
+            "| --- | --- |\n"
+            "| 交通 | 返程高铁班次已确认有票。 |"
+        ),
+    ).to_dict()
+
+    assert result["unsupported_claims"]["unsupported_claim_count"] == 0
+    assert any(
+        claim["support_reason"] == "qualified_by_verification_section"
+        for claim in result["unsupported_claims"]["claims"]
+    )
+
+
+def test_agent_metrics_ends_verification_context_at_next_markdown_heading():
+    scenario = _scenario(
+        metric_expectations={
+            "unsupported_claims": {
+                "strict": True,
+                "categories": ["transport_schedule"],
+            }
+        }
+    )
+
+    result = evaluate_agent_metrics(
+        [],
+        scenario=scenario,
+        report_data=_valid_report_data(),
+        assistant_text=(
+            "### 二次核验项\n"
+            "返程交通将在出发前复核。\n"
+            "### 已确认方案\n"
+            "返程高铁班次已确认有票。"
+        ),
+    ).to_dict()
+
+    assert result["unsupported_claims"]["unsupported_claim_count"] == 1
+    assert result["unsupported_claims"]["unsupported"][0]["support_reason"] == (
+        "missing_successful_compatible_tool_evidence"
+    )
+
+
+def test_agent_metrics_preserves_structured_verification_field_context():
+    scenario = _scenario(
+        metric_expectations={
+            "unsupported_claims": {
+                "strict": True,
+                "categories": ["transport_schedule", "inventory", "hotel_availability"],
+            }
+        }
+    )
+    verification_report = _valid_report_data()
+    verification_report["tool_audit_summary"] = {
+        "pending_checks": ["返程班次真实余票和票价。"],
+    }
+    confirmed_report = _valid_report_data()
+    confirmed_report["transport"] = {
+        "summary": "返程高铁班次已确认有票。",
+    }
+
+    verification_result = evaluate_agent_metrics(
+        [],
+        scenario=scenario,
+        report_data=verification_report,
+    ).to_dict()
+    confirmed_result = evaluate_agent_metrics(
+        [],
+        scenario=scenario,
+        report_data=confirmed_report,
+    ).to_dict()
+
+    assert verification_result["unsupported_claims"]["unsupported_claim_count"] == 0
+    assert any(
+        claim["support_reason"] == "qualified_by_structured_verification_field"
+        for claim in verification_result["unsupported_claims"]["claims"]
+    )
+    assert confirmed_result["unsupported_claims"]["unsupported_claim_count"] >= 1
 
 
 def test_scenario_catalog_accepts_metric_expectations(tmp_path: Path):

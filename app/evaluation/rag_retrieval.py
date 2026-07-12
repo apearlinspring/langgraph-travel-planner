@@ -28,6 +28,11 @@ except Exception:  # pragma: no cover - minimal dependency shells
 
 from app.rag.contracts import metadata_list
 from app.rag.document_loader import DocumentManager
+from app.rag.retrieval_boost import (
+    destination_match_priority,
+    explicit_query_destinations,
+    query_document_boost,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -134,6 +139,10 @@ class RagRetrievalScenario:
     expected_sources: list[str]
     expected_categories: list[str]
     expected_source_types: list[str] = field(default_factory=list)
+    expected_visibilities: list[str] = field(default_factory=list)
+    forbidden_categories: list[str] = field(default_factory=list)
+    forbidden_source_types: list[str] = field(default_factory=list)
+    forbidden_visibilities: list[str] = field(default_factory=list)
     tags: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -177,6 +186,9 @@ class RagScenarioRetrievalResult:
     source_recall: float
     category_recall: float
     source_type_recall: float
+    visibility_recall: float
+    forbidden_hit_count: int
+    forbidden_hits: list[str]
     reciprocal_rank: float
     first_relevant_rank: int | None
     retrieved: list[RetrievedDocument]
@@ -185,9 +197,14 @@ class RagScenarioRetrievalResult:
     def hit(self) -> bool:
         return self.first_relevant_rank is not None
 
+    @property
+    def safety_passed(self) -> bool:
+        return self.forbidden_hit_count == 0
+
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
         payload["hit"] = self.hit
+        payload["safety_passed"] = self.safety_passed
         payload["retrieved"] = [item.to_dict() for item in self.retrieved]
         return payload
 
@@ -202,7 +219,9 @@ class RagRetrievalStrategySummary:
     source_recall: float
     category_recall: float
     source_type_recall: float
+    visibility_recall: float
     hit_rate: float
+    safety_pass_rate: float
     mrr: float
 
     def to_dict(self) -> dict[str, Any]:
@@ -220,6 +239,7 @@ class RagRetrievalEvaluationResult:
     summaries: list[RagRetrievalStrategySummary]
     scenario_results: list[RagScenarioRetrievalResult]
     improvement: dict[str, float]
+    coverage_summary: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -230,6 +250,7 @@ class RagRetrievalEvaluationResult:
             "summaries": [summary.to_dict() for summary in self.summaries],
             "scenario_results": [result.to_dict() for result in self.scenario_results],
             "improvement": self.improvement,
+            "coverage_summary": self.coverage_summary,
         }
 
 
@@ -293,6 +314,42 @@ def load_rag_retrieval_scenarios(
                         scenario_id,
                     )
                     if raw.get("expected_source_types") is not None
+                    else []
+                ),
+                expected_visibilities=(
+                    _require_string_list(
+                        raw.get("expected_visibilities"),
+                        "expected_visibilities",
+                        scenario_id,
+                    )
+                    if raw.get("expected_visibilities") is not None
+                    else []
+                ),
+                forbidden_categories=(
+                    _require_string_list(
+                        raw.get("forbidden_categories"),
+                        "forbidden_categories",
+                        scenario_id,
+                    )
+                    if raw.get("forbidden_categories") is not None
+                    else []
+                ),
+                forbidden_source_types=(
+                    _require_string_list(
+                        raw.get("forbidden_source_types"),
+                        "forbidden_source_types",
+                        scenario_id,
+                    )
+                    if raw.get("forbidden_source_types") is not None
+                    else []
+                ),
+                forbidden_visibilities=(
+                    _require_string_list(
+                        raw.get("forbidden_visibilities"),
+                        "forbidden_visibilities",
+                        scenario_id,
+                    )
+                    if raw.get("forbidden_visibilities") is not None
                     else []
                 ),
                 tags=(
@@ -444,6 +501,11 @@ def retrieve_documents(
     *,
     strategy: RetrievalStrategy,
     top_k: int,
+    preferred_visibilities: Iterable[str] = (),
+    blocked_categories: Iterable[str] = (),
+    blocked_source_types: Iterable[str] = (),
+    blocked_visibilities: Iterable[str] = (),
+    enforce_blocked: bool = False,
 ) -> list[RetrievedDocument]:
     """Retrieve documents with a deterministic offline strategy."""
 
@@ -461,23 +523,72 @@ def retrieve_documents(
     if include_metadata:
         category_hints = _infer_category_hints(query)
         source_type_hints = _infer_source_type_hints(query)
+        preferred_visibility_set = {str(item) for item in preferred_visibilities if str(item)}
+        blocked_category_set = {str(item) for item in blocked_categories if str(item)}
+        blocked_source_type_set = {str(item) for item in blocked_source_types if str(item)}
+        blocked_visibility_set = {str(item) for item in blocked_visibilities if str(item)}
         for index, document in enumerate(documents):
             boost = 0.0
             if document.category in category_hints:
                 boost += 1.2
             if document.source_type in source_type_hints:
                 boost += 0.5
+            if preferred_visibility_set and document.visibility in preferred_visibility_set:
+                boost += 2.0
+            if (
+                document.category in blocked_category_set
+                or document.source_type in blocked_source_type_set
+                or document.visibility in blocked_visibility_set
+            ):
+                boost -= 6.0
             applicable_modes = set(metadata_list(document.metadata.get("applicable_modes")))
             if "省心" in query and "agency_plan" in applicable_modes:
                 boost += 0.2
             if "自由行" in query and "free_planning" in applicable_modes:
                 boost += 0.2
+            boost += query_document_boost(
+                query,
+                metadata=document.metadata,
+                page_content=document.page_content,
+            )
             scores[index] += boost
 
+    query_destinations = (
+        explicit_query_destinations(
+            query,
+            (
+                (document.metadata, document.page_content)
+                for document in documents
+            ),
+        )
+        if include_metadata
+        else set()
+    )
     ranked = sorted(
         zip(documents, scores),
-        key=lambda item: (-item[1], item[0].source),
+        key=lambda item: (
+            destination_match_priority(
+                query_destinations,
+                metadata=item[0].metadata,
+                page_content=item[0].page_content,
+            ),
+            -item[1],
+            item[0].source,
+        ),
     )
+    if enforce_blocked:
+        blocked_category_set = {str(item) for item in blocked_categories if str(item)}
+        blocked_source_type_set = {str(item) for item in blocked_source_types if str(item)}
+        blocked_visibility_set = {str(item) for item in blocked_visibilities if str(item)}
+        ranked = [
+            (document, score)
+            for document, score in ranked
+            if not (
+                document.category in blocked_category_set
+                or document.source_type in blocked_source_type_set
+                or document.visibility in blocked_visibility_set
+            )
+        ]
     return [
         RetrievedDocument(
             rank=rank,
@@ -516,22 +627,93 @@ def _first_relevant_rank(
     return None
 
 
+def _scenario_visibility_filter(scenario: RagRetrievalScenario) -> set[str]:
+    if scenario.expected_visibilities:
+        return set(scenario.expected_visibilities)
+    tags = set(scenario.tags)
+    if "public" in tags and "internal" not in tags:
+        return {"public"}
+    if "internal" in tags and "public" not in tags:
+        return {"internal"}
+    return set()
+
+
+def _filter_documents_for_scenario(
+    scenario: RagRetrievalScenario,
+    documents: list[IndexedDocument],
+) -> list[IndexedDocument]:
+    visibility_filter = _scenario_visibility_filter(scenario)
+    if not visibility_filter:
+        return documents
+    return [
+        document
+        for document in documents
+        if document.visibility in visibility_filter
+    ]
+
+
+def _forbidden_hits(
+    scenario: RagRetrievalScenario,
+    retrieved: list[RetrievedDocument],
+) -> list[str]:
+    forbidden_categories = set(scenario.forbidden_categories)
+    forbidden_source_types = set(scenario.forbidden_source_types)
+    forbidden_visibilities = set(scenario.forbidden_visibilities)
+    hits: list[str] = []
+    for item in retrieved:
+        if (
+            item.category in forbidden_categories
+            or item.source_type in forbidden_source_types
+            or item.visibility in forbidden_visibilities
+        ):
+            hits.append(item.source)
+    return hits
+
+
 def evaluate_rag_retrieval_scenario(
     scenario: RagRetrievalScenario,
     documents: list[IndexedDocument],
     *,
     strategy: RetrievalStrategy,
     top_k: int,
+    apply_visibility_filter: bool = True,
+    visibility_bias: bool = False,
+    enforce_forbidden_hits: bool = False,
 ) -> RagScenarioRetrievalResult:
     """Evaluate one labeled retrieval query."""
 
+    candidate_documents = (
+        _filter_documents_for_scenario(scenario, documents)
+        if apply_visibility_filter
+        else documents
+    )
     retrieved = retrieve_documents(
         scenario.query,
-        documents,
+        candidate_documents,
         strategy=strategy,
         top_k=top_k,
+        preferred_visibilities=(
+            scenario.expected_visibilities if visibility_bias else ()
+        ),
+        blocked_categories=(
+            scenario.forbidden_categories
+            if visibility_bias or enforce_forbidden_hits
+            else ()
+        ),
+        blocked_source_types=(
+            scenario.forbidden_source_types
+            if visibility_bias or enforce_forbidden_hits
+            else ()
+        ),
+        blocked_visibilities=(
+            scenario.forbidden_visibilities
+            if visibility_bias or enforce_forbidden_hits
+            else ()
+        ),
+        enforce_blocked=enforce_forbidden_hits,
     )
     first_rank = _first_relevant_rank(scenario, retrieved)
+    forbidden_hits = _forbidden_hits(scenario, retrieved)
     return RagScenarioRetrievalResult(
         scenario_id=scenario.id,
         strategy=strategy,
@@ -545,6 +727,11 @@ def evaluate_rag_retrieval_scenario(
         source_type_recall=_safe_round(
             _recall(scenario.expected_source_types, [item.source_type for item in retrieved])
         ),
+        visibility_recall=_safe_round(
+            _recall(scenario.expected_visibilities, [item.visibility for item in retrieved])
+        ),
+        forbidden_hit_count=len(forbidden_hits),
+        forbidden_hits=forbidden_hits,
         reciprocal_rank=_safe_round(1 / first_rank if first_rank else 0.0),
         first_relevant_rank=first_rank,
         retrieved=retrieved,
@@ -554,6 +741,51 @@ def evaluate_rag_retrieval_scenario(
 def _average(values: Iterable[float]) -> float:
     items = list(values)
     return _safe_round(sum(items) / len(items)) if items else 0.0
+
+
+def _count_values(values: Iterable[str]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for value in values:
+        key = str(value or "").strip()
+        if not key:
+            continue
+        counts[key] = counts.get(key, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _scenario_coverage_summary(scenarios: list[RagRetrievalScenario]) -> dict[str, Any]:
+    """Return stable coverage metadata for release and demo reports."""
+
+    public_safety_count = sum(
+        1
+        for scenario in scenarios
+        if "public" in set(scenario.tags)
+        and (
+            scenario.forbidden_categories
+            or scenario.forbidden_source_types
+            or scenario.forbidden_visibilities
+        )
+    )
+    return {
+        "scenario_count": len(scenarios),
+        "public_safety_scenario_count": public_safety_count,
+        "categories": _count_values(
+            category
+            for scenario in scenarios
+            for category in scenario.expected_categories
+        ),
+        "source_types": _count_values(
+            source_type
+            for scenario in scenarios
+            for source_type in scenario.expected_source_types
+        ),
+        "visibilities": _count_values(
+            visibility
+            for scenario in scenarios
+            for visibility in scenario.expected_visibilities
+        ),
+        "tags": _count_values(tag for scenario in scenarios for tag in scenario.tags),
+    }
 
 
 def _summarize(
@@ -574,7 +806,9 @@ def _summarize(
         source_recall=_average(result.source_recall for result in selected),
         category_recall=_average(result.category_recall for result in selected),
         source_type_recall=_average(result.source_type_recall for result in selected),
+        visibility_recall=_average(result.visibility_recall for result in selected),
         hit_rate=_average(1.0 if result.hit else 0.0 for result in selected),
+        safety_pass_rate=_average(1.0 if result.safety_passed else 0.0 for result in selected),
         mrr=_average(result.reciprocal_rank for result in selected),
     )
 
@@ -620,6 +854,9 @@ def evaluate_rag_retrieval(
     documents_dir: Path | str | None = None,
     top_k_values: Iterable[int] = (3, 5),
     strategies: Iterable[RetrievalStrategy] = ("baseline_bm25", "metadata_aware_bm25"),
+    apply_visibility_filter: bool = True,
+    visibility_bias: bool = False,
+    enforce_forbidden_hits: bool = False,
 ) -> RagRetrievalEvaluationResult:
     """Run the deterministic retrieval benchmark."""
 
@@ -639,6 +876,9 @@ def evaluate_rag_retrieval(
                         loaded_documents,
                         strategy=strategy,
                         top_k=top_k,
+                        apply_visibility_filter=apply_visibility_filter,
+                        visibility_bias=visibility_bias,
+                        enforce_forbidden_hits=enforce_forbidden_hits,
                     )
                 )
 
@@ -655,7 +895,88 @@ def evaluate_rag_retrieval(
         summaries=summaries,
         scenario_results=results,
         improvement=_improvement(summaries, top_ks),
+        coverage_summary=_scenario_coverage_summary(loaded_scenarios),
     )
+
+
+def evaluate_rag_mixed_corpus_safety(
+    *,
+    scenarios: list[RagRetrievalScenario] | None = None,
+    documents: list[IndexedDocument] | None = None,
+    scenario_path: Path | str | None = None,
+    documents_dir: Path | str | None = None,
+    top_k_values: Iterable[int] = (3,),
+    strategies: Iterable[RetrievalStrategy] = ("metadata_aware_bm25",),
+) -> RagRetrievalEvaluationResult:
+    """Evaluate public safety scenarios against an unfiltered mixed corpus.
+
+    The candidate set intentionally keeps both public and internal documents.
+    Ranking receives expected/forbidden visibility hints and then enforces a
+    final forbidden-hit guardrail on returned documents.
+    """
+
+    loaded_scenarios = scenarios or load_rag_retrieval_scenarios(scenario_path)
+    safety_scenarios = [
+        scenario
+        for scenario in loaded_scenarios
+        if (
+            "public" in set(scenario.tags)
+            and (
+                scenario.forbidden_categories
+                or scenario.forbidden_source_types
+                or scenario.forbidden_visibilities
+            )
+        )
+    ]
+    if not safety_scenarios:
+        raise ValueError("Mixed-corpus safety evaluation requires public forbidden-hit scenarios")
+    return evaluate_rag_retrieval(
+        scenarios=safety_scenarios,
+        documents=documents,
+        documents_dir=documents_dir,
+        top_k_values=top_k_values,
+        strategies=strategies,
+        apply_visibility_filter=False,
+        visibility_bias=True,
+        enforce_forbidden_hits=True,
+    )
+
+
+def rag_mixed_corpus_safety_failures(
+    result: RagRetrievalEvaluationResult,
+) -> list[dict[str, Any]]:
+    """Return mixed-corpus safety failures with stable machine-readable reasons."""
+
+    failures: list[dict[str, Any]] = []
+    for scenario_result in result.scenario_results:
+        reasons: list[str] = []
+        if not scenario_result.safety_passed:
+            reasons.append("forbidden_hits")
+        if scenario_result.source_recall < 1.0:
+            reasons.append("source_recall")
+        if scenario_result.category_recall < 1.0:
+            reasons.append("category_recall")
+        if scenario_result.source_type_recall < 1.0:
+            reasons.append("source_type_recall")
+        if scenario_result.visibility_recall < 1.0:
+            reasons.append("visibility_recall")
+        if not reasons:
+            continue
+        failures.append(
+            {
+                "scenario_id": scenario_result.scenario_id,
+                "strategy": scenario_result.strategy,
+                "top_k": scenario_result.top_k,
+                "reasons": reasons,
+                "source_recall": scenario_result.source_recall,
+                "category_recall": scenario_result.category_recall,
+                "source_type_recall": scenario_result.source_type_recall,
+                "visibility_recall": scenario_result.visibility_recall,
+                "forbidden_hits": scenario_result.forbidden_hits,
+                "retrieved": [item.to_dict() for item in scenario_result.retrieved],
+            }
+        )
+    return failures
 
 
 def render_rag_retrieval_markdown(result: RagRetrievalEvaluationResult) -> str:
@@ -671,17 +992,34 @@ def render_rag_retrieval_markdown(result: RagRetrievalEvaluationResult) -> str:
         f"- documents: `{result.document_count}`",
         f"- top_k_values: `{', '.join(str(item) for item in result.top_k_values)}`",
         "",
+        "## Status Semantics（状态语义）",
+        "",
+        "`passed` 表示当前命令在当前本地知识文档和标注场景下通过；`blocked` 表示缺少真实依赖、候选库安全门失败或运行前置条件不足，不能被解释为验收通过。",
+        "",
+        "本离线报告只证明确定性召回评测结果，不代表真实向量库、真实 embedding（嵌入向量）或在线 Agent（智能体）验收已经通过。",
+        "",
+        "## Mixed-corpus Safety Gate（混合库安全门）",
+        "",
+        "公开知识安全需要单独跑 mixed-corpus（公开+内部混合候选库）对抗验收：",
+        "",
+        "```powershell",
+        "uv run python scripts\\evaluate_rag_retrieval.py --mixed-corpus-safety --top-k 3 --json",
+        "```",
+        "",
+        "这条验收不预先删除内部文档候选，而是在排序阶段使用场景的 `expected_visibilities` / `forbidden_*` 元数据提示，并在返回前执行 forbidden-hit 护栏。如果失败，acceptance preflight（验收预检）的 `rag_mixed_corpus_safety` 应进入 `blocked`。",
+        "",
         "## Summary（汇总）",
         "",
-        "| strategy | top_k | source recall | category recall | source type recall | hit rate | MRR |",
-        "|---|---:|---:|---:|---:|---:|---:|",
+        "| strategy | top_k | source recall | category recall | source type recall | visibility recall | hit rate | safety pass | MRR |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for summary in result.summaries:
         lines.append(
             "| "
             f"{summary.strategy} | {summary.top_k} | "
             f"{summary.source_recall:.2%} | {summary.category_recall:.2%} | "
-            f"{summary.source_type_recall:.2%} | {summary.hit_rate:.2%} | "
+            f"{summary.source_type_recall:.2%} | {summary.visibility_recall:.2%} | "
+            f"{summary.hit_rate:.2%} | {summary.safety_pass_rate:.2%} | "
             f"{summary.mrr:.4f} |"
         )
 
@@ -699,13 +1037,34 @@ def render_rag_retrieval_markdown(result: RagRetrievalEvaluationResult) -> str:
             ]
         )
 
+    coverage = result.coverage_summary
+    if coverage:
+        category_summary = ", ".join(
+            f"{key}={value}"
+            for key, value in dict(coverage.get("categories") or {}).items()
+        )
+        tag_summary = ", ".join(
+            f"{key}={value}"
+            for key, value in dict(coverage.get("tags") or {}).items()
+        )
+        lines.extend(
+            [
+                "",
+                "## Coverage Summary（场景覆盖摘要）",
+                "",
+                f"- public_safety_scenarios: `{coverage.get('public_safety_scenario_count', 0)}`",
+                f"- expected_categories: `{category_summary}`",
+                f"- tags: `{tag_summary}`",
+            ]
+        )
+
     lines.extend(
         [
             "",
             "## Scenario Details（场景明细）",
             "",
-            "| scenario | strategy | top_k | source recall | category recall | first relevant rank | top sources |",
-            "|---|---|---:|---:|---:|---:|---|",
+            "| scenario | strategy | top_k | source recall | category recall | safety | first relevant rank | top sources |",
+            "|---|---|---:|---:|---:|---|---:|---|",
         ]
     )
     for item in result.scenario_results:
@@ -714,6 +1073,7 @@ def render_rag_retrieval_markdown(result: RagRetrievalEvaluationResult) -> str:
             "| "
             f"{item.scenario_id} | {item.strategy} | {item.top_k} | "
             f"{item.source_recall:.2%} | {item.category_recall:.2%} | "
+            f"{'pass' if item.safety_passed else 'fail'} | "
             f"{item.first_relevant_rank or ''} | {top_sources} |"
         )
     return "\n".join(lines)

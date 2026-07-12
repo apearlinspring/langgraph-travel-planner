@@ -16,8 +16,20 @@ for stream in (sys.stdout, sys.stderr):
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from scripts._evidence_record_helpers import (  # noqa: E402
+    as_list as _as_list,
+    has_text as _has_text,
+    is_ready as _is_ready,
+    make_json_object_reader,
+    make_path_arg,
+    status_from_checks as _status_from_checks,
+)
+
+
 INCIDENT_TABLETOP_STATUS_VERSION = "incident_tabletop_status.v1"
-READY_VALUES = {"1", "true", "yes", "y", "ready", "passed", "completed", "verified", "ok", "done"}
 VALID_SEVERITIES = {"P0", "P1", "P2", "P3"}
 SECRET_PATTERNS = (
     re.compile(
@@ -29,24 +41,11 @@ SECRET_PATTERNS = (
 )
 
 
-def _read_json(path: Path) -> Mapping[str, Any]:
-    with path.open(encoding="utf-8") as handle:
-        payload = json.load(handle)
-    if not isinstance(payload, Mapping):
-        raise ValueError("Incident tabletop record must be a JSON object.")
-    return payload
-
-
-def _is_ready(value: Any) -> bool:
-    return str(value or "").strip().lower() in READY_VALUES
-
-
-def _has_text(value: Any) -> bool:
-    return bool(str(value or "").strip())
-
-
-def _as_list(value: Any) -> list[Any]:
-    return value if isinstance(value, list) else []
+_path_arg = make_path_arg(PROJECT_ROOT)
+_read_json = make_json_object_reader(
+    object_error="Incident tabletop record must be a JSON object.",
+    encoding="utf-8",
+)
 
 
 def _redaction_boundary_check(record: Mapping[str, Any], raw_text: str) -> dict[str, Any]:
@@ -241,19 +240,6 @@ def _severity_policy_check(record: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _status_from_checks(checks: Mapping[str, Mapping[str, Any]]) -> tuple[str, list[dict[str, Any]]]:
-    blockers = []
-    for name, check in checks.items():
-        if check.get("status") != "blocked":
-            continue
-        for item in check.get("blocked_reasons") or []:
-            if isinstance(item, Mapping):
-                blockers.append({"check": name, **dict(item)})
-        if not check.get("blocked_reasons"):
-            blockers.append({"check": name, "finding": check.get("finding") or "blocked"})
-    return ("blocked" if blockers else "passed", blockers)
-
-
 def build_incident_tabletop_status_report(record: Mapping[str, Any], *, raw_text: str = "") -> dict[str, Any]:
     """Build a redacted validation report for one incident tabletop record."""
 
@@ -361,11 +347,6 @@ def _template_record() -> dict[str, Any]:
             "secret_values_included": False,
         },
     }
-
-
-def _path_arg(value: str) -> Path:
-    path = Path(value)
-    return path if path.is_absolute() else PROJECT_ROOT / path
 
 
 def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:

@@ -572,6 +572,7 @@
         normalizeReportBudgetItems: (...args) => normalizeReportBudgetItems(...args),
         formatReportDataMoney: (...args) => formatReportDataMoney(...args),
         getStatusLabel: (...args) => getStatusLabel(...args),
+        escapeAttribute: (...args) => escapeAttribute(...args),
       });
       if (!reportDataPanels) {
         throw new Error("ZhiXingReportDataPanels is not loaded.");

@@ -2,6 +2,7 @@
 初始化 RAG 系统
 加载文档、切分、创建向量数据库
 """
+import argparse
 import asyncio
 import os
 import shutil
@@ -175,14 +176,17 @@ def _replace_vectorstore_directory(
     if target_dir.exists():
         backup_dir = _new_refresh_auxiliary_path(target_dir, "backup")
         backup_dir.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(target_dir), str(backup_dir))
+        target_dir.replace(backup_dir)
         _log_info(f"{label} 旧向量库已备份: {backup_dir}")
 
     try:
-        shutil.move(str(build_dir), str(target_dir))
+        # 构建目录与目标目录位于同一卷，使用原子 rename。不要使用
+        # shutil.move：Windows rename 失败时它会退化为 copy+rmtree，若
+        # Chroma 仍持有 data_level0.bin，会留下一个已复制但未发布完整的目录。
+        build_dir.replace(target_dir)
     except Exception:
         if backup_dir is not None and backup_dir.exists() and not target_dir.exists():
-            shutil.move(str(backup_dir), str(target_dir))
+            backup_dir.replace(target_dir)
         raise
 
     _log_info(f"{label} 已替换为新向量库: {target_dir}")
@@ -202,9 +206,9 @@ def _rollback_vectorstore_replacement(
     failed_dir = _new_refresh_auxiliary_path(target_dir, "failed")
     failed_dir.parent.mkdir(parents=True, exist_ok=True)
     if target_dir.exists():
-        shutil.move(str(target_dir), str(failed_dir))
+        target_dir.replace(failed_dir)
         _log_error(f"{label} 新向量库已移入失败目录: {failed_dir}")
-    shutil.move(str(backup_dir), str(target_dir))
+    backup_dir.replace(target_dir)
     _log_error(f"{label} 已回滚到旧向量库: {target_dir}")
 
 
@@ -232,12 +236,17 @@ def _build_vectorstore(
     parent_docs, child_docs = splitter.split_documents(documents)
 
     _log_info(f"创建向量数据库: {label}...")
-    vs_manager = VectorStoreManager(
-        persist_directory=str(build_dir),
-        collection_name=collection_name,
-    )
     try:
-        vs_manager.create_vectorstore(child_docs)
+        vs_manager = VectorStoreManager(
+            persist_directory=str(build_dir),
+            collection_name=collection_name,
+        )
+        try:
+            vs_manager.create_vectorstore(child_docs)
+        finally:
+            # Chroma 会在进程级 System 缓存中持有 HNSW 文件句柄。必须先
+            # 显式关闭，Windows 才能原子重命名构建目录。
+            vs_manager.close()
     except Exception:
         if refresh:
             _cleanup_refresh_build(build_dir)
@@ -383,7 +392,14 @@ async def initialize_rag() -> None:
     )
 
 
-def main() -> int:
+def _build_parser() -> argparse.ArgumentParser:
+    return argparse.ArgumentParser(
+        description="Build, verify, and atomically replace the public and internal RAG indexes."
+    )
+
+
+def main(argv: list[str] | None = None) -> int:
+    _build_parser().parse_args(argv or [])
     try:
         _ensure_runtime_imports()
         asyncio.run(initialize_rag())
@@ -394,4 +410,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(main(sys.argv[1:]))

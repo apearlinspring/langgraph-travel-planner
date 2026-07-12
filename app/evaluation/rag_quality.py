@@ -5,6 +5,13 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.evaluation.report_quality import CriterionResult, REQUIRED_AGENCY_CATEGORIES
+from app.evaluation.scoring import (
+    as_dict as _as_dict,
+    as_list as _as_list,
+    grade as _grade,
+    has_text as _has_text,
+    score as _score,
+)
 from app.rag.contracts import LOW_CONFIDENCE_EVIDENCE_LEVELS, PROHIBITED_DYNAMIC_COMMITMENTS
 
 
@@ -50,37 +57,6 @@ class RagQualityResult:
             "category_coverage": self.category_coverage,
             "criteria": [criterion.to_dict() for criterion in self.criteria],
         }
-
-
-def _grade(normalized_score: float) -> str:
-    if normalized_score >= 90:
-        return "A"
-    if normalized_score >= 80:
-        return "B"
-    if normalized_score >= 70:
-        return "C"
-    if normalized_score >= 60:
-        return "D"
-    return "F"
-
-
-def _as_dict(value: Any) -> dict[str, Any]:
-    return value if isinstance(value, dict) else {}
-
-
-def _as_list(value: Any) -> list[Any]:
-    return value if isinstance(value, list) else []
-
-
-def _has_text(value: Any) -> bool:
-    return isinstance(value, str) and bool(value.strip())
-
-
-def _score(condition: bool, points: float, findings: list[str], message: str) -> float:
-    if condition:
-        return points
-    findings.append(message)
-    return 0.0
 
 
 def _agency_context(report_data: dict[str, Any]) -> dict[str, Any]:

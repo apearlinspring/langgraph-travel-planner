@@ -90,7 +90,7 @@ docker compose logs --tail=500 backend caddy 2>&1 | \
 |---|---|
 | 可用性 | `/health/live` 和 `/health/ready` 有定时检查，异常能通知负责人 |
 | 就绪状态 | readiness 输出 `blocked` 时阻断发布或暂停试运行 |
-| 性能 | 记录首 token、总耗时、P95（第 95 百分位）趋势和慢请求原因 |
+| 性能 | 记录任意首个助手片段、总耗时、P95（第 95 百分位）趋势和慢请求原因；首片段可能只是固定 ACK（确认收到） |
 | 工具质量 | 记录工具调用数、失败数、降级数、需核验数和外部 API 分类 |
 | 成本配额 | 记录 token 估算、LLM/地图/搜索/航班/酒店调用预算和配额告警 |
 | 数据安全 | 日志和告警不包含密钥、Cookie、完整 token、PII（个人可识别信息）或用户原文 |
@@ -101,12 +101,14 @@ docker compose logs --tail=500 backend caddy 2>&1 | \
 
 M1 建议从以下阈值开始，真实试运行后再按数据调整。
 
+当前 API 可能先发送固定 ACK，因此 `first_token_seconds` 只表示连接后任意首个助手片段的等待时间。该指标适合监控网关、SSE 建连和请求接收，不代表 LLM 已开始输出有意义内容，也不能定位工具冷启动；完整业务延迟应看 `total_elapsed_seconds`，当前尚未单独采集首个有意义内容耗时。
+
 | 指标 | Warning（预警） | Critical（严重） | 处理 |
 |---|---|---|---|
 | `/health/live` | 单次失败 | 连续 2 次失败 | 检查容器、进程、端口和反向代理 |
 | `/health/ready` | `degraded` 持续 5 分钟 | `not_ready` 或 `blocked` | 暂停发布或试运行，按 `blocked_reasons` 修复 |
 | 后端 5xx | 5 分钟内 > 1% | 5 分钟内 > 5% | 查看错误日志和最近发布 |
-| 首 token | P95 > 30 秒 | P95 > 60 秒 | 排查 LLM、网络、工具冷启动 |
+| 任意首个助手片段（可为 ACK） | P95 > 30 秒 | P95 > 60 秒 | 排查网关、网络、SSE 建连和请求接收；LLM / 工具慢点看单轮总耗时 |
 | 单轮总耗时 | P95 > 180 秒 | 超过运行预算或大量超时 | 排查工具链、模型响应和状态循环 |
 | 工具失败率 | 10 分钟内 > 10% | 10 分钟内 > 30% | 按外部 API 故障手册降级 |
 | fallback 次数 | 明显高于基线 | 连续多轮兜底 | 检查 prompt、工具、RAG 和外部 API |
@@ -171,7 +173,9 @@ python scripts/check_backup_alert_status.py \
 
 ### 4.6 工具失败率监控
 
-工具失败率用 `scripts/check_tool_failure_monitor_status.py` 从 `tool_audit_event` 表采集。脚本只读取工具名、状态、错误分类、证据类型、耗时和时间窗口，不读取工具入参、工具出参、`.env` 或数据库连接串，也不输出真实数据库地址。
+工具失败率用 `scripts/check_tool_failure_monitor_status.py` 从 `tool_audit_event` 表采集。脚本只读取工具名、原始状态、错误分类、证据类型、耗时和时间窗口，不读取工具入参、工具出参、`.env` 或数据库连接串，也不输出真实数据库地址。
+
+这里的 failure rate（失败率）专指 hard failure rate（硬失败率）。分类先看显式 `semantic_status`，再看 `error_type`，最后才用原始 `status` 兜底：只有 `service_exception` 进入分子；没有更具体语义时，原始 `failed`、`failure`、`timeout`、`error` 才归为 `service_exception`。因此 `failed + empty_*_result` 仍属于 `not_found`，只进入 `fallback_count`；`needs_verification`、参数不足、`skipped` 和 `approval_required` 只进入 `degraded_count`。报告同时保留 raw `status_counts`（原始状态分布）和 `semantic_status_counts`（语义状态分布），方便排查但不改变告警阈值。`warn_failure_rate` 和 `max_failure_rate` 必须是有限数，且满足 `0 <= warn <= max <= 1`；`NaN` 和正负无穷会被 CLI（命令行接口）直接拒绝。
 
 ```sh
 python scripts/check_tool_failure_monitor_status.py \
@@ -286,7 +290,7 @@ M1 验收记录中至少补充：
 |---|---|
 | `health_check_status` | passed / degraded / blocked |
 | `readiness_status` | passed / degraded / blocked |
-| `p95_first_token_seconds` | 数值或 not measured |
+| `p95_first_token_seconds` | 数值或 not measured；只代表任意首个助手片段，可能是固定 ACK |
 | `p95_turn_elapsed_seconds` | 数值或 not measured |
 | `tool_failure_rate` | 百分比或 not measured |
 | `external_api_incidents` | 无 / 有，引用脱敏编号 |

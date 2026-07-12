@@ -124,7 +124,7 @@ def test_project_docs_cover_required_capabilities_and_demo_paths():
     )
 
     for phrase in [
-        "多智能体编排",
+        "Agent 能力编排",
         "状态机",
         "工具调用",
         "RAG（检索增强生成）",

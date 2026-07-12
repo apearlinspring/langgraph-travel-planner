@@ -68,6 +68,13 @@
       return renderJourneyPreview?.(previewState);
     }
 
+    function buildCustomerRiskLines(reportData = {}, viewModel = {}) {
+      return normalizeReportDataList?.([
+        ...(Array.isArray(reportData.risks) ? reportData.risks : []),
+        ...(viewModel.handoff?.pendingChecks || []),
+      ])?.filter((item, index, list) => list.indexOf(item) === index);
+    }
+
     function renderStructuredReportNextAction(reportData = {}) {
       const explicitLines = normalizeReportDataList?.([
         reportData.next_action,
@@ -108,6 +115,7 @@
       const mapDigest = !options?.suppressJourneyPreview
         ? renderReportDataMapDigest(reportData)
         : "";
+      const customerRiskLines = buildCustomerRiskLines(reportData, viewModel);
 
       return `
           <div class="travel-report travel-report--${escapeHtml?.(
@@ -199,7 +207,7 @@
                 label: "风险提醒",
                 title: "重要提醒",
                 body: `
-                  ${renderReportDataList?.(reportData.risks, "风险提醒待补充")}
+                  ${renderReportDataList?.(customerRiskLines, "风险提醒待补充")}
                 `,
               })}
               ${renderReportDataCard({

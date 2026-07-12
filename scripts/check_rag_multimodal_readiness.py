@@ -13,6 +13,8 @@ for stream in (sys.stdout, sys.stderr):
 
 if "--json" in sys.argv:
     os.environ.setdefault("ZHIXING_SUPPRESS_CONSOLE_LOGS", "1")
+if "--no-dotenv" in sys.argv:
+    os.environ.setdefault("ZHIXING_DISABLE_DOTENV", "1")
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -39,9 +41,32 @@ def _status(value: bool) -> str:
     return "configured" if value else "not_configured"
 
 
-def _summarize_e2e_acceptance(result: dict[str, object]) -> dict[str, object]:
-    from scripts.accept_rag_multimodal_e2e import project_display_path
+def _redact_local_path(value: str | Path | None) -> str:
+    """Return a path suitable for public readiness output."""
 
+    if not value:
+        return ""
+    path = Path(str(value))
+    try:
+        relative = path.resolve().relative_to(PROJECT_ROOT.resolve())
+        display = str(relative).replace("\\", "/")
+    except (OSError, ValueError):
+        return "<external path redacted>"
+
+    if display == ".runtime" or display.startswith(".runtime/"):
+        return ".runtime/<redacted>"
+    if display == ".venv" or display.startswith(".venv/"):
+        return ".venv/<redacted>"
+    if display == "data/vectorstore" or display.startswith("data/vectorstore/"):
+        return "data/vectorstore/<redacted>"
+    if display == "data/vectorstore_internal" or display.startswith(
+        "data/vectorstore_internal/"
+    ):
+        return "data/vectorstore_internal/<redacted>"
+    return display
+
+
+def _summarize_e2e_acceptance(result: dict[str, object]) -> dict[str, object]:
     query_results = []
     for item in result.get("query_results") or []:
         if not isinstance(item, dict):
@@ -65,8 +90,8 @@ def _summarize_e2e_acceptance(result: dict[str, object]) -> dict[str, object]:
         "document_count": result.get("document_count"),
         "parent_count": result.get("parent_count"),
         "child_count": result.get("child_count"),
-        "root": project_display_path(str(result.get("root") or "")),
-        "result_path": project_display_path(
+        "root": _redact_local_path(str(result.get("root") or "")),
+        "result_path": _redact_local_path(
             Path(str(result.get("root") or "")) / "acceptance_result.json"
         )
         if result.get("root")
@@ -80,7 +105,6 @@ def _run_e2e_acceptance_check() -> dict[str, object]:
         DEFAULT_ROOT,
         DEFAULT_SOURCE_DIR,
         AcceptanceBlocked,
-        project_display_path,
         run_multimodal_e2e_acceptance,
     )
 
@@ -92,8 +116,8 @@ def _run_e2e_acceptance_check() -> dict[str, object]:
         return {
             "status": "blocked",
             "passed": False,
-            "root": project_display_path(root),
-            "result_path": project_display_path(root / "acceptance_result.json"),
+            "root": _redact_local_path(root),
+            "result_path": _redact_local_path(root / "acceptance_result.json"),
             "error_type": exc.__class__.__name__,
             "error": str(exc),
         }
@@ -101,8 +125,8 @@ def _run_e2e_acceptance_check() -> dict[str, object]:
         return {
             "status": "failed",
             "passed": False,
-            "root": project_display_path(root),
-            "result_path": project_display_path(root / "acceptance_result.json"),
+            "root": _redact_local_path(root),
+            "result_path": _redact_local_path(root / "acceptance_result.json"),
             "error_type": exc.__class__.__name__,
             "error": str(exc),
         }
@@ -123,7 +147,7 @@ def build_rag_multimodal_readiness_report(*, check_e2e: bool = False) -> dict[st
     report = {
         "version": RAG_MULTIMODAL_READINESS_VERSION,
         "enabled": multimodal_auto_extract_enabled(),
-        "cache_path": str(resolve_multimodal_cache_path()),
+        "cache_path": _redact_local_path(resolve_multimodal_cache_path()),
         "vision": {
             "status": _status(has_real_env_value(settings.dashscope_api_key)),
             "model": resolve_model_name(profile="vision"),
@@ -131,7 +155,7 @@ def build_rag_multimodal_readiness_report(*, check_e2e: bool = False) -> dict[st
         },
         "ffmpeg": {
             "status": _status(bool(ffmpeg)),
-            "path": ffmpeg or "",
+            "path": _redact_local_path(ffmpeg),
             "env_vars": ["RAG_FFMPEG_PATH", "PATH"],
         },
         "transcript_command": {
@@ -145,7 +169,7 @@ def build_rag_multimodal_readiness_report(*, check_e2e: bool = False) -> dict[st
             "model_size": whisper_config.model_size,
             "device": whisper_config.device,
             "compute_type": whisper_config.compute_type,
-            "model_cache": str(whisper_config.model_cache),
+            "model_cache": _redact_local_path(whisper_config.model_cache),
             "env_vars": [
                 "RAG_WHISPER_MODEL_SIZE",
                 "RAG_WHISPER_MODEL_CACHE",
@@ -235,6 +259,11 @@ def _render_human(report: dict[str, object]) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
+    parser.add_argument(
+        "--no-dotenv",
+        action="store_true",
+        help="Do not load the local .env file; useful for public, redacted readiness checks.",
+    )
     parser.add_argument(
         "--check-e2e",
         action="store_true",

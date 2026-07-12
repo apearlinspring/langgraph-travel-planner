@@ -6,6 +6,7 @@ from typing import Any
 
 from app.agency.evidence import build_rule_evidence
 from app.agency.pricing_rules import (
+    budget_group_key as _budget_group_key,
     budget_confidence_payload,
     build_adjustment_options,
     build_quote_policy,
@@ -20,7 +21,12 @@ from app.reports.contracts import (
     report_sections,
 )
 from app.reports.render_markdown import render_report_markdown
-from app.reports.route_builder import build_route_map, normalize_report_route_alignment
+from app.reports.route_builder import (
+    build_route_map,
+    dedupe_route_points as _dedupe_report_points,
+    normalize_report_route_alignment,
+    normalize_report_route_contract_surfaces,
+)
 from app.reports.validators import ReportValidationResult, validate_report_data
 from app.tools.audit import pending_checks_from_audit_events, summarize_audit_events_for_report
 
@@ -37,6 +43,7 @@ class ReportBundle:
 def build_report_bundle(report_data: dict[str, Any]) -> ReportBundle:
     """Validate report_data and render Markdown from the same source payload."""
 
+    report_data = normalize_report_route_contract_surfaces(report_data)
     validation = validate_report_data(report_data)
     markdown = render_report_markdown(report_data) if validation.ok else ""
     return ReportBundle(
@@ -116,18 +123,6 @@ def _route_segment_pending_checks(route_summaries: list[dict[str, Any]]) -> list
                 continue
             checks.append(f"Day {day_number} 路段待核验：{_route_segment_summary(segment)}")
     return _dedupe_report_points(checks, max_items=6)
-
-
-def _dedupe_report_points(points: list[str], max_items: int = 6) -> list[str]:
-    picked = []
-    for point in points:
-        normalized = str(point or "").strip()
-        if not normalized or normalized in picked:
-            continue
-        picked.append(normalized)
-        if len(picked) >= max_items:
-            break
-    return picked
 
 
 def format_report_people(requirement: dict[str, Any]) -> str:
@@ -271,21 +266,6 @@ BUDGET_DISPLAY_GROUPS: tuple[dict[str, str], ...] = (
     {"key": "service_reserve", "label": "服务/预留"},
     {"key": "other", "label": "其他"},
 )
-
-
-def _budget_group_key(item: dict[str, Any]) -> str:
-    source = f"{item.get('key') or item.get('category') or ''} {item.get('label') or ''}".lower()
-    if any(token in source for token in ("transport", "traffic", "交通", "高铁", "航班", "机票")):
-        return "transport"
-    if any(token in source for token in ("accommodation", "hotel", "lodging", "住宿", "酒店", "民宿")):
-        return "accommodation"
-    if any(token in source for token in ("food", "dining", "meal", "餐", "美食", "小吃")):
-        return "food"
-    if any(token in source for token in ("attraction", "scenic", "sight", "experience", "景点", "门票", "体验")):
-        return "attractions"
-    if any(token in source for token in ("service", "reserve", "contingency", "buffer", "misc", "预留", "服务", "机动")):
-        return "service_reserve"
-    return "other"
 
 
 def _merge_budget_item(target: dict[str, Any], item: dict[str, Any]) -> None:
@@ -449,7 +429,7 @@ def build_travel_report_data(
         state.get("tool_audit_events"),
     )
 
-    return {
+    report_data = {
         "version": REPORT_VERSION,
         "title": "个性化旅游规划报告",
         "subtitle": "最终旅行方案报告",
@@ -503,3 +483,4 @@ def build_travel_report_data(
         "customer_sections": list(CUSTOMER_REPORT_SECTION_IDS),
         "advisor_sections": list(ADVISOR_REPORT_SECTION_IDS),
     }
+    return normalize_report_route_contract_surfaces(report_data)

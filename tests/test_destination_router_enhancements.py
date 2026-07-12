@@ -68,45 +68,6 @@ class FakeRagTool:
         return self.result
 
 
-@pytest.mark.asyncio
-async def test_get_explore_tools_appends_live_search_tools(monkeypatch):
-    monkeypatch.setattr(
-        destination_router,
-        "get_rag_tools",
-        lambda: [SimpleNamespace(name="search_destination_guide")],
-    )
-
-    async def fake_search_tools():
-        return [SimpleNamespace(name="search_travel_info")]
-
-    monkeypatch.setattr(destination_router, "get_search_tools", fake_search_tools)
-
-    tools = await destination_router._get_explore_tools()
-
-    assert [tool.name for tool in tools] == [
-        "search_destination_guide",
-        "search_travel_info",
-    ]
-
-
-@pytest.mark.asyncio
-async def test_get_explore_tools_can_skip_live_search_tools(monkeypatch):
-    monkeypatch.setattr(
-        destination_router,
-        "get_rag_tools",
-        lambda: [SimpleNamespace(name="search_destination_guide")],
-    )
-
-    async def unexpected_search_tools():
-        raise AssertionError("live search should not be loaded for stable guide queries")
-
-    monkeypatch.setattr(destination_router, "get_search_tools", unexpected_search_tools)
-
-    tools = await destination_router._get_explore_tools_for_query(include_live_search=False)
-
-    assert [tool.name for tool in tools] == ["search_destination_guide"]
-
-
 def test_destination_router_only_uses_live_search_for_time_sensitive_queries():
     assert destination_router._should_include_live_search("长沙最近开放和门票规则")
     assert not destination_router._should_include_live_search("长沙经典景点和美食攻略")
@@ -117,11 +78,6 @@ async def test_explore_agent_node_uses_single_direct_rag_for_stable_queries(monk
     guide_tool = FakeRagTool("search_destination_guide", "杭州亲子攻略证据")
 
     monkeypatch.setattr(destination_router, "get_rag_tools", lambda: [guide_tool])
-
-    async def unexpected_agent(*args, **kwargs):
-        raise AssertionError("stable RAG query should not create nested explore agent")
-
-    monkeypatch.setattr(destination_router, "_get_or_create_explore_agent", unexpected_agent)
 
     result = await destination_router.explore_agent_node(
         {"destination": "杭州", "query": "亲子轻松景点攻略"}
@@ -143,11 +99,6 @@ async def test_explore_agent_node_uses_single_live_search_for_time_sensitive_que
         return [live_tool]
 
     monkeypatch.setattr(destination_router, "get_search_tools", fake_search_tools)
-
-    async def unexpected_agent(*args, **kwargs):
-        raise AssertionError("live destination query should use deterministic search once")
-
-    monkeypatch.setattr(destination_router, "_get_or_create_explore_agent", unexpected_agent)
 
     result = await destination_router.explore_agent_node(
         {"destination": "杭州", "query": "亲子景点最新开放和预约"}

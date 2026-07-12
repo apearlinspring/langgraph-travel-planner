@@ -1,27 +1,11 @@
 (function (global) {
-  const sessionApi = global.ZhiXingSessionApi;
-
-  async function parseJsonSafe(response) {
-    try {
-      return await response.json();
-    } catch (error) {
-      return null;
-    }
-  }
-
-  function buildOptions(stateToken, options = {}) {
-    return sessionApi.buildApiRequestOptions(stateToken, options);
-  }
+  const { requestJson } = global.ZhiXingSessionApi;
 
   async function fetchAdminOverview({ apiBase, stateToken = "" }) {
-    const response = await fetch(
+    return requestJson(
       `${apiBase}/api/v1/admin/overview`,
-      buildOptions(stateToken)
+      stateToken
     );
-    return {
-      response,
-      data: await parseJsonSafe(response),
-    };
   }
 
   async function fetchAdminUsers({
@@ -38,14 +22,10 @@
       role,
     });
     if (queryText.trim()) params.set("q", queryText.trim());
-    const response = await fetch(
+    return requestJson(
       `${apiBase}/api/v1/admin/users?${params}`,
-      buildOptions(stateToken)
+      stateToken
     );
-    return {
-      response,
-      data: await parseJsonSafe(response),
-    };
   }
 
   async function fetchAdminConversations({
@@ -64,14 +44,10 @@
       role,
     });
     if (queryText.trim()) params.set("q", queryText.trim());
-    const response = await fetch(
+    return requestJson(
       `${apiBase}/api/v1/admin/conversations?${params}`,
-      buildOptions(stateToken)
+      stateToken
     );
-    return {
-      response,
-      data: await parseJsonSafe(response),
-    };
   }
 
   async function fetchAdminUserDetail({
@@ -79,14 +55,10 @@
     stateToken = "",
     userId,
   }) {
-    const response = await fetch(
+    return requestJson(
       `${apiBase}/api/v1/admin/users/${encodeURIComponent(userId)}`,
-      buildOptions(stateToken)
+      stateToken
     );
-    return {
-      response,
-      data: await parseJsonSafe(response),
-    };
   }
 
   async function fetchAdminConversationDetail({
@@ -94,14 +66,10 @@
     stateToken = "",
     conversationId,
   }) {
-    const response = await fetch(
+    return requestJson(
       `${apiBase}/api/v1/admin/conversations/${encodeURIComponent(conversationId)}`,
-      buildOptions(stateToken)
+      stateToken
     );
-    return {
-      response,
-      data: await parseJsonSafe(response),
-    };
   }
 
   global.ZhiXingAdminApi = {

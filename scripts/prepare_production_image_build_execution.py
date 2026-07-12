@@ -23,6 +23,15 @@ for stream in (sys.stdout, sys.stderr):
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from scripts._remote_probe_helpers import (  # noqa: E402
+    first_value as _first,
+    parse_tabbed_probe_lines as _parse_probe_lines,
+)
+
+
 PRODUCTION_IMAGE_BUILD_EXECUTION_PREP_VERSION = "production_image_build_execution_prep.v1"
 APPROVAL_TOKEN = "APPROVE_PRODUCTION_IMAGE_BUILD_EXECUTION"
 SERVER_TARGET_PLACEHOLDER = "<server-target>"
@@ -176,21 +185,6 @@ def _run_command(
 
 def _default_build_id() -> str:
     return "zhixing-image-build-" + datetime.now(UTC).strftime("%Y%m%d%H%M%S")
-
-
-def _parse_probe_lines(stdout: str) -> dict[str, list[str]]:
-    parsed: dict[str, list[str]] = {}
-    for raw_line in str(stdout or "").splitlines():
-        if "\t" not in raw_line:
-            continue
-        key, value = raw_line.split("\t", 1)
-        parsed.setdefault(key.strip(), []).append(value.strip())
-    return parsed
-
-
-def _first(values: Mapping[str, list[str]], key: str, default: str = "") -> str:
-    items = values.get(key) or []
-    return str(items[0]) if items else default
 
 
 def _target_summary(ssh_target: str, deploy_dir: str) -> dict[str, str]:

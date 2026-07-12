@@ -17,10 +17,13 @@ from pydantic import BaseModel, Field
 from app.api.dependencies import get_current_user
 from app.config import settings
 from app.journey.route_preferences import (
+    format_route_distance as _format_distance,
+    format_route_duration as _format_duration,
     normalize_route_segment_mode,
     route_segment_mode_label,
 )
 from app.mcp_core.client import get_mcp_client
+from app.mcp_core.result_parsing import parse_json_text as _parse_json_text
 from app.models.user import User
 from app.utils.logger import app_logger
 
@@ -142,26 +145,6 @@ _geocode_cache: dict[str, tuple[float, MapPoint | None]] = {}
 
 def _map_preview_deadline_expired(deadline: float | None) -> bool:
     return bool(deadline and time.perf_counter() >= deadline)
-
-
-def _extract_text_payload(result: Any) -> str:
-    if isinstance(result, str):
-        return result
-    if isinstance(result, list):
-        for item in result:
-            if isinstance(item, dict) and item.get("type") == "text":
-                return str(item.get("text", ""))
-    if isinstance(result, dict) and result.get("type") == "text":
-        return str(result.get("text", ""))
-    return str(result)
-
-
-def _parse_json_text(result: Any) -> dict[str, Any]:
-    text = _extract_text_payload(result)
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        return {}
 
 
 def _normalize_query(text: str | None) -> str:
@@ -346,22 +329,6 @@ async def _resolve_point(
         app_logger.warning(f"Map preview geocode failed for {normalized}: {exc}")
         _set_cached_geocode(normalized, city, None, success=False)
         return None
-
-
-def _format_distance(distance_meters: float) -> str:
-    if distance_meters >= 1000:
-        return f"{distance_meters / 1000:.1f} 公里"
-    return f"{distance_meters:.0f} 米"
-
-
-def _format_duration(duration_seconds: float) -> str:
-    total_minutes = max(int(round(duration_seconds / 60)), 1)
-    hours, minutes = divmod(total_minutes, 60)
-    if hours and minutes:
-        return f"{hours}小时{minutes}分钟"
-    if hours:
-        return f"{hours}小时"
-    return f"{minutes}分钟"
 
 
 def _verification_label(status: str | None) -> str:

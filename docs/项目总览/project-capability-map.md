@@ -7,24 +7,24 @@
 | 常见问题 | 一句话回答 | 代码定位 | 验证命令 | 风险边界 |
 |---|---|---|---|---|
 | 这是不是普通 RAG 问答？ | 不是。RAG（检索增强生成）只是证据来源之一，主链路由状态机、工具调用、MCP（模型上下文协议）和最终 `report_data`（结构化报告数据）交付组成。 | `app/core/workflow.py`、`app/tools/state_transition.py`、`app/reports/` | `.\.venv\Scripts\python -m pytest tests\test_report_contract_module.py -q` | 不把检索片段直接当成最终事实。 |
-| 多智能体怎么编排？ | 主控 Travel Agent（旅行智能体）负责阶段推进；目的地 Router（路由器）处理攻略和天气；交通 Coordinator（协调器）分发航班、高铁、自驾。 | `app/agents/handoffs/travel_agent.py`、`app/agents/routers/destination_router.py`、`app/agents/subagents/transport_coordinator.py` | `.\.venv\Scripts\python -m pytest tests\test_destination_router.py tests\test_flight_query_tool.py -q` | 子 Agent 不是越多越好，必须有清晰职责和工具边界。 |
-| 状态机在哪里？ | `TravelState` 保存结构化状态；`free_planning` 用 `current_step` 控制八个规划阶段，`agency_plan` 用 `agency_step` 控制省心方案五阶段。 | `app/core/state.py`、`app/core/workflow.py`、`app/agents/handoffs/step_config.py`、`app/tools/state_transition.py` | `.\.venv\Scripts\python -m pytest tests\test_workflow_maintainability.py tests\test_step_prompt_rendering.py -q` | 改阶段必须同步状态、prompt（提示词）、工具、前端进度台和测试。 |
+| Agent 能力怎么编排？ | 主控 Travel Agent（旅行智能体）负责阶段推进；目的地 Router（路由器）处理攻略和天气；交通 Coordinator（协调器）直接编排航班、高铁、自驾查询工具。 | `app/agents/handoffs/travel_agent.py`、`app/agents/routers/destination_router.py`、`app/agents/subagents/transport_coordinator.py` | `.\.venv\Scripts\python -m pytest tests\test_destination_router.py tests\test_flight_query_tool.py -q` | 主流程不是“每阶段一个 Agent”，交通也没有再分发到三个方式子 Agent。 |
+| 状态机在哪里？ | `TravelState` 保存结构化状态；`free_planning` 用 `current_step` 控制八个逻辑阶段，`agency_plan` 用 `agency_step` 控制五个逻辑阶段。主链路由 `create_agent`、中间件和迁移工具推进，目的地 Router 才是显式 `StateGraph`。 | `app/core/state.py`、`app/core/workflow.py`、`app/agents/handoffs/step_config.py`、`app/tools/state_transition.py` | `.\.venv\Scripts\python -m pytest tests\test_workflow_maintainability.py tests\test_step_prompt_rendering.py -q` | 改阶段必须同步状态、prompt（提示词）、工具、前端进度台和测试。 |
 | 省心方案和自由规划怎么分流？ | 首轮先问“省心方案 / 个性化旅游规划”；省心方案走产品匹配和方案草案，个性化旅游规划走交通、住宿、餐饮等逐项状态机。 | `app/api/v1/chat.py`、`app/core/intent.py`、`app/core/middleware.py`、`app/agents/handoffs/step_config.py` | `.\.venv\Scripts\python -m pytest tests\test_chat_report_metadata.py tests\test_intent_detection.py -q` | 省心方案不应漂回自由规划交通/住宿阶段。 |
 | 首轮为什么能快？ | API（应用程序接口）层先走本地快路径，解析首句事实并问规划方式；不创建完整 Travel Agent，不加载 MCP（模型上下文协议）工具。 | `app/api/v1/chat.py` | `.\.venv\Scripts\python -m pytest tests\test_chat_report_metadata.py -q` | 快路径只处理分流和基础事实，复杂方案仍交给 Agent。 |
 | 工具怎么避免乱调？ | `StepConfigMiddleware` 按工作流和阶段注入工具；省心方案使用独立白名单，默认移除交通/酒店实时查询和选择工具。 | `app/core/middleware.py`、`app/agents/handoffs/step_config.py` | `.\.venv\Scripts\python -m pytest tests\test_step_prompt_rendering.py tests\test_intent_detection.py -q` | 用户明确要求实时查交通或酒店时，才临时开放对应工具。 |
 | 外部能力为什么用 MCP？ | MCP 把天气、搜索、地图、铁路、航班和酒店能力统一为 Agent 可调用工具，并通过服务级缓存、重试和降级避免单点拖垮主链路。 | `app/mcp_core/client.py`、`app/tools/mcp_tools.py` | `.\.venv\Scripts\python -m pytest tests\test_mcp_client_config_unit.py -q` | 外部服务不可用时不能伪造真实查询结果。 |
 | RAG 怎么保证旅行社业务感？ | 内部知识库按产品、SOP（标准作业流程）、报价、风险和报告标准组织；产品化样板支持目的地级弱匹配，例如只说“想去新疆”也能召回新疆省心路线候选。 | `data/documents/internal/`、`app/tools/rag_tools.py`、`app/evaluation/rag_quality.py`、`app/evaluation/rag_retrieval.py`、`docs/RAG与知识库/rag-demo-evaluation-guide.md`、`docs/RAG与知识库/rag-vectorstore-readiness.md` | `.\.venv\Scripts\python scripts\validate_rag_knowledge.py`；`.\.venv\Scripts\python scripts\evaluate_rag_retrieval.py --json` | 离线召回 passed 不等于真实 Chroma 向量库 configured，也不等于线上 Agent passed。 |
 | 报价怎么讲清楚？ | 报告区分真实工具价、规则估算、兜底估算和待核验项，避免锁价或库存承诺。 | `app/agency/pricing_rules.py`、`app/reports/builder.py` | `.\.venv\Scripts\python -m pytest tests\test_report_quality_evaluation.py -q` | 不接真实支付和供应链履约。 |
-| HITL 如何体现？ | 敏感动作有策略、审批请求、审批事件和 readiness 语义；当前订单号只是模拟编号，M1 只提供站内模拟确认跳转，不代表真实预订。 | `app/core/approval.py`、`app/core/permissions.py`、`app/api/v1/approvals.py`、`app/api/v1/mock_checkout.py`、`docs/治理与可观测/approval-governance.md` | `.\.venv\Scripts\python -m pytest tests\test_approval_governance.py tests\test_mock_checkout.py -q` | 普通用户不能自审未来真实支付或预订动作。 |
-| 可观测性有什么？ | 聊天链路记录 turn（轮次）级观测：首 token（文本令牌）、总耗时、工具调用、失败、fallback（兜底）和 token 估算；AgentOps 文档把它和工具审计、readiness/preflight/acceptance 摘要串成轻量复盘链。 | `app/core/observability.py`、`app/api/v1/chat.py`、`app/evaluation/runtime_metrics.py`、`docs/治理与可观测/agentops-replay-versioning.md` | `.\.venv\Scripts\python -m pytest tests\test_runtime_metrics.py -q` | 当前是 turn 级安全摘要复盘，不是完整分布式 trace 或 APM。 |
-| 验收门禁怎么做？ | `acceptance_gate` 聚合报告质量、RAG 质量、工具质量、运行预算和内部证据，失败时输出维度化原因。 | `app/evaluation/acceptance_gate.py`、`scripts/run_evaluation_scenarios.py` | `.\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-smoke --dry-run` | 无真实环境时只能 blocked 或 dry-run，不能声明通过。 |
+| HITL 做到哪一步？ | 当前实现的是审批治理骨架：敏感动作策略、持久化请求、只追加事件、角色权限和 readiness 语义；当前订单号只是模拟编号。 | `app/core/approval.py`、`app/core/permissions.py`、`app/api/v1/approvals.py`、`app/api/v1/mock_checkout.py`、`docs/治理与可观测/approval-governance.md` | `.\.venv\Scripts\python -m pytest tests\test_approval_governance.py tests\test_mock_checkout.py -q` | 尚未实现 LangGraph `interrupt/resume`；批准记录不会自动恢复原 Agent 工具调用，普通用户也不能自审未来真实支付或预订动作。 |
+| 可观测性有什么？ | 聊天链路记录 turn（轮次）级观测：`first_token_seconds`、`total_elapsed_seconds`、工具调用、失败、fallback（兜底）和 token 估算；AgentOps 文档把它和工具审计、readiness/preflight/acceptance 摘要串成轻量复盘链。 | `app/core/observability.py`、`app/api/v1/chat.py`、`app/evaluation/runtime_metrics.py`、`docs/治理与可观测/agentops-replay-versioning.md` | `.\.venv\Scripts\python -m pytest tests\test_runtime_metrics.py -q` | `first_token_seconds` 只表示任意首个助手片段，可能只是固定 ACK（确认收到）；它不等于 LLM 有意义内容或完整处理完成，必须与总耗时一起解释。当前也不是完整分布式 trace 或 APM。 |
+| 验收门禁怎么做？ | `acceptance_gate` 聚合报告质量、RAG 质量、工具治理、运行预算和内部证据，运行预算还会约束工具失败数、失败率和 fallback 数。 | `app/evaluation/acceptance_gate.py`、`app/evaluation/runtime_metrics.py`、`scripts/run_evaluation_scenarios.py` | `.\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-smoke --dry-run` | 普通场景默认不允许工具失败/fallback，只有两个专门降级场景显式放宽；即便 `passed` 也不等于轨迹最优、重复稳定或完整过程评估。 |
 | CI/CD（持续集成/持续交付） 如何覆盖？ | 默认 CI 跑编译、知识库校验、测试收集、本地回归和前端验证；staging smoke（预生产烟测）手动触发真实链路。 | `.github/workflows/ci.yml`、`.github/workflows/staging-smoke.yml` | `.\.venv\Scripts\python -m pytest tests\test_ci_workflows.py -q` | 默认 CI 不消耗真实外部 API（应用程序接口）额度。 |
 | 前端怎么证明报告可交付？ | 前端优先消费 `report_data`，展示规划模式、预算、待核验、方案依据、地图路线、复制摘要和导出 HTML（超文本标记语言）。 | `frontend/app.js`、`frontend/zhixing.html`、`docs/前端与演示/frontend-report-experience.md`、`docs/前端与演示/report-data-delivery-contract.md` | `node scripts\verify_frontend_report_renderer.js`；`node scripts\verify_frontend_browser_regression.js` | 前端是单页原型；导出件不是支付、预订、锁价或履约凭证。 |
-| 现在能算生产系统吗？ | 不能写成完整生产系统；当前可写成 M1 受控试运行就绪。已有一次正式部署切换、health/ready、PostgreSQL / Redis live probe、备份新鲜度、一次 PostgreSQL 非生产恢复演练、外部依赖降级演练、短窗口并发与限流、上线执行记录、运维复盘记录、私有签核矩阵，以及一轮线上认证 + live chat SSE 业务链路证据。 | `docs/部署与运行/m1-controlled-trial-status.md`、`docs/部署与运行/production-readiness-gap.md`、`docs/部署与运行/m1-release-candidate-freeze.md`、`docs/部署与运行/m1-launch-checklist.md`、`docs/部署与运行/m1-controlled-trial-runbook.md`、`docs/部署与运行/postgres-redis-ops-runbook.md`、`docs/部署与运行/security-release-key-rotation-runbook.md`、`scripts/check_release_candidate_freeze.py`、`scripts/build_release_artifact.py`、`deploy/first-deploy.sh`、`scripts/check_m1_launch_inputs.py`、`scripts/check_server_preflight_readiness.py`、`scripts/check_backup_restore_readiness.py`、`scripts/collect_backup_restore_drill_evidence.py`、`scripts/check_external_api_readiness.py`、`scripts/check_monitoring_alerting_readiness.py`、`scripts/collect_monitoring_alerting_evidence.py`、`scripts/collect_incident_rollback_evidence.py`、`scripts/check_security_release_readiness.py`、`scripts/check_m1_deployment_gate.py`、`scripts/render_m1_acceptance_record.py`、`scripts/collect_m1_smoke_evidence.py`、`scripts/collect_m1_go_no_go_evidence.py` | `uv run python scripts\check_runtime_readiness.py --target production --json`；`uv run python scripts\check_release_candidate_freeze.py --json`；`uv run python scripts\check_m1_first_deploy_dry_run.py --json`；`uv run python scripts\build_release_artifact.py --json`；`sh deploy/first-deploy.sh --archive /tmp/<release-archive> --archive-sha256 <archive-sha256> --deploy-dir <deploy-dir>`；`uv run python scripts\check_m1_launch_inputs.py --json`；`uv run python scripts\check_server_preflight_readiness.py --json`；`uv run python scripts\check_backup_restore_readiness.py --json`；`uv run python scripts\collect_backup_restore_drill_evidence.py --json`；`uv run python scripts\check_external_api_readiness.py --json`；`uv run python scripts\check_monitoring_alerting_readiness.py --json`；`uv run python scripts\collect_monitoring_alerting_evidence.py --json`；`uv run python scripts\collect_incident_rollback_evidence.py --json`；`uv run python scripts\check_security_release_readiness.py --json`；`uv run python scripts\check_m1_deployment_gate.py --json`；`uv run python scripts\render_m1_acceptance_record.py`；`uv run python scripts\collect_m1_smoke_evidence.py --json`；`uv run python scripts\collect_m1_go_no_go_evidence.py --json` | M1 证据不等于 full production ready；不能承诺真实支付、真实预订、库存锁定、出票、履约、长时间压测、多机高可用、自动扩缩容、PITR、异地灾备、供应商 SLA 或真实配额强约束。 |
+| 现在能算生产系统吗？ | 不能。截至 2026-07-03 的仓库外私有采样曾记录一次 M1 受控试运行部署、健康检查、数据库/缓存、恢复演练、短窗口探针和单轮 live chat 证据；这些是历史目标版本快照，不代表当前 commit 或当前工作树仍就绪。 | `docs/部署与运行/m1-controlled-trial-status.md`、`docs/部署与运行/production-readiness-gap.md`、`docs/部署与运行/m1-launch-checklist.md`、`docs/部署与运行/m1-controlled-trial-runbook.md` | `uv run python scripts\check_runtime_readiness.py --target production --json`；在目标版本和目标环境重新执行 release freeze、go/no-go、health/readiness 与 acceptance smoke | 当前公开状态应写成“历史 M1 证据可用，当前版本待复验”；不能承诺真实履约、长时间压测、多机高可用、自动扩缩容、PITR、异地灾备或供应商 SLA。 |
 
 ## 当前边界与改进路线
 
-当前项目已经具备 Agent 应用骨架，并完成 M1 受控试运行就绪证据。公开工程口径仍限定为旅行规划和顾问交付闭环：M1 可展示站内模拟订单确认跳转和一轮线上认证 + live chat SSE 链路，但不承诺真实库存、真实锁价、真实支付、真实出票或供应链履约。
+当前项目已经具备 Agent 应用骨架；仓库外留有截至 2026-07-03 的 M1 受控试运行历史证据。仓库也已具备资源申请、首部署 dry-run、发布包 manifest、服务器首部署、smoke/备份恢复/监控告警/事故回滚证据收集和 go/no-go 聚合入口；真实剩余缺口不是“缺这些脚本”，而是当前工作树尚未冻结成干净 commit，且这些入口尚未针对最终候选在目标环境完成同一时间窗的真实执行、复核与签核。公开工程口径必须写成“历史证据可追溯、当前版本待复验”，不能把旧部署和单轮 live chat 采样继承为当前版本结论。站内模拟确认也不代表真实库存、真实锁价、真实支付、真实出票或供应链履约。
 
 资源收集入口见 `docs/部署与运行/m1-resource-request-pack.md`、`scripts/render_m1_resource_request.py --markdown`、`scripts/check_m1_launch_inputs.py --template`、`scripts/check_m1_launch_inputs.py --input-json <private-workdir>/m1-launch-inputs.local.json --json`、`scripts/render_server_env_checklist.py --template` 和 `scripts/check_server_env_file.py --env-file <deploy-dir>/shared/.env --json`。它用于告诉部署/运维负责人需要准备哪些服务器、env、数据、验收、备份、监控和回滚资源，并在目标服务器或受控 shell 中校验服务器 `.env` 是否缺变量、空值、仍像占位符或重复声明；全程只收变量名、状态和脱敏摘要，不收真实密钥值。
 
@@ -37,6 +37,8 @@
 发布候选冻结见 `scripts/check_release_candidate_freeze.py`、`scripts/render_release_candidate_freeze_record.py`、`scripts/check_release_candidate_freeze_signoff.py --check-current-worktree` 和 `docs/部署与运行/m1-release-candidate-freeze.md`。它只读取 Git 工作区状态，把未提交路径按 workstream 归类，生成 include/defer/remove 决策记录，并校验进入候选的方向是否有验证结果、验证证据摘要、风险结论、负责人签核且记录仍匹配当前工作区路径快照；当前工作区未冻结时会阻塞 M1 聚合门禁和正式打包。
 
 下一阶段改进路线见 `docs/项目总览/agent-ai-app-improvement-roadmap.md`。该路线图把架构与状态、RAG（检索增强生成）评测、MCP（模型上下文协议）工具安全、结构化报告、前端交付和可观测验收拆成可并行推进的方向，并要求每个方向提交改动范围、测试结果、剩余风险和公开口径影响。
+
+截至 2026-07-12，当前 RAG 离线召回集为 27 个场景、26 份文档，公开目的地样例覆盖西安、杭州、厦门、桂林、南京和北京，mixed-corpus safety（公开+内部混合库安全）门禁覆盖 11 个公开场景。这些数字只是当前本地 BM25/metadata 确定性评测口径，不代表真实向量库、在线 Agent 或生产环境已验收。2026-07-11 的 26 场景、25 文档、5 个公开目的地和 10 个安全场景为南京样例校准后的历史快照；下段的 25 场景、24 文档和 9 个安全场景保留为 2026-06-23 前两轮实施快照，均不是当前规模。
 
 第一轮和第二轮已补强两个 P0 方向：RAG 离线召回评测更新到 25 个场景、24 份文档，公开目的地覆盖西安、杭州、厦门、桂林，并单独标出 9 个 mixed-corpus safety（公开+内部混合库安全）场景；工具治理补充 URL query 密钥脱敏、MCP 错误脱敏和外部 MCP 服务目录。第三轮补充 `TravelState` 状态契约和阶段 Prompt 规则清单，明确双工作流进度轴、阶段字段、工具白名单和报告红线。第四轮补充 `report_data` 交付契约和前端导出回归，证明结构化报告可以渲染、复制摘要和导出 HTML。第五轮补充 RAG readiness 发布矩阵和 AgentOps 轻量回放/版本记录，明确离线评测、真实向量库、preflight、live smoke/core、turn 级观测和工具审计各自能证明什么。第六轮补充生产化差距清单、M1 上线总清单、生产部署输入清单、M1 受控试运行 runbook、外部 API 故障 runbook、备份恢复 runbook、监控告警 runbook、安全发布/密钥轮换 runbook 和验收记录模板；第七轮把 M1 非密钥输入升级为 `check_m1_launch_inputs.py` 机器门禁；第八轮新增 `check_m1_deployment_gate.py` 聚合门禁；第九轮新增 `render_m1_acceptance_record.py`，把门禁结果整理成脱敏 M1 验收记录；第十轮新增 `check_backup_restore_readiness.py`，把备份目标和恢复策略纳入机器门禁；第十一轮新增 `check_monitoring_alerting_readiness.py`，把监控告警和成本预算纳入机器门禁；第十二轮新增 `check_security_release_readiness.py`，把安全发布和密钥轮换状态纳入机器门禁；第十三轮新增 `check_external_api_readiness.py`，把外部 API 可靠性状态纳入机器门禁；第十四轮新增 `check_server_preflight_readiness.py`，把目标服务器部署基础条件纳入机器门禁；第十五轮新增 `collect_m1_smoke_evidence.py`，把部署后 health、M1 gate 和 acceptance smoke 收束成脱敏证据；第十六轮新增 `collect_backup_restore_drill_evidence.py`，把最新 PostgreSQL dump、catalog 可读性和恢复演练声明收束成脱敏证据；第十七轮新增 `collect_monitoring_alerting_evidence.py`，把告警投递和关键指标监控声明收束成脱敏证据；第十八轮新增 `collect_incident_rollback_evidence.py`，把事故响应和发布回滚演练收束成脱敏证据；第十九轮新增 `collect_m1_go_no_go_evidence.py`，把 M1 gate、smoke、备份恢复、监控告警、事故回滚证据汇总为最终 `decision`，并把请求 section 的 `not_checked` 视为 `no_go`。当前仍不是完整生产系统，受控试运行前必须补齐服务器、密钥、数据、安全、观测、发布和履约缺口；这些都是工程证据，不代表真实供应链、真实向量库、真实告警投递、真实密钥有效、真实供应商调用成功、目标版本已部署、最终 go/no-go 已放行或在线 Agent 验收已经通过。
 
@@ -64,7 +66,7 @@
 
 回答模板：
 
-> 知行是一个旅行社智能顾问 Agent。后端用 FastAPI（快速应用接口框架）提供 API，主对话由 LangGraph（图式智能体编排框架）和 LangChain（大模型应用编排框架）编排，状态机分八个旅行规划阶段。它通过 RAG 补充公开和内部知识，通过 MCP 接入天气、搜索、地图、铁路、航班、酒店等外部能力，最终生成结构化 `report_data`，前端按这个契约渲染和导出报告。
+> 知行是一个旅行社智能顾问 Agent。后端用 FastAPI（快速应用接口框架）提供 API；主对话由 LangChain `create_agent` 构建并运行在 LangGraph runtime（运行时）上，通过 `TravelState`、中间件和迁移工具推进八个逻辑规划阶段。它用 RAG 补充公开和内部知识，用 MCP 接入天气、搜索、地图、铁路、航班、酒店等外部能力，最终生成结构化 `report_data`，前端按这个契约渲染和导出报告。
 
 代码定位：
 
@@ -95,7 +97,7 @@
 
 回答模板：
 
-> 工具失败不能编造真实结果。酒店和交通查询失败时，系统会给出诚实兜底，并在报告中保留待核验项。MCP 客户端按服务降级，避免单个外部服务拖垮核心对话。验收门禁也会检查失败兜底和工具审计，而不是只看回复是否流畅。
+> 工具失败不能编造真实结果。酒店和交通查询失败时，系统会给出诚实兜底，并在报告中保留待核验项。MCP 客户端按服务降级，避免单个外部服务拖垮核心对话。但失败很多仍然说明工具链不可靠；当前普通场景默认要求工具失败数、失败率和 fallback 数都为 0，只有两个专门 fallback 场景允许有界失败。生产前还要补连续成功率、多次运行分布和 Badcase 归因。
 
 可指代码：
 
@@ -108,7 +110,7 @@
 
 回答模板：
 
-> 当前项目不接真实供应链，但已经有轻量治理边界：审批策略、审批请求和事件、工具审计、运行时观测、readiness 检查、CI 门禁和手动 staging smoke。也就是说，未来接真实支付、短信、真实预订前，已有敏感动作和审计模型可以承接，不会让 Agent 直接执行高风险动作。
+> 当前项目不接真实供应链，但已经有轻量治理边界：审批策略、审批请求和事件、工具审计、运行时观测、readiness 检查、CI 门禁和手动 staging smoke。它目前是治理骨架，不是完整 HITL 执行闭环；未来接真实支付、短信或预订前，还要把审批记录与 LangGraph `interrupt/resume`、幂等和补偿流程真正接通。
 
 可指代码：
 
@@ -146,8 +148,8 @@
 | 现在能真实下单吗？ | 不能。当前只生成项目内模拟订单号，并提供站内模拟确认跳转，用于证明报告到确认页的链路；它不代表支付、锁价、库存或履约，真实支付和预订必须先补 HITL、幂等、供应链和审计闭环。 |
 | 真实价格准确吗？ | 工具返回的价格可以标记为可追溯；缺失时只能做规则估算或兜底估算，并进入待核验项。 |
 | 为什么不直接让模型一次性写报告？ | 一次性写报告不可控，难以追踪证据和阶段状态；现在的状态机可以把需求、工具结果、预算和风险沉淀为结构化状态。 |
-| 为什么不用更多 Agent？ | Agent 数量不是目标。当前只在目的地路由和交通模式分发处拆分，因为这些地方有明确任务边界。 |
-| 评估是不是太规则化？ | 确定性门禁负责底线，例如结构、证据、工具和运行预算；可选 LLM-as-Judge（大模型评审）只做补充，不覆盖确定性结论。 |
+| 为什么不用更多 Agent？ | Agent 数量不是目标。当前主流程是单个 Travel Agent；目的地 Router 和交通 Coordinator 只在有明确任务边界时按需调用。航班、高铁、自驾差异留在确定性查询 wrapper（包装器）中，避免为了“多 Agent”标签增加额外模型调用。 |
+| 评估是不是太规则化？ | 是当前边界之一。确定性门禁负责结构、证据、诚实降级和运行预算；可选 LLM-as-Judge（大模型评审）只做补充。它还不能证明工具轨迹最优、同一场景多次运行稳定、失败可精确归因或线上用户体验提升。 |
 | 前端是否生产可用？ | 目前是单页原型，用来证明结构化报告体验；完整生产前端还需要工程化构建、权限后台和更完整的可访问性验证。 |
 
 ## 最后收束

@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
 from app.config import has_configured_value, has_real_env_value
-from app.utils.security import redact_sensitive_text
+from app.utils.security import REDACTED_VALUE, redact_sensitive_text
 from app.utils.logger import app_logger
 
 load_dotenv()
@@ -66,9 +66,10 @@ class MCPClientManager:
             "core_requirement": "optional",
             "acceptance_requirement": "required_when_declared",
             "backing_api": None,
-            "env_vars": (),
+            "env_vars": ("ZHIXING_12306_MCP_URL",),
             "env_var_policy": "all",
             "startup_probe": "default",
+            "skip_when_unconfigured": True,
         },
         "VariFlight-Aviation": {
             "label": "VariFlight aviation MCP",
@@ -99,7 +100,7 @@ class MCPClientManager:
         "weather": 8.0,
         "search": 8.0,
         "amap": 8.0,
-        "12306-mcp": 8.0,
+        "12306-mcp": 25.0,
         "VariFlight-Aviation": 8.0,
         "aigohotel-mcp": 25.0,
     }
@@ -243,10 +244,6 @@ class MCPClientManager:
                 "url": f"https://mcp.amap.com/mcp?key={os.getenv('AMAP_API_KEY', '')}",
                 "transport": "http",
             },
-            "12306-mcp": {
-                "url": "https://mcp.api-inference.modelscope.net/215d3cfb299e47/mcp",
-                "transport": "streamable_http",
-            },
             "VariFlight-Aviation": {
                 "url": (
                     "https://ai.variflight.com/servers/aviation/mcp/"
@@ -255,6 +252,17 @@ class MCPClientManager:
                 "transport": "streamable_http",
             },
         }
+
+        rail_mcp_url = os.getenv("ZHIXING_12306_MCP_URL", "").strip()
+        if rail_mcp_url:
+            server_configs["12306-mcp"] = {
+                "url": rail_mcp_url,
+                "transport": (
+                    "sse"
+                    if urlparse(rail_mcp_url).path.rstrip("/").endswith("/sse")
+                    else "streamable_http"
+                ),
+            }
 
         hotel_api_key = cls._resolve_hotel_api_key()
         if hotel_api_key:
@@ -540,12 +548,16 @@ class MCPClientManager:
             )
             raise
 
-    @staticmethod
-    def _format_error(exc: Exception | None) -> str:
+    @classmethod
+    def _format_error(cls, exc: Exception | None) -> str:
         if exc is None:
             return "unknown error"
         message = str(exc).strip()
-        return redact_sensitive_text(message or exc.__class__.__name__)
+        redacted = redact_sensitive_text(message or exc.__class__.__name__)
+        rail_mcp_url = os.getenv("ZHIXING_12306_MCP_URL", "").strip()
+        if rail_mcp_url:
+            redacted = redacted.replace(rail_mcp_url, REDACTED_VALUE)
+        return redacted
 
     async def _load_server_tools(self, server: str, *, force_refresh: bool = False) -> list[Any]:
         return await self._load_server_tools_with_overrides(

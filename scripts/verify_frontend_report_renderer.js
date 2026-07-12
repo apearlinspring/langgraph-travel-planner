@@ -180,7 +180,27 @@ function countOccurrences(text, fragment) {
   return String(text || "").split(fragment).length - 1;
 }
 
+const customerInternalReportLabels = [
+  "预算置信度",
+  "交付清单",
+  "顾问核验与下一步",
+  "治理边界",
+  "人工确认边界",
+  "current_step",
+  "agency_step",
+  "tool_audit_summary",
+  "query_transport_options",
+];
+const exportContractFragments = [
+  "结构化 report_data 报告",
+  "待核验项",
+  "导出不代表真实支付、预订、出票、锁价",
+  "交付边界：本摘要不代表真实支付、预订、出票、锁价或履约成功。",
+];
+
 const context = createRenderContext();
+
+assertIncludes(frontendScriptBundle, exportContractFragments, "report-export-contract-copy");
 
 const fixtures = [
   ["agency_plan", addRouteSegmentContract(loadReportFixture("agency_plan_desensitized.json"))],
@@ -211,6 +231,8 @@ for (const [mode, reportData] of fixtures) {
       "导出报告",
       "候选：打车 / 公交/地铁",
       "已锁定",
+      "待核验",
+      mode === "agency_plan" ? "当前报告不代表真实支付" : "不承诺真实锁价",
     ],
     mode
   );
@@ -221,13 +243,86 @@ for (const [mode, reportData] of fixtures) {
   );
   assertExcludes(
     html,
-    ["预算置信度", "交付清单", "顾问核验与下一步", "治理边界", "人工确认边界", "不承诺真实库存"],
+    [...customerInternalReportLabels, "不承诺真实库存"],
     `${mode}-customer-view`
   );
   if (html.includes("人均参考") || html.includes("预算粗估（每人）")) {
     throw new Error(`${mode} should not default to per-person budget copy.`);
   }
 }
+
+const mockCheckoutReportData = JSON.parse(JSON.stringify(fixtures[0][1]));
+mockCheckoutReportData.evidence_bundle = {
+  ...(mockCheckoutReportData.evidence_bundle || {}),
+  m1_mock_checkout: {
+    enabled: true,
+    mode: "m1_demo_only",
+    order_id: "ORDER-DEMO12345678",
+    checkout_url: "/api/v1/mock-checkout/ORDER-DEMO12345678",
+    status_url: "/api/v1/mock-checkout/ORDER-DEMO12345678/status",
+    real_payment: false,
+    real_booking: false,
+    inventory_locked: false,
+    fulfillment_triggered: false,
+    boundary: "M1 mock checkout only proves internal redirect behavior; it is not a payment link.",
+  },
+};
+const mockCheckoutCustomerHtml = context.renderAssistantText("", {
+  reportData: mockCheckoutReportData,
+});
+assertExcludes(
+  mockCheckoutCustomerHtml,
+  ["M1 模拟确认页", "打开模拟确认页", "ORDER-DEMO12345678"],
+  "mock-checkout-customer-hidden"
+);
+const mockCheckoutAdvisorHtml = context.renderAssistantText("", {
+  reportData: mockCheckoutReportData,
+  view: "advisor",
+});
+assertIncludes(
+  mockCheckoutAdvisorHtml,
+  [
+    "M1 模拟确认页（非支付链接）",
+    "打开模拟确认页",
+    "/api/v1/mock-checkout/ORDER-DEMO12345678",
+    "真实支付：否",
+    "真实预订：否",
+    "库存锁定：否",
+    "履约触发：否",
+  ],
+  "mock-checkout-advisor-visible"
+);
+
+const transportAuditReportData = JSON.parse(JSON.stringify(fixtures[0][1]));
+transportAuditReportData.tool_audit_summary = {
+  ...(transportAuditReportData.tool_audit_summary || {}),
+  pending_checks: [
+    "高铁/火车：真实查询超时（upstream_timeout），出发前需要重新查询并二次核验。",
+  ],
+  events: [
+    {
+      name: "query_train_options",
+      status: "timeout",
+      elapsed_seconds: 45,
+      error_type: "upstream_timeout",
+      retry_count: 0,
+      evidence_type: "live_transport_query",
+    },
+  ],
+};
+const transportAuditHtml = context.renderAssistantText("", {
+  reportData: transportAuditReportData,
+});
+assertIncludes(
+  transportAuditHtml,
+  ["风险提醒", "高铁/火车：真实查询超时", "出发前需要重新查询并二次核验"],
+  "transport-audit-customer-visible"
+);
+assertExcludes(
+  transportAuditHtml,
+  ["交付清单", "顾问核验与下一步", "治理边界"],
+  "transport-audit-no-advisor-leak"
+);
 
 const feedbackMarkdown = `
 行程摘要：北京 → 南京，4天3晚，当前方案先按轻松城市慢游整理。

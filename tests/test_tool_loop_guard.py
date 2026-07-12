@@ -27,6 +27,10 @@ def _build_runtime(state):
     )
 
 
+def _transition_outcome(command):
+    return command.update["messages"][0].artifact
+
+
 def test_parallel_tool_loop_guard_updates_are_merged():
     state = create_initial_state(user_id="user-1", session_id="session-1")
     state["turn_id"] = "turn-parallel-loop"
@@ -217,6 +221,8 @@ def test_state_transition_duplicate_accommodation_does_not_rewind_step():
     assert "不会重复写入同一住宿选择" in command.update["messages"][0].content
     assert "current_step" not in command.update
     assert "selected_accommodation_types" not in command.update
+    assert _transition_outcome(command)["status"] == "already_applied"
+    assert _transition_outcome(command)["tool"] == "select_accommodation_tool"
 
 
 def test_select_accommodation_infers_type_from_existing_candidate():
@@ -324,6 +330,8 @@ def test_select_accommodation_requires_hotel_audit_for_unlocked_price_request():
     assert "query_hotel_options" in command.update["messages"][0].content
     assert "current_step" not in command.update
     assert "selected_accommodation_types" not in command.update
+    assert _transition_outcome(command)["status"] == "not_applied"
+    assert _transition_outcome(command)["reason"] == "audit_required"
 
 
 def test_select_accommodation_allows_selection_after_hotel_audit_result():
@@ -353,6 +361,8 @@ def test_select_accommodation_allows_selection_after_hotel_audit_result():
 
     assert command.update["current_step"] == "food_planning"
     assert command.update["selected_accommodation_types"] == ["star_hotel"]
+    assert _transition_outcome(command)["status"] == "applied"
+    assert _transition_outcome(command)["next_step"] == "food_planning"
 
 
 def test_select_transport_requires_transport_audit_for_fallback_request():
@@ -378,6 +388,8 @@ def test_select_transport_requires_transport_audit_for_fallback_request():
     assert command.update["current_step"] == "transport_planning"
     assert "query_transport_options" in command.update["messages"][0].content
     assert "selected_transport" not in command.update
+    assert _transition_outcome(command)["status"] == "not_applied"
+    assert _transition_outcome(command)["reason"] == "audit_required"
 
 
 def test_select_transport_allows_selection_after_transport_audit_result():
@@ -407,6 +419,54 @@ def test_select_transport_allows_selection_after_transport_audit_result():
 
     assert command.update["current_step"] == "accommodation_planning"
     assert command.update["selected_transport"] == "train"
+    assert _transition_outcome(command)["status"] == "applied"
+    assert _transition_outcome(command)["next_step"] == "accommodation_planning"
+
+
+@pytest.mark.parametrize(
+    ("tool", "arguments", "message", "expected_step", "expected_field"),
+    [
+        (
+            select_transport_tool,
+            {"transport_type": "高铁"},
+            "只记录高铁偏好，本轮不要调用实时班次查询工具，具体班次和价格均待核验。",
+            "accommodation_planning",
+            "selected_transport",
+        ),
+        (
+            select_accommodation_tool,
+            {"accommodation_types": ["舒适型酒店"]},
+            "只记录住宿偏好；本轮不要调用实时酒店库存查询工具；"
+            "不要记录任何具体酒店、房态或价格。",
+            "food_planning",
+            "selected_accommodation_types",
+        ),
+    ],
+)
+def test_explicit_static_selection_skips_live_audit_without_dynamic_claims(
+    tool,
+    arguments,
+    message,
+    expected_step,
+    expected_field,
+):
+    state = create_initial_state(user_id="user-1", session_id="session-1")
+    state.update(
+        {
+            "current_step": (
+                "transport_planning"
+                if tool is select_transport_tool
+                else "accommodation_planning"
+            ),
+            "messages": [HumanMessage(content=message)],
+        }
+    )
+
+    command = tool.invoke({**arguments, "runtime": _build_runtime(state)})
+
+    assert command.update["current_step"] == expected_step
+    assert expected_field in command.update
+    assert _transition_outcome(command)["status"] == "applied"
 
 
 def test_select_food_tool_keeps_flow_at_accommodation_when_accommodation_missing():

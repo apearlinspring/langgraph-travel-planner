@@ -21,42 +21,22 @@ for stream in (sys.stdout, sys.stderr):
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from scripts._evidence_record_helpers import (  # noqa: E402
+    as_mapping as _as_mapping,
+    make_path_arg,
+    read_optional_json_object as _read_json,
+)
+
+
 RESTORE_DRILL_FEASIBILITY_VERSION = "restore_drill_feasibility.v1"
 SUPPORTED_PG_RESTORE_EXTENSIONS = {".dump", ".backup", ".tar"}
 SQL_RESTORE_EXTENSIONS = {".sql", ".sql.gz"}
 
 
-def _path_arg(value: str) -> Path:
-    path = Path(value)
-    return path if path.is_absolute() else PROJECT_ROOT / path
-
-
-def _read_json(path: Path | None, *, label: str) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
-    if path is None:
-        return None, {
-            "key": f"missing_{label}",
-            "finding": f"{label} JSON path is required.",
-            "path_echoed": False,
-        }
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8-sig"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        return None, {
-            "key": f"unreadable_{label}",
-            "finding": f"{label} JSON could not be read.",
-            "path_echoed": False,
-        }
-    if not isinstance(payload, dict):
-        return None, {
-            "key": f"invalid_{label}",
-            "finding": f"{label} JSON must be an object.",
-            "path_echoed": False,
-        }
-    return payload, None
-
-
-def _as_mapping(value: Any) -> Mapping[str, Any]:
-    return value if isinstance(value, Mapping) else {}
+_path_arg = make_path_arg(PROJECT_ROOT)
 
 
 def _as_number(value: Any, default: float = 0.0) -> float:
