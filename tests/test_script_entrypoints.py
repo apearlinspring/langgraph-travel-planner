@@ -881,7 +881,8 @@ def test_readiness_docs_cover_ci_staging_and_production_layers():
     assert "component_readiness" in deployment
     assert "repair_suggestions" in deployment
     assert "alembic upgrade head" in deployment
-    assert "默认不连接真实 PostgreSQL" in db_migration
+    assert "PostgreSQL Transaction Integration" in db_migration
+    assert "一次性 PostgreSQL 17 service" in db_migration
     assert "AsyncPostgresSaver.setup()" in db_migration
     assert "tool_audit_event" in db_migration
     assert "staging-smoke.yml" in evaluation

@@ -12,8 +12,10 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from app.agency.transaction_policy import build_transaction_execution_snapshot
 from app.api.v1 import (
     admin,
+    agency_transactions,
     approvals,
     chat,
     conversations,
@@ -248,6 +250,7 @@ def build_readiness_payload(startup_complete: bool) -> tuple[dict, int]:
     mcp_status = MCPClientManager.get_status_snapshot()
     session_lock_status = session_lock_manager.get_status_snapshot()
     approval_governance_status = ApprovalGovernanceManager.get_status_snapshot()
+    transaction_execution_status = build_transaction_execution_snapshot(settings)
     runtime_payload = build_runtime_dependency_payload(
         checkpointer_status=checkpointer_status,
         store_status=store_status,
@@ -306,6 +309,7 @@ def build_readiness_payload(startup_complete: bool) -> tuple[dict, int]:
             "mcp": mcp_status,
             "session_lock": session_lock_status,
             "approval_governance": approval_governance_status,
+            "transaction_execution": transaction_execution_status,
         },
     }
     return payload, status_code
@@ -570,7 +574,13 @@ app.add_middleware(
     allow_origins=settings.cors_allowed_origins,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "Accept", "Cache-Control"],
+    allow_headers=[
+        "Authorization",
+        "Content-Type",
+        "Accept",
+        "Cache-Control",
+        "Idempotency-Key",
+    ],
     allow_origin_regex=settings.allow_origin_regex,
 )
 
@@ -595,6 +605,7 @@ async def append_security_headers(request: Request, call_next):
 
 app.include_router(users.router, prefix="/api/v1")
 app.include_router(conversations.router, prefix="/api/v1")
+app.include_router(agency_transactions.router, prefix="/api/v1")
 app.include_router(guide_import.router, prefix="/api/v1")
 app.include_router(maps.router, prefix="/api/v1")
 app.include_router(mock_checkout.router, prefix="/api/v1")

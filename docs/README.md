@@ -5,7 +5,13 @@ This directory contains several kinds of public project documentation: current c
 ## Current Wording Rules（当前口径规则）
 
 - 当前代码、当前测试和重新生成的机器报告优先于历史截图、旧讲解稿和带日期的验收记录。
+- 产品目标业务形态是“旅行社经营与交付工作台”。当前代码完成的是规划交付链路和第一阶段租户、成员、客户关系及交易数据/控制面骨架，不得把目标定位扩写成当前已经具备完整 CRM、真实供应链或资金交易能力。
 - 主执行链路是“单个 Travel Agent + `StepConfigMiddleware` + 状态迁移工具”；目的地 Router 和交通 Coordinator 是按需调用的嵌套能力。交通 Coordinator 直接调用航班、高铁、自驾查询工具，不存在再分发给三个交通方式子 Agent 的运行层。
+- `agency_plan` 是旅行社方案规划分支，不是交易状态；`agency_quote`、`agency_order` 等持久化模型也不等于真实预订、支付、退款或履约已经接通。`mock_checkout` 与 `generate_order_tool` 只提供演示编号和确认流程，不是订单系统。
+- `/api/v1/agency` 当前覆盖报价草稿、发布、客户接受、订单草稿、提交审核和旅行社内部批准/拒绝，共 13 个操作、6 个 `POST`。只有同一有效旅行社中 `active` 的 `approver` 可以决定审核，`owner`、`admin` 等角色不能代替，客户或审核发起人不能自审。
+- 内部 `approved` 只表示订单通过旅行社审核，不能扩写成供应商预订、支付、退款、通知或履约已执行；`external_action_enabled` 仍为 `false`。交易域审核也没有绑定平台 `/api/v1/approvals` 或 LangGraph HITL（人类在环）恢复链路。
+- 创建报价要求客户在对应旅行社的 `agency_customer` 关系为 `active`；客户导入、同意和关系激活/停用 API 尚未实现。
+- 真实供应商预订、支付、退款和通知当前尚未接入，并由 `TRANSACTION_MODE=disabled`、总熔断开关和细粒度动作开关默认阻断。任何未来放行都必须同时满足租户权限、四眼审批、`revision`（修订号）、`payload_hash`（业务负载哈希）、幂等、补偿和供应商适配器检查。
 - 审批模块当前提供策略、持久化请求、只追加事件、角色权限和 readiness（就绪状态）语义；尚未实现 LangGraph `interrupt/resume`（中断/恢复）执行闭环。`approval_persistence_ready` 只表示审批与审计可持久化，`hitl_closed_loop` 当前始终为 `false`，不能扩写成“审批后自动恢复原 Agent 动作”。
 - acceptance（验收）门禁主要检查报告、证据、工具治理、可观测摘要和运行预算；普通场景默认还要求工具失败数、失败率和 fallback 数为 0，只有专门降级场景可显式放宽。历史 `passed` 只代表当时单次场景门禁结果；它不等于最优工具轨迹、稳定成功率、当前工作树通过或完整生产就绪。
 - 带日期、commit（提交）或仓库外私有证据的文档都是快照。代码、模型、配置、知识库或部署环境变化后，必须重新验证才能使用“当前通过”“当前就绪”等表述。
@@ -24,7 +30,7 @@ This directory contains several kinds of public project documentation: current c
 | Directory | Purpose | Start Here |
 |---|---|---|
 | `项目总览/` | Capability map, high-level project positioning and engineering improvement roadmap. | `项目总览/project-capability-map.md` |
-| `架构与流程/` | Architecture, workflow state, planning boundaries, model switching and session consistency. | `架构与流程/architecture-overview.md` |
+| `架构与流程/` | Architecture, workflow state, planning boundaries, agency transaction domain, model switching and session consistency. | `架构与流程/architecture-overview.md` |
 | `RAG与知识库/` | RAG（检索增强生成）runtime contract, vector store readiness, retrieval evaluation and demo explanation. | `RAG与知识库/rag-demo-evaluation-guide.md` |
 | `评估与验收/` | Evaluation system, acceptance gates, live runner and pre-deployment validation. | `评估与验收/evaluation-system.md` |
 | `部署与运行/` | Local runtime, database readiness, MCP（模型上下文协议）health and deployment templates. | `部署与运行/deployment-readiness.md` |
@@ -41,6 +47,7 @@ Local workspaces may contain ignored `历史轮次/` and `问题记录/` directo
 - TravelState contract: `架构与流程/state-schema-contract.md`
 - Step prompt rule inventory: `架构与流程/step-prompt-rule-inventory.md`
 - Planning mode boundary: `架构与流程/planning-mode-boundary.md`
+- Agency transaction domain: `架构与流程/agency-transaction-domain.md`
 - Planning guardrails: `架构与流程/planning-guardrails.md`
 - RAG demo and evaluation: `RAG与知识库/rag-demo-evaluation-guide.md`
 - RAG release checklist: `RAG与知识库/rag-release-checklist.md`
@@ -50,6 +57,7 @@ Local workspaces may contain ignored `历史轮次/` and `问题记录/` directo
 - Evaluation system: `评估与验收/evaluation-system.md`
 - AgentOps replay and versioning: `治理与可观测/agentops-replay-versioning.md`
 - Production readiness gap: `部署与运行/production-readiness-gap.md`
+- DB migration readiness: `部署与运行/db-migration-readiness.md`
 - M1 controlled trial status: `部署与运行/m1-controlled-trial-status.md`
 - M1 resource request pack: `部署与运行/m1-resource-request-pack.md`
 - M1 execution input gap checklist: `部署与运行/m1-execution-input-gap-checklist.md`
@@ -85,3 +93,4 @@ Local workspaces may contain ignored `历史轮次/` and `问题记录/` directo
 - Keep current architecture, deployment, testing, frontend and evaluation contracts in Git, and label public templates, dated evidence and historical archives explicitly.
 - Keep restricted deployment coordinates, local evidence snapshots, raw logs, database dumps, generated vector stores and local-only drafts out of Git.
 - Productized RAG route templates are demo catalog data. They do not represent real inventory, guaranteed group availability or locked pricing.
+- Transaction tables, mock checkout and generated references are engineering evidence only. They do not represent a supplier booking, payment, refund, ticket, hotel confirmation, contract or completed fulfillment.

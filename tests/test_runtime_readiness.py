@@ -518,6 +518,17 @@ def test_database_migration_readiness_is_static_and_separates_langgraph():
         "approval_request",
         "approval_event",
         "tool_audit_event",
+        "agency",
+        "agency_membership",
+        "agency_customer",
+        "supplier_product",
+        "agency_quote",
+        "agency_order",
+        "agency_order_event",
+        "agency_order_review",
+        "idempotency_record",
+        "payment_attempt",
+        "fulfillment_record",
     }
     assert "checkpoints" in report["managed_tables"]["langgraph_checkpointer"]
     assert "store_vectors" in report["managed_tables"]["langgraph_store"]

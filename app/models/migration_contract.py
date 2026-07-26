@@ -7,6 +7,17 @@ BUSINESS_MANAGED_TABLES: tuple[str, ...] = (
     "approval_request",
     "approval_event",
     "tool_audit_event",
+    "agency",
+    "agency_membership",
+    "agency_customer",
+    "supplier_product",
+    "agency_quote",
+    "agency_order",
+    "agency_order_event",
+    "agency_order_review",
+    "idempotency_record",
+    "payment_attempt",
+    "fulfillment_record",
 )
 
 LANGGRAPH_CHECKPOINT_TABLES: tuple[str, ...] = (

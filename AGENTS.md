@@ -20,9 +20,9 @@
 
 ## Project Summary
 
-ZhiXing Travel Planner is a state-driven Agent travel planning application. The backend uses FastAPI (快速应用接口框架). The main conversation flow is one Travel Agent created with LangChain (大模型应用编排框架) and run on the LangGraph (图式智能体编排框架) runtime; a destination Router and nested transport Coordinator are invoked for bounded tasks. RAG (检索增强生成) provides local knowledge, MCP (模型上下文协议) connects optional external services, PostgreSQL (关系型数据库) stores durable business facts, checkpoints and long-term memory, and Redis (缓存数据库) handles locks, caches, rate-limit counters and short-lived runtime state.
+ZhiXing Travel Planner targets a travel-agency operations and delivery workbench, not a generic itinerary chatbot. The backend uses FastAPI (快速应用接口框架). The main conversation flow is one Travel Agent created with LangChain (大模型应用编排框架) and run on the LangGraph (图式智能体编排框架) runtime; a destination Router and nested transport Coordinator are invoked for bounded tasks. RAG (检索增强生成) provides local knowledge, MCP (模型上下文协议) connects optional external services, PostgreSQL (关系型数据库) stores durable business facts, checkpoints, long-term memory and the first-stage agency transaction schema, and Redis (缓存数据库) handles locks, caches, rate-limit counters and short-lived runtime state.
 
-The product shape is a travel consultant that can collect requirements over multiple turns, split users into personalized free planning or agency-style packaged planning, query real candidates when configured, and generate structured travel reports.
+The intended product assists travel advisors with requirement collection, product matching, proposal and quote preparation, order drafting and delivery. The current implementation is still a planning/delivery flow plus transaction control-plane skeleton: tenant, membership, agency-customer relationship, supplier-product, quote, order, bound internal order review, event, idempotency, payment-attempt and fulfillment-record models exist. The authenticated API can issue and accept quotes, create and submit an order, then let only an active tenant `approver` approve or reject it with four-eyes checks. Internal `approved` never means booked or paid: live supplier booking, payment, refund and notification are not integrated and remain fail-closed by default. Quote creation requires an active agency-customer relationship, but customer import, consent and relationship activation APIs are not implemented. Never describe mock checkout or a generated `ORDER-` reference as a real transaction.
 
 ## Key Directories
 
@@ -31,7 +31,10 @@ The product shape is a travel consultant that can collect requirements over mult
 - `app/main.py`: FastAPI app, lifespan, routes and health checks.
 - `app/api/`: HTTP API layer, including users, conversations, chat and map preview.
 - `app/agents/handoffs/`: main travel agent and step configuration.
+- `app/agency/`: deterministic quote/order service and fail-closed transaction execution policy.
+- `app/api/v1/agency_transactions.py`: authenticated quote, order and internal order-review API; it stops before any external supplier or financial execution.
 - `app/core/`: state, workflow metadata, middleware, checkpoints, memory and intent policy.
+- `app/models/agency_transaction.py`: first-stage agency tenant, membership, customer relationship, quote, order, event and execution-ledger schema.
 - `app/tools/`: agent tools for state transitions, transport, hotel, RAG, MCP and memory.
 - `app/reports/`: final report contract, validation and Markdown rendering.
 - `app/rag/`: document loading, splitting, retrieval, reranking, cache and pipeline code.
@@ -53,6 +56,8 @@ The app is not a plain Q&A bot. It first selects a planning mode, then advances 
 The free planning stages are defined in `app/core/workflow.py`. Stage prompts, tools and dependencies live in `app/agents/handoffs/step_config.py`.
 
 When changing stages or report contracts, check the related state, middleware, transition tools, frontend progress display and tests together.
+
+Planning workflow state and transaction state are separate contracts. `agency_plan` produces a proposal and delivery report; it does not mean that a quote was issued, an order was internally approved, inventory was locked or money was collected. Transaction-domain changes must be checked across SQLAlchemy models, Alembic migrations, migration ownership, authorization, idempotency, revision/payload-hash validation, append-only events, external-action gates, formal docs and tests. Internal order approval is separate from platform Approval/HITL and never authorizes an external action. Real supplier/payment/refund/notification execution must remain disabled until its adapter, platform approval binding, compensation, reconciliation and target-environment evidence are complete.
 
 ## Validation
 

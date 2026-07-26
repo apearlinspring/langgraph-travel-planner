@@ -33,6 +33,7 @@ def _settings_env_file() -> str | None:
     return os.path.join(BASE_DIR, ".env")
 
 RuntimeEnvironment = Literal["development", "test", "staging", "production"]
+TransactionMode = Literal["disabled", "sandbox", "live"]
 DependencyRequirement = Literal["required", "optional"]
 ValuePolicy = Literal["configured", "real"]
 EnvVarPolicy = Literal["all", "any"]
@@ -737,6 +738,31 @@ class Settings(BaseSettings):
         alias="CHAT_TURN_QUOTA_ADMIN_EXEMPT",
     )
 
+    # ============== 旅行社交易执行配置 ==============
+    # 报价和订单草稿可在 disabled 模式下持久化；任何真实外部副作用都必须
+    # 同时通过 transaction mode、细粒度开关、审批和适配器门禁。
+    transaction_mode: str = Field(default="disabled", alias="TRANSACTION_MODE")
+    live_supplier_booking_enabled: bool = Field(
+        default=False,
+        alias="LIVE_SUPPLIER_BOOKING_ENABLED",
+    )
+    live_payment_enabled: bool = Field(
+        default=False,
+        alias="LIVE_PAYMENT_ENABLED",
+    )
+    live_refund_enabled: bool = Field(
+        default=False,
+        alias="LIVE_REFUND_ENABLED",
+    )
+    live_notification_enabled: bool = Field(
+        default=False,
+        alias="LIVE_NOTIFICATION_ENABLED",
+    )
+    real_payment_order_disabled: bool = Field(
+        default=True,
+        alias="ZHIXING_REAL_PAYMENT_ORDER_DISABLED",
+    )
+
     # ============== LangGraph 运行配置 ==============
     langgraph_recursion_limit: int = Field(default=60, alias="LANGGRAPH_RECURSION_LIMIT")
 
@@ -847,6 +873,15 @@ class Settings(BaseSettings):
             return raw
         return "lax"
 
+    @property
+    def transaction_mode_resolved(self) -> TransactionMode:
+        """Normalize the fail-closed transaction execution tier."""
+
+        normalized = str(self.transaction_mode or "disabled").strip().lower()
+        if normalized in {"disabled", "sandbox", "live"}:
+            return normalized
+        return "disabled"
+
     def validate_security_baseline(self) -> None:
         """Fail fast when a production-like environment keeps unsafe auth defaults."""
 
@@ -858,6 +893,9 @@ class Settings(BaseSettings):
             findings.append("JWT_SECRET_KEY must be a real non-placeholder secret")
         if self.auth_cookie_samesite_resolved == "none" and not self.auth_cookie_secure_resolved:
             findings.append("AUTH_COOKIE_SAMESITE=none requires AUTH_COOKIE_SECURE=true")
+        normalized_transaction_mode = str(self.transaction_mode or "").strip().lower()
+        if normalized_transaction_mode not in {"disabled", "sandbox", "live"}:
+            findings.append("TRANSACTION_MODE must be disabled, sandbox, or live")
 
         invalid_origins = [
             origin

@@ -123,3 +123,32 @@ def test_ci_workflow_keeps_default_gate_separate_from_staging_smoke():
     assert "run_live_acceptance" not in text
     assert "acceptance_base_url" not in text
     assert "${{ secrets.DASHSCOPE_API_KEY }}" not in text
+
+
+def test_ci_runs_transaction_integration_against_disposable_postgres():
+    workflow = _load_workflow(CI_WORKFLOW)
+    job = workflow["jobs"]["postgres-integration"]
+    postgres = job["services"]["postgres"]
+    step_commands = "\n".join(str(step.get("run", "")) for step in job["steps"])
+
+    assert job["runs-on"] == "ubuntu-latest"
+    assert postgres["image"] == "postgres:17-alpine"
+    assert postgres["env"] == {
+        "POSTGRES_DB": "zhixing_ci",
+        "POSTGRES_USER": "zhixing_ci",
+        "POSTGRES_PASSWORD": "ci-only-password",
+    }
+    assert "5432:5432" in [str(port) for port in postgres["ports"]]
+    assert "pg_isready -U zhixing_ci -d zhixing_ci" in postgres["options"]
+
+    assert job["env"]["ZHIXING_DISABLE_DOTENV"] == "1"
+    assert job["env"]["ZHIXING_TEST_POSTGRES_DSN"] == (
+        "postgresql://zhixing_ci:ci-only-password@127.0.0.1:5432/zhixing_ci"
+    )
+    assert 'test -n "$ZHIXING_TEST_POSTGRES_DSN"' in step_commands
+    assert (
+        "python -m pytest --run-integration -q "
+        "tests/test_agency_transaction_postgres_integration.py"
+    ) in step_commands
+    assert "scripts.init_db" not in step_commands
+    assert "${{ secrets." not in str(job)

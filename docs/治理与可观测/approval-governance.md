@@ -1,13 +1,14 @@
-# 审批治理轻量版（HITL 前置骨架）
+# 审批治理轻量版（旅行社交易执行前置骨架）
 
 ## 目标
 
-本模块只建立敏感动作治理契约，不接真实供应链、不做真实支付、不生成真实客服或支付链接，也没有接入 LangGraph `interrupt/resume`（中断/恢复）。
+本模块只建立敏感动作治理契约。项目的目标业务是旅行社经营与交付工作台，但当前不接真实供应链、不做真实支付或退款、不发送真实通知、不生成真实客服或支付链接，也没有接入 LangGraph `interrupt/resume`（中断/恢复）。
 
 当前实现提供：
 
 - 敏感动作权限策略。
-- 轻量角色边界：普通用户、审批操作者、管理员。
+- 轻量平台审批角色边界：普通用户、审批操作者、管理员。
+- 独立的旅行社内部订单审核：同租户专职 `approver` 可批准或拒绝 `pending_review` 订单，且不能自审；这不是平台 Approval/HITL。
 - PostgreSQL（关系型数据库）持久化审批请求、审批事件和工具审计事件。
 - 审批事件采用 append-only（只追加）方式记录状态流转。
 - TravelState（旅行规划状态）审批字段。
@@ -21,7 +22,7 @@
 
 | 动作 | 当前策略 | 说明 |
 |---|---|---|
-| `generate_order_id` | 记录型，不阻塞 | 生成项目内模拟订单号；不代表真实支付、真实预订、锁价、占库存或履约。 |
+| `generate_order_id` | 记录型，不阻塞 | 生成规划演示用模拟编号；不是 `agency_order`，不代表真实支付、真实预订、锁价、占库存或履约。 |
 | `export_final_report` | 记录型，不阻塞 | 导出当前结构化旅行报告；不代表已经完成支付、预订、出票或酒店确认。 |
 | `real_booking` | 强制审批 | 未来接入真实供应链、库存或订单履约前必须审批。 |
 | `real_payment` | 强制审批 | 未来接入支付网关前必须审批。 |
@@ -29,6 +30,39 @@
 | `export_customer_profile` | 强制审批 | 未来导出客户资料或行程画像前必须审批，并最小化字段。 |
 
 `generate_order_id` 仍被视为敏感动作，但当前只是记录治理边界，不阻塞报告交付。未来只要动作会触发真实支付、真实预订、短信发送或客户资料导出，就必须先完成 `pending -> approved`，再由独立的受控执行入口校验审批和动作参数；批准记录本身不会自动恢复 Agent 或执行动作。
+
+## 与旅行社交易域的关系
+
+旅行社交易域已增加 `agency`、`agency_membership`、`agency_customer`、`agency_quote`、`agency_order`、`agency_order_review`、`agency_order_event`、`idempotency_record`、`payment_attempt` 和 `fulfillment_record` 等持久化模型。`agency_order_review` 已实现旅行社内部审核闭环：记录绑定旅行社、订单、提交时修订号、`payload_hash`、金额、币种和发起人，由同租户专职审批员决定。
+
+旅行社内部审核与平台 `/api/v1/approvals` 是两个独立契约：
+
+- 内部订单审核决定业务状态 `pending_review -> approved / review_rejected`。
+- 平台 Approval 记录未来高风险外部动作是否经过治理审批。
+- 内部 `approved` 不会创建或批准 `approval_request`，平台 `approved` 也不会自动改变 `agency_order`。
+- 两者当前都不会调用供应商预订、支付、退款或通知服务，也不会恢复 LangGraph run（运行）。
+
+当前平台 `approval_request` 尚未形成以下外部动作绑定闭环：
+
+- 旅行社 `agency_id` 和租户内有效成员。
+- 报价或订单资源 ID、动作类型和操作者。
+- 金额、币种、预期 `revision`（修订号）和 `payload_hash`（业务负载哈希）。
+- 审批过期时间、幂等键和供应商适配器版本。
+- 发起人与审批人的 four-eyes（四眼原则）职责分离。
+
+因此，平台审批 `approved` 只能表示一条治理记录被平台审批员或管理员批准；交易域订单 `approved` 只能表示旅行社内部审核通过。二者都不能直接作为真实预订、支付、退款或通知的执行凭证。未来交易执行入口必须在数据库事务中重新读取并锁定相关业务对象，验证平台审批与交易对象的全部绑定字段后才能调用外部适配器。
+
+### 旅行社内部订单审核
+
+交易路由挂载在 `/api/v1/agency`：
+
+- `GET /api/v1/agency/order-reviews`：仅同一有效旅行社中 `active role=approver` 可读取结构化审核工作队列。
+- `GET /api/v1/agency/orders/{order_id}/review`：只有同一旅行社的有效专职 `approver` 可读取结构化审核记录；客户仍可通过订单 DTO 查看订单审核状态，但不会取得内部审核原因和决定人信息。
+- `POST /api/v1/agency/orders/{order_id}/review`：仅同租户专职 `approver` 可决定；`owner`、`admin`、`travel_advisor`、`booking_operator`、`finance` 和 `auditor` 不能代替。
+
+专职 `approver` 还可以通过订单读取接口查看已生成审核记录的完整订单快照，但不能读取尚未提交审核的订单，也不能创建、修改或发布报价。决定请求包含 `decision=approve|reject`、`expected_revision`、可选 `reason` 和必需的 `Idempotency-Key`（幂等键）；拒绝时 `reason` 必填。批准与拒绝共用 `order.review.decide` 幂等 scope（作用域）。服务锁定订单行和审核行，校验订单/审核状态、修订号、负载哈希、金额和币种绑定，拒绝订单客户或审核发起人自审，并追加 `order_review_approved` 或 `order_review_rejected` 事件。审核原因写入前会脱敏。
+
+以上闭环是确定性的旅行社业务审核，不是 Agent HITL：它不写 `TravelState.approval_*`，不调用 `Command(resume=...)`，也不放行任何外部副作用。
 
 ## 状态字段
 
@@ -82,13 +116,18 @@ approval_governance: dict
 
 ### 角色与权限
 
-当前不引入复杂 RBAC（基于角色的访问控制）系统，也不接外部权限服务。服务端从用户对象的 `role` 属性或 `preferences.role` 中解析轻量角色，缺省为 `user`。
+当前不引入完整企业级 RBAC（基于角色的访问控制）系统，也不接外部权限服务。审批 API 从用户对象的 `role` 属性或 `preferences.role` 中解析平台级 `user`、`approver`、`admin`，缺省为 `user`；交易域另用 `agency_membership` 表表达租户内岗位，两套角色不能互相替代。平台 `approver` 不自动获得旅行社审核权，租户 `approver` 也不自动获得平台审批全量权限。
 
-| 角色 | 能力边界 |
-|---|---|
-| `user` | 可创建敏感动作标记，可查询自己的审批记录和事件；不能批准、拒绝或手动过期审批。 |
-| `approver` | 审批操作者，可查看全部审批记录，可批准、拒绝或手动过期 `pending` 审批。 |
-| `admin` | 管理员，拥有审批操作者能力，预留给后续治理配置维护。 |
+| 角色作用域 | 角色 | 当前能力边界 |
+|---|---|---|
+| 平台审批 | `user` | 可创建敏感动作标记，可查询自己的审批记录和事件；不能批准、拒绝或手动过期审批。 |
+| 平台审批 | `approver` | 可查看全部审批记录，可决定其他用户发起的 `pending` 审批；不能自审。 |
+| 平台审批 | `admin` | 拥有审批操作者能力并预留治理配置维护；同样不能自审。 |
+| 旅行社租户 | `travel_advisor` | 管理本旅行社方案和报价；不因此获得平台审批或真实预订执行权。 |
+| 旅行社租户 | `booking_operator` | 预订操作员骨架；当前没有供应商执行入口。 |
+| 旅行社租户 | `approver` | 当前唯一可读取审核工作队列并决定内部订单审核；必须是同一有效旅行社的有效成员，且不能审核本人订单或本人发起的审核。不能据此调用平台审批全量接口。 |
+| 旅行社租户 | `finance`、`auditor` | 预留财务和审计职责；当前不能决定订单审核，也没有真实支付、退款或对账入口。 |
+| 旅行社租户 | `admin`、`owner` | 管理租户的岗位骨架；高风险动作仍需职责分离。 |
 
 `GET /api/v1/approvals` 默认只返回当前用户记录；审批操作者或管理员可以通过 `scope=all` 查看全部审批记录。无权限响应使用稳定错误契约：
 
@@ -121,6 +160,8 @@ approval_governance: dict
 
 `approval_request.status` 是为了查询当前状态的派生快照；可信历史以 `approval_event` 为准。审批自动过期和手动过期都会追加 `expired` 事件。
 
+旅行社内部审核另存于 `agency_order_review`，不属于上述平台审批表。它保存审核快照和决定结果，并通过 `agency_order_event` 记录订单状态变化；不能用它推断 `approval_persistence_ready` 或 `hitl_closed_loop`。
+
 ## Readiness 语义
 
 `/health/ready` 的 `services.approval_governance` 字段用于判断审批记录和审计事件能否可靠持久化：
@@ -138,9 +179,9 @@ approval_governance: dict
 - `session_lock.status="degraded"` 可以让整体状态变为 `degraded`，但不替代审批治理持久化要求。
 - MCP（模型上下文协议）为 `degraded` 或 `unavailable` 时，若核心依赖全部就绪，整体状态返回 `degraded` 而不是 `not_ready`。
 
-## 订单号治理边界
+## 模拟编号与交易订单边界
 
-`generate_order_tool` 会继续生成 `ORDER-` 开头的项目内模拟订单号，不因为审批未完成而阻塞当前最终报告。但它会同步写入：
+`generate_order_tool` 会继续生成 `ORDER-` 开头的规划演示编号，不因为审批未完成而阻塞当前最终报告。该编号不是 `agency_order.order_no`，不能用于收款、供应商预订、合同或履约。但工具会同步写入：
 
 - `approval_action="generate_order_id"`。
 - `approval_status="none"`。
@@ -150,7 +191,7 @@ approval_governance: dict
 - `report_data.tool_audit_summary.approval`。
 - `report_data.evidence_bundle.approval_governance`。
 
-当前工具调用路径仍保留同步内存记录，原因是本分支不做统一工具执行网关和全链路异步数据库上下文改造；聊天 API 会把流式捕获到的工具审计事件持久化到 `tool_audit_event`。未来统一工具执行网关落地后，`generate_order_tool` 可直接接入数据库审批服务。
+当前工具调用路径仍保留同步内存记录，原因是当前尚未完成统一工具执行网关和全链路异步数据库上下文改造；聊天 API 会把流式捕获到的工具审计事件持久化到 `tool_audit_event`。未来统一工具执行网关落地后，应直接调用旅行社交易服务，而不是把 `generate_order_tool` 的演示编号升级解释为真实订单。
 
 最终报告和工具返回消息继续明确：
 
@@ -187,9 +228,10 @@ approval_governance: dict
 - 不提供 LangGraph `interrupt/resume`、审批结果回写 checkpoint 或审批后自动恢复工具调用。
 - 不提供独立后台审批 UI（用户界面）；当前只有现有单页前端里的轻量治理台演示入口。
 - 不接真实库存、支付、短信、客服或供应链。
+- 平台 `approval_request` 仍不绑定旅行社报价/订单的金额、币种、修订号和负载哈希；交易域内部订单审核虽已完成四眼约束和业务快照绑定，但不能替代平台外部动作审批。
 - 不生成支付链接、客服链接、预订凭证或出票凭证。
 - 不承诺锁价、余位、成团、酒店确认或订单履约。
 - 不做分布式一致性和不可篡改审计日志。
 - 不在本分支大规模重构所有工具执行流程；统一工具执行网关放到后续分支。
 
-这些能力需要在未来真实业务接入前单独设计数据库表、权限模型、审计日志和失败补偿机制。
+交易域基础表、内部报价/订单 API 和订单审核闭环已经存在，但真实业务接入前仍需补齐客户生命周期、顾问分配、取消/人工介入、平台审批绑定、外部适配器、回调验签、失败补偿和对账机制。

@@ -285,6 +285,16 @@ def test_build_readiness_payload_reports_ready_when_all_core_dependencies_are_re
     assert payload["services"]["store"]["initialized"] is True
     assert payload["services"]["session_lock"]["status"] == "ready"
     assert payload["services"]["approval_governance"]["status"] == "ready"
+    transaction_execution = payload["services"]["transaction_execution"]
+    assert set(transaction_execution["actions"]) == {
+        "supplier_booking",
+        "payment",
+        "refund",
+        "notification",
+    }
+    assert "configuration_gate_passed" in next(
+        iter(transaction_execution["actions"].values())
+    )
 
 
 def test_build_readiness_payload_reports_degraded_when_mcp_is_degraded(monkeypatch):

@@ -1,6 +1,6 @@
 # Project Capability Map（项目能力答疑地图）
 
-这份文档把 AI-Agent（人工智能智能体）项目常见问题映射到项目回答、代码定位、可运行命令和风险边界。回答时优先讲“设计取舍”和“可验证证据”，避免只说概念。
+这份文档把 AI-Agent（人工智能智能体）项目常见问题映射到项目回答、代码定位、可运行命令和风险边界。项目目标业务是旅行社经营与交付工作台；当前实现仍是“规划交付链路 + 第一阶段交易数据/控制面骨架”。回答时优先讲“设计取舍”和“可验证证据”，避免只说概念，也不能把目标形态当成当前已经上线的能力。
 
 ## 快速总览
 
@@ -14,17 +14,18 @@
 | 工具怎么避免乱调？ | `StepConfigMiddleware` 按工作流和阶段注入工具；省心方案使用独立白名单，默认移除交通/酒店实时查询和选择工具。 | `app/core/middleware.py`、`app/agents/handoffs/step_config.py` | `.\.venv\Scripts\python -m pytest tests\test_step_prompt_rendering.py tests\test_intent_detection.py -q` | 用户明确要求实时查交通或酒店时，才临时开放对应工具。 |
 | 外部能力为什么用 MCP？ | MCP 把天气、搜索、地图、铁路、航班和酒店能力统一为 Agent 可调用工具，并通过服务级缓存、重试和降级避免单点拖垮主链路。 | `app/mcp_core/client.py`、`app/tools/mcp_tools.py` | `.\.venv\Scripts\python -m pytest tests\test_mcp_client_config_unit.py -q` | 外部服务不可用时不能伪造真实查询结果。 |
 | RAG 怎么保证旅行社业务感？ | 内部知识库按产品、SOP（标准作业流程）、报价、风险和报告标准组织；产品化样板支持目的地级弱匹配，例如只说“想去新疆”也能召回新疆省心路线候选。 | `data/documents/internal/`、`app/tools/rag_tools.py`、`app/evaluation/rag_quality.py`、`app/evaluation/rag_retrieval.py`、`docs/RAG与知识库/rag-demo-evaluation-guide.md`、`docs/RAG与知识库/rag-vectorstore-readiness.md` | `.\.venv\Scripts\python scripts\validate_rag_knowledge.py`；`.\.venv\Scripts\python scripts\evaluate_rag_retrieval.py --json` | 离线召回 passed 不等于真实 Chroma 向量库 configured，也不等于线上 Agent passed。 |
-| 报价怎么讲清楚？ | 报告区分真实工具价、规则估算、兜底估算和待核验项，避免锁价或库存承诺。 | `app/agency/pricing_rules.py`、`app/reports/builder.py` | `.\.venv\Scripts\python -m pytest tests\test_report_quality_evaluation.py -q` | 不接真实支付和供应链履约。 |
-| HITL 做到哪一步？ | 当前实现的是审批治理骨架：敏感动作策略、持久化请求、只追加事件、角色权限和 readiness 语义；当前订单号只是模拟编号。 | `app/core/approval.py`、`app/core/permissions.py`、`app/api/v1/approvals.py`、`app/api/v1/mock_checkout.py`、`docs/治理与可观测/approval-governance.md` | `.\.venv\Scripts\python -m pytest tests\test_approval_governance.py tests\test_mock_checkout.py -q` | 尚未实现 LangGraph `interrupt/resume`；批准记录不会自动恢复原 Agent 工具调用，普通用户也不能自审未来真实支付或预订动作。 |
+| 方案预算和旅行社报价怎么区分？ | `report_data` 中的预算按真实工具价、规则估算、兜底估算和待核验项表达；`agency_quote` 则保存租户、客户、金额、有效期、快照、`revision` 和 `payload_hash`。二者必须显式转换，不能由模型文本自动形成正式报价。 | `app/agency/pricing_rules.py`、`app/reports/builder.py`、`app/models/agency_transaction.py`、`docs/架构与流程/agency-transaction-domain.md` | `uv run python -m pytest -q tests/test_report_quality_evaluation.py tests/test_agency_transaction_models.py` | 报价表不代表供应商库存已确认、价格已锁定或客户已付款。 |
+| 旅行社交易域做到哪一步？ | 已加入旅行社租户、成员、客户关系、供应商产品、报价、订单、内部审核、只追加订单事件、幂等记录和执行账本；13 个内部操作覆盖报价、订单提交和专职审批员批准/拒绝，审核绑定订单修订号、负载哈希、金额和币种。 | `app/models/agency_transaction.py`、`app/models/agency_order_review.py`、`app/agency/transaction_service.py`、`app/agency/order_review_service.py`、`app/api/v1/agency_transactions.py`、`alembic/versions/20260726_0003_agency_order_review.py` | `uv run python -m pytest -q tests/test_agency_transaction_models.py tests/test_agency_transaction_policy.py tests/test_agency_transaction_api.py` | `approved` 仅为内部审核；客户生命周期、顾问分配、取消/人工介入、岗位裁剪 DTO、供应商预订、支付、退款、通知、对账和履约仍未闭环。 |
+| HITL 做到哪一步？ | 交易域已有确定性内部订单审核：只有同租户 `approver` 可读写审核，owner/admin 不能代替，客户或发起人不能自审；平台 Approval 仍只提供敏感动作记录、事件、角色权限和 readiness。 | `app/models/agency_order_review.py`、`app/agency/order_review_service.py`、`app/core/approval.py`、`app/api/v1/approvals.py`、`docs/治理与可观测/approval-governance.md` | `uv run python -m pytest -q tests/test_agency_transaction_api.py tests/test_approval_governance.py` | 内部审核没有绑定平台 `approval_request`，也没有 LangGraph `interrupt/resume`；通过审核不会执行供应商、支付、退款或通知动作。 |
 | 可观测性有什么？ | 聊天链路记录 turn（轮次）级观测：`first_token_seconds`、`total_elapsed_seconds`、工具调用、失败、fallback（兜底）和 token 估算；AgentOps 文档把它和工具审计、readiness/preflight/acceptance 摘要串成轻量复盘链。 | `app/core/observability.py`、`app/api/v1/chat.py`、`app/evaluation/runtime_metrics.py`、`docs/治理与可观测/agentops-replay-versioning.md` | `.\.venv\Scripts\python -m pytest tests\test_runtime_metrics.py -q` | `first_token_seconds` 只表示任意首个助手片段，可能只是固定 ACK（确认收到）；它不等于 LLM 有意义内容或完整处理完成，必须与总耗时一起解释。当前也不是完整分布式 trace 或 APM。 |
 | 验收门禁怎么做？ | `acceptance_gate` 聚合报告质量、RAG 质量、工具治理、运行预算和内部证据，运行预算还会约束工具失败数、失败率和 fallback 数。 | `app/evaluation/acceptance_gate.py`、`app/evaluation/runtime_metrics.py`、`scripts/run_evaluation_scenarios.py` | `.\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-smoke --dry-run` | 普通场景默认不允许工具失败/fallback，只有两个专门降级场景显式放宽；即便 `passed` 也不等于轨迹最优、重复稳定或完整过程评估。 |
 | CI/CD（持续集成/持续交付） 如何覆盖？ | 默认 CI 跑编译、知识库校验、测试收集、本地回归和前端验证；staging smoke（预生产烟测）手动触发真实链路。 | `.github/workflows/ci.yml`、`.github/workflows/staging-smoke.yml` | `.\.venv\Scripts\python -m pytest tests\test_ci_workflows.py -q` | 默认 CI 不消耗真实外部 API（应用程序接口）额度。 |
 | 前端怎么证明报告可交付？ | 前端优先消费 `report_data`，展示规划模式、预算、待核验、方案依据、地图路线、复制摘要和导出 HTML（超文本标记语言）。 | `frontend/app.js`、`frontend/zhixing.html`、`docs/前端与演示/frontend-report-experience.md`、`docs/前端与演示/report-data-delivery-contract.md` | `node scripts\verify_frontend_report_renderer.js`；`node scripts\verify_frontend_browser_regression.js` | 前端是单页原型；导出件不是支付、预订、锁价或履约凭证。 |
-| 现在能算生产系统吗？ | 不能。截至 2026-07-03 的仓库外私有采样曾记录一次 M1 受控试运行部署、健康检查、数据库/缓存、恢复演练、短窗口探针和单轮 live chat 证据；这些是历史目标版本快照，不代表当前 commit 或当前工作树仍就绪。 | `docs/部署与运行/m1-controlled-trial-status.md`、`docs/部署与运行/production-readiness-gap.md`、`docs/部署与运行/m1-launch-checklist.md`、`docs/部署与运行/m1-controlled-trial-runbook.md` | `uv run python scripts\check_runtime_readiness.py --target production --json`；在目标版本和目标环境重新执行 release freeze、go/no-go、health/readiness 与 acceptance smoke | 当前公开状态应写成“历史 M1 证据可用，当前版本待复验”；不能承诺真实履约、长时间压测、多机高可用、自动扩缩容、PITR、异地灾备或供应商 SLA。 |
+| 现在能算生产系统吗？ | 不能。截至 2026-07-03 的仓库外私有采样曾记录一次 M1 受控试运行部署、健康检查、数据库/缓存、恢复演练、短窗口探针和单轮 live chat 证据；这些是历史目标版本快照，不代表当前 commit 或当前工作树仍就绪。新增交易域也只证明模型、迁移和控制门禁存在。 | `docs/部署与运行/m1-controlled-trial-status.md`、`docs/部署与运行/production-readiness-gap.md`、`docs/架构与流程/agency-transaction-domain.md`、`docs/部署与运行/m1-controlled-trial-runbook.md` | `uv run python scripts\check_runtime_readiness.py --target production --json`；在目标版本和目标环境重新执行 migration review、release freeze、go/no-go、health/readiness 与 acceptance smoke | 当前公开状态应写成“目标业务是旅行社，交易骨架已建立，历史 M1 证据可追溯，当前版本与真实交易均待验收”；不能承诺真实履约、长时间压测、多机高可用、PITR、异地灾备或供应商 SLA。 |
 
 ## 当前边界与改进路线
 
-当前项目已经具备 Agent 应用骨架；仓库外留有截至 2026-07-03 的 M1 受控试运行历史证据。仓库也已具备资源申请、首部署 dry-run、发布包 manifest、服务器首部署、smoke/备份恢复/监控告警/事故回滚证据收集和 go/no-go 聚合入口；真实剩余缺口不是“缺这些脚本”，而是当前工作树尚未冻结成干净 commit，且这些入口尚未针对最终候选在目标环境完成同一时间窗的真实执行、复核与签核。公开工程口径必须写成“历史证据可追溯、当前版本待复验”，不能把旧部署和单轮 live chat 采样继承为当前版本结论。站内模拟确认也不代表真实库存、真实锁价、真实支付、真实出票或供应链履约。
+当前项目已经具备 Agent 应用骨架和旅行社交易数据/控制面骨架；仓库外留有截至 2026-07-03 的 M1 受控试运行历史证据。交易域覆盖多租户、成员、客户关系、产品、报价、订单、绑定式内部审核、事件、修订号、负载哈希、幂等和角色/执行门禁，但客户关系管理 API、顾问分配、取消/人工介入、平台 Approval 绑定、真实供应商预订、支付、退款、通知、补偿与对账尚未接入。仓库也已具备资源申请、首部署 dry-run、发布包 manifest、服务器首部署、smoke/备份恢复/监控告警/事故回滚证据收集和 go/no-go 聚合入口；真实剩余缺口不是“缺这些脚本”，而是当前工作树尚未冻结成干净 commit，且这些入口尚未针对最终候选在目标环境完成同一时间窗的真实执行、复核与签核。公开工程口径必须写成“目标业务是旅行社，内部审核控制面已建立，历史证据可追溯，当前版本与真实外部交易均待验收”，不能把旧部署和单轮 live chat 采样继承为当前版本结论。站内模拟确认或内部 `approved` 也不代表真实库存、真实锁价、真实支付、真实出票或供应链履约。
 
 资源收集入口见 `docs/部署与运行/m1-resource-request-pack.md`、`scripts/render_m1_resource_request.py --markdown`、`scripts/check_m1_launch_inputs.py --template`、`scripts/check_m1_launch_inputs.py --input-json <private-workdir>/m1-launch-inputs.local.json --json`、`scripts/render_server_env_checklist.py --template` 和 `scripts/check_server_env_file.py --env-file <deploy-dir>/shared/.env --json`。它用于告诉部署/运维负责人需要准备哪些服务器、env、数据、验收、备份、监控和回滚资源，并在目标服务器或受控 shell 中校验服务器 `.env` 是否缺变量、空值、仍像占位符或重复声明；全程只收变量名、状态和脱敏摘要，不收真实密钥值。
 
@@ -110,12 +111,14 @@
 
 回答模板：
 
-> 当前项目不接真实供应链，但已经有轻量治理边界：审批策略、审批请求和事件、工具审计、运行时观测、readiness 检查、CI 门禁和手动 staging smoke。它目前是治理骨架，不是完整 HITL 执行闭环；未来接真实支付、短信或预订前，还要把审批记录与 LangGraph `interrupt/resume`、幂等和补偿流程真正接通。
+> 当前项目不接真实供应链，但已经有确定性的旅行社内部订单审核，以及平台审批策略、审批请求和事件、工具审计、运行时观测、readiness 检查、CI 门禁和手动 staging smoke。内部订单审核只改变业务状态，不是完整 HITL 执行闭环；未来接真实支付、短信或预订前，还要把平台审批记录与交易对象、LangGraph `interrupt/resume`、幂等和补偿流程真正接通。
 
 可指代码：
 
 - `app/core/permissions.py`
 - `app/models/approval.py`
+- `app/models/agency_transaction.py`
+- `app/agency/transaction_service.py`
 - `app/core/observability.py`
 - `.github/workflows/staging-smoke.yml`
 
@@ -145,7 +148,7 @@
 
 | 追问 | 建议回答 |
 |---|---|
-| 现在能真实下单吗？ | 不能。当前只生成项目内模拟订单号，并提供站内模拟确认跳转，用于证明报告到确认页的链路；它不代表支付、锁价、库存或履约，真实支付和预订必须先补 HITL、幂等、供应链和审计闭环。 |
+| 现在能真实下单吗？ | 不能。当前既保留规划演示用模拟编号，也能持久化旅行社内部订单并完成专职审批员审核；但内部 `approved` 不触发支付、锁价、库存、供应商预订或履约。真实外部下单仍需平台 HITL 绑定、供应商适配器、幂等、补偿、对账和目标环境验收。 |
 | 真实价格准确吗？ | 工具返回的价格可以标记为可追溯；缺失时只能做规则估算或兜底估算，并进入待核验项。 |
 | 为什么不直接让模型一次性写报告？ | 一次性写报告不可控，难以追踪证据和阶段状态；现在的状态机可以把需求、工具结果、预算和风险沉淀为结构化状态。 |
 | 为什么不用更多 Agent？ | Agent 数量不是目标。当前主流程是单个 Travel Agent；目的地 Router 和交通 Coordinator 只在有明确任务边界时按需调用。航班、高铁、自驾差异留在确定性查询 wrapper（包装器）中，避免为了“多 Agent”标签增加额外模型调用。 |

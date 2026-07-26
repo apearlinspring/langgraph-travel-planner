@@ -12,20 +12,41 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 _LEGACY_BUSINESS_TABLES = {"user", "conversation", "message"}
+_INITIAL_BUSINESS_TABLES = (
+    "user",
+    "conversation",
+    "message",
+    "approval_request",
+    "approval_event",
+    "tool_audit_event",
+)
 
 
 def _bootstrap_legacy_create_all_schema() -> bool:
     """Adopt databases that already have legacy business tables but no revision."""
 
     bind = op.get_bind()
-    existing_tables = set(sa.inspect(bind).get_table_names())
+    try:
+        existing_tables = set(sa.inspect(bind).get_table_names())
+    except sa.exc.NoInspectionAvailable:
+        # Alembic offline SQL generation provides a MockConnection that cannot
+        # be inspected. In that mode the normal declarative migration below is
+        # the only valid path; legacy schema adoption remains online-only.
+        return False
     if not (_LEGACY_BUSINESS_TABLES & existing_tables):
         return False
 
     import app.models  # noqa: F401
     from app.models.base import Base
 
-    Base.metadata.create_all(bind=bind, checkfirst=True)
+    Base.metadata.create_all(
+        bind=bind,
+        tables=[
+            Base.metadata.tables[table_name]
+            for table_name in _INITIAL_BUSINESS_TABLES
+        ],
+        checkfirst=True,
+    )
     return True
 
 

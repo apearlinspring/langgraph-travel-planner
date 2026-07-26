@@ -1,7 +1,9 @@
 import json
 import subprocess
-from pathlib import Path
 from collections import namedtuple
+from pathlib import Path, PurePosixPath, PureWindowsPath
+
+import pytest
 
 from scripts import check_server_preflight_readiness as readiness
 
@@ -214,3 +216,52 @@ def test_server_preflight_deploy_dir_inside_workspace_is_blocked():
 
     assert report["status"] == "blocked"
     assert any(item["env_var"] == "ZHIXING_DEPLOY_DIR" for item in report["blocked_reasons"])
+
+
+@pytest.mark.parametrize(
+    ("project_root", "deploy_dir"),
+    [
+        (PurePosixPath("/srv/zhixing"), "/srv/zhixing/releases/2026-07-26"),
+        (
+            PureWindowsPath(r"C:\workspace\zhixing"),
+            r"c:\WORKSPACE\ZHIXING\releases\2026-07-26",
+        ),
+    ],
+)
+def test_server_preflight_blocks_workspace_paths_for_unix_and_windows(
+    monkeypatch,
+    project_root,
+    deploy_dir,
+):
+    monkeypatch.setattr(readiness, "PROJECT_ROOT", project_root)
+    env = _valid_env()
+    env["ZHIXING_DEPLOY_DIR"] = deploy_dir
+
+    report = readiness.build_server_preflight_readiness_report(environ=env)
+
+    deploy_dir_check = next(
+        item for item in report["checks"] if item["env_var"] == "ZHIXING_DEPLOY_DIR"
+    )
+    assert deploy_dir_check["status"] == "blocked"
+    assert deploy_dir_check["finding"] == "Deployment directory must not point inside the Git workspace."
+
+
+@pytest.mark.parametrize(
+    ("project_root", "deploy_dir"),
+    [
+        (PurePosixPath("/srv/zhixing"), "/srv/zhixing-copy"),
+        (PureWindowsPath(r"C:\workspace\zhixing"), r"C:\workspace\zhixing-copy"),
+    ],
+)
+def test_server_preflight_allows_absolute_sibling_paths_for_unix_and_windows(
+    monkeypatch,
+    project_root,
+    deploy_dir,
+):
+    monkeypatch.setattr(readiness, "PROJECT_ROOT", project_root)
+    env = _valid_env()
+    env["ZHIXING_DEPLOY_DIR"] = deploy_dir
+
+    report = readiness.build_server_preflight_readiness_report(environ=env)
+
+    assert report["status"] == "passed"

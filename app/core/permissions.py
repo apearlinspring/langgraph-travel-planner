@@ -109,9 +109,16 @@ def can_view_approval_record(user: Any, record_user_id: str | None) -> bool:
 
 
 def can_decide_approval_record(user: Any, record_user_id: str | None) -> bool:
-    """Only approval operators and admins can decide sensitive-action records."""
+    """Require an approval operator who is not the action requester."""
 
-    return is_approval_operator(user)
+    actor_id = str(getattr(user, "id", "") or "").strip()
+    requester_id = str(record_user_id or "").strip()
+    return (
+        is_approval_operator(user)
+        and bool(actor_id)
+        and bool(requester_id)
+        and actor_id != requester_id
+    )
 
 
 def can_list_all_approval_records(user: Any) -> bool:

@@ -3,12 +3,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import ntpath
 import os
-from pathlib import Path
-import re
+import posixpath
 import shutil
 import subprocess
 import sys
+from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
 from typing import Any, Mapping, Sequence
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
@@ -30,7 +31,6 @@ HEALTH_ENDPOINTS = (
     ("health/live", "/health/live"),
     ("health/ready", "/health/ready"),
 )
-WINDOWS_ABSOLUTE_PATH = re.compile(r"^[A-Za-z]:[\\/]")
 
 
 def _value(environ: Mapping[str, str], key: str) -> str:
@@ -183,6 +183,42 @@ def _check_deploy_mode(value: str) -> dict[str, Any]:
     return item
 
 
+def _absolute_path_flavour(value: str) -> str | None:
+    if PureWindowsPath(value).is_absolute():
+        return "windows"
+    if PurePosixPath(value).is_absolute():
+        return "posix"
+    return None
+
+
+def _normalized_pure_path(value: str, *, flavour: str) -> PurePath:
+    if flavour == "windows":
+        return PureWindowsPath(ntpath.normcase(ntpath.normpath(value)))
+    return PurePosixPath(posixpath.normpath(value))
+
+
+def _is_within_project_root(value: str) -> bool:
+    project_root_text = os.fspath(PROJECT_ROOT)
+    value_flavour = _absolute_path_flavour(value)
+    project_root_flavour = _absolute_path_flavour(project_root_text)
+    if value_flavour is None or value_flavour != project_root_flavour:
+        return False
+
+    native_flavour = "windows" if os.name == "nt" else "posix"
+    if value_flavour == native_flavour:
+        candidate = Path(value).resolve()
+        project_root = Path(project_root_text).resolve()
+    else:
+        candidate = _normalized_pure_path(value, flavour=value_flavour)
+        project_root = _normalized_pure_path(project_root_text, flavour=value_flavour)
+
+    try:
+        candidate.relative_to(project_root)
+    except ValueError:
+        return False
+    return True
+
+
 def _check_deploy_dir(value: str) -> dict[str, Any]:
     item = _check_declared(
         category="deployment",
@@ -193,17 +229,11 @@ def _check_deploy_dir(value: str) -> dict[str, Any]:
     )
     if item["status"] == "blocked":
         return item
-    normalized = value.replace("\\", "/")
-    if not (normalized.startswith("/") or WINDOWS_ABSOLUTE_PATH.match(value)):
+    if _absolute_path_flavour(value) is None:
         item["status"] = "blocked"
         item["finding"] = "Deployment directory must be an absolute path."
         return item
-    path = Path(value)
-    if normalized.startswith("/") and not WINDOWS_ABSOLUTE_PATH.match(value):
-        return item
-    try:
-        path.resolve().relative_to(PROJECT_ROOT.resolve())
-    except ValueError:
+    if not _is_within_project_root(value):
         return item
     item["status"] = "blocked"
     item["finding"] = "Deployment directory must not point inside the Git workspace."
