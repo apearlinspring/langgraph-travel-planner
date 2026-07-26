@@ -20,7 +20,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, Awaitable, Callable
 
 import pytest
@@ -125,13 +124,12 @@ def postgres_schema(monkeypatch: pytest.MonkeyPatch) -> PostgresSandbox:
     import app.config as app_config
     import app.models  # noqa: F401
 
-    migration_settings = SimpleNamespace(
-        database_url=scoped_url.render_as_string(hide_password=False),
-        postgres_connect_timeout_seconds=5,
-        postgres_statement_timeout_seconds=10,
-        sql_echo=False,
+    migration_database_url = scoped_url.render_as_string(hide_password=False)
+    monkeypatch.setattr(
+        type(app_config.settings),
+        "database_url",
+        property(lambda _: migration_database_url),
     )
-    monkeypatch.setattr(app_config, "settings", migration_settings)
 
     try:
         with admin_engine.begin() as connection:
