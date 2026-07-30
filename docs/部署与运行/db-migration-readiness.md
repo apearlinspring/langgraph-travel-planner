@@ -42,7 +42,7 @@ LangGraph（图式智能体编排框架）相关表不进入 Alembic 迁移：
 - `20260726_0003`：新增 `agency_order_review`，保存与旅行社、订单、修订号、负载哈希、金额和币种绑定的内部审核记录；触发器禁止删除、篡改绑定字段和再次修改已终结审核。
 - `20260726_0004`：新增门店、门店岗位授权、客户生命周期事件和主顾问分配；把报价、订单、审核和事件绑定到门店与客户关系。升级会为每个旧旅行社创建 `MAIN` 门店、回填旧客户/交易归属，并将旧客户同意统一置为 `unknown`，不会伪造历史同意。报价/订单触发器会固化租户、门店、客户和账户绑定，复验客户同意、门店状态、报价有效期和订单/报价金额、币种、快照一致性，要求更新时 `revision` 恰好加一、状态只按白名单迁移，并要求新订单保持 `external_action_enabled=false` 的惰性状态；客户触发器还阻止在停用前的 `pending_review` 被明确拒绝前重新激活关系；DEFERRABLE（延迟到事务提交校验）约束触发器会确认待审核订单至少有一名有效门店审批员，并校验订单与审核批准/拒绝终态成对一致。
 
-这只说明仓库中的迁移依赖关系和 DDL 已版本化，不代表这些迁移已经在目标 PostgreSQL（关系型数据库）执行。旧 `319ac26` 基线的 GitHub Actions 已使用一次性 PostgreSQL 17 通过 3 项交易集成测试，证明当时的 `0001 -> 0002 -> 0003` CI 路径；该结果早于 `0004`，不能证明客户生命周期迁移。本机没有可用 PostgreSQL，`0004` 的本地数据库执行仍为 `not run`；包含 `0004` 的候选必须在提交后重新确认新增 PostgreSQL job。目标环境仍必须在发布窗口内完成备份、`alembic current`、迁移执行、集成测试和迁移后验证。
+这只说明仓库中的迁移依赖关系和 DDL 已版本化，不代表这些迁移已经在目标 PostgreSQL（关系型数据库）执行。本机没有可用 PostgreSQL，`0004` 的本地数据库执行仍为 `not run`；实现候选 [`20ff715`](https://github.com/apearlinspring/langgraph-travel-planner/commit/20ff71592096dfb4fc718cef050832a745bfe174) 已由 [GitHub Actions 运行 30534862434](https://github.com/apearlinspring/langgraph-travel-planner/actions/runs/30534862434) 在一次性 PostgreSQL 17 中执行 `0001 -> 0002 -> 0003 -> 0004` 相关迁移与集成场景，数据库 job 为 `10 passed`，默认 job 为 `1713 passed, 34 deselected`。这证明该实现提交的隔离 CI 路径，不证明目标环境迁移；目标环境仍必须在发布窗口内完成备份、`alembic current`、迁移执行、集成测试和迁移后验证。
 
 ## 入口分层
 
@@ -121,14 +121,14 @@ alembic upgrade head --sql
 uv run python -m pytest --run-integration -q tests\test_agency_transaction_postgres_integration.py tests\test_agency_customer_lifecycle_postgres_integration.py tests\test_agency_branch_permissions_postgres_integration.py
 ```
 
-这 3 个文件当前共 10 项 PostgreSQL 集成测试：3 项交易、5 项客户生命周期和 2 项门店权限。它们覆盖迁移、非空旧数据回填、数据库约束、门店/客户范围和授权并发，但当前仍待包含 `0004` 的新提交触发 CI 后确认；不得把旧 `319ac26` 的 3 项交易绿灯继承为本轮结果，也不得读取 staging 或 production 数据库 secret（密钥配置）。业务写入采用 `customer -> branch -> quote/order` 锁序，授权敏感写入持有门店/成员共享锁，以阻止并发撤权或门店状态变化造成 TOCTOU（检查与使用时序差）竞态；这仍不能替代目标环境的锁等待和事务回滚验证。
+这 3 个文件当前共 10 项 PostgreSQL 集成测试：3 项交易、5 项客户生命周期和 2 项门店权限。它们覆盖迁移、非空旧数据回填、数据库约束、门店/客户范围和授权并发；实现候选 `20ff71592096dfb4fc718cef050832a745bfe174` 已在运行 `30534862434` 的一次性 PostgreSQL 17 job 中得到 `10 passed`。CI 只使用隔离数据库且不得读取 staging 或 production 数据库 secret（密钥配置）。业务写入采用 `customer -> branch -> quote/order` 锁序，授权敏感写入持有门店/成员共享锁，以阻止并发撤权或门店状态变化造成 TOCTOU（检查与使用时序差）竞态；这仍不能替代目标环境的锁等待和事务回滚验证。
 
 ## 环境命令
 
 | 环境 | 迁移命令 | 验收命令 | 数据库策略 |
 |---|---|---|---|
 | 本地 development（开发） | `python -m scripts.init_db --mode bootstrap` 或 `alembic upgrade head` | `python scripts/check_runtime_readiness.py --target development --json` | 可用本地 PostgreSQL；不写真实客户数据。 |
-| CI（持续集成） | 一次性 PostgreSQL service 中执行 `upgrade head -> downgrade base -> legacy upgrade head` | 静态 job 运行 development readiness；数据库 job 精确运行交易、客户生命周期与门店权限三个 PostgreSQL 测试文件 | 仅使用固定 CI-only 凭据和隔离数据库，不读取部署环境 secret；旧 `319ac26` 的 3 项通过不覆盖 `0004`，新候选须重新确认；CI 也不能替代目标环境迁移验收。 |
+| CI（持续集成） | 一次性 PostgreSQL service 中执行 `upgrade head -> downgrade base -> legacy upgrade head` | 静态 job 运行 development readiness；数据库 job 精确运行交易、客户生命周期与门店权限三个 PostgreSQL 测试文件；实现候选 `20ff715` 的运行 `30534862434` 已得到默认 `1713 passed, 34 deselected` 与 PostgreSQL `10 passed` | 仅使用固定 CI-only 凭据和隔离数据库，不读取部署环境 secret；后续数据库变更必须重新运行，CI 也不能替代目标环境迁移验收。 |
 | staging（预生产） | `alembic upgrade head`，首次环境补跑 `python -m scripts.init_db --mode langgraph` 和 `--mode pgvector` | `alembic current`、`python scripts/check_runtime_readiness.py --target acceptance --check-backend --base-url <staging-url> --json` | 使用预生产密钥和隔离数据，不复用生产客户数据。 |
 | production（生产） | `alembic upgrade head`，必要时只由运维窗口执行 LangGraph/pgvector 引导 | `alembic current`、`python scripts/check_runtime_readiness.py --target production --json` | 只使用部署密钥系统注入，不在文档、日志或提交中写真实连接串。 |
 

@@ -143,7 +143,7 @@ $env:ZHIXING_TEST_POSTGRES_DSN = "postgresql://travel_user:change-me@127.0.0.1:5
 uv run python -m pytest --run-integration -q tests\test_agency_transaction_postgres_integration.py tests\test_agency_customer_lifecycle_postgres_integration.py tests\test_agency_branch_permissions_postgres_integration.py
 ```
 
-数据库名必须包含独立的 `test` 或 `ci` 段；测试会创建并删除随机 schema（数据库命名空间），不得连接 staging（预生产）或 production（生产）数据库。GitHub Actions（GitHub 自动化流水线）的 `PostgreSQL Transaction Integration` job 使用一次性 PostgreSQL 17 service（服务容器）精确执行上述三个测试文件。旧 `319ac26` 基线的远端 job 已有 3 项交易测试通过，但它早于 `0004` 客户生命周期迁移，不能继承为本轮通过证据；包含 `0004` 的提交仍须重新确认该 job。需要真实 LLM（大语言模型）、MCP 服务或外部 API 的其他集成测试仍单独标记，不属于默认快速回归。
+数据库名必须包含独立的 `test` 或 `ci` 段；测试会创建并删除随机 schema（数据库命名空间），不得连接 staging（预生产）或 production（生产）数据库。实现候选 [`20ff715`](https://github.com/apearlinspring/langgraph-travel-planner/commit/20ff71592096dfb4fc718cef050832a745bfe174) 的 [GitHub Actions 运行 30534862434](https://github.com/apearlinspring/langgraph-travel-planner/actions/runs/30534862434) 已在一次性 PostgreSQL 17 service（服务容器）中精确执行上述三个文件并得到 `10 passed`（3 项交易、5 项客户生命周期、2 项门店权限）；同一运行的默认 job 为 `1713 passed, 34 deselected`。这只证明该实现提交的 CI 路径，不代表目标环境迁移或真实业务链路已验收。需要真实 LLM（大语言模型）、MCP 服务或外部 API 的其他集成测试仍单独标记，不属于默认快速回归。
 
 ## 文档入口
 

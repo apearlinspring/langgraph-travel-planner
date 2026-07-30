@@ -26,8 +26,8 @@
 | 报告交付 | `report_data` 已是核心契约，但仍需继续统一报告、前端和评估口径 | 结构化报告成为前端、导出、评估共用事实来源 | P0 | 报告契约测试、前端渲染验证 |
 | AgentOps 与可观测 | 已有轻量运行指标，但缺少更完整的 trace（链路追踪）、成本和版本治理 | 形成运行质量指标、Prompt/模型变更记录和回放思路 | P1 | 评估系统文档、快照摘要、运行指标测试 |
 | 前端工程化 | 单页原型可演示，但组件化、可访问性和构建治理不足 | 保持原型定位，优先保证结构化报告体验和导出可信 | P1 | 前端验证脚本、移动端/桌面端检查说明 |
-| 旅行社客户与门店权限 | 门店、角色授权、线下潜客、本人同意、激活/停用、主顾问分配和范围查询已实现；客户拒绝/撤回同意或停用会原子收口内部交易，旧 `pending_review` 明确拒绝前不能随关系重新激活，写授权持共享范围锁以防并发撤权 TOCTOU（检查与使用时序差）。当前仍是应用层行级授权，不是 PostgreSQL RLS，且缺安全邀请/认领 token、客户通知、PII 档案、法律级同意、跨门店转移和门店停用/关闭 API | 先验证 `0004` 迁移、10 项 PostgreSQL 集成测试和越权/并发矩阵，再补客户获取、转店、合规和运营闭环；同意哈希与内部取消不得冒充法律合规、供应商取消或退款证明 | P0 | 客户生命周期模型/API 单测、隔离 PostgreSQL 17 集成测试、目标环境迁移与越权复验 |
-| 部署与运行 | readiness（就绪检查）、部署模板和历史 M1 受控试运行证据已存在；旧 `319ac26` 具有 PostgreSQL 17 三项交易测试绿灯，但新增 `0004` 候选尚无目标环境新鲜执行与签核证据，生产高可用、扩缩容和密钥系统仍不完整 | 保持部署模板诚实，冻结候选后在目标环境重跑 readiness、preflight、smoke/core 和运维证据链 | P1 | runtime/deployment 文档、绑定 commit 的 readiness 结果和目标环境脱敏摘要 |
+| 旅行社客户与门店权限 | 门店、角色授权、线下潜客、本人同意、激活/停用、主顾问分配和范围查询已实现；客户拒绝/撤回同意或停用会原子收口内部交易，旧 `pending_review` 明确拒绝前不能随关系重新激活，写授权持共享范围锁以防并发撤权 TOCTOU（检查与使用时序差）。当前仍是应用层行级授权，不是 PostgreSQL RLS，且缺安全邀请/认领 token、客户通知、PII 档案、法律级同意、跨门店转移和门店停用/关闭 API | 实现候选 `20ff715` 已在一次性 PostgreSQL 17 通过 10 项 `0004` 集成测试；下一步先在目标环境复验迁移与越权/并发矩阵，再补客户获取、转店、合规和运营闭环。同意哈希与内部取消不得冒充法律合规、供应商取消或退款证明 | P0 | [Actions 30534862434](https://github.com/apearlinspring/langgraph-travel-planner/actions/runs/30534862434)、客户生命周期模型/API 单测、目标环境迁移与越权复验 |
+| 部署与运行 | readiness（就绪检查）、部署模板和历史 M1 受控试运行证据已存在；实现候选 `20ff715` 已有默认 `1713 passed, 34 deselected` 与 PostgreSQL 17 `10 passed` 的 CI 证据，但仍无目标环境新鲜执行与签核证据，生产高可用、扩缩容和密钥系统仍不完整 | 保持部署模板诚实，冻结候选后在目标环境重跑 readiness、preflight、smoke/core 和运维证据链 | P1 | runtime/deployment 文档、绑定 commit 的 readiness 结果和目标环境脱敏摘要 |
 | 部署后 smoke 证据 | `collect_m1_smoke_evidence.py` 已能把 health、M1 gate 和 acceptance smoke 收束为脱敏摘要；当前缺口是尚未对冻结后的候选在目标环境执行并由负责人复核 | 在目标环境显式执行后形成绑定 commit、时间窗和配置口径的可复查证据；默认计划模式不冒充通过 | P0 | `scripts/collect_m1_smoke_evidence.py --json`、目标环境 smoke 摘要和复核记录 |
 | 备份恢复演练证据 | readiness 与 `collect_backup_restore_drill_evidence.py` 已覆盖备份声明、dump 元数据和 catalog 检查；当前缺少绑定当前候选的目标环境新鲜备份、实际非生产恢复、恢复后校验和负责人签核 | 在隔离环境执行恢复，记录备份新鲜度、恢复耗时、数据丢失窗口、恢复后 readiness/smoke 和签核 | P0 | `scripts/collect_backup_restore_drill_evidence.py --json`、非生产恢复演练摘要和签核记录 |
 | 监控告警投递证据 | readiness 与 `collect_monitoring_alerting_evidence.py` 已能收束监控声明；当前缺少目标环境真实告警投递、指标持续留存、值班升级和成本/备份告警闭环证据 | 对冻结候选执行受控告警演练，验证 health/readiness、错误率、工具失败、成本和备份告警的投递与处置 | P0 | `scripts/collect_monitoring_alerting_evidence.py --json`、告警送达证据和负责人签核 |
@@ -118,7 +118,7 @@
 | 2026-06-23 | RAG/Evaluation 第二轮 | 扩充公开目的地样例，把公开安全负样本从西安扩到更多目的地 | 已完成 | 公开目的地扩到西安、杭州、厦门、桂林；离线评测为 25 场景、24 文档、9 个公开安全场景，仍不代表真实向量库或在线 Agent 验收 |
 | 2026-07-11 | RAG/Evaluation 南京样例校准（历史快照） | 新增南京公开目的地样例和精确目的地消歧场景，重新生成离线召回报告并校准旧口径 | 已完成离线校准 | 该轮历史快照为 26 场景、25 文档、5 个公开目的地和 10 个 mixed-corpus safety 场景；当时离线脚本通过不代表真实向量库、在线 Agent 或生产环境验收通过 |
 | 2026-07-12 | RAG/Evaluation 北京银发样例校准 | 新增北京公开低强度、午休、无障碍/电梯和天气 Plan B 安全样例，补精确召回场景并复跑离线门禁 | 已完成离线校准 | 当前为 27 场景、26 文档、6 个公开目的地和 11 个 mixed-corpus safety 场景；2026-07-11 的 26/25/5/10 保留为历史快照；离线通过不代表真实向量库或在线 Agent 通过 |
-| 2026-07-26 | 旅行社客户生命周期与门店权限 | 新增 `0004` 门店、门店岗位授权、线下潜客关联、客户本人同意、激活/停用、主顾问分配和应用层范围查询；把报价、订单和内部审核绑定门店/客户关系，并增加客户停用内部交易收口、报价/订单数据库变更门禁、统一锁序与撤权并发保护 | 代码与专项测试已落地，3 个 PostgreSQL 测试文件的 10 项测试待新提交 CI 确认 | 旧 `319ac26` 的 PostgreSQL 17 三项交易测试已通过但早于 `0004`；本轮必须重新确认 3 项交易、5 项客户生命周期和 2 项门店权限测试，且内部 `cancelled` 不代表供应商取消/退款，整轮结果也不代表目标环境、RLS、完整 CRM、法律合规或真实履约 |
+| 2026-07-26 | 旅行社客户生命周期与门店权限 | 新增 `0004` 门店、门店岗位授权、线下潜客关联、客户本人同意、激活/停用、主顾问分配和应用层范围查询；把报价、订单和内部审核绑定门店/客户关系，并增加客户停用内部交易收口、报价/订单数据库变更门禁、统一锁序与撤权并发保护 | 实现候选 [`20ff715`](https://github.com/apearlinspring/langgraph-travel-planner/commit/20ff71592096dfb4fc718cef050832a745bfe174) 已在 [Actions 30534862434](https://github.com/apearlinspring/langgraph-travel-planner/actions/runs/30534862434) 通过默认 `1713 passed, 34 deselected` 和 PostgreSQL 17 `10 passed`（3+5+2） | 该结果只证明一次性 CI 环境；内部 `cancelled` 不代表供应商取消/退款，整轮结果也不代表目标环境、RLS、完整 CRM、法律合规或真实履约 |
 | 2026-06-23 | Tool/Security 第二轮 | 补外部 MCP 服务目录、required / optional / degraded 策略表，并与 `SERVICE_DEFINITIONS` 口径对齐 | 已完成 | MCP 目录只写变量名和状态语义；`required_when_declared` 只在被选中验收场景声明必需时阻塞 |
 | 2026-06-23 | Agent State/Architecture 第三轮 | 新增状态契约和 Prompt 规则清单，补双工作流轴、阶段字段、工具白名单和报告红线维护性测试 | 已完成 | `active_workflow` 决定读 `current_step` 或 `agency_step`；`step_config.py` 仍是静态配置来源，运行态还要依赖中间件和工具守卫 |
 | 2026-06-23 | Report/Frontend 第四轮 | 新增 `report_data` 交付契约文档，补前端渲染、复制摘要、导出 HTML 和浏览器回归边界断言 | 已完成 | 前端演示证明结构化报告可渲染、可复制摘要、可导出，不证明真实支付、预订、库存、锁价或履约 |
@@ -193,7 +193,7 @@ uv run python -m pytest --run-integration -q tests\test_agency_transaction_postg
 
 - `dry-run` 只能证明场景和入口存在，不能证明真实链路通过。
 - `blocked` 表示真实环境、密钥、外部服务或依赖不满足，不能写成业务通过。
-- 旧 `319ac26` 的 3 项 PostgreSQL 通过只适用于旧基线；当前 3 个文件共 10 项测试仍须等待包含 `0004` 的新提交触发数据库 job，且 CI 不能替代目标环境迁移。
+- 实现候选 `20ff71592096dfb4fc718cef050832a745bfe174` 已在运行 `30534862434` 通过 3 个文件共 10 项 PostgreSQL 17 测试；后续数据库改动必须重新触发该 job，且 CI 不能替代目标环境迁移。
 - 涉及真实外部 API（应用程序接口）时，结果只提交脱敏摘要，不提交原始日志、`.runtime` 快照或密钥。
 
 ## 8. 公开边界

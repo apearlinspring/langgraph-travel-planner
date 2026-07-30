@@ -92,10 +92,13 @@ name contains a standalone `test` or `ci` segment:
 uv run python -m pytest --run-integration -q tests\test_agency_transaction_postgres_integration.py tests\test_agency_customer_lifecycle_postgres_integration.py tests\test_agency_branch_permissions_postgres_integration.py
 ```
 
-The old `319ac26` PostgreSQL 17 result covers only the three pre-`0004`
-transaction tests. The current workflow defines ten PostgreSQL integration
-tests across the three files (3 transaction, 5 customer lifecycle and 2 branch
-permission tests), but a change containing `0004` still requires a fresh CI run
-and target-environment migration evidence before any readiness claim.
+Implementation candidate `20ff71592096dfb4fc718cef050832a745bfe174` is
+covered by GitHub Actions run
+`https://github.com/apearlinspring/langgraph-travel-planner/actions/runs/30534862434`:
+the default job reported 1713 passed and 34 deselected, while PostgreSQL 17
+reported 10 passed across the three files (3 transaction, 5 customer lifecycle
+and 2 branch permission tests). This is CI-only evidence. Any later agency
+database change requires a fresh run, and target-environment migration evidence
+is still required before a readiness claim.
 
 For deployment, use `docs/部署与运行/deployment-readiness.md`. Public deployment docs are templates; private production coordinates must stay outside Git.
