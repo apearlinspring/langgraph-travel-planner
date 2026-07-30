@@ -885,15 +885,18 @@ async def test_database_rejects_illegal_branch_role_and_fake_active_customer(
                         email=f"unconsented-{unique}@example.test",
                         password_hash="integration-test-only",
                     ),
-                    AgencyMembership(
-                        id=owner_membership_id,
-                        agency_id=actors.agency_id,
-                        user_id=owner_id,
-                        role="owner",
-                        status="active",
-                        joined_at=datetime.now(UTC),
-                    ),
                 ]
+            )
+            await session.flush()
+            session.add(
+                AgencyMembership(
+                    id=owner_membership_id,
+                    agency_id=actors.agency_id,
+                    user_id=owner_id,
+                    role="owner",
+                    status="active",
+                    joined_at=datetime.now(UTC),
+                )
             )
 
         with pytest.raises(IntegrityError):

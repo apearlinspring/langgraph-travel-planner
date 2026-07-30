@@ -65,6 +65,11 @@ async def test_branch_access_matrix_approver_queue_and_inactive_fail_closed(
                         email=f"matrix-manager-{unique}@example.test",
                         password_hash="integration-test-only",
                     ),
+                ]
+            )
+            await session.flush()
+            session.add_all(
+                [
                     AgencyMembership(
                         agency_id=actors.agency_id,
                         user_id=owner_id,
@@ -88,6 +93,11 @@ async def test_branch_access_matrix_approver_queue_and_inactive_fail_closed(
                         status="active",
                         revision=1,
                     ),
+                ]
+            )
+            await session.flush()
+            session.add_all(
+                [
                     AgencyBranchRoleGrant(
                         id=manager_grant_id,
                         agency_id=actors.agency_id,
@@ -411,6 +421,11 @@ async def test_concurrent_approver_revocations_preserve_review_coverage(
                         email=f"race-approver-{unique}@example.test",
                         password_hash="integration-test-only",
                     ),
+                ]
+            )
+            await session.flush()
+            session.add_all(
+                [
                     AgencyMembership(
                         agency_id=actors.agency_id,
                         user_id=owner_id,
@@ -426,18 +441,21 @@ async def test_concurrent_approver_revocations_preserve_review_coverage(
                         status="active",
                         joined_at=now,
                     ),
-                    AgencyBranchRoleGrant(
-                        id=second_grant_id,
-                        agency_id=actors.agency_id,
-                        branch_id=actors.branch_id,
-                        membership_id=second_membership_id,
-                        role="approver",
-                        status="active",
-                        revision=1,
-                        granted_by_user_id=owner_id,
-                        granted_at=now,
-                    ),
                 ]
+            )
+            await session.flush()
+            session.add(
+                AgencyBranchRoleGrant(
+                    id=second_grant_id,
+                    agency_id=actors.agency_id,
+                    branch_id=actors.branch_id,
+                    membership_id=second_membership_id,
+                    role="approver",
+                    status="active",
+                    revision=1,
+                    granted_by_user_id=owner_id,
+                    granted_at=now,
+                )
             )
 
         quote = await _call(

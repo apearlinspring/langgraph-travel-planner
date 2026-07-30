@@ -131,6 +131,11 @@ async def _seed_lifecycle_actors(session_factory) -> LifecycleActors:
                     name="Lifecycle Integration Agency",
                     status="active",
                 ),
+            ]
+        )
+        await session.flush()
+        session.add_all(
+            [
                 AgencyMembership(
                     agency_id=actors.agency_id,
                     user_id=actors.owner_id,
@@ -334,6 +339,11 @@ async def _seed_tenant(
                     name="PostgreSQL Integration Agency",
                     status="active",
                 ),
+            ]
+        )
+        await session.flush()
+        session.add_all(
+            [
                 AgencyBranch(
                     id=branch_id,
                     agency_id=agency_id,
@@ -358,6 +368,11 @@ async def _seed_tenant(
                     status="active",
                     joined_at=now,
                 ),
+            ]
+        )
+        await session.flush()
+        session.add_all(
+            [
                 AgencyCustomer(
                     id=customer_record_id,
                     agency_id=agency_id,
@@ -394,17 +409,20 @@ async def _seed_tenant(
                     revision=1,
                     granted_at=now,
                 ),
-                AgencyCustomerAdvisorAssignment(
-                    agency_id=agency_id,
-                    branch_id=branch_id,
-                    customer_id=customer_record_id,
-                    advisor_role_grant_id=advisor_grant_id,
-                    advisor_membership_id=advisor_membership_id,
-                    status="active",
-                    revision=1,
-                    assigned_at=now,
-                ),
             ]
+        )
+        await session.flush()
+        session.add(
+            AgencyCustomerAdvisorAssignment(
+                agency_id=agency_id,
+                branch_id=branch_id,
+                customer_id=customer_record_id,
+                advisor_role_grant_id=advisor_grant_id,
+                advisor_membership_id=advisor_membership_id,
+                status="active",
+                revision=1,
+                assigned_at=now,
+            )
         )
 
     return TenantActors(

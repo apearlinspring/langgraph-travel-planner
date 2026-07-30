@@ -493,9 +493,8 @@ def downgrade() -> None:
            OR event_row.from_status IS NOT NULL
            OR event_row.to_status <> customer.status
            OR event_row.actor_user_id IS NOT NULL
-           OR event_row.event_metadata->>'source'
-                IS DISTINCT FROM 'migration:20260726_0004'
-           OR json_object_length(event_row.event_metadata) <> 1
+           OR event_row.event_metadata::jsonb IS DISTINCT FROM
+                '{"source":"migration:20260726_0004"}'::jsonb
            OR event_row.created_at <> customer.created_at
         """,
         "downgrade blocked: non-baseline customer event exists",
