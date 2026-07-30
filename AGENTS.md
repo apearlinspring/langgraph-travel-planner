@@ -104,8 +104,14 @@ covered by GitHub Actions run
 `https://github.com/apearlinspring/langgraph-travel-planner/actions/runs/30534862434`:
 the default job reported 1713 passed and 34 deselected, while PostgreSQL 17
 reported 10 passed across the three files (3 transaction, 5 customer lifecycle
-and 2 branch permission tests). This is a pre-`0005`, CI-only baseline. The
-`0005 -> 0006` database chain requires a fresh successful run, and target-environment migration
-evidence is still required before any readiness claim.
+and 2 branch permission tests). This is a pre-`0005`, CI-only baseline.
+Implementation commit `b8b8bea29477b472c942b7df40e8da6e9dbf05ab` is covered by
+GitHub Actions run
+`https://github.com/apearlinspring/langgraph-travel-planner/actions/runs/30551146157`:
+the default job reported 1738 passed and 39 deselected, while PostgreSQL 17
+reported 15 passed across four files (3 transaction, 5 customer lifecycle,
+5 customer claim and 2 branch permission tests). This proves the ephemeral
+CI path for `0005 -> 0006`; target-environment migration evidence is still
+required before any readiness claim.
 
 For deployment, use `docs/部署与运行/deployment-readiness.md`. Public deployment docs are templates; private production coordinates must stay outside Git.

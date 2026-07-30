@@ -231,7 +231,7 @@ draft / approved / processing / failed -> cancellation_pending
 - 外部调用前先落本地意图和幂等记录，回执以可重放方式落账。
 - timeout（超时）不能直接推断为失败或成功，必须进入查询、重试或人工介入。
 
-现有测试已加入客户生命周期和交易 API 契约、客户停用时的内部交易收口、门店授权矩阵、顾问分配、禁止自审、审核绑定、幂等重放/冲突、行锁和外部动作关闭，以及 `0005` 的 token 不落库、目标账户认领、过期/撤销/重复认领、服务端同意证据、legacy 升级和数据库不可变门禁；`0006` 另有迁移契约测试，确保共享触发器只在对应表分支内访问表专属 `NEW` 字段。实现候选 [`20ff715`](https://github.com/apearlinspring/langgraph-travel-planner/commit/20ff71592096dfb4fc718cef050832a745bfe174) 的 [GitHub Actions 运行 30534862434](https://github.com/apearlinspring/langgraph-travel-planner/actions/runs/30534862434) 曾精确执行 3 个 PostgreSQL 测试文件并得到 `10 passed`：3 项交易、5 项客户生命周期和 2 项门店权限；同一运行的默认 job 为 `1713 passed, 34 deselected`。该证据只覆盖 `0004` 历史候选，不能证明 `0005 -> 0006`。当前修复后的 PostgreSQL CI、本地数据库执行和目标环境迁移均不得沿用旧结果，必须重新执行并记录；任何 CI 结果也不能代替目标环境事务故障和供应商故障注入测试。
+现有测试已加入客户生命周期和交易 API 契约、客户停用时的内部交易收口、门店授权矩阵、顾问分配、禁止自审、审核绑定、幂等重放/冲突、行锁和外部动作关闭，以及 `0005` 的 token 不落库、目标账户认领、过期/撤销/重复认领、服务端同意证据、legacy 升级和数据库不可变门禁；`0006` 另有迁移契约测试，确保共享触发器只在对应表分支内访问表专属 `NEW` 字段。实现候选 [`20ff715`](https://github.com/apearlinspring/langgraph-travel-planner/commit/20ff71592096dfb4fc718cef050832a745bfe174) 的 [运行 30534862434](https://github.com/apearlinspring/langgraph-travel-planner/actions/runs/30534862434) 曾得到默认 `1713 passed, 34 deselected` 和 PostgreSQL `10 passed`，只覆盖 `0004` 历史候选。当前 [`b8b8bea`](https://github.com/apearlinspring/langgraph-travel-planner/commit/b8b8bea29477b472c942b7df40e8da6e9dbf05ab) 的 [运行 30551146157](https://github.com/apearlinspring/langgraph-travel-planner/actions/runs/30551146157) 已得到默认 `1738 passed, 39 deselected` 和 PostgreSQL 17 四文件 `15 passed`：3 项交易、5 项客户生命周期、5 项客户认领和 2 项门店权限。这证明 `0005 -> 0006` 在一次性 CI 数据库中的迁移、约束和集成路径；本机未执行真实 PostgreSQL，且 CI 不能代替目标环境迁移、事务故障和供应商故障注入测试。
 
 ## 外部执行的默认关闭策略
 
