@@ -16,6 +16,7 @@ from tests.test_agency_transaction_postgres_integration import (
     _seed_tenant,
     _session_factory,
     migrated_postgres,
+    postgres_schema,
 )
 
 
