@@ -5,12 +5,17 @@ This directory contains several kinds of public project documentation: current c
 ## Current Wording Rules（当前口径规则）
 
 - 当前代码、当前测试和重新生成的机器报告优先于历史截图、旧讲解稿和带日期的验收记录。
-- 产品目标业务形态是“旅行社经营与交付工作台”。当前代码完成的是规划交付链路和第一阶段租户、成员、客户关系及交易数据/控制面骨架，不得把目标定位扩写成当前已经具备完整 CRM、真实供应链或资金交易能力。
+- 产品目标业务形态是“旅行社经营与交付工作台”。当前代码完成的是规划交付链路、门店与客户生命周期控制面及第一阶段交易数据/控制面骨架，不得把目标定位扩写成当前已经具备完整 CRM、真实供应链或资金交易能力。
 - 主执行链路是“单个 Travel Agent + `StepConfigMiddleware` + 状态迁移工具”；目的地 Router 和交通 Coordinator 是按需调用的嵌套能力。交通 Coordinator 直接调用航班、高铁、自驾查询工具，不存在再分发给三个交通方式子 Agent 的运行层。
 - `agency_plan` 是旅行社方案规划分支，不是交易状态；`agency_quote`、`agency_order` 等持久化模型也不等于真实预订、支付、退款或履约已经接通。`mock_checkout` 与 `generate_order_tool` 只提供演示编号和确认流程，不是订单系统。
-- `/api/v1/agency` 当前覆盖报价草稿、发布、客户接受、订单草稿、提交审核和旅行社内部批准/拒绝，共 13 个操作、6 个 `POST`。只有同一有效旅行社中 `active` 的 `approver` 可以决定审核，`owner`、`admin` 等角色不能代替，客户或审核发起人不能自审。
+- `/api/v1/agency` 的交易子集覆盖报价草稿、发布、客户接受、订单草稿、提交审核和旅行社内部批准/拒绝，共 13 个操作、6 个 `POST`；门店与客户生命周期子集另有 16 个操作、10 个 `POST`，覆盖门店、门店角色授权、线下潜客登记、用户关联、本人同意、激活/停用、顾问分配和客户事件。
+- 门店权限是应用层行级授权，不是 PostgreSQL RLS（行级安全策略）。`owner`、`admin` 为旅行社全域角色；门店经理、顾问和审批员必须持有同一有效门店的有效授权，顾问还必须是客户当前主顾问。门店至少有一名有效专职 `approver` 才能提交订单，提交后不得撤掉最后一名审批员；只有该角色可以处理本门店审核。批准还要求客户保持 `active + granted`，客户停用后保留中的审核只能拒绝，且拒绝前不能重新激活客户关系；`owner`、`admin` 等角色不能代替，客户或审核发起人不能自审。
 - 内部 `approved` 只表示订单通过旅行社审核，不能扩写成供应商预订、支付、退款、通知或履约已执行；`external_action_enabled` 仍为 `false`。交易域审核也没有绑定平台 `/api/v1/approvals` 或 LangGraph HITL（人类在环）恢复链路。
-- 创建报价要求客户在对应旅行社的 `agency_customer` 关系为 `active`；客户导入、同意和关系激活/停用 API 尚未实现。
+- 创建报价要求 `agency_customer` 已关联平台用户、关系为 `active`、同意为 `granted` 且所属门店有效。当前可逐条登记线下 `prospect` 并关联已有平台用户；未确认绑定可在 `invited + unknown` 阶段纠正，关联用户在记录本人同意决定前不可读取客户关系，但仍没有批量导入、邀请发送或安全认领流程。
+- 客户关系模型未引入姓名、电话、证件和联系人等 PII（个人可识别信息）字段，也不发送客户通知；同意版本和证据哈希只用于审计，不能充当法律合规证明。客户跨门店转移及门店停用/关闭 API 尚未实现。
+- `blocked` 客户保持失败关闭，不能经普通停用/激活接口解除；门店状态数据库门禁要求先结束有效授权、分配、客户关系和未终结交易，正式门店关闭工作流仍待实现。
+- 活跃客户拒绝/撤回同意或关系停用时，会在同一数据库事务中结束当前顾问分配并收口内部交易：`draft`/`offered` 和无订单的 `accepted` 报价内部取消；未执行的 `draft`/`approved` 订单内部取消；`pending_review` 保留给审批员拒绝且不能再批准，拒绝前客户关系也不能重新激活；异常或可能已有外部状态的订单进入 `cancellation_pending` 或保留人工处理标记。这不代表供应商取消、退款或通知已经完成。
+- `0004` 数据库触发器固化报价/订单绑定，复验客户/门店、报价有效期和订单/报价金额、币种、快照一致性，强制 `revision` 每次恰好加一、状态只按白名单迁移并保持外部动作关闭；订单与审核终态在事务提交时成对校验。写路径采用 `customer -> branch -> quote/order` 锁序，授权写持有门店/成员共享锁以防撤权 TOCTOU（检查与使用时序差）竞态。
 - 真实供应商预订、支付、退款和通知当前尚未接入，并由 `TRANSACTION_MODE=disabled`、总熔断开关和细粒度动作开关默认阻断。任何未来放行都必须同时满足租户权限、四眼审批、`revision`（修订号）、`payload_hash`（业务负载哈希）、幂等、补偿和供应商适配器检查。
 - 审批模块当前提供策略、持久化请求、只追加事件、角色权限和 readiness（就绪状态）语义；尚未实现 LangGraph `interrupt/resume`（中断/恢复）执行闭环。`approval_persistence_ready` 只表示审批与审计可持久化，`hitl_closed_loop` 当前始终为 `false`，不能扩写成“审批后自动恢复原 Agent 动作”。
 - acceptance（验收）门禁主要检查报告、证据、工具治理、可观测摘要和运行预算；普通场景默认还要求工具失败数、失败率和 fallback 数为 0，只有专门降级场景可显式放宽。历史 `passed` 只代表当时单次场景门禁结果；它不等于最优工具轨迹、稳定成功率、当前工作树通过或完整生产就绪。
@@ -30,7 +35,7 @@ This directory contains several kinds of public project documentation: current c
 | Directory | Purpose | Start Here |
 |---|---|---|
 | `项目总览/` | Capability map, high-level project positioning and engineering improvement roadmap. | `项目总览/project-capability-map.md` |
-| `架构与流程/` | Architecture, workflow state, planning boundaries, agency transaction domain, model switching and session consistency. | `架构与流程/architecture-overview.md` |
+| `架构与流程/` | Architecture, workflow state, planning boundaries, agency customer/transaction domain, model switching and session consistency. | `架构与流程/architecture-overview.md` |
 | `RAG与知识库/` | RAG（检索增强生成）runtime contract, vector store readiness, retrieval evaluation and demo explanation. | `RAG与知识库/rag-demo-evaluation-guide.md` |
 | `评估与验收/` | Evaluation system, acceptance gates, live runner and pre-deployment validation. | `评估与验收/evaluation-system.md` |
 | `部署与运行/` | Local runtime, database readiness, MCP（模型上下文协议）health and deployment templates. | `部署与运行/deployment-readiness.md` |
@@ -47,7 +52,7 @@ Local workspaces may contain ignored `历史轮次/` and `问题记录/` directo
 - TravelState contract: `架构与流程/state-schema-contract.md`
 - Step prompt rule inventory: `架构与流程/step-prompt-rule-inventory.md`
 - Planning mode boundary: `架构与流程/planning-mode-boundary.md`
-- Agency transaction domain: `架构与流程/agency-transaction-domain.md`
+- Agency customer and transaction domain: `架构与流程/agency-transaction-domain.md`
 - Planning guardrails: `架构与流程/planning-guardrails.md`
 - RAG demo and evaluation: `RAG与知识库/rag-demo-evaluation-guide.md`
 - RAG release checklist: `RAG与知识库/rag-release-checklist.md`
@@ -93,4 +98,4 @@ Local workspaces may contain ignored `历史轮次/` and `问题记录/` directo
 - Keep current architecture, deployment, testing, frontend and evaluation contracts in Git, and label public templates, dated evidence and historical archives explicitly.
 - Keep restricted deployment coordinates, local evidence snapshots, raw logs, database dumps, generated vector stores and local-only drafts out of Git.
 - Productized RAG route templates are demo catalog data. They do not represent real inventory, guaranteed group availability or locked pricing.
-- Transaction tables, mock checkout and generated references are engineering evidence only. They do not represent a supplier booking, payment, refund, ticket, hotel confirmation, contract or completed fulfillment.
+- Branch/customer records, consent hashes, transaction tables, mock checkout and generated references are engineering evidence only. They do not prove legal consent, supplier booking, payment, refund, notification, ticket, hotel confirmation, contract or completed fulfillment.

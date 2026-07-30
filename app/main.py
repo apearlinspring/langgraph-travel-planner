@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse
 from app.agency.transaction_policy import build_transaction_execution_snapshot
 from app.api.v1 import (
     admin,
+    agency_customers,
     agency_transactions,
     approvals,
     chat,
@@ -605,6 +606,7 @@ async def append_security_headers(request: Request, call_next):
 
 app.include_router(users.router, prefix="/api/v1")
 app.include_router(conversations.router, prefix="/api/v1")
+app.include_router(agency_customers.router, prefix="/api/v1")
 app.include_router(agency_transactions.router, prefix="/api/v1")
 app.include_router(guide_import.router, prefix="/api/v1")
 app.include_router(maps.router, prefix="/api/v1")

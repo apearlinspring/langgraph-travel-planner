@@ -5,14 +5,16 @@ import uuid
 
 from sqlalchemy import desc, func, select
 
-from app.agency.transaction_service import (
+from app.agency.errors import (
     AgencyTransactionAccessDenied,
     AgencyTransactionConflict,
     AgencyTransactionPersistenceError,
-    AgencyTransactionService,
     AgencyTransactionValidationError,
+    hidden_not_found,
+)
+from app.agency.transaction_service import (
+    AgencyTransactionService,
     IdempotencyState,
-    _hidden_not_found,
 )
 from app.models.agency_order_review import AgencyOrderReview
 from app.models.agency_transaction import AgencyMembership, AgencyOrder
@@ -29,27 +31,26 @@ class AgencyOrderReviewService(AgencyTransactionService):
         self,
         *,
         agency_id: uuid.UUID,
+        branch_id: uuid.UUID,
         actor_user_id: uuid.UUID,
         hide_resource: bool,
+        lock_scope: bool = False,
     ) -> AgencyMembership:
-        membership = await self._get_active_membership(
+        access = await self.authorization.require_branch_approver(
             agency_id=agency_id,
-            user_id=actor_user_id,
+            branch_id=branch_id,
+            actor_user_id=actor_user_id,
+            hide_resource=hide_resource,
+            lock_scope=lock_scope,
         )
-        if membership is not None and membership.role in ORDER_REVIEWER_ROLES:
-            return membership
-        if hide_resource:
-            raise _hidden_not_found()
-        raise AgencyTransactionAccessDenied(
-            "agency_order_review_permission_denied",
-            "只有本旅行社的专职审批员可以处理订单审核",
-        )
+        return access.membership
 
     async def _load_replayed_order_review(
         self,
         state: IdempotencyState,
         *,
         agency_id: uuid.UUID,
+        branch_id: uuid.UUID,
         order_id: uuid.UUID,
     ) -> AgencyOrderReview:
         if state.record.resource_type != "agency_order_review":
@@ -68,6 +69,7 @@ class AgencyOrderReviewService(AgencyTransactionService):
             select(AgencyOrderReview)
             .where(AgencyOrderReview.id == resource_id)
             .where(AgencyOrderReview.agency_id == agency_id)
+            .where(AgencyOrderReview.branch_id == branch_id)
             .where(AgencyOrderReview.order_id == order_id)
         )
         review = result.scalar_one_or_none()
@@ -82,6 +84,8 @@ class AgencyOrderReviewService(AgencyTransactionService):
         self,
         order_id: uuid.UUID,
         *,
+        agency_id: uuid.UUID | None = None,
+        branch_id: uuid.UUID | None = None,
         for_update: bool = False,
     ) -> AgencyOrderReview:
         statement = (
@@ -90,12 +94,20 @@ class AgencyOrderReviewService(AgencyTransactionService):
             .order_by(desc(AgencyOrderReview.order_revision))
             .limit(1)
         )
+        if agency_id is not None:
+            statement = statement.where(
+                AgencyOrderReview.agency_id == agency_id
+            )
+        if branch_id is not None:
+            statement = statement.where(
+                AgencyOrderReview.branch_id == branch_id
+            )
         if for_update:
             statement = statement.with_for_update()
         result = await self.db.execute(statement)
         review = result.scalar_one_or_none()
         if review is None:
-            raise _hidden_not_found()
+            raise hidden_not_found()
         return review
 
     @staticmethod
@@ -105,6 +117,7 @@ class AgencyOrderReviewService(AgencyTransactionService):
     ) -> None:
         binding_matches = (
             review.agency_id == order.agency_id
+            and review.branch_id == order.branch_id
             and review.order_id == order.id
             and review.order_revision == order.revision
             and review.payload_hash == order.payload_hash
@@ -126,30 +139,40 @@ class AgencyOrderReviewService(AgencyTransactionService):
         limit: int,
         offset: int,
     ) -> tuple[list[AgencyOrderReview], int]:
-        await self._require_order_reviewer(
+        membership = await self._get_active_membership(
+            agency_id=agency_id,
+            user_id=actor_user_id,
+        )
+        if membership is None or membership.role not in ORDER_REVIEWER_ROLES:
+            raise AgencyTransactionAccessDenied(
+                "agency_order_review_permission_denied",
+                "只有本旅行社具备门店授权的专职审批员可以查看审核队列",
+            )
+        visibility = await self.authorization.branch_visibility_filter(
             agency_id=agency_id,
             actor_user_id=actor_user_id,
-            hide_resource=False,
+            roles=ORDER_REVIEWER_ROLES,
+            branch_column=AgencyOrderReview.branch_id,
         )
-        filters = [AgencyOrderReview.agency_id == agency_id]
+        filters = [
+            AgencyOrderReview.agency_id == agency_id,
+            visibility,
+        ]
         if status_filter is not None:
             filters.append(AgencyOrderReview.status == status_filter)
-        result = await self.db.execute(
-            select(AgencyOrderReview)
+        return await self._page(
+            statement=select(AgencyOrderReview)
             .where(*filters)
             .order_by(
                 desc(AgencyOrderReview.created_at),
                 desc(AgencyOrderReview.id),
             )
             .limit(limit)
-            .offset(offset)
-        )
-        count_result = await self.db.execute(
-            select(func.count())
+            .offset(offset),
+            count_statement=select(func.count())
             .select_from(AgencyOrderReview)
-            .where(*filters)
+            .where(*filters),
         )
-        return list(result.scalars().all()), int(count_result.scalar_one())
 
     async def get_order_review(
         self,
@@ -160,10 +183,15 @@ class AgencyOrderReviewService(AgencyTransactionService):
         order = await self._get_order(order_id)
         await self._require_order_reviewer(
             agency_id=order.agency_id,
+            branch_id=order.branch_id,
             actor_user_id=actor_user_id,
             hide_resource=True,
         )
-        return await self._get_order_review(order.id)
+        return await self._get_order_review(
+            order.id,
+            agency_id=order.agency_id,
+            branch_id=order.branch_id,
+        )
 
     async def decide_order_review(
         self,
@@ -188,12 +216,32 @@ class AgencyOrderReviewService(AgencyTransactionService):
                 "拒绝订单审核时必须填写原因",
             )
 
-        order = await self._get_order(order_id, for_update=True)
+        order_preview = await self._get_order(order_id)
+        binding = self._transaction_binding(order_preview)
+        if normalized_decision == "approve":
+            customer = await self._get_transaction_customer(
+                agency_id=binding[0],
+                branch_id=binding[1],
+                customer_id=binding[2],
+                for_update=True,
+            )
+        else:
+            customer = await self._get_customer_binding(
+                agency_id=binding[0],
+                branch_id=binding[1],
+                customer_id=binding[2],
+                for_update=True,
+            )
+        self._ensure_customer_binding(customer, binding)
         await self._require_order_reviewer(
-            agency_id=order.agency_id,
+            agency_id=binding[0],
+            branch_id=binding[1],
             actor_user_id=actor_user_id,
             hide_resource=True,
+            lock_scope=True,
         )
+        order = await self._get_order(order_id, for_update=True)
+        self._ensure_transaction_binding(order, binding)
         await self._ensure_agency_active(order.agency_id)
         state = await self._begin_idempotent_action(
             agency_id=order.agency_id,
@@ -211,10 +259,16 @@ class AgencyOrderReviewService(AgencyTransactionService):
             return await self._load_replayed_order_review(
                 state,
                 agency_id=order.agency_id,
+                branch_id=order.branch_id,
                 order_id=order.id,
             )
 
-        review = await self._get_order_review(order.id, for_update=True)
+        review = await self._get_order_review(
+            order.id,
+            agency_id=order.agency_id,
+            branch_id=order.branch_id,
+            for_update=True,
+        )
         self._ensure_revision(order.revision, expected_revision)
         if order.status != "pending_review" or review.status != "pending":
             raise AgencyTransactionConflict(
@@ -274,10 +328,8 @@ class AgencyOrderReviewService(AgencyTransactionService):
                 "external_actions_triggered": False,
             },
         )
-        self._complete_idempotency(
+        return await self._finish_action(
             state,
             resource_type="agency_order_review",
-            resource_id=review.id,
+            resource=review,
         )
-        await self._flush()
-        return review

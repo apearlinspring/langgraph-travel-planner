@@ -57,7 +57,7 @@ MAX_QUOTE_SNAPSHOT_BYTES = 256 * 1024
 
 class AgencyQuoteCreateRequest(BaseModel):
     agency_id: uuid.UUID
-    customer_user_id: uuid.UUID
+    customer_id: uuid.UUID
     conversation_id: uuid.UUID | None = None
     product_id: uuid.UUID | None = None
     total_amount: Money
@@ -138,7 +138,8 @@ class AgencyQuoteResponse(BaseModel):
     id: uuid.UUID
     quote_no: str
     agency_id: uuid.UUID
-    user_id: uuid.UUID
+    branch_id: uuid.UUID
+    customer_id: uuid.UUID
     conversation_id: uuid.UUID | None = None
     product_id: uuid.UUID | None = None
     status: QuoteStatus
@@ -168,8 +169,9 @@ class AgencyOrderResponse(BaseModel):
     id: uuid.UUID
     order_no: str
     agency_id: uuid.UUID
+    branch_id: uuid.UUID
+    customer_id: uuid.UUID
     quote_id: uuid.UUID
-    user_id: uuid.UUID
     status: OrderStatus
     revision: int
     payload_hash: str
@@ -198,6 +200,7 @@ class AgencyOrderListResponse(BaseModel):
 class AgencyOrderReviewResponse(BaseModel):
     id: uuid.UUID
     agency_id: uuid.UUID
+    branch_id: uuid.UUID
     order_id: uuid.UUID
     status: OrderReviewStatus
     order_revision: int
@@ -225,13 +228,13 @@ class AgencyOrderReviewListResponse(BaseModel):
 class AgencyOrderEventResponse(BaseModel):
     id: uuid.UUID
     agency_id: uuid.UUID
+    branch_id: uuid.UUID
     order_id: uuid.UUID
     event_sequence: int
     order_revision: int
     event_type: str
     from_status: OrderStatus | None = None
     to_status: OrderStatus | None = None
-    actor_user_id: uuid.UUID | None = None
     payload_hash: str
     event_metadata: dict[str, Any]
     created_at: datetime

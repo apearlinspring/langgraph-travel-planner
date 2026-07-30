@@ -2,23 +2,17 @@
 from __future__ import annotations
 
 import uuid
-from typing import Annotated, Awaitable, TypeVar
 
-from fastapi import APIRouter, Depends, Header, Query, status
-from sqlalchemy.exc import SQLAlchemyError
+from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agency.order_review_service import AgencyOrderReviewService
-from app.agency.transaction_service import (
-    AgencyTransactionAccessDenied,
-    AgencyTransactionConflict,
-    AgencyTransactionError,
-    AgencyTransactionNotFound,
-    AgencyTransactionPersistenceError,
-    AgencyTransactionService,
-    AgencyTransactionValidationError,
+from app.agency.transaction_service import AgencyTransactionService
+from app.api.dependencies import get_current_user
+from app.api.v1.agency_common import (
+    IdempotencyKeyHeader,
+    agency_service_call as _service_call,
 )
-from app.api.dependencies import api_error, get_current_user
 from app.models.base import get_db
 from app.models.user import User
 from app.schemas.agency_transaction import (
@@ -41,16 +35,6 @@ from app.schemas.agency_transaction import (
 
 
 router = APIRouter(prefix="/agency", tags=["旅行社交易"])
-IdempotencyKeyHeader = Annotated[
-    str,
-    Header(
-        alias="Idempotency-Key",
-        min_length=1,
-        max_length=128,
-        description="客户端生成的幂等键；相同业务请求重试时必须复用",
-    ),
-]
-T = TypeVar("T")
 
 
 async def get_agency_transaction_service(
@@ -59,69 +43,19 @@ async def get_agency_transaction_service(
     return AgencyOrderReviewService(db)
 
 
-def _transaction_error_to_http(error: Exception):
-    if isinstance(error, AgencyTransactionNotFound):
-        return api_error(
-            status_code=status.HTTP_404_NOT_FOUND,
-            code=error.code,
-            message=error.message,
-        )
-    if isinstance(error, AgencyTransactionAccessDenied):
-        return api_error(
-            status_code=status.HTTP_403_FORBIDDEN,
-            code=error.code,
-            message=error.message,
-        )
-    if isinstance(error, AgencyTransactionConflict):
-        return api_error(
-            status_code=status.HTTP_409_CONFLICT,
-            code=error.code,
-            message=error.message,
-        )
-    if isinstance(error, AgencyTransactionValidationError):
-        return api_error(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            code=error.code,
-            message=error.message,
-        )
-    if isinstance(error, (AgencyTransactionPersistenceError, SQLAlchemyError)):
-        code = (
-            error.code
-            if isinstance(error, AgencyTransactionPersistenceError)
-            else "transaction_persistence_unavailable"
-        )
-        message = (
-            error.message
-            if isinstance(error, AgencyTransactionPersistenceError)
-            else "交易数据服务暂时不可用，请稍后重试"
-        )
-        return api_error(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            code=code,
-            message=message,
-        )
-    if isinstance(error, AgencyTransactionError):
-        return api_error(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            code=error.code,
-            message=error.message,
-        )
-    raise error
-
-
-async def _service_call(operation: Awaitable[T]) -> T:
-    try:
-        return await operation
-    except (AgencyTransactionError, SQLAlchemyError) as error:
-        raise _transaction_error_to_http(error) from error
-
-
 def _event_response(event) -> AgencyOrderEventResponse:
     response = AgencyOrderEventResponse.model_validate(event)
+    allowed_metadata = {
+        "quote_id",
+        "review_id",
+        "review_order_revision",
+        "decision_order_revision",
+        "external_actions_triggered",
+    }
     safe_metadata = {
         key: value
         for key, value in response.event_metadata.items()
-        if key != "quote_snapshot"
+        if key in allowed_metadata
     }
     return response.model_copy(update={"event_metadata": safe_metadata})
 

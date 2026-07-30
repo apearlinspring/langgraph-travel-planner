@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session, configure_mappers
 
 from app.models import (
     Agency,
+    AgencyBranch,
     AgencyCustomer,
     AgencyMembership,
     AgencyOrder,
@@ -147,14 +148,19 @@ def test_agency_membership_and_transaction_tenant_boundaries_are_explicit():
     } == _constraint_names(Agency, UniqueConstraint)
     assert {
         "uq_agency_membership_agency_user",
+        "uq_agency_membership_agency_id",
     }.issubset(_constraint_names(AgencyMembership, UniqueConstraint))
     assert {
         "uq_agency_customer_agency_user",
+        "uq_agency_customer_branch_id",
+        "uq_agency_customer_branch_no",
+        "uq_agency_customer_quote_binding",
     }.issubset(_constraint_names(AgencyCustomer, UniqueConstraint))
     assert AgencyMembership.__table__.columns["agency_id"].nullable is False
     assert AgencyMembership.__table__.columns["user_id"].nullable is False
     assert AgencyCustomer.__table__.columns["agency_id"].nullable is False
-    assert AgencyCustomer.__table__.columns["user_id"].nullable is False
+    assert AgencyCustomer.__table__.columns["branch_id"].nullable is False
+    assert AgencyCustomer.__table__.columns["user_id"].nullable is True
     membership_role_sql = str(
         next(
             constraint
@@ -168,6 +174,7 @@ def test_agency_membership_and_transaction_tenant_boundaries_are_explicit():
         "approver",
         "finance",
         "auditor",
+        "branch_manager",
         "admin",
         "owner",
     ):
@@ -204,13 +211,31 @@ def test_agency_membership_and_transaction_tenant_boundaries_are_explicit():
         "agency_id",
         "product_id",
     ]
-    assert tenant_foreign_keys["fk_agency_order_quote_tenant_user"] == [
+    assert tenant_foreign_keys["fk_agency_quote_branch"] == [
         "agency_id",
+        "branch_id",
+    ]
+    assert tenant_foreign_keys["fk_agency_quote_customer"] == [
+        "agency_id",
+        "branch_id",
+        "customer_id",
+        "user_id",
+    ]
+    assert tenant_foreign_keys["fk_agency_order_quote_binding"] == [
+        "agency_id",
+        "branch_id",
+        "customer_id",
         "user_id",
         "quote_id",
     ]
-    assert tenant_foreign_keys["fk_agency_order_event_order_tenant"] == [
+    assert tenant_foreign_keys["fk_agency_order_customer"] == [
         "agency_id",
+        "branch_id",
+        "customer_id",
+    ]
+    assert tenant_foreign_keys["fk_agency_order_event_order_branch"] == [
+        "agency_id",
+        "branch_id",
         "order_id",
     ]
     assert tenant_foreign_keys["fk_payment_attempt_order_tenant"] == [
@@ -283,16 +308,18 @@ def test_order_review_is_strongly_bound_and_enforces_four_eyes():
     )
     assert [column.name for column in unique.columns] == [
         "agency_id",
+        "branch_id",
         "order_id",
         "order_revision",
     ]
     tenant_fk = next(
         constraint
         for constraint in AgencyOrderReview.__table__.constraints
-        if constraint.name == "fk_agency_order_review_order_tenant"
+        if constraint.name == "fk_agency_order_review_order_branch"
     )
     assert [column.name for column in tenant_fk.columns] == [
         "agency_id",
+        "branch_id",
         "order_id",
     ]
     assert {
@@ -406,6 +433,7 @@ class _MigrationOperationRecorder:
         self.created_tables: list[str] = []
         self.table_elements: dict[str, tuple[object, ...]] = {}
         self.created_indexes: list[tuple[str, str]] = []
+        self.created_index_columns: dict[tuple[str, str], tuple[str, ...]] = {}
         self.dropped_indexes: list[tuple[str, str]] = []
         self.dropped_tables: list[str] = []
         self.executed_sql: list[str] = []
@@ -422,6 +450,9 @@ class _MigrationOperationRecorder:
         **kwargs,
     ) -> None:
         self.created_indexes.append((index_name, table_name))
+        self.created_index_columns[(index_name, table_name)] = tuple(
+            args[0] if args else ()
+        )
 
     def drop_index(self, index_name: str, *, table_name: str) -> None:
         self.dropped_indexes.append((index_name, table_name))
@@ -471,6 +502,62 @@ def test_agency_transaction_migration_has_reversible_dependency_order():
             FulfillmentRecord,
         )
     }
+    columns_added_by_0004 = {
+        "agency_customer": {
+            "branch_id",
+            "customer_no",
+            "source_type",
+            "source_reference",
+            "consent_status",
+            "consent_version",
+            "consent_evidence_hash",
+            "consent_updated_at",
+            "lifecycle_revision",
+            "invited_at",
+            "deactivated_at",
+        },
+        "agency_quote": {"branch_id", "customer_id"},
+        "agency_order": {"branch_id", "customer_id"},
+        "agency_order_event": {"branch_id"},
+    }
+    indexes_added_by_0004 = {
+        "agency_customer": {"ix_agency_customer_branch_status"},
+        "agency_quote": {"ix_agency_quote_branch_customer_status"},
+        "agency_order": {"ix_agency_order_branch_customer_status"},
+    }
+    constraints_added_by_0004 = {
+        "agency_membership": {"uq_agency_membership_agency_id"},
+        "agency_customer": {
+            "uq_agency_customer_branch_id",
+            "uq_agency_customer_branch_no",
+            "uq_agency_customer_quote_binding",
+            "fk_agency_customer_branch",
+            "ck_agency_customer_no",
+            "ck_agency_customer_source",
+            "ck_agency_customer_consent_status",
+            "ck_agency_customer_consent_evidence_hash",
+            "ck_agency_customer_consent_evidence",
+            "ck_agency_customer_lifecycle_revision",
+            "ck_agency_customer_deactivated",
+        },
+        "agency_quote": {
+            "uq_agency_quote_order_binding",
+            "fk_agency_quote_branch",
+            "fk_agency_quote_customer",
+        },
+        "agency_order": {
+            "uq_agency_order_branch_id",
+            "fk_agency_order_quote_binding",
+            "fk_agency_order_branch",
+            "fk_agency_order_customer",
+        },
+        "agency_order_event": {"fk_agency_order_event_order_branch"},
+    }
+    constraints_replaced_by_0004 = {
+        "agency_quote": {"uq_agency_quote_agency_user_id"},
+        "agency_order": {"fk_agency_order_quote_tenant_user"},
+        "agency_order_event": {"fk_agency_order_event_order_tenant"},
+    }
     for table_name, model in models_by_table.items():
         migrated_elements = recorder.table_elements[table_name]
         migrated_columns = {
@@ -478,16 +565,19 @@ def test_agency_transaction_migration_has_reversible_dependency_order():
             for element in migrated_elements
             if isinstance(element, Column)
         }
-        assert migrated_columns == {
-            column.name for column in model.__table__.columns
-        }
+        assert migrated_columns == (
+            {column.name for column in model.__table__.columns}
+            - columns_added_by_0004.get(table_name, set())
+        )
 
         migrated_indexes = {
             index_name
             for index_name, indexed_table in recorder.created_indexes
             if indexed_table == table_name
         }
-        assert migrated_indexes == _index_names(model)
+        assert migrated_indexes == (
+            _index_names(model) - indexes_added_by_0004.get(table_name, set())
+        )
 
         migrated_named_constraints = {
             element.name
@@ -507,7 +597,35 @@ def test_agency_transaction_migration_has_reversible_dependency_order():
             )
             and constraint.name
         }
-        assert migrated_named_constraints == model_named_constraints
+        expected_baseline_constraints = (
+            model_named_constraints
+            - constraints_added_by_0004.get(table_name, set())
+        ) | constraints_replaced_by_0004.get(table_name, set())
+        assert migrated_named_constraints == expected_baseline_constraints
+
+    membership_elements = recorder.table_elements["agency_membership"]
+    membership_role_check = next(
+        element
+        for element in membership_elements
+        if isinstance(element, CheckConstraint)
+        and element.name == "ck_agency_membership_role"
+    )
+    assert "branch_manager" not in str(membership_role_check.sqltext)
+
+    customer_elements = recorder.table_elements["agency_customer"]
+    legacy_customer_user = next(
+        element
+        for element in customer_elements
+        if isinstance(element, Column) and element.name == "user_id"
+    )
+    assert legacy_customer_user.nullable is False
+    legacy_customer_status = next(
+        element
+        for element in customer_elements
+        if isinstance(element, CheckConstraint)
+        and element.name == "ck_agency_customer_status"
+    )
+    assert "invited" not in str(legacy_customer_status.sqltext)
 
     migrated_constraint_names = {
         element.name
@@ -569,7 +687,9 @@ def test_order_review_migration_matches_the_strongly_typed_model():
         if isinstance(element, Column)
     }
     assert migrated_columns == {
-        column.name for column in AgencyOrderReview.__table__.columns
+        column.name
+        for column in AgencyOrderReview.__table__.columns
+        if column.name != "branch_id"
     }
     migrated_indexes = {
         index_name
@@ -595,7 +715,47 @@ def test_order_review_migration_matches_the_strongly_typed_model():
         )
         and constraint.name
     }
-    assert migrated_constraints == model_constraints
+    assert migrated_constraints == (
+        model_constraints
+        - {"fk_agency_order_review_order_branch"}
+    ) | {"fk_agency_order_review_order_tenant"}
+
+    legacy_unique = next(
+        element
+        for element in migrated_elements
+        if isinstance(element, UniqueConstraint)
+        and element.name == "uq_agency_order_review_order_revision"
+    )
+    assert list(legacy_unique._pending_colargs) == [
+        "agency_id",
+        "order_id",
+        "order_revision",
+    ]
+    legacy_tenant_fk = next(
+        element
+        for element in migrated_elements
+        if isinstance(element, ForeignKeyConstraint)
+        and element.name == "fk_agency_order_review_order_tenant"
+    )
+    assert list(legacy_tenant_fk.column_keys) == [
+        "agency_id",
+        "order_id",
+    ]
+    legacy_queue_index = next(
+        element
+        for element in recorder.created_indexes
+        if element[0] == "ix_agency_order_review_agency_status_created"
+    )
+    assert legacy_queue_index == (
+        "ix_agency_order_review_agency_status_created",
+        "agency_order_review",
+    )
+    assert recorder.created_index_columns[legacy_queue_index] == (
+        "agency_id",
+        "status",
+        "created_at",
+        "id",
+    )
 
     revision.downgrade()
     assert recorder.dropped_tables == ["agency_order_review"]
@@ -713,6 +873,25 @@ def test_sqlite_schema_blocks_relationship_driven_cross_tenant_reassignment():
         )
         session.add_all([user, agency_a, agency_b])
         session.flush()
+        branch_a = AgencyBranch(
+            agency_id=agency_a.id,
+            branch_code="MAIN",
+            name="旅行社 A 总店",
+            status="active",
+        )
+        session.add(branch_a)
+        session.flush()
+        customer_a = AgencyCustomer(
+            agency_id=agency_a.id,
+            branch_id=branch_a.id,
+            customer_no="CUSTOMER-A",
+            user_id=user.id,
+            source_type="test",
+            status="prospect",
+            consent_status="unknown",
+        )
+        session.add(customer_a)
+        session.flush()
         product_a = SupplierProduct(
             agency_id=agency_a.id,
             supplier_code="SUPPLIER-A",
@@ -735,6 +914,8 @@ def test_sqlite_schema_blocks_relationship_driven_cross_tenant_reassignment():
             quote_no="QUOTE-TENANT-BOUNDARY",
             idempotency_key="quote-tenant-boundary",
             agency_id=agency_a.id,
+            branch_id=branch_a.id,
+            customer_id=customer_a.id,
             user_id=user.id,
             product_id=product_a.id,
             status="draft",

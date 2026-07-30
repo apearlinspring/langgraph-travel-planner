@@ -31,6 +31,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, foreign, mapped_column, relationship
 
 from app.models.base import Base
+from app.models.agency_customer_lifecycle import AgencyCustomer
 
 
 class Agency(Base):
@@ -93,10 +94,15 @@ class AgencyMembership(Base):
             "user_id",
             name="uq_agency_membership_agency_user",
         ),
+        UniqueConstraint(
+            "agency_id",
+            "id",
+            name="uq_agency_membership_agency_id",
+        ),
         CheckConstraint(
             "role IN "
             "('travel_advisor', 'booking_operator', 'approver', 'finance', "
-            "'auditor', 'admin', 'owner')",
+            "'auditor', 'branch_manager', 'admin', 'owner')",
             name="ck_agency_membership_role",
         ),
         CheckConstraint(
@@ -136,54 +142,6 @@ class AgencyMembership(Base):
     )
 
     agency: Mapped[Agency] = relationship(back_populates="memberships")
-
-
-class AgencyCustomer(Base):
-    """旅行社与客户之间可授权、可停用的业务关系。"""
-
-    __tablename__ = "agency_customer"
-    __table_args__ = (
-        UniqueConstraint(
-            "agency_id",
-            "user_id",
-            name="uq_agency_customer_agency_user",
-        ),
-        CheckConstraint(
-            "status IN ('prospect', 'active', 'inactive', 'blocked')",
-            name="ck_agency_customer_status",
-        ),
-        Index("ix_agency_customer_user_status", "user_id", "status"),
-    )
-
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
-        primary_key=True,
-        default=uuid.uuid4,
-    )
-    agency_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("agency.id", ondelete="RESTRICT"),
-    )
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("user.id", ondelete="RESTRICT"),
-    )
-    status: Mapped[str] = mapped_column(String(20), default="prospect")
-    activated_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True),
-        nullable=True,
-    )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=func.now(),
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=func.now(),
-        onupdate=func.now(),
-    )
-
-    agency: Mapped[Agency] = relationship(back_populates="customers")
 
 
 class SupplierProduct(Base):
@@ -266,9 +224,11 @@ class AgencyQuote(Base):
         UniqueConstraint("quote_no", name="uq_agency_quote_no"),
         UniqueConstraint(
             "agency_id",
+            "branch_id",
+            "customer_id",
             "user_id",
             "id",
-            name="uq_agency_quote_agency_user_id",
+            name="uq_agency_quote_order_binding",
         ),
         UniqueConstraint(
             "agency_id",
@@ -279,6 +239,23 @@ class AgencyQuote(Base):
             ["agency_id", "product_id"],
             ["supplier_product.agency_id", "supplier_product.id"],
             name="fk_agency_quote_product_tenant",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["agency_id", "branch_id"],
+            ["agency_branch.agency_id", "agency_branch.id"],
+            name="fk_agency_quote_branch",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["agency_id", "branch_id", "customer_id", "user_id"],
+            [
+                "agency_customer.agency_id",
+                "agency_customer.branch_id",
+                "agency_customer.id",
+                "agency_customer.user_id",
+            ],
+            name="fk_agency_quote_customer",
             ondelete="RESTRICT",
         ),
         CheckConstraint(
@@ -310,6 +287,15 @@ class AgencyQuote(Base):
             "created_at",
             "id",
         ),
+        Index(
+            "ix_agency_quote_branch_customer_status",
+            "agency_id",
+            "branch_id",
+            "customer_id",
+            "status",
+            "created_at",
+            "id",
+        ),
         Index("ix_agency_quote_valid_until", "valid_until"),
     )
 
@@ -324,6 +310,8 @@ class AgencyQuote(Base):
         UUID(as_uuid=True),
         ForeignKey("agency.id", ondelete="RESTRICT"),
     )
+    branch_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    customer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("user.id", ondelete="RESTRICT"),
@@ -379,6 +367,8 @@ class AgencyQuote(Base):
         back_populates="quote",
         primaryjoin=lambda: and_(
             AgencyQuote.agency_id == AgencyOrder.agency_id,
+            AgencyQuote.branch_id == AgencyOrder.branch_id,
+            AgencyQuote.customer_id == AgencyOrder.customer_id,
             AgencyQuote.user_id == AgencyOrder.user_id,
             AgencyQuote.id == foreign(AgencyOrder.quote_id),
         ),
@@ -403,17 +393,47 @@ class AgencyOrder(Base):
         ),
         UniqueConstraint(
             "agency_id",
+            "branch_id",
+            "id",
+            name="uq_agency_order_branch_id",
+        ),
+        UniqueConstraint(
+            "agency_id",
             "idempotency_key",
             name="uq_agency_order_agency_idempotency",
         ),
         ForeignKeyConstraint(
-            ["agency_id", "user_id", "quote_id"],
+            [
+                "agency_id",
+                "branch_id",
+                "customer_id",
+                "user_id",
+                "quote_id",
+            ],
             [
                 "agency_quote.agency_id",
+                "agency_quote.branch_id",
+                "agency_quote.customer_id",
                 "agency_quote.user_id",
                 "agency_quote.id",
             ],
-            name="fk_agency_order_quote_tenant_user",
+            name="fk_agency_order_quote_binding",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["agency_id", "branch_id"],
+            ["agency_branch.agency_id", "agency_branch.id"],
+            name="fk_agency_order_branch",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["agency_id", "branch_id", "customer_id"],
+            [
+                "agency_customer.agency_id",
+                "agency_customer.branch_id",
+                "agency_customer.id",
+            ],
+            name="fk_agency_order_customer",
             ondelete="RESTRICT",
         ),
         CheckConstraint(
@@ -461,6 +481,15 @@ class AgencyOrder(Base):
             "id",
         ),
         Index(
+            "ix_agency_order_branch_customer_status",
+            "agency_id",
+            "branch_id",
+            "customer_id",
+            "status",
+            "created_at",
+            "id",
+        ),
+        Index(
             "ix_agency_order_payment_fulfillment",
             "payment_status",
             "fulfillment_status",
@@ -477,6 +506,8 @@ class AgencyOrder(Base):
         UUID(as_uuid=True),
         ForeignKey("agency.id", ondelete="RESTRICT"),
     )
+    branch_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    customer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
     quote_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
     )
@@ -531,6 +562,8 @@ class AgencyOrder(Base):
         back_populates="order",
         primaryjoin=lambda: and_(
             AgencyOrder.agency_id == AgencyQuote.agency_id,
+            AgencyOrder.branch_id == AgencyQuote.branch_id,
+            AgencyOrder.customer_id == AgencyQuote.customer_id,
             AgencyOrder.user_id == AgencyQuote.user_id,
             foreign(AgencyOrder.quote_id) == AgencyQuote.id,
         ),
@@ -557,6 +590,7 @@ class AgencyOrder(Base):
         order_by="AgencyOrderEvent.event_sequence",
         primaryjoin=lambda: and_(
             AgencyOrder.agency_id == AgencyOrderEvent.agency_id,
+            AgencyOrder.branch_id == AgencyOrderEvent.branch_id,
             AgencyOrder.id == foreign(AgencyOrderEvent.order_id),
         ),
         foreign_keys=lambda: [AgencyOrderEvent.order_id],
@@ -570,14 +604,20 @@ class AgencyOrderEvent(Base):
     __tablename__ = "agency_order_event"
     __table_args__ = (
         UniqueConstraint(
+            "agency_id",
+            "branch_id",
             "order_id",
             "event_sequence",
             name="uq_agency_order_event_sequence",
         ),
         ForeignKeyConstraint(
-            ["agency_id", "order_id"],
-            ["agency_order.agency_id", "agency_order.id"],
-            name="fk_agency_order_event_order_tenant",
+            ["agency_id", "branch_id", "order_id"],
+            [
+                "agency_order.agency_id",
+                "agency_order.branch_id",
+                "agency_order.id",
+            ],
+            name="fk_agency_order_event_order_branch",
             ondelete="RESTRICT",
         ),
         CheckConstraint(
@@ -609,6 +649,7 @@ class AgencyOrderEvent(Base):
         UUID(as_uuid=True),
         ForeignKey("agency.id", ondelete="RESTRICT"),
     )
+    branch_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
     order_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
     )
@@ -634,6 +675,7 @@ class AgencyOrderEvent(Base):
         back_populates="events",
         primaryjoin=lambda: and_(
             AgencyOrderEvent.agency_id == AgencyOrder.agency_id,
+            AgencyOrderEvent.branch_id == AgencyOrder.branch_id,
             foreign(AgencyOrderEvent.order_id) == AgencyOrder.id,
         ),
         foreign_keys=lambda: [AgencyOrderEvent.order_id],

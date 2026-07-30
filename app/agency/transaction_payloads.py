@@ -51,7 +51,7 @@ def canonical_money_text(value: Decimal) -> str:
 def build_quote_payload(data: AgencyQuoteCreateRequest) -> dict[str, Any]:
     return {
         "agency_id": data.agency_id,
-        "customer_user_id": data.customer_user_id,
+        "customer_id": data.customer_id,
         "conversation_id": data.conversation_id,
         "product_id": data.product_id,
         "total_amount": canonical_money_text(data.total_amount),

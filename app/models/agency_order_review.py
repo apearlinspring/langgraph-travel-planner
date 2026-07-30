@@ -30,13 +30,18 @@ class AgencyOrderReview(Base):
     __tablename__ = "agency_order_review"
     __table_args__ = (
         ForeignKeyConstraint(
-            ["agency_id", "order_id"],
-            ["agency_order.agency_id", "agency_order.id"],
-            name="fk_agency_order_review_order_tenant",
+            ["agency_id", "branch_id", "order_id"],
+            [
+                "agency_order.agency_id",
+                "agency_order.branch_id",
+                "agency_order.id",
+            ],
+            name="fk_agency_order_review_order_branch",
             ondelete="RESTRICT",
         ),
         UniqueConstraint(
             "agency_id",
+            "branch_id",
             "order_id",
             "order_revision",
             name="uq_agency_order_review_order_revision",
@@ -92,6 +97,7 @@ class AgencyOrderReview(Base):
         Index(
             "ix_agency_order_review_agency_status_created",
             "agency_id",
+            "branch_id",
             "status",
             "created_at",
             "id",
@@ -112,6 +118,7 @@ class AgencyOrderReview(Base):
         UUID(as_uuid=True),
         ForeignKey("agency.id", ondelete="RESTRICT"),
     )
+    branch_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
     order_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
     status: Mapped[str] = mapped_column(String(20), default="pending")
     order_revision: Mapped[int] = mapped_column(Integer)

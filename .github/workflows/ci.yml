@@ -124,4 +124,7 @@ jobs:
       - name: Run PostgreSQL Transaction Integration
         run: |
           test -n "$ZHIXING_TEST_POSTGRES_DSN"
-          python -m pytest --run-integration -q tests/test_agency_transaction_postgres_integration.py
+          python -m pytest --run-integration -q \
+            tests/test_agency_transaction_postgres_integration.py \
+            tests/test_agency_customer_lifecycle_postgres_integration.py \
+            tests/test_agency_branch_permissions_postgres_integration.py

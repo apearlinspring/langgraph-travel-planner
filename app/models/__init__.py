@@ -6,10 +6,17 @@ from app.models.user import User
 from app.models.conversation import Conversation
 from app.models.message import Message
 from app.models.approval import ApprovalEvent, ApprovalRequest, ToolAuditEvent
+from app.models.agency_customer_lifecycle import (
+    BRANCH_ROLES,
+    AgencyBranch,
+    AgencyBranchRoleGrant,
+    AgencyCustomer,
+    AgencyCustomerAdvisorAssignment,
+    AgencyCustomerEvent,
+)
 from app.models.agency_order_review import AgencyOrderReview
 from app.models.agency_transaction import (
     Agency,
-    AgencyCustomer,
     AgencyMembership,
     AgencyOrder,
     AgencyOrderEvent,
@@ -29,7 +36,12 @@ __all__ = [
     "ApprovalEvent",
     "ToolAuditEvent",
     "Agency",
+    "BRANCH_ROLES",
+    "AgencyBranch",
+    "AgencyBranchRoleGrant",
     "AgencyCustomer",
+    "AgencyCustomerEvent",
+    "AgencyCustomerAdvisorAssignment",
     "AgencyMembership",
     "SupplierProduct",
     "AgencyQuote",

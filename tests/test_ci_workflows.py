@@ -147,8 +147,10 @@ def test_ci_runs_transaction_integration_against_disposable_postgres():
     )
     assert 'test -n "$ZHIXING_TEST_POSTGRES_DSN"' in step_commands
     assert (
-        "python -m pytest --run-integration -q "
-        "tests/test_agency_transaction_postgres_integration.py"
+        "python -m pytest --run-integration -q \\\n"
+        "  tests/test_agency_transaction_postgres_integration.py \\\n"
+        "  tests/test_agency_customer_lifecycle_postgres_integration.py \\\n"
+        "  tests/test_agency_branch_permissions_postgres_integration.py"
     ) in step_commands
     assert "scripts.init_db" not in step_commands
     assert "${{ secrets." not in str(job)

@@ -5,6 +5,8 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from sqlalchemy import false, true
+from sqlalchemy.dialects import postgresql
 
 from app.agency.order_review_service import AgencyOrderReviewService
 from app.agency.transaction_service import (
@@ -15,10 +17,12 @@ from app.agency.transaction_service import (
     IdempotencyState,
 )
 from app.models.agency_order_review import AgencyOrderReview
-from app.models.agency_transaction import IdempotencyRecord
+from app.models.agency_transaction import AgencyOrder, IdempotencyRecord
 from tests.agency_transaction_test_support import (
     AGENCY_ID,
     APPROVER_ID,
+    BRANCH_ID,
+    BUSINESS_CUSTOMER_ID,
     CUSTOMER_ID,
     ORDER_ID,
     REVIEW_ID,
@@ -29,12 +33,15 @@ from tests.agency_transaction_test_support import (
 
 
 @pytest.mark.asyncio
-async def test_approver_can_read_order_snapshot_without_quote_write_permission():
+async def test_approver_can_read_only_a_review_bound_order_snapshot():
     membership = SimpleNamespace(role="approver", status="active")
     order = order_record(status="pending_review", revision=2)
-    read_service = AgencyTransactionService(  # type: ignore[arg-type]
-        ExecuteSequence(order, membership, REVIEW_ID)
-    )
+    db = ExecuteSequence(REVIEW_ID)
+    read_service = AgencyTransactionService(db)  # type: ignore[arg-type]
+    read_service._get_order = AsyncMock(return_value=order)
+    review_access = SimpleNamespace(membership=membership, grant=object())
+    require_view = AsyncMock(return_value=review_access)
+    read_service.authorization.require_transaction_view = require_view
 
     result = await read_service.get_order(
         actor_user_id=APPROVER_ID,
@@ -42,18 +49,14 @@ async def test_approver_can_read_order_snapshot_without_quote_write_permission()
     )
 
     assert result is order
-
-    write_service = AgencyTransactionService(  # type: ignore[arg-type]
-        ExecuteSequence(membership)
+    require_view.assert_awaited_once_with(
+        resource=order,
+        actor_user_id=APPROVER_ID,
+        include_approver=True,
     )
-    with pytest.raises(AgencyTransactionAccessDenied) as exc_info:
-        await write_service._require_quote_manager(
-            agency_id=AGENCY_ID,
-            actor_user_id=APPROVER_ID,
-            hide_resource=False,
-        )
-
-    assert exc_info.value.code == "agency_quote_permission_denied"
+    review_statement = str(db.statements[0])
+    assert "agency_order_review.branch_id" in review_statement
+    assert "agency_order_review.order_id" in review_statement
 
 
 @pytest.mark.asyncio
@@ -61,7 +64,11 @@ async def test_approver_cannot_read_an_order_without_a_review_record():
     membership = SimpleNamespace(role="approver", status="active")
     order = order_record(status="draft", revision=1)
     service = AgencyTransactionService(  # type: ignore[arg-type]
-        ExecuteSequence(order, membership, None)
+        ExecuteSequence(None)
+    )
+    service._get_order = AsyncMock(return_value=order)
+    service.authorization.require_transaction_view = AsyncMock(
+        return_value=SimpleNamespace(membership=membership, grant=object())
     )
 
     with pytest.raises(AgencyTransactionNotFound):
@@ -75,8 +82,11 @@ async def test_approver_cannot_read_an_order_without_a_review_record():
 async def test_approver_order_list_is_limited_to_review_bound_orders():
     membership = SimpleNamespace(role="approver", status="active")
     order = order_record(status="pending_review", revision=2)
-    db = ExecuteSequence(membership, [order], 1)
+    db = ExecuteSequence([order], 1)
     service = AgencyTransactionService(db)  # type: ignore[arg-type]
+    service._get_active_membership = AsyncMock(return_value=membership)
+    visibility = AsyncMock(side_effect=[false(), true()])
+    service.authorization.transaction_visibility_filter = visibility
 
     orders, total = await service.list_orders(
         actor_user_id=APPROVER_ID,
@@ -88,8 +98,23 @@ async def test_approver_order_list_is_limited_to_review_bound_orders():
 
     assert orders == [order]
     assert total == 1
-    list_statement = str(db.statements[1])
+    assert visibility.await_count == 2
+    assert visibility.await_args_list[0].kwargs == {
+        "model": AgencyOrder,
+        "agency_id": AGENCY_ID,
+        "actor_user_id": APPROVER_ID,
+    }
+    assert visibility.await_args_list[1].kwargs == {
+        "model": AgencyOrder,
+        "agency_id": AGENCY_ID,
+        "actor_user_id": APPROVER_ID,
+        "include_approver": True,
+    }
+    list_statement = str(db.statements[0])
     assert "agency_order.id IN (SELECT agency_order_review.order_id" in (
+        list_statement
+    )
+    assert "agency_order_review.branch_id = agency_order.branch_id" in (
         list_statement
     )
     assert "agency_order.user_id =" not in list_statement
@@ -120,6 +145,23 @@ async def test_submit_order_creates_a_review_bound_to_the_new_revision(
         "_ensure_agency_active",
         AsyncMock(),
     )
+    ensure_approver = AsyncMock()
+    monkeypatch.setattr(
+        service,
+        "_ensure_branch_has_active_approver",
+        ensure_approver,
+    )
+    get_customer = AsyncMock(
+        return_value=SimpleNamespace(
+            id=BUSINESS_CUSTOMER_ID,
+            agency_id=AGENCY_ID,
+            branch_id=BRANCH_ID,
+            user_id=CUSTOMER_ID,
+        )
+    )
+    monkeypatch.setattr(service, "_get_transaction_customer", get_customer)
+    lock_branch = AsyncMock()
+    service.authorization.lock_active_branch_scope = lock_branch
     monkeypatch.setattr(
         service,
         "_begin_idempotent_action",
@@ -145,6 +187,7 @@ async def test_submit_order_creates_a_review_bound_to_the_new_revision(
     assert isinstance(review, AgencyOrderReview)
     assert result is order
     assert review.agency_id == order.agency_id
+    assert review.branch_id == order.branch_id
     assert review.order_id == order.id
     assert review.order_revision == order.revision == 2
     assert review.payload_hash == order.payload_hash
@@ -162,42 +205,103 @@ async def test_submit_order_creates_a_review_bound_to_the_new_revision(
     assert idempotency.status == "completed"
     assert idempotency.resource_type == "agency_order"
     assert idempotency.resource_id == str(order.id)
-
-
-@pytest.mark.parametrize("role", ["owner", "admin", "travel_advisor"])
-@pytest.mark.asyncio
-async def test_only_the_dedicated_tenant_approver_can_decide_reviews(
-    role: str,
-):
-    membership = SimpleNamespace(role=role, status="active")
-    service = AgencyOrderReviewService(  # type: ignore[arg-type]
-        ExecuteSequence(membership)
+    get_customer.assert_awaited_once_with(
+        agency_id=AGENCY_ID,
+        branch_id=BRANCH_ID,
+        customer_id=BUSINESS_CUSTOMER_ID,
+        for_update=True,
     )
+    lock_branch.assert_awaited_once_with(
+        agency_id=AGENCY_ID,
+        branch_id=BRANCH_ID,
+    )
+    ensure_approver.assert_awaited_once_with(
+        agency_id=AGENCY_ID,
+        branch_id=BRANCH_ID,
+    )
+
+
+@pytest.mark.asyncio
+async def test_order_submission_requires_active_branch_approver():
+    db = ExecuteSequence(None)
+    service = AgencyTransactionService(db)  # type: ignore[arg-type]
+
+    with pytest.raises(AgencyTransactionConflict) as exc_info:
+        await service._ensure_branch_has_active_approver(
+            agency_id=AGENCY_ID,
+            branch_id=BRANCH_ID,
+        )
+
+    assert exc_info.value.code == "branch_approver_required"
+    statement = str(
+        db.statements[0].compile(dialect=postgresql.dialect())
+    )
+    assert "agency_branch_role_grant" in statement
+    assert "agency_membership" in statement
+    assert statement.endswith("FOR SHARE")
+
+
+@pytest.mark.asyncio
+async def test_reviewer_gate_is_bound_to_the_order_branch():
+    service = AgencyOrderReviewService(  # type: ignore[arg-type]
+        SimpleNamespace()
+    )
+    require_branch_role = AsyncMock(
+        side_effect=AgencyTransactionAccessDenied(
+            "agency_branch_permission_denied",
+            "当前用户没有该门店的有效角色授权",
+        )
+    )
+    service.authorization.require_branch_role = require_branch_role
 
     with pytest.raises(AgencyTransactionAccessDenied) as exc_info:
         await service._require_order_reviewer(
             agency_id=AGENCY_ID,
+            branch_id=BRANCH_ID,
             actor_user_id=APPROVER_ID,
             hide_resource=False,
         )
 
-    assert exc_info.value.code == "agency_order_review_permission_denied"
+    assert exc_info.value.code == "agency_branch_permission_denied"
+    require_branch_role.assert_awaited_once_with(
+        agency_id=AGENCY_ID,
+        branch_id=BRANCH_ID,
+        actor_user_id=APPROVER_ID,
+        roles={"approver"},
+        hide_resource=False,
+        allow_agency_wide=False,
+        lock_scope=False,
+    )
 
 
 @pytest.mark.asyncio
 async def test_dedicated_tenant_approver_role_is_accepted():
     membership = SimpleNamespace(role="approver", status="active")
     service = AgencyOrderReviewService(  # type: ignore[arg-type]
-        ExecuteSequence(membership)
+        SimpleNamespace()
     )
+    require_branch_role = AsyncMock(
+        return_value=SimpleNamespace(membership=membership, grant=object())
+    )
+    service.authorization.require_branch_role = require_branch_role
 
     result = await service._require_order_reviewer(
         agency_id=AGENCY_ID,
+        branch_id=BRANCH_ID,
         actor_user_id=APPROVER_ID,
         hide_resource=False,
     )
 
     assert result is membership
+    require_branch_role.assert_awaited_once_with(
+        agency_id=AGENCY_ID,
+        branch_id=BRANCH_ID,
+        actor_user_id=APPROVER_ID,
+        roles={"approver"},
+        hide_resource=False,
+        allow_agency_wide=False,
+        lock_scope=False,
+    )
 
 
 def test_order_review_binding_rejects_amount_or_hash_drift():
@@ -242,6 +346,7 @@ async def test_order_review_decision_is_atomic_bound_and_never_external(
     review = AgencyOrderReview(
         id=REVIEW_ID,
         agency_id=AGENCY_ID,
+        branch_id=BRANCH_ID,
         order_id=ORDER_ID,
         status="pending",
         order_revision=2,
@@ -285,6 +390,21 @@ async def test_order_review_decision_is_atomic_bound_and_never_external(
         "_get_order_review",
         AsyncMock(return_value=review),
     )
+    get_customer = AsyncMock(
+        return_value=SimpleNamespace(
+            id=BUSINESS_CUSTOMER_ID,
+            agency_id=AGENCY_ID,
+            branch_id=BRANCH_ID,
+            user_id=CUSTOMER_ID,
+        )
+    )
+    monkeypatch.setattr(service, "_get_transaction_customer", get_customer)
+    get_customer_binding = AsyncMock(return_value=get_customer.return_value)
+    monkeypatch.setattr(
+        service,
+        "_get_customer_binding",
+        get_customer_binding,
+    )
     append_event = AsyncMock()
     monkeypatch.setattr(service, "_append_order_event", append_event)
 
@@ -323,6 +443,29 @@ async def test_order_review_decision_is_atomic_bound_and_never_external(
     assert idempotency.status == "completed"
     assert idempotency.resource_type == "agency_order_review"
     assert idempotency.resource_id == str(REVIEW_ID)
+    if decision == "approve":
+        get_customer.assert_awaited_once_with(
+            agency_id=AGENCY_ID,
+            branch_id=BRANCH_ID,
+            customer_id=BUSINESS_CUSTOMER_ID,
+            for_update=True,
+        )
+        get_customer_binding.assert_not_awaited()
+    else:
+        get_customer.assert_not_awaited()
+        get_customer_binding.assert_awaited_once_with(
+            agency_id=AGENCY_ID,
+            branch_id=BRANCH_ID,
+            customer_id=BUSINESS_CUSTOMER_ID,
+            for_update=True,
+        )
+    service._require_order_reviewer.assert_awaited_once_with(
+        agency_id=AGENCY_ID,
+        branch_id=BRANCH_ID,
+        actor_user_id=APPROVER_ID,
+        hide_resource=True,
+        lock_scope=True,
+    )
 
 
 @pytest.mark.asyncio
@@ -366,6 +509,18 @@ async def test_order_customer_cannot_decide_own_review(
         service,
         "_get_order_review",
         AsyncMock(return_value=review),
+    )
+    monkeypatch.setattr(
+        service,
+        "_get_transaction_customer",
+        AsyncMock(
+            return_value=SimpleNamespace(
+                id=BUSINESS_CUSTOMER_ID,
+                agency_id=AGENCY_ID,
+                branch_id=BRANCH_ID,
+                user_id=CUSTOMER_ID,
+            )
+        ),
     )
 
     with pytest.raises(AgencyTransactionAccessDenied) as exc_info:

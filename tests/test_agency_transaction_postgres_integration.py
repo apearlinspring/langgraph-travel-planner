@@ -61,9 +61,102 @@ class PostgresSandbox:
 @dataclass(frozen=True)
 class TenantActors:
     agency_id: uuid.UUID
+    branch_id: uuid.UUID
     advisor_id: uuid.UUID
+    advisor_membership_id: uuid.UUID
+    advisor_grant_id: uuid.UUID
     approver_id: uuid.UUID
-    customer_id: uuid.UUID
+    approver_membership_id: uuid.UUID
+    approver_grant_id: uuid.UUID
+    customer_user_id: uuid.UUID
+    customer_record_id: uuid.UUID
+
+
+@dataclass(frozen=True)
+class LifecycleActors:
+    agency_id: uuid.UUID
+    owner_id: uuid.UUID
+    advisor_one_id: uuid.UUID
+    advisor_one_membership_id: uuid.UUID
+    advisor_two_id: uuid.UUID
+    advisor_two_membership_id: uuid.UUID
+    customer_user_id: uuid.UUID
+
+
+async def _seed_lifecycle_actors(session_factory) -> LifecycleActors:
+    from app.models.agency_transaction import Agency, AgencyMembership
+    from app.models.user import User
+
+    unique = uuid.uuid4().hex
+    actors = LifecycleActors(
+        agency_id=uuid.uuid4(),
+        owner_id=uuid.uuid4(),
+        advisor_one_id=uuid.uuid4(),
+        advisor_one_membership_id=uuid.uuid4(),
+        advisor_two_id=uuid.uuid4(),
+        advisor_two_membership_id=uuid.uuid4(),
+        customer_user_id=uuid.uuid4(),
+    )
+    now = datetime.now(UTC)
+    async with session_factory() as session, session.begin():
+        session.add_all(
+            [
+                User(
+                    id=actors.owner_id,
+                    username=f"owner-{unique}",
+                    email=f"owner-{unique}@example.test",
+                    password_hash="integration-test-only",
+                ),
+                User(
+                    id=actors.advisor_one_id,
+                    username=f"advisor-one-{unique}",
+                    email=f"advisor-one-{unique}@example.test",
+                    password_hash="integration-test-only",
+                ),
+                User(
+                    id=actors.advisor_two_id,
+                    username=f"advisor-two-{unique}",
+                    email=f"advisor-two-{unique}@example.test",
+                    password_hash="integration-test-only",
+                ),
+                User(
+                    id=actors.customer_user_id,
+                    username=f"linked-customer-{unique}",
+                    email=f"linked-customer-{unique}@example.test",
+                    password_hash="integration-test-only",
+                ),
+                Agency(
+                    id=actors.agency_id,
+                    agency_code=f"LIFE-{unique[:20]}",
+                    name="Lifecycle Integration Agency",
+                    status="active",
+                ),
+                AgencyMembership(
+                    agency_id=actors.agency_id,
+                    user_id=actors.owner_id,
+                    role="owner",
+                    status="active",
+                    joined_at=now,
+                ),
+                AgencyMembership(
+                    id=actors.advisor_one_membership_id,
+                    agency_id=actors.agency_id,
+                    user_id=actors.advisor_one_id,
+                    role="travel_advisor",
+                    status="active",
+                    joined_at=now,
+                ),
+                AgencyMembership(
+                    id=actors.advisor_two_membership_id,
+                    agency_id=actors.agency_id,
+                    user_id=actors.advisor_two_id,
+                    role="travel_advisor",
+                    status="active",
+                    joined_at=now,
+                ),
+            ]
+        )
+    return actors
 
 
 def _explicit_test_url() -> URL:
@@ -189,6 +282,11 @@ def _session_factory(
 async def _seed_tenant(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> TenantActors:
+    from app.models.agency_customer_lifecycle import (
+        AgencyBranch,
+        AgencyBranchRoleGrant,
+        AgencyCustomerAdvisorAssignment,
+    )
     from app.models.agency_transaction import (
         Agency,
         AgencyCustomer,
@@ -197,10 +295,17 @@ async def _seed_tenant(
     from app.models.user import User
 
     agency_id = uuid.uuid4()
+    branch_id = uuid.uuid4()
     advisor_id = uuid.uuid4()
+    advisor_membership_id = uuid.uuid4()
+    advisor_grant_id = uuid.uuid4()
     approver_id = uuid.uuid4()
-    customer_id = uuid.uuid4()
+    approver_membership_id = uuid.uuid4()
+    approver_grant_id = uuid.uuid4()
+    customer_user_id = uuid.uuid4()
+    customer_record_id = uuid.uuid4()
     unique = uuid.uuid4().hex
+    now = datetime.now(UTC)
 
     async with session_factory() as session, session.begin():
         session.add_all(
@@ -212,7 +317,7 @@ async def _seed_tenant(
                     password_hash="integration-test-only",
                 ),
                 User(
-                    id=customer_id,
+                    id=customer_user_id,
                     username=f"customer-{unique}",
                     email=f"customer-{unique}@example.test",
                     password_hash="integration-test-only",
@@ -229,34 +334,90 @@ async def _seed_tenant(
                     name="PostgreSQL Integration Agency",
                     status="active",
                 ),
+                AgencyBranch(
+                    id=branch_id,
+                    agency_id=agency_id,
+                    branch_code="MAIN",
+                    name="PostgreSQL Integration Branch",
+                    status="active",
+                    revision=1,
+                ),
                 AgencyMembership(
+                    id=advisor_membership_id,
                     agency_id=agency_id,
                     user_id=advisor_id,
                     role="travel_advisor",
                     status="active",
-                    joined_at=datetime.now(UTC),
+                    joined_at=now,
                 ),
                 AgencyMembership(
+                    id=approver_membership_id,
                     agency_id=agency_id,
                     user_id=approver_id,
                     role="approver",
                     status="active",
-                    joined_at=datetime.now(UTC),
+                    joined_at=now,
                 ),
                 AgencyCustomer(
+                    id=customer_record_id,
                     agency_id=agency_id,
-                    user_id=customer_id,
+                    branch_id=branch_id,
+                    customer_no=f"CUST-{unique[:20].upper()}",
+                    user_id=customer_user_id,
+                    source_type="registered_user",
                     status="active",
-                    activated_at=datetime.now(UTC),
+                    consent_status="granted",
+                    consent_version="integration.v1",
+                    consent_evidence_hash="c" * 64,
+                    consent_updated_at=now,
+                    lifecycle_revision=1,
+                    invited_at=now,
+                    activated_at=now,
+                ),
+                AgencyBranchRoleGrant(
+                    id=advisor_grant_id,
+                    agency_id=agency_id,
+                    branch_id=branch_id,
+                    membership_id=advisor_membership_id,
+                    role="travel_advisor",
+                    status="active",
+                    revision=1,
+                    granted_at=now,
+                ),
+                AgencyBranchRoleGrant(
+                    id=approver_grant_id,
+                    agency_id=agency_id,
+                    branch_id=branch_id,
+                    membership_id=approver_membership_id,
+                    role="approver",
+                    status="active",
+                    revision=1,
+                    granted_at=now,
+                ),
+                AgencyCustomerAdvisorAssignment(
+                    agency_id=agency_id,
+                    branch_id=branch_id,
+                    customer_id=customer_record_id,
+                    advisor_role_grant_id=advisor_grant_id,
+                    advisor_membership_id=advisor_membership_id,
+                    status="active",
+                    revision=1,
+                    assigned_at=now,
                 ),
             ]
         )
 
     return TenantActors(
         agency_id=agency_id,
+        branch_id=branch_id,
         advisor_id=advisor_id,
+        advisor_membership_id=advisor_membership_id,
+        advisor_grant_id=advisor_grant_id,
         approver_id=approver_id,
-        customer_id=customer_id,
+        approver_membership_id=approver_membership_id,
+        approver_grant_id=approver_grant_id,
+        customer_user_id=customer_user_id,
+        customer_record_id=customer_record_id,
     )
 
 
@@ -265,7 +426,7 @@ def _quote_request(actors: TenantActors):
 
     return AgencyQuoteCreateRequest(
         agency_id=actors.agency_id,
-        customer_user_id=actors.customer_id,
+        customer_id=actors.customer_record_id,
         total_amount=Decimal("1288.00"),
         currency="CNY",
         quote_snapshot={
@@ -407,7 +568,9 @@ async def test_composite_tenant_fk_and_order_event_append_only_trigger(
                         quote_no=f"Q-{uuid.uuid4().hex}",
                         idempotency_key=f"cross-tenant-{uuid.uuid4().hex}",
                         agency_id=actors.agency_id,
-                        user_id=actors.customer_id,
+                        branch_id=actors.branch_id,
+                        customer_id=actors.customer_record_id,
+                        user_id=actors.customer_user_id,
                         product_id=other_product_id,
                         status="draft",
                         revision=1,
@@ -437,7 +600,7 @@ async def test_composite_tenant_fk_and_order_event_append_only_trigger(
         async with session_factory() as session, session.begin():
             service = AgencyOrderReviewService(session)
             accepted = await service.accept_quote(
-                actor_user_id=actors.customer_id,
+                actor_user_id=actors.customer_user_id,
                 quote_id=quote.id,
                 expected_revision=2,
                 idempotency_key=f"accept-{uuid.uuid4().hex}",
@@ -445,7 +608,7 @@ async def test_composite_tenant_fk_and_order_event_append_only_trigger(
             from app.schemas.agency_transaction import AgencyOrderCreateRequest
 
             order = await service.create_order(
-                actor_user_id=actors.customer_id,
+                actor_user_id=actors.customer_user_id,
                 data=AgencyOrderCreateRequest(
                     agency_id=actors.agency_id,
                     quote_id=accepted.id,
@@ -459,13 +622,14 @@ async def test_composite_tenant_fk_and_order_event_append_only_trigger(
                 session.add(
                     AgencyOrderReview(
                         agency_id=other_agency_id,
+                        branch_id=actors.branch_id,
                         order_id=order.id,
                         status="pending",
                         order_revision=order.revision,
                         payload_hash=order.payload_hash,
                         total_amount=order.total_amount,
                         currency=order.currency,
-                        requested_by_user_id=actors.customer_id,
+                        requested_by_user_id=actors.customer_user_id,
                     )
                 )
                 await session.flush()
@@ -575,13 +739,13 @@ async def test_concurrent_idempotency_revision_and_event_sequence(
         async with session_factory() as session, session.begin():
             service = AgencyOrderReviewService(session)
             accepted = await service.accept_quote(
-                actor_user_id=actors.customer_id,
+                actor_user_id=actors.customer_user_id,
                 quote_id=quote_id,
                 expected_revision=2,
                 idempotency_key=f"accept-{uuid.uuid4().hex}",
             )
             order = await service.create_order(
-                actor_user_id=actors.customer_id,
+                actor_user_id=actors.customer_user_id,
                 data=AgencyOrderCreateRequest(
                     agency_id=actors.agency_id,
                     quote_id=quote_id,
@@ -594,7 +758,7 @@ async def test_concurrent_idempotency_revision_and_event_sequence(
 
         async def submit_order(session: AsyncSession):
             return await AgencyOrderReviewService(session).submit_order(
-                actor_user_id=actors.customer_id,
+                actor_user_id=actors.customer_user_id,
                 order_id=order.id,
                 expected_revision=1,
                 idempotency_key=submit_key,

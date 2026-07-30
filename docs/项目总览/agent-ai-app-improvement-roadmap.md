@@ -6,7 +6,7 @@
 
 ## 1. 改进目标
 
-当前项目已经具备阶段化旅行规划、RAG（检索增强生成）、MCP（模型上下文协议）工具、结构化 `report_data`（报告数据）、前端报告展示和评估入口。下一阶段目标不是继续堆叠功能，而是把这些能力收束成更可维护、可验证、可审计的 AI 应用工程闭环。
+当前项目已经具备阶段化旅行规划、RAG（检索增强生成）、MCP（模型上下文协议）工具、结构化 `report_data`（报告数据）、前端报告展示、门店与客户生命周期控制面和评估入口。下一阶段目标不是继续堆叠功能，而是把这些能力收束成更可维护、可验证、可审计的 AI 应用工程闭环。
 
 本路线图的交付目标：
 
@@ -26,15 +26,16 @@
 | 报告交付 | `report_data` 已是核心契约，但仍需继续统一报告、前端和评估口径 | 结构化报告成为前端、导出、评估共用事实来源 | P0 | 报告契约测试、前端渲染验证 |
 | AgentOps 与可观测 | 已有轻量运行指标，但缺少更完整的 trace（链路追踪）、成本和版本治理 | 形成运行质量指标、Prompt/模型变更记录和回放思路 | P1 | 评估系统文档、快照摘要、运行指标测试 |
 | 前端工程化 | 单页原型可演示，但组件化、可访问性和构建治理不足 | 保持原型定位，优先保证结构化报告体验和导出可信 | P1 | 前端验证脚本、移动端/桌面端检查说明 |
-| 部署与运行 | readiness（就绪检查）、部署模板和历史 M1 受控试运行证据已存在，但当前候选尚未绑定干净 commit，也没有目标环境的新鲜执行与签核证据；生产高可用、扩缩容和密钥系统仍不完整 | 保持部署模板诚实，冻结候选后在目标环境重跑 readiness、preflight、smoke/core 和运维证据链 | P1 | runtime/deployment 文档、绑定 commit 的 readiness 结果和目标环境脱敏摘要 |
+| 旅行社客户与门店权限 | 门店、角色授权、线下潜客、本人同意、激活/停用、主顾问分配和范围查询已实现；客户拒绝/撤回同意或停用会原子收口内部交易，旧 `pending_review` 明确拒绝前不能随关系重新激活，写授权持共享范围锁以防并发撤权 TOCTOU（检查与使用时序差）。当前仍是应用层行级授权，不是 PostgreSQL RLS，且缺安全邀请/认领 token、客户通知、PII 档案、法律级同意、跨门店转移和门店停用/关闭 API | 先验证 `0004` 迁移、10 项 PostgreSQL 集成测试和越权/并发矩阵，再补客户获取、转店、合规和运营闭环；同意哈希与内部取消不得冒充法律合规、供应商取消或退款证明 | P0 | 客户生命周期模型/API 单测、隔离 PostgreSQL 17 集成测试、目标环境迁移与越权复验 |
+| 部署与运行 | readiness（就绪检查）、部署模板和历史 M1 受控试运行证据已存在；旧 `319ac26` 具有 PostgreSQL 17 三项交易测试绿灯，但新增 `0004` 候选尚无目标环境新鲜执行与签核证据，生产高可用、扩缩容和密钥系统仍不完整 | 保持部署模板诚实，冻结候选后在目标环境重跑 readiness、preflight、smoke/core 和运维证据链 | P1 | runtime/deployment 文档、绑定 commit 的 readiness 结果和目标环境脱敏摘要 |
 | 部署后 smoke 证据 | `collect_m1_smoke_evidence.py` 已能把 health、M1 gate 和 acceptance smoke 收束为脱敏摘要；当前缺口是尚未对冻结后的候选在目标环境执行并由负责人复核 | 在目标环境显式执行后形成绑定 commit、时间窗和配置口径的可复查证据；默认计划模式不冒充通过 | P0 | `scripts/collect_m1_smoke_evidence.py --json`、目标环境 smoke 摘要和复核记录 |
 | 备份恢复演练证据 | readiness 与 `collect_backup_restore_drill_evidence.py` 已覆盖备份声明、dump 元数据和 catalog 检查；当前缺少绑定当前候选的目标环境新鲜备份、实际非生产恢复、恢复后校验和负责人签核 | 在隔离环境执行恢复，记录备份新鲜度、恢复耗时、数据丢失窗口、恢复后 readiness/smoke 和签核 | P0 | `scripts/collect_backup_restore_drill_evidence.py --json`、非生产恢复演练摘要和签核记录 |
 | 监控告警投递证据 | readiness 与 `collect_monitoring_alerting_evidence.py` 已能收束监控声明；当前缺少目标环境真实告警投递、指标持续留存、值班升级和成本/备份告警闭环证据 | 对冻结候选执行受控告警演练，验证 health/readiness、错误率、工具失败、成本和备份告警的投递与处置 | P0 | `scripts/collect_monitoring_alerting_evidence.py --json`、告警送达证据和负责人签核 |
 | 事故响应和回滚演练 | `collect_incident_rollback_evidence.py` 已提供机器化收束入口；当前缺少冻结候选在目标环境的真实回滚执行、回滚后 health/gate/smoke、事故复盘和 owner（负责人）签核 | 受控执行 P0/P1 响应和发布回滚，记录目标版本、数据安全边界、复验结果、根因与后续负责人 | P0 | `scripts/collect_incident_rollback_evidence.py --json`、回滚演练摘要、复盘和签核记录 |
 | M1 go/no-go 总判定 | `collect_m1_go_no_go_evidence.py` 已能聚合 M1 gate、smoke、备份恢复、监控告警和事故回滚，并对 `not_checked` fail-closed（缺证据即阻断）；当前缺少当前候选的完整目标环境输入与最终 release-owner（发布负责人）签核 | 为冻结 commit 收齐同一时间窗的目标环境证据，生成最终 `decision` 并完成人工风险接受或阻断 | P0 | `scripts/collect_m1_go_no_go_evidence.py --json`、目标环境最终 `decision` 和 release-owner 签核 |
 | M1 资源申请包 | `render_m1_resource_request.py` 和正式资源申请文档已存在；当前缺少由实际部署、运维和安全负责人填写并确认的仓库外资源状态、目标服务器输入和密钥托管责任 | 用现有模板收齐非密钥状态与 owner，阻止缺服务器、数据、备份、监控或外部依赖输入时进入部署 | P0 | `scripts/render_m1_resource_request.py --markdown`、`docs/部署与运行/m1-resource-request-pack.md` 和已确认的私有资源记录 |
-| M1 首部署 dry-run | `check_m1_first_deploy_dry_run.py` 已提供不连接服务器、不上传文件的预演入口，并会对脏工作树或缺目标输入 fail-closed；当前工作树尚未冻结，缺少针对最终候选和真实目标输入的通过记录 | 冻结干净 commit，补齐目标输入后执行 dry-run，复核发布工具、Compose、公开边界和远端命令计划 | P0 | `scripts/check_m1_first_deploy_dry_run.py --json`、`docs/部署与运行/m1-first-deploy-dry-run.md` 和绑定候选的通过摘要 |
-| M1 发布包 manifest | `build_release_artifact.py` 已能从干净 Git `HEAD` 生成 archive 和 manifest 并记录 commit、tree、tracked file count 与 sha256；当前脏工作树不能生成可对外复现的候选发布包 | 冻结并评审干净 commit，生成不可变发布包，校验哈希并让部署记录引用同一 artifact（发布制品） | P0 | `scripts/build_release_artifact.py --execute --output-dir <release-output-dir> --json`、发布包 manifest 和哈希复核 |
+| M1 首部署 dry-run | `check_m1_first_deploy_dry_run.py` 已提供不连接服务器、不上传文件的预演入口，并会对脏工作树或缺目标输入 fail-closed；新增 `0004` 尚缺绑定最终提交和真实目标输入的通过记录 | 冻结干净 commit，补齐目标输入后执行 dry-run，复核发布工具、Compose、公开边界和远端命令计划 | P0 | `scripts/check_m1_first_deploy_dry_run.py --json`、`docs/部署与运行/m1-first-deploy-dry-run.md` 和绑定候选的通过摘要 |
+| M1 发布包 manifest | `build_release_artifact.py` 已能从干净 Git `HEAD` 生成 archive 和 manifest 并记录 commit、tree、tracked file count 与 sha256；新增 `0004` 尚未生成与最终提交绑定的可复现候选发布包 | 冻结并评审干净 commit，生成不可变发布包，校验哈希并让部署记录引用同一 artifact（发布制品） | P0 | `scripts/build_release_artifact.py --execute --output-dir <release-output-dir> --json`、发布包 manifest 和哈希复核 |
 | M1 服务器首部署脚本 | `deploy/first-deploy.sh` 已固化 release/current/shared 模型并默认 dry-run；当前缺少最终发布包在目标服务器的 dry-run、显式执行、切换后健康检查、回滚准备和 owner 签核 | 使用同一 manifest 发布包完成目标服务器预演与受控切换，验证运行时数据不被覆盖并留存回滚证据 | P0 | `deploy/first-deploy.sh`、目标服务器执行摘要、健康检查、回滚准备和签核记录 |
 | 生产化差距 | 当前更接近工程样板和受控演示，距离真实生产系统还有密钥、数据、安全、可观测、业务履约等硬缺口 | 按 P0/P1/P2 明确真实上线前阻断项和验收标准 | P0 | `docs/部署与运行/production-readiness-gap.md` |
 | 生产运行依赖范围 | runtime-only requirements（仅运行时依赖）拆分和 `check_runtime_dependency_scope.py` 静态门禁已实现；当前缺少基于冻结候选的完整镜像重建、体积/时长记录、目标运行时启动与回归证据 | 保持默认 API 镜像与开发/测试、多模态深门禁、本地 embedding、GPU/model 重依赖解耦，并用实际镜像验证门禁结果 | P0 | `scripts/check_runtime_dependency_scope.py --json`、依赖范围测试、镜像 manifest、体积和健康探针记录 |
@@ -50,6 +51,7 @@
 | RAG/Evaluation Agent | `app/rag/`、`app/evaluation/`、`data/evaluation/`、`docs/RAG与知识库/` | 召回场景扩展、RAG 评测报告、真实环境前置条件 | 不提交向量库、原始 `.runtime` 证据或密钥 |
 | Agent State/Architecture Agent | `app/core/`、`app/agents/handoffs/`、`docs/架构与流程/` | 状态 schema、流程边界、大文件拆分建议、Prompt 规则外移方案 | 不一次性重写主链路 |
 | Tool/Security Agent | `app/mcp_core/`、`app/tools/`、`app/utils/security.py`、`docs/治理与可观测/` | 密钥脱敏、工具策略、schema/version、失败审计 | 不新增真实支付、短信或预订动作 |
+| Agency Domain Agent | `app/agency/`、`app/api/v1/agency_*`、`app/models/agency_*`、`alembic/versions/` | 门店、客户生命周期、顾问分配、交易权限、迁移与专项测试 | 不把应用层授权表述为 PostgreSQL RLS，不接真实供应商、支付、退款或通知 |
 | Report/Frontend Agent | `app/reports/`、`frontend/`、`docs/前端与演示/` | `report_data` 交付证据、结构化报告渲染、导出验证 | 不把单页原型包装成完整生产后台 |
 | Docs/Release Agent | `docs/评估与验收/`、`docs/部署与运行/`、正式公开说明 | 公开发布口径、验收矩阵、风险边界 | 不写本地草稿资料或本地敏感路径 |
 
@@ -116,6 +118,7 @@
 | 2026-06-23 | RAG/Evaluation 第二轮 | 扩充公开目的地样例，把公开安全负样本从西安扩到更多目的地 | 已完成 | 公开目的地扩到西安、杭州、厦门、桂林；离线评测为 25 场景、24 文档、9 个公开安全场景，仍不代表真实向量库或在线 Agent 验收 |
 | 2026-07-11 | RAG/Evaluation 南京样例校准（历史快照） | 新增南京公开目的地样例和精确目的地消歧场景，重新生成离线召回报告并校准旧口径 | 已完成离线校准 | 该轮历史快照为 26 场景、25 文档、5 个公开目的地和 10 个 mixed-corpus safety 场景；当时离线脚本通过不代表真实向量库、在线 Agent 或生产环境验收通过 |
 | 2026-07-12 | RAG/Evaluation 北京银发样例校准 | 新增北京公开低强度、午休、无障碍/电梯和天气 Plan B 安全样例，补精确召回场景并复跑离线门禁 | 已完成离线校准 | 当前为 27 场景、26 文档、6 个公开目的地和 11 个 mixed-corpus safety 场景；2026-07-11 的 26/25/5/10 保留为历史快照；离线通过不代表真实向量库或在线 Agent 通过 |
+| 2026-07-26 | 旅行社客户生命周期与门店权限 | 新增 `0004` 门店、门店岗位授权、线下潜客关联、客户本人同意、激活/停用、主顾问分配和应用层范围查询；把报价、订单和内部审核绑定门店/客户关系，并增加客户停用内部交易收口、报价/订单数据库变更门禁、统一锁序与撤权并发保护 | 代码与专项测试已落地，3 个 PostgreSQL 测试文件的 10 项测试待新提交 CI 确认 | 旧 `319ac26` 的 PostgreSQL 17 三项交易测试已通过但早于 `0004`；本轮必须重新确认 3 项交易、5 项客户生命周期和 2 项门店权限测试，且内部 `cancelled` 不代表供应商取消/退款，整轮结果也不代表目标环境、RLS、完整 CRM、法律合规或真实履约 |
 | 2026-06-23 | Tool/Security 第二轮 | 补外部 MCP 服务目录、required / optional / degraded 策略表，并与 `SERVICE_DEFINITIONS` 口径对齐 | 已完成 | MCP 目录只写变量名和状态语义；`required_when_declared` 只在被选中验收场景声明必需时阻塞 |
 | 2026-06-23 | Agent State/Architecture 第三轮 | 新增状态契约和 Prompt 规则清单，补双工作流轴、阶段字段、工具白名单和报告红线维护性测试 | 已完成 | `active_workflow` 决定读 `current_step` 或 `agency_step`；`step_config.py` 仍是静态配置来源，运行态还要依赖中间件和工具守卫 |
 | 2026-06-23 | Report/Frontend 第四轮 | 新增 `report_data` 交付契约文档，补前端渲染、复制摘要、导出 HTML 和浏览器回归边界断言 | 已完成 | 前端演示证明结构化报告可渲染、可复制摘要、可导出，不证明真实支付、预订、库存、锁价或履约 |
@@ -178,10 +181,19 @@ node scripts\verify_frontend_report_renderer.js
 node scripts\verify_frontend_browser_regression.js
 ```
 
+旅行社客户与交易域：
+
+```powershell
+uv run python -m pytest -q tests\test_agency_customer_lifecycle_models.py tests\test_agency_customer_lifecycle_api.py tests\test_agency_customer_transaction_settlement.py tests\test_agency_transaction_models.py tests\test_agency_transaction_api.py
+$env:ZHIXING_TEST_POSTGRES_DSN = "postgresql://travel_user:change-me@127.0.0.1:5432/zhixing_test"
+uv run python -m pytest --run-integration -q tests\test_agency_transaction_postgres_integration.py tests\test_agency_customer_lifecycle_postgres_integration.py tests\test_agency_branch_permissions_postgres_integration.py
+```
+
 验收说明：
 
 - `dry-run` 只能证明场景和入口存在，不能证明真实链路通过。
 - `blocked` 表示真实环境、密钥、外部服务或依赖不满足，不能写成业务通过。
+- 旧 `319ac26` 的 3 项 PostgreSQL 通过只适用于旧基线；当前 3 个文件共 10 项测试仍须等待包含 `0004` 的新提交触发数据库 job，且 CI 不能替代目标环境迁移。
 - 涉及真实外部 API（应用程序接口）时，结果只提交脱敏摘要，不提交原始日志、`.runtime` 快照或密钥。
 
 ## 8. 公开边界

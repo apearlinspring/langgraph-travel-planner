@@ -3,11 +3,14 @@ from __future__ import annotations
 import uuid
 from decimal import Decimal
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from sqlalchemy.dialects import postgresql
 
+from app.agency.branch_authorization import BranchAuthorization
 from app.agency.transaction_service import (
     AgencyTransactionAccessDenied,
     AgencyTransactionConflict,
@@ -27,6 +30,8 @@ from tests.agency_transaction_test_support import (
     AGENCY_ID,
     ADVISOR_ID,
     APPROVER_ID,
+    BRANCH_ID,
+    BUSINESS_CUSTOMER_ID,
     CUSTOMER_ID,
     NOW,
     ORDER_ID,
@@ -151,7 +156,7 @@ def _build_client(
 def _quote_create_payload() -> dict:
     return {
         "agency_id": str(AGENCY_ID),
-        "customer_user_id": str(CUSTOMER_ID),
+        "customer_id": str(BUSINESS_CUSTOMER_ID),
         "total_amount": "1288.50",
         "currency": "cny",
         "quote_snapshot": {"destination": "杭州", "days": 3},
@@ -291,6 +296,9 @@ def test_quote_routes_forward_idempotency_revision_and_pagination():
 
     assert create_response.status_code == 201
     assert create_response.json()["total_amount"] == "1288.50"
+    assert create_response.json()["branch_id"] == str(BRANCH_ID)
+    assert create_response.json()["customer_id"] == str(BUSINESS_CUSTOMER_ID)
+    assert "user_id" not in create_response.json()
     assert list_response.status_code == 200
     assert list_response.json()["total"] == 1
     assert get_response.status_code == 200
@@ -338,12 +346,16 @@ def test_order_routes_keep_external_actions_disabled_and_expose_events():
     )
 
     assert create_response.status_code == 201
+    assert create_response.json()["branch_id"] == str(BRANCH_ID)
+    assert create_response.json()["customer_id"] == str(BUSINESS_CUSTOMER_ID)
+    assert "user_id" not in create_response.json()
     assert create_response.json()["external_action_enabled"] is False
     assert create_response.json()["payment_status"] == "not_started"
     assert create_response.json()["fulfillment_status"] == "not_started"
     assert list_response.json()["total"] == 1
     assert get_response.status_code == 200
     assert events_response.json()["total"] == 1
+    assert "actor_user_id" not in events_response.json()["events"][0]
     assert (
         events_response.json()["events"][0]["event_metadata"][
             "external_actions_triggered"
@@ -394,6 +406,7 @@ def test_order_review_routes_use_a_snapshot_free_dto_and_single_decision():
     assert list_response.status_code == 200
     assert list_response.json()["total"] == 1
     assert "quote_snapshot" not in list_response.json()["reviews"][0]
+    assert list_response.json()["reviews"][0]["branch_id"] == str(BRANCH_ID)
     assert get_response.status_code == 200
     assert get_response.json()["order_revision"] == 2
     assert decision_response.status_code == 200
@@ -574,28 +587,156 @@ async def test_mutation_loaders_request_row_locks():
     await service._get_order(ORDER_ID, for_update=True)
 
     assert all(statement._for_update_arg is not None for statement in db.statements)
+    assert all(
+        statement.get_execution_options().get("populate_existing") is True
+        for statement in db.statements
+    )
+
+
+@pytest.mark.asyncio
+async def test_transaction_customer_lock_targets_only_customer_row():
+    customer = SimpleNamespace(
+        id=BUSINESS_CUSTOMER_ID,
+        agency_id=AGENCY_ID,
+        branch_id=BRANCH_ID,
+        user_id=CUSTOMER_ID,
+        status="active",
+        consent_status="granted",
+        consent_evidence_hash="c" * 64,
+    )
+    db = _ExecuteSequence(customer)
+    service = AgencyTransactionService(db)  # type: ignore[arg-type]
+
+    result = await service._get_transaction_customer(
+        agency_id=AGENCY_ID,
+        branch_id=BRANCH_ID,
+        customer_id=BUSINESS_CUSTOMER_ID,
+        for_update=True,
+    )
+
+    assert result is customer
+    sql = str(
+        db.statements[0].compile(dialect=postgresql.dialect())
+    ).upper()
+    assert "FOR UPDATE OF AGENCY_CUSTOMER" in sql
+    assert "FOR UPDATE OF AGENCY_CUSTOMER, AGENCY_BRANCH" not in sql
+    assert (
+        db.statements[0].get_execution_options().get("populate_existing")
+        is True
+    )
+
+
+@pytest.mark.asyncio
+async def test_self_service_branch_scope_uses_share_lock():
+    db = _ExecuteSequence(BRANCH_ID)
+    authorization = BranchAuthorization(db)  # type: ignore[arg-type]
+
+    await authorization.lock_active_branch_scope(
+        agency_id=AGENCY_ID,
+        branch_id=BRANCH_ID,
+    )
+
+    sql = str(
+        db.statements[0].compile(dialect=postgresql.dialect())
+    ).upper()
+    assert "FOR SHARE" in sql
+
+
+@pytest.mark.asyncio
+async def test_agency_wide_command_scope_uses_share_lock():
+    membership = SimpleNamespace(role="owner", status="active")
+    db = _ExecuteSequence(membership)
+    authorization = BranchAuthorization(db)  # type: ignore[arg-type]
+
+    result = await authorization.require_agency_wide(
+        agency_id=AGENCY_ID,
+        actor_user_id=ADVISOR_ID,
+        lock_scope=True,
+    )
+
+    assert result is membership
+    sql = str(
+        db.statements[0].compile(dialect=postgresql.dialect())
+    ).upper()
+    assert "FOR SHARE" in sql
 
 
 @pytest.mark.asyncio
 async def test_staff_membership_is_bound_to_an_active_agency():
     membership = SimpleNamespace(role="travel_advisor", status="active")
-    db = _ExecuteSequence(membership)
-    service = AgencyTransactionService(db)  # type: ignore[arg-type]
+    service = AgencyTransactionService(  # type: ignore[arg-type]
+        SimpleNamespace()
+    )
+    get_membership = AsyncMock(return_value=membership)
+    service.authorization.get_active_membership = get_membership
 
     result = await service._get_active_membership(
         agency_id=AGENCY_ID,
         user_id=ADVISOR_ID,
     )
 
-    statement_text = str(db.statements[0])
     assert result is membership
-    assert "JOIN agency" in statement_text
-    assert "agency_membership.status" in statement_text
-    assert "agency.status" in statement_text
+    get_membership.assert_awaited_once_with(
+        agency_id=AGENCY_ID,
+        user_id=ADVISOR_ID,
+    )
+
+
+@pytest.mark.parametrize("assigned", [True, False])
+@pytest.mark.asyncio
+async def test_travel_advisor_quote_access_requires_active_customer_assignment(
+    assigned: bool,
+):
+    membership = SimpleNamespace(
+        id=uuid.uuid4(),
+        role="travel_advisor",
+        status="active",
+    )
+    grant = SimpleNamespace(id=uuid.uuid4(), role="travel_advisor")
+    customer = SimpleNamespace(
+        id=BUSINESS_CUSTOMER_ID,
+        agency_id=AGENCY_ID,
+        branch_id=BRANCH_ID,
+        user_id=CUSTOMER_ID,
+    )
+    authorization = BranchAuthorization(  # type: ignore[arg-type]
+        SimpleNamespace()
+    )
+    authorization.get_active_membership = AsyncMock(return_value=membership)
+    authorization._has_active_assignment = AsyncMock(return_value=assigned)
+    authorization._active_branch_grant = AsyncMock(return_value=grant)
+
+    if assigned:
+        access = await authorization.require_quote_manager(
+            customer=customer,
+            actor_user_id=ADVISOR_ID,
+            hide_resource=False,
+        )
+
+        assert access.membership is membership
+        assert access.grant is grant
+        authorization._active_branch_grant.assert_awaited_once_with(
+            agency_id=AGENCY_ID,
+            branch_id=BRANCH_ID,
+            membership=membership,
+            roles={"travel_advisor"},
+        )
+    else:
+        with pytest.raises(AgencyTransactionAccessDenied) as exc_info:
+            await authorization.require_quote_manager(
+                customer=customer,
+                actor_user_id=ADVISOR_ID,
+                hide_resource=False,
+            )
+
+        assert exc_info.value.code == "agency_quote_permission_denied"
+        authorization._active_branch_grant.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_quote_product_lookup_is_scoped_to_the_same_agency():
+async def test_quote_product_lookup_reuses_the_scoped_transaction_customer(
+    monkeypatch: pytest.MonkeyPatch,
+):
     product_id = uuid.UUID("70000000-0000-0000-0000-000000000001")
     data = AgencyQuoteCreateRequest.model_validate(
         {
@@ -603,42 +744,194 @@ async def test_quote_product_lookup_is_scoped_to_the_same_agency():
             "product_id": str(product_id),
         }
     )
-    db = _ExecuteSequence(CUSTOMER_ID, product_id)
+    customer = SimpleNamespace(
+        id=BUSINESS_CUSTOMER_ID,
+        agency_id=AGENCY_ID,
+        branch_id=BRANCH_ID,
+        user_id=CUSTOMER_ID,
+        status="active",
+        consent_status="granted",
+        consent_evidence_hash="c" * 64,
+    )
+    db = _ExecuteSequence(product_id)
     service = AgencyTransactionService(db)  # type: ignore[arg-type]
+    get_customer = AsyncMock(return_value=customer)
+    monkeypatch.setattr(service, "_get_transaction_customer", get_customer)
 
-    await service._validate_quote_references(data)
+    result = await service._validate_quote_references(data)
 
-    customer_statement = str(db.statements[0])
-    product_statement = str(db.statements[1])
-    assert "agency_customer.agency_id" in customer_statement
-    assert "agency_customer.status" in customer_statement
+    assert result is customer
+    get_customer.assert_awaited_once_with(
+        agency_id=AGENCY_ID,
+        customer_id=BUSINESS_CUSTOMER_ID,
+        for_update=True,
+    )
+    product_statement = str(db.statements[0])
     assert "supplier_product.agency_id" in product_statement
     assert "supplier_product.status" in product_statement
 
 
 @pytest.mark.asyncio
-async def test_quote_requires_an_active_customer_relationship():
-    data = AgencyQuoteCreateRequest.model_validate(_quote_create_payload())
-    db = _ExecuteSequence(None)
-    service = AgencyTransactionService(db)  # type: ignore[arg-type]
+async def test_issue_quote_rechecks_customer_relationship_before_authorization(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    quote = _quote_record()
+    service = AgencyTransactionService(  # type: ignore[arg-type]
+        SimpleNamespace()
+    )
+    monkeypatch.setattr(
+        service,
+        "_get_quote",
+        AsyncMock(return_value=quote),
+    )
+    get_customer = AsyncMock(
+        side_effect=AgencyTransactionValidationError(
+            "quote_customer_not_active",
+            "客户尚未完成账号关联、同意确认和业务关系激活",
+        )
+    )
+    monkeypatch.setattr(service, "_get_transaction_customer", get_customer)
+    authorize = AsyncMock()
+    service.authorization.require_quote_manager = authorize
 
     with pytest.raises(AgencyTransactionValidationError) as exc_info:
-        await service._validate_quote_references(data)
+        await service.issue_quote(
+            actor_user_id=ADVISOR_ID,
+            quote_id=QUOTE_ID,
+            expected_revision=1,
+            idempotency_key="issue-recheck",
+        )
 
     assert exc_info.value.code == "quote_customer_not_active"
-    statement_text = str(db.statements[0])
-    assert "agency_customer.agency_id" in statement_text
-    assert "agency_customer.user_id" in statement_text
-    assert "agency_customer.status" in statement_text
+    get_customer.assert_awaited_once_with(
+        agency_id=AGENCY_ID,
+        branch_id=BRANCH_ID,
+        customer_id=BUSINESS_CUSTOMER_ID,
+        for_update=True,
+    )
+    authorize.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_issue_quote_locks_customer_and_branch_before_quote_row(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    quote = _quote_record()
+    customer = SimpleNamespace(
+        id=BUSINESS_CUSTOMER_ID,
+        agency_id=AGENCY_ID,
+        branch_id=BRANCH_ID,
+        user_id=CUSTOMER_ID,
+    )
+    service = AgencyTransactionService(  # type: ignore[arg-type]
+        SimpleNamespace()
+    )
+    calls: list[str] = []
+
+    async def get_quote(_quote_id, *, for_update=False):
+        calls.append("quote_lock" if for_update else "quote_preview")
+        if for_update:
+            raise AgencyTransactionConflict("stop_after_lock", "stop")
+        return quote
+
+    async def get_customer(**_kwargs):
+        calls.append("customer_lock")
+        return customer
+
+    async def authorize(**kwargs):
+        calls.append("branch_scope")
+        assert kwargs["lock_scope"] is True
+
+    monkeypatch.setattr(service, "_get_quote", get_quote)
+    monkeypatch.setattr(service, "_get_transaction_customer", get_customer)
+    service.authorization.require_quote_manager = authorize
+
+    with pytest.raises(AgencyTransactionConflict) as exc_info:
+        await service.issue_quote(
+            actor_user_id=ADVISOR_ID,
+            quote_id=QUOTE_ID,
+            expected_revision=1,
+            idempotency_key="issue-lock-order",
+        )
+
+    assert exc_info.value.code == "stop_after_lock"
+    assert calls == [
+        "quote_preview",
+        "customer_lock",
+        "branch_scope",
+        "quote_lock",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_issue_quote_rejects_binding_drift_after_row_lock(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    quote_preview = _quote_record()
+    quote_locked = _quote_record(branch_id=uuid.uuid4())
+    customer = SimpleNamespace(
+        id=BUSINESS_CUSTOMER_ID,
+        agency_id=AGENCY_ID,
+        branch_id=BRANCH_ID,
+        user_id=CUSTOMER_ID,
+    )
+    service = AgencyTransactionService(  # type: ignore[arg-type]
+        SimpleNamespace()
+    )
+    monkeypatch.setattr(
+        service,
+        "_get_quote",
+        AsyncMock(side_effect=[quote_preview, quote_locked]),
+    )
+    monkeypatch.setattr(
+        service,
+        "_get_transaction_customer",
+        AsyncMock(return_value=customer),
+    )
+    service.authorization.require_quote_manager = AsyncMock()
+
+    with pytest.raises(AgencyTransactionConflict) as exc_info:
+        await service.issue_quote(
+            actor_user_id=ADVISOR_ID,
+            quote_id=QUOTE_ID,
+            expected_revision=1,
+            idempotency_key="issue-binding-drift",
+        )
+
+    assert exc_info.value.code == "transaction_binding_conflict"
+    service.authorization.require_quote_manager.assert_awaited_once_with(
+        customer=customer,
+        actor_user_id=ADVISOR_ID,
+        hide_resource=True,
+        lock_scope=True,
+    )
 
 
 @pytest.mark.parametrize("role", ["auditor", "finance"])
 @pytest.mark.asyncio
-async def test_non_advisor_staff_cannot_read_full_order_snapshot(role: str):
+async def test_non_advisor_staff_cannot_read_full_order_snapshot(
+    role: str,
+    monkeypatch: pytest.MonkeyPatch,
+):
     staff_id = uuid.uuid4()
-    membership = SimpleNamespace(role=role, status="active")
-    db = _ExecuteSequence(_order_record(), membership)
-    service = AgencyTransactionService(db)  # type: ignore[arg-type]
+    membership = SimpleNamespace(
+        id=uuid.uuid4(),
+        role=role,
+        status="active",
+    )
+    order = _order_record()
+    service = AgencyTransactionService(  # type: ignore[arg-type]
+        SimpleNamespace()
+    )
+    monkeypatch.setattr(service, "_get_order", AsyncMock(return_value=order))
+    service.authorization.get_active_membership = AsyncMock(
+        return_value=membership
+    )
+    branch_grant = AsyncMock(return_value=None)
+    service.authorization._active_branch_grant = branch_grant
+    service.authorization._has_active_assignment_ids = AsyncMock(
+        return_value=False
+    )
 
     with pytest.raises(AgencyTransactionNotFound) as exc_info:
         await service.get_order(
@@ -647,3 +940,9 @@ async def test_non_advisor_staff_cannot_read_full_order_snapshot(role: str):
         )
 
     assert exc_info.value.code == "agency_transaction_not_found"
+    branch_grant.assert_awaited_once_with(
+        agency_id=AGENCY_ID,
+        branch_id=BRANCH_ID,
+        membership=membership,
+        roles={"branch_manager", "approver"},
+    )

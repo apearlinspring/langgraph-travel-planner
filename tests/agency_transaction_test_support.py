@@ -7,13 +7,18 @@ from types import SimpleNamespace
 
 
 AGENCY_ID = uuid.UUID("10000000-0000-0000-0000-000000000001")
+BRANCH_ID = uuid.UUID("10000000-0000-0000-0000-000000000002")
 ADVISOR_ID = uuid.UUID("20000000-0000-0000-0000-000000000001")
 CUSTOMER_ID = uuid.UUID("30000000-0000-0000-0000-000000000001")
+BUSINESS_CUSTOMER_ID = uuid.UUID("30000000-0000-0000-0000-000000000002")
 QUOTE_ID = uuid.UUID("40000000-0000-0000-0000-000000000001")
 ORDER_ID = uuid.UUID("50000000-0000-0000-0000-000000000001")
 EVENT_ID = uuid.UUID("60000000-0000-0000-0000-000000000001")
 REVIEW_ID = uuid.UUID("70000000-0000-0000-0000-000000000001")
 APPROVER_ID = uuid.UUID("80000000-0000-0000-0000-000000000001")
+MEMBERSHIP_ID = uuid.UUID("90000000-0000-0000-0000-000000000001")
+ROLE_GRANT_ID = uuid.UUID("a0000000-0000-0000-0000-000000000001")
+ASSIGNMENT_ID = uuid.UUID("b0000000-0000-0000-0000-000000000001")
 NOW = datetime(2030, 1, 1, 8, 0, tzinfo=UTC)
 
 
@@ -28,6 +33,8 @@ def quote_record(**updates) -> SimpleNamespace:
         "id": QUOTE_ID,
         "quote_no": "Q-20300101-1234567890ABCDEF",
         "agency_id": AGENCY_ID,
+        "branch_id": BRANCH_ID,
+        "customer_id": BUSINESS_CUSTOMER_ID,
         "user_id": CUSTOMER_ID,
         "conversation_id": None,
         "product_id": None,
@@ -53,6 +60,8 @@ def order_record(**updates) -> SimpleNamespace:
         "id": ORDER_ID,
         "order_no": "ORDER-20300101-1234567890ABCDEF",
         "agency_id": AGENCY_ID,
+        "branch_id": BRANCH_ID,
+        "customer_id": BUSINESS_CUSTOMER_ID,
         "quote_id": QUOTE_ID,
         "user_id": CUSTOMER_ID,
         "status": "draft",
@@ -78,6 +87,7 @@ def event_record() -> SimpleNamespace:
     return SimpleNamespace(
         id=EVENT_ID,
         agency_id=AGENCY_ID,
+        branch_id=BRANCH_ID,
         order_id=ORDER_ID,
         event_sequence=1,
         order_revision=1,
@@ -99,6 +109,7 @@ def review_record(**updates) -> SimpleNamespace:
     payload = {
         "id": REVIEW_ID,
         "agency_id": AGENCY_ID,
+        "branch_id": BRANCH_ID,
         "order_id": ORDER_ID,
         "status": "pending",
         "order_revision": 2,
