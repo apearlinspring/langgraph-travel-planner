@@ -33,6 +33,17 @@ CustomerConsentStatus = Literal[
     "revoked",
 ]
 CustomerConsentDecision = Literal["grant", "deny", "revoke"]
+CustomerBindingProvenance = Literal[
+    "unbound",
+    "legacy_direct",
+    "secure_claim",
+]
+CustomerConsentEvidenceOrigin = Literal[
+    "none",
+    "legacy_client_hash",
+    "server_canonical",
+]
+CustomerClaimInvitationStatus = Literal["pending", "claimed", "revoked"]
 CustomerSourceType = Literal[
     "manual",
     "staff_import",
@@ -83,7 +94,6 @@ class AgencyBranchRoleGrantRevokeRequest(ExpectedRevisionRequest):
 class AgencyCustomerCreateRequest(StrictRequest):
     agency_id: uuid.UUID
     branch_id: uuid.UUID
-    user_id: uuid.UUID | None = None
     source_type: CustomerSourceType = "manual"
     source_reference: str | None = Field(default=None, max_length=160)
 
@@ -93,24 +103,38 @@ class AgencyCustomerCreateRequest(StrictRequest):
         return value or None
 
 
-class AgencyCustomerLinkUserRequest(ExpectedRevisionRequest):
-    user_id: uuid.UUID
-
-
 class AgencyCustomerConsentRequest(ExpectedRevisionRequest):
     decision: CustomerConsentDecision
-    consent_version: str = Field(..., min_length=1, max_length=40)
-    consent_evidence_hash: str = Field(
+    expected_notice_version: str = Field(..., min_length=1, max_length=40)
+    expected_notice_document_sha256: str = Field(
         ...,
         min_length=64,
         max_length=64,
         pattern=r"^[0-9a-fA-F]{64}$",
     )
 
-    @field_validator("consent_evidence_hash")
+    @field_validator("expected_notice_document_sha256")
     @classmethod
-    def normalize_evidence_hash(cls, value: str) -> str:
+    def normalize_notice_hash(cls, value: str) -> str:
         return value.lower()
+
+
+class AgencyCustomerClaimInvitationIssueRequest(ExpectedRevisionRequest):
+    target_user_id: uuid.UUID
+
+
+class AgencyCustomerClaimInvitationRevokeRequest(ExpectedRevisionRequest):
+    expected_invitation_revision: int = Field(..., ge=1)
+    reason: str = Field(..., min_length=1, max_length=500)
+
+
+class AgencyCustomerClaimRequest(StrictRequest):
+    claim_token: str = Field(
+        ...,
+        min_length=32,
+        max_length=512,
+        repr=False,
+    )
 
 
 class AgencyCustomerDeactivateRequest(ExpectedRevisionRequest):
@@ -182,7 +206,10 @@ class AgencyCustomerResponse(BaseModel):
     customer_no: str
     source_type: str
     status: CustomerStatus
+    binding_provenance: CustomerBindingProvenance
+    claimed_at: datetime | None = None
     consent_status: CustomerConsentStatus
+    consent_evidence_origin: CustomerConsentEvidenceOrigin
     consent_version: str | None = None
     consent_updated_at: datetime | None = None
     lifecycle_revision: int
@@ -197,6 +224,45 @@ class AgencyCustomerResponse(BaseModel):
 
 class AgencyCustomerListResponse(BaseModel):
     customers: list[AgencyCustomerResponse]
+    total: int
+    offset: int
+    limit: int
+
+
+class AgencyCustomerConsentNoticeResponse(BaseModel):
+    consent_version: str
+    consent_document_sha256: str
+    evidence_schema_version: str
+    channel: str
+    notice_markdown: str
+
+
+class AgencyCustomerClaimInvitationResponse(BaseModel):
+    id: uuid.UUID
+    agency_id: uuid.UUID
+    branch_id: uuid.UUID
+    customer_id: uuid.UUID
+    status: CustomerClaimInvitationStatus
+    revision: int
+    issued_at: datetime
+    expires_at: datetime
+    claimed_at: datetime | None = None
+    revoked_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AgencyCustomerClaimInvitationIssuedResponse(
+    AgencyCustomerClaimInvitationResponse
+):
+    # 只在首次创建成功时返回；幂等重放、查询和事件都不会再次暴露原 token。
+    claim_token: str | None = Field(default=None, repr=False)
+
+
+class AgencyCustomerClaimInvitationListResponse(BaseModel):
+    invitations: list[AgencyCustomerClaimInvitationResponse]
     total: int
     offset: int
     limit: int

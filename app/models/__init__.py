@@ -14,6 +14,10 @@ from app.models.agency_customer_lifecycle import (
     AgencyCustomerAdvisorAssignment,
     AgencyCustomerEvent,
 )
+from app.models.agency_customer_identity import (
+    AgencyCustomerConsentRecord,
+    AgencyCustomerInvitation,
+)
 from app.models.agency_order_review import AgencyOrderReview
 from app.models.agency_transaction import (
     Agency,
@@ -40,6 +44,8 @@ __all__ = [
     "AgencyBranch",
     "AgencyBranchRoleGrant",
     "AgencyCustomer",
+    "AgencyCustomerInvitation",
+    "AgencyCustomerConsentRecord",
     "AgencyCustomerEvent",
     "AgencyCustomerAdvisorAssignment",
     "AgencyMembership",

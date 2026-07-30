@@ -287,14 +287,25 @@ def _session_factory(
 async def _seed_tenant(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> TenantActors:
+    from app.agency.customer_claim_tokens import hash_claim_token
+    from app.agency.customer_consent import (
+        CUSTOMER_CONSENT_DOCUMENT_SHA256,
+        CUSTOMER_CONSENT_EVIDENCE_SCHEMA,
+        CUSTOMER_CONSENT_VERSION,
+        build_customer_consent_evidence,
+    )
+    from app.models.agency_customer_identity import (
+        AgencyCustomerConsentRecord,
+        AgencyCustomerInvitation,
+    )
     from app.models.agency_customer_lifecycle import (
         AgencyBranch,
         AgencyBranchRoleGrant,
+        AgencyCustomer,
         AgencyCustomerAdvisorAssignment,
     )
     from app.models.agency_transaction import (
         Agency,
-        AgencyCustomer,
         AgencyMembership,
     )
     from app.models.user import User
@@ -309,6 +320,8 @@ async def _seed_tenant(
     approver_grant_id = uuid.uuid4()
     customer_user_id = uuid.uuid4()
     customer_record_id = uuid.uuid4()
+    invitation_id = uuid.uuid4()
+    consent_record_id = uuid.uuid4()
     unique = uuid.uuid4().hex
     now = datetime.now(UTC)
 
@@ -371,24 +384,23 @@ async def _seed_tenant(
             ]
         )
         await session.flush()
+        customer = AgencyCustomer(
+            id=customer_record_id,
+            agency_id=agency_id,
+            branch_id=branch_id,
+            customer_no=f"CUST-{unique[:20].upper()}",
+            user_id=None,
+            binding_provenance="unbound",
+            source_type="registered_user",
+            status="prospect",
+            consent_status="unknown",
+            consent_evidence_origin="none",
+            lifecycle_revision=1,
+            invited_at=now,
+        )
         session.add_all(
             [
-                AgencyCustomer(
-                    id=customer_record_id,
-                    agency_id=agency_id,
-                    branch_id=branch_id,
-                    customer_no=f"CUST-{unique[:20].upper()}",
-                    user_id=customer_user_id,
-                    source_type="registered_user",
-                    status="active",
-                    consent_status="granted",
-                    consent_version="integration.v1",
-                    consent_evidence_hash="c" * 64,
-                    consent_updated_at=now,
-                    lifecycle_revision=1,
-                    invited_at=now,
-                    activated_at=now,
-                ),
+                customer,
                 AgencyBranchRoleGrant(
                     id=advisor_grant_id,
                     agency_id=agency_id,
@@ -411,6 +423,71 @@ async def _seed_tenant(
                 ),
             ]
         )
+        await session.flush()
+        invitation = AgencyCustomerInvitation(
+            id=invitation_id,
+            agency_id=agency_id,
+            branch_id=branch_id,
+            customer_id=customer_record_id,
+            target_user_id=customer_user_id,
+            token_digest=hash_claim_token(
+                f"integration-claim-{customer_record_id}"
+            ),
+            status="pending",
+            revision=1,
+            issued_by_user_id=advisor_id,
+            issued_at=now,
+            expires_at=now + timedelta(days=1),
+        )
+        session.add(invitation)
+        await session.flush()
+        invitation.status = "claimed"
+        invitation.claimed_by_user_id = customer_user_id
+        invitation.claimed_at = now
+        await session.flush()
+        customer.user_id = customer_user_id
+        customer.binding_provenance = "secure_claim"
+        customer.claimed_invitation_id = invitation_id
+        customer.claimed_at = now
+        customer.status = "invited"
+        await session.flush()
+
+        _, evidence_hash = build_customer_consent_evidence(
+            agency_id=agency_id,
+            branch_id=branch_id,
+            customer_id=customer_record_id,
+            user_id=customer_user_id,
+            claim_invitation_id=invitation_id,
+            decision="grant",
+            recorded_at=now,
+        )
+        consent_record = AgencyCustomerConsentRecord(
+            id=consent_record_id,
+            agency_id=agency_id,
+            branch_id=branch_id,
+            customer_id=customer_record_id,
+            user_id=customer_user_id,
+            invitation_id=invitation_id,
+            consent_sequence=1,
+            customer_revision=customer.lifecycle_revision + 1,
+            decision="granted",
+            consent_version=CUSTOMER_CONSENT_VERSION,
+            consent_document_hash=CUSTOMER_CONSENT_DOCUMENT_SHA256,
+            evidence_hash=evidence_hash,
+            evidence_schema_version=CUSTOMER_CONSENT_EVIDENCE_SCHEMA,
+            evidence_origin="server_canonical",
+            recorded_at=now,
+        )
+        session.add(consent_record)
+        await session.flush()
+        customer.status = "active"
+        customer.consent_status = "granted"
+        customer.consent_version = CUSTOMER_CONSENT_VERSION
+        customer.consent_evidence_hash = evidence_hash
+        customer.current_consent_record_id = consent_record_id
+        customer.consent_evidence_origin = "server_canonical"
+        customer.consent_updated_at = now
+        customer.activated_at = now
         await session.flush()
         session.add(
             AgencyCustomerAdvisorAssignment(
@@ -482,6 +559,8 @@ def test_alembic_upgrade_downgrade_and_legacy_bootstrap(
         "conversation",
         "message",
         "agency",
+        "agency_customer_invitation",
+        "agency_customer_consent_record",
         "agency_quote",
         "agency_order",
         "agency_order_review",
@@ -495,6 +574,8 @@ def test_alembic_upgrade_downgrade_and_legacy_bootstrap(
         "conversation",
         "message",
         "agency",
+        "agency_customer_invitation",
+        "agency_customer_consent_record",
         "agency_quote",
         "agency_order",
         "agency_order_review",
@@ -532,6 +613,8 @@ def test_alembic_upgrade_downgrade_and_legacy_bootstrap(
     command.upgrade(postgres_schema.alembic_config, "head")
     assert {
         "agency",
+        "agency_customer_invitation",
+        "agency_customer_consent_record",
         "agency_quote",
         "agency_order",
         "agency_order_review",

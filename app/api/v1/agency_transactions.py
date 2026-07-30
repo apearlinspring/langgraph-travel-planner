@@ -12,8 +12,8 @@ from app.api.dependencies import get_current_user
 from app.api.v1.agency_common import (
     IdempotencyKeyHeader,
     agency_service_call as _service_call,
+    get_agency_db,
 )
-from app.models.base import get_db
 from app.models.user import User
 from app.schemas.agency_transaction import (
     AgencyOrderCreateRequest,
@@ -38,7 +38,7 @@ router = APIRouter(prefix="/agency", tags=["旅行社交易"])
 
 
 async def get_agency_transaction_service(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_agency_db, scope="function"),
 ) -> AgencyOrderReviewService:
     return AgencyOrderReviewService(db)
 

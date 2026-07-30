@@ -207,7 +207,9 @@ def test_nonempty_0003_upgrade_backfills_branch_without_fake_consent(
             customer = connection.execute(
                 text(
                     "SELECT branch_id, customer_no, consent_status, "
-                    "consent_version, consent_evidence_hash, lifecycle_revision "
+                    "consent_version, consent_evidence_hash, lifecycle_revision, "
+                    "binding_provenance, claimed_invitation_id, "
+                    "consent_evidence_origin, current_consent_record_id "
                     "FROM agency_customer WHERE id = :id"
                 ),
                 {"id": ids["customer"]},
@@ -244,6 +246,10 @@ def test_nonempty_0003_upgrade_backfills_branch_without_fake_consent(
         assert customer["consent_version"] is None
         assert customer["consent_evidence_hash"] is None
         assert customer["lifecycle_revision"] == 1
+        assert customer["binding_provenance"] == "legacy_direct"
+        assert customer["claimed_invitation_id"] is None
+        assert customer["consent_evidence_origin"] == "none"
+        assert customer["current_consent_record_id"] is None
         assert set(transaction_binding.values()) == {
             ids["agency"],
             ids["customer"],
@@ -298,16 +304,23 @@ def test_nonempty_0003_upgrade_backfills_branch_without_fake_consent(
 async def test_offline_customer_lifecycle_assignment_replay_and_reassign(
     migrated_postgres: PostgresSandbox,
 ) -> None:
+    from app.agency.customer_consent import (
+        CUSTOMER_CONSENT_DOCUMENT_SHA256,
+        CUSTOMER_CONSENT_VERSION,
+    )
     from app.agency.customer_lifecycle_service import CustomerLifecycleService
     from app.agency.errors import (
         AgencyTransactionConflict,
         AgencyTransactionNotFound,
     )
     from app.models.agency_customer_lifecycle import (
+        AgencyCustomer,
         AgencyCustomerAdvisorAssignment,
         AgencyCustomerEvent,
     )
-    from app.models.agency_transaction import AgencyCustomer
+    from app.models.agency_customer_identity import (
+        AgencyCustomerConsentRecord,
+    )
     from app.schemas.agency_customer_lifecycle import (
         AgencyBranchCreateRequest,
         AgencyBranchRoleGrantCreateRequest,
@@ -360,7 +373,6 @@ async def test_offline_customer_lifecycle_assignment_replay_and_reassign(
         create_request = AgencyCustomerCreateRequest(
             agency_id=actors.agency_id,
             branch_id=branch.id,
-            user_id=None,
             source_type="staff_import",
             source_reference="opaque-import-row",
         )
@@ -385,19 +397,23 @@ async def test_offline_customer_lifecycle_assignment_replay_and_reassign(
         assert customer.status == "prospect"
         assert customer.consent_status == "unknown"
 
-        linked = await _call(
+        wrong_invitation, wrong_claim_token = await _call(
             session_factory,
             lambda session: CustomerLifecycleService(
                 session
-            ).link_customer_user(
+            ).issue_customer_claim_invitation(
                 actor_user_id=actors.owner_id,
                 customer_id=customer.id,
                 expected_revision=1,
-                user_id=actors.advisor_two_id,
-                idempotency_key="link-customer-user",
+                target_user_id=actors.advisor_two_id,
+                idempotency_key="issue-wrong-customer-claim",
             ),
         )
-        assert (linked.status, linked.lifecycle_revision) == ("invited", 2)
+        assert wrong_claim_token is not None
+        assert (wrong_invitation.status, wrong_invitation.revision) == (
+            "pending",
+            1,
+        )
         with pytest.raises(AgencyTransactionNotFound):
             await _call(
                 session_factory,
@@ -408,22 +424,57 @@ async def test_offline_customer_lifecycle_assignment_replay_and_reassign(
                     customer_id=customer.id,
                 ),
             )
-        relinked = await _call(
+        revoked_invitation = await _call(
             session_factory,
             lambda session: CustomerLifecycleService(
                 session
-            ).link_customer_user(
+            ).revoke_customer_claim_invitation(
                 actor_user_id=actors.owner_id,
                 customer_id=customer.id,
-                expected_revision=2,
-                user_id=actors.customer_user_id,
-                idempotency_key="relink-customer-user",
+                invitation_id=wrong_invitation.id,
+                expected_revision=1,
+                expected_invitation_revision=1,
+                reason="目标账户录入错误",
+                idempotency_key="revoke-wrong-customer-claim",
             ),
         )
-        assert (relinked.user_id, relinked.lifecycle_revision) == (
-            actors.customer_user_id,
-            3,
+        assert (revoked_invitation.status, revoked_invitation.revision) == (
+            "revoked",
+            2,
         )
+        invitation, claim_token = await _call(
+            session_factory,
+            lambda session: CustomerLifecycleService(
+                session
+            ).issue_customer_claim_invitation(
+                actor_user_id=actors.owner_id,
+                customer_id=customer.id,
+                expected_revision=1,
+                target_user_id=actors.customer_user_id,
+                idempotency_key="issue-customer-claim",
+            ),
+        )
+        assert claim_token is not None
+        claimed = await _call(
+            session_factory,
+            lambda session: CustomerLifecycleService(session).claim_customer(
+                actor_user_id=actors.customer_user_id,
+                claim_token=claim_token,
+                idempotency_key="claim-customer",
+            ),
+        )
+        assert (
+            claimed.user_id,
+            claimed.binding_provenance,
+            claimed.status,
+            claimed.lifecycle_revision,
+        ) == (
+            actors.customer_user_id,
+            "secure_claim",
+            "invited",
+            2,
+        )
+        assert claimed.claimed_invitation_id == invitation.id
         with pytest.raises(AgencyTransactionConflict) as stale:
             await _call(
                 session_factory,
@@ -434,12 +485,33 @@ async def test_offline_customer_lifecycle_assignment_replay_and_reassign(
                     customer_id=customer.id,
                     expected_revision=1,
                     decision="grant",
-                    consent_version="privacy.v1",
-                    consent_evidence_hash="d" * 64,
+                    expected_notice_version=CUSTOMER_CONSENT_VERSION,
+                    expected_notice_document_sha256=(
+                        CUSTOMER_CONSENT_DOCUMENT_SHA256
+                    ),
                     idempotency_key="stale-consent",
                 ),
             )
         assert stale.value.code == "transaction_revision_conflict"
+
+        with pytest.raises(AgencyTransactionConflict) as changed_notice:
+            await _call(
+                session_factory,
+                lambda session: CustomerLifecycleService(
+                    session
+                ).record_customer_consent(
+                    actor_user_id=actors.customer_user_id,
+                    customer_id=customer.id,
+                    expected_revision=2,
+                    decision="grant",
+                    expected_notice_version="stale-consent-notice.v0",
+                    expected_notice_document_sha256=(
+                        CUSTOMER_CONSENT_DOCUMENT_SHA256
+                    ),
+                    idempotency_key="stale-consent-notice",
+                ),
+            )
+        assert changed_notice.value.code == "customer_consent_notice_changed"
 
         consented = await _call(
             session_factory,
@@ -448,10 +520,12 @@ async def test_offline_customer_lifecycle_assignment_replay_and_reassign(
             ).record_customer_consent(
                 actor_user_id=actors.customer_user_id,
                 customer_id=customer.id,
-                expected_revision=3,
+                expected_revision=2,
                 decision="grant",
-                consent_version="privacy.v1",
-                consent_evidence_hash="d" * 64,
+                expected_notice_version=CUSTOMER_CONSENT_VERSION,
+                expected_notice_document_sha256=(
+                    CUSTOMER_CONSENT_DOCUMENT_SHA256
+                ),
                 idempotency_key="customer-consent",
             ),
         )
@@ -537,7 +611,7 @@ async def test_offline_customer_lifecycle_assignment_replay_and_reassign(
             ).end_customer_advisor_assignment(
                 actor_user_id=actors.owner_id,
                 customer_id=customer.id,
-                expected_revision=7,
+                expected_revision=6,
                 reason="顾问离职且暂无接替人",
                 idempotency_key="end-advisor-two",
             ),
@@ -549,7 +623,7 @@ async def test_offline_customer_lifecycle_assignment_replay_and_reassign(
             ).end_customer_advisor_assignment(
                 actor_user_id=actors.owner_id,
                 customer_id=customer.id,
-                expected_revision=7,
+                expected_revision=6,
                 reason="顾问离职且暂无接替人",
                 idempotency_key="end-advisor-two",
             ),
@@ -584,11 +658,27 @@ async def test_offline_customer_lifecycle_assignment_replay_and_reassign(
                 .scalars()
                 .all()
             )
+            consent_records = list(
+                (
+                    await session.execute(
+                        select(AgencyCustomerConsentRecord)
+                        .where(
+                            AgencyCustomerConsentRecord.customer_id
+                            == customer.id
+                        )
+                        .order_by(
+                            AgencyCustomerConsentRecord.consent_sequence
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
 
         assert stored_customer is not None
         assert (stored_customer.status, stored_customer.lifecycle_revision) == (
             "active",
-            8,
+            7,
         )
         assert reassigned.status == "active"
         assert [(item.status, item.ended_reason) for item in assignments] == [
@@ -600,15 +690,23 @@ async def test_offline_customer_lifecycle_assignment_replay_and_reassign(
         )
         assert [event.event_type for event in events] == [
             "customer_created",
-            "customer_user_linked",
-            "customer_user_relinked",
+            "customer_claim_invitation_issued",
+            "customer_claim_invitation_revoked",
+            "customer_claim_invitation_issued",
+            "customer_secure_claimed",
             "customer_consent_granted",
             "customer_activated",
             "customer_advisor_assigned",
             "customer_advisor_reassigned",
             "customer_advisor_unassigned",
         ]
-        assert events[3].event_metadata["consent_evidence_hash"] == "d" * 64
+        assert len(consent_records) == 1
+        assert consent_records[0].evidence_origin == "server_canonical"
+        assert (
+            events[5].event_metadata["consent_evidence_hash"]
+            == stored_customer.consent_evidence_hash
+            == consent_records[0].evidence_hash
+        )
     finally:
         await engine.dispose()
 
@@ -617,6 +715,10 @@ async def test_offline_customer_lifecycle_assignment_replay_and_reassign(
 async def test_database_rejects_cross_branch_and_customer_user_misbinding(
     migrated_postgres: PostgresSandbox,
 ) -> None:
+    from app.agency.customer_consent import (
+        CUSTOMER_CONSENT_DOCUMENT_SHA256,
+        CUSTOMER_CONSENT_VERSION,
+    )
     from app.agency.customer_lifecycle_service import CustomerLifecycleService
     from app.agency.order_review_service import AgencyOrderReviewService
     from app.models.agency_customer_lifecycle import AgencyBranch
@@ -815,7 +917,7 @@ async def test_database_rejects_cross_branch_and_customer_user_misbinding(
             ).deactivate_customer(
                 actor_user_id=actors.customer_user_id,
                 customer_id=actors.customer_record_id,
-                expected_revision=1,
+                expected_revision=3,
                 reason="客户撤回待审核订单",
                 idempotency_key=f"guard-deactivate-{uuid.uuid4().hex}",
             ),
@@ -830,8 +932,10 @@ async def test_database_rejects_cross_branch_and_customer_user_misbinding(
                 customer_id=actors.customer_record_id,
                 expected_revision=deactivated.lifecycle_revision,
                 decision="grant",
-                consent_version="integration.v2",
-                consent_evidence_hash="f" * 64,
+                expected_notice_version=CUSTOMER_CONSENT_VERSION,
+                expected_notice_document_sha256=(
+                    CUSTOMER_CONSENT_DOCUMENT_SHA256
+                ),
                 idempotency_key=f"guard-reconsent-{uuid.uuid4().hex}",
             ),
         )

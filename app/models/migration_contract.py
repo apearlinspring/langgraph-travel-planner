@@ -12,6 +12,8 @@ BUSINESS_MANAGED_TABLES: tuple[str, ...] = (
     "agency_membership",
     "agency_branch_role_grant",
     "agency_customer",
+    "agency_customer_invitation",
+    "agency_customer_consent_record",
     "agency_customer_event",
     "agency_customer_advisor_assignment",
     "supplier_product",

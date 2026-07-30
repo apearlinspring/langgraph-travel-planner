@@ -3,16 +3,23 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agency.customer_consent import (
+    CUSTOMER_CONSENT_CHANNEL,
+    CUSTOMER_CONSENT_DOCUMENT_SHA256,
+    CUSTOMER_CONSENT_EVIDENCE_SCHEMA,
+    CUSTOMER_CONSENT_NOTICE_MARKDOWN,
+    CUSTOMER_CONSENT_VERSION,
+)
 from app.agency.customer_lifecycle_service import CustomerLifecycleService
 from app.api.dependencies import get_current_user
 from app.api.v1.agency_common import (
     IdempotencyKeyHeader,
     agency_service_call as _service_call,
+    get_agency_db,
 )
-from app.models.base import get_db
 from app.models.user import User
 from app.schemas.agency_customer_lifecycle import (
     AdvisorAssignmentStatus,
@@ -27,12 +34,18 @@ from app.schemas.agency_customer_lifecycle import (
     AgencyCustomerAdvisorEndRequest,
     AgencyCustomerAdvisorAssignmentListResponse,
     AgencyCustomerAdvisorAssignmentResponse,
+    AgencyCustomerClaimInvitationIssueRequest,
+    AgencyCustomerClaimInvitationIssuedResponse,
+    AgencyCustomerClaimInvitationListResponse,
+    AgencyCustomerClaimInvitationResponse,
+    AgencyCustomerClaimInvitationRevokeRequest,
+    AgencyCustomerClaimRequest,
+    AgencyCustomerConsentNoticeResponse,
     AgencyCustomerConsentRequest,
     AgencyCustomerCreateRequest,
     AgencyCustomerDeactivateRequest,
     AgencyCustomerEventListResponse,
     AgencyCustomerEventResponse,
-    AgencyCustomerLinkUserRequest,
     AgencyCustomerListResponse,
     AgencyCustomerResponse,
     BranchRoleGrantStatus,
@@ -46,7 +59,7 @@ router = APIRouter(prefix="/agency", tags=["旅行社客户与门店"])
 
 
 async def get_customer_lifecycle_service(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_agency_db, scope="function"),
 ) -> CustomerLifecycleService:
     return CustomerLifecycleService(db)
 
@@ -285,26 +298,129 @@ async def get_agency_customer(
 
 
 @router.post(
-    "/customers/{customer_id}/link-user",
-    response_model=AgencyCustomerResponse,
+    "/customers/{customer_id}/claim-invitations",
+    response_model=AgencyCustomerClaimInvitationIssuedResponse,
+    status_code=status.HTTP_201_CREATED,
 )
-async def link_agency_customer_user(
+async def issue_agency_customer_claim_invitation(
     customer_id: uuid.UUID,
-    data: AgencyCustomerLinkUserRequest,
+    data: AgencyCustomerClaimInvitationIssueRequest,
+    idempotency_key: IdempotencyKeyHeader,
+    response: Response,
+    user: User = Depends(get_current_user),
+    service: CustomerLifecycleService = Depends(
+        get_customer_lifecycle_service
+    ),
+):
+    """签发一次性客户认领凭证；当前阶段不负责投递通知。"""
+
+    invitation, claim_token = await _service_call(
+        service.issue_customer_claim_invitation(
+            actor_user_id=user.id,
+            customer_id=customer_id,
+            expected_revision=data.expected_revision,
+            target_user_id=data.target_user_id,
+            idempotency_key=idempotency_key,
+        )
+    )
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Pragma"] = "no-cache"
+    invitation_response = (
+        AgencyCustomerClaimInvitationIssuedResponse.model_validate(
+            invitation
+        )
+    )
+    return invitation_response.model_copy(
+        update={"claim_token": claim_token}
+    )
+
+
+@router.get(
+    "/customers/{customer_id}/claim-invitations",
+    response_model=AgencyCustomerClaimInvitationListResponse,
+)
+async def list_agency_customer_claim_invitations(
+    customer_id: uuid.UUID,
+    limit: int = Query(default=30, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    user: User = Depends(get_current_user),
+    service: CustomerLifecycleService = Depends(
+        get_customer_lifecycle_service
+    ),
+):
+    """列出客户认领凭证元数据，不返回原 token 或 token 摘要。"""
+
+    invitations, total = await _service_call(
+        service.list_customer_claim_invitations(
+            actor_user_id=user.id,
+            customer_id=customer_id,
+            limit=limit,
+            offset=offset,
+        )
+    )
+    return AgencyCustomerClaimInvitationListResponse(
+        invitations=[
+            AgencyCustomerClaimInvitationResponse.model_validate(invitation)
+            for invitation in invitations
+        ],
+        total=total,
+        offset=offset,
+        limit=limit,
+    )
+
+
+@router.post(
+    "/customers/{customer_id}/claim-invitations/{invitation_id}/revoke",
+    response_model=AgencyCustomerClaimInvitationResponse,
+)
+async def revoke_agency_customer_claim_invitation(
+    customer_id: uuid.UUID,
+    invitation_id: uuid.UUID,
+    data: AgencyCustomerClaimInvitationRevokeRequest,
     idempotency_key: IdempotencyKeyHeader,
     user: User = Depends(get_current_user),
     service: CustomerLifecycleService = Depends(
         get_customer_lifecycle_service
     ),
 ):
-    """将线下客户关系关联到已注册用户，不在响应中暴露用户标识。"""
+    """撤销尚未使用的客户认领凭证。"""
 
     return await _service_call(
-        service.link_customer_user(
+        service.revoke_customer_claim_invitation(
             actor_user_id=user.id,
             customer_id=customer_id,
+            invitation_id=invitation_id,
             expected_revision=data.expected_revision,
-            user_id=data.user_id,
+            expected_invitation_revision=(
+                data.expected_invitation_revision
+            ),
+            reason=data.reason,
+            idempotency_key=idempotency_key,
+        )
+    )
+
+
+@router.post(
+    "/customer-claims",
+    response_model=AgencyCustomerResponse,
+)
+async def claim_agency_customer(
+    data: AgencyCustomerClaimRequest,
+    idempotency_key: IdempotencyKeyHeader,
+    response: Response,
+    user: User = Depends(get_current_user),
+    service: CustomerLifecycleService = Depends(
+        get_customer_lifecycle_service
+    ),
+):
+    """由已登录用户持一次性凭证认领客户关系。"""
+
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Pragma"] = "no-cache"
+    return await _service_call(
+        service.claim_customer(
+            actor_user_id=user.id,
+            claim_token=data.claim_token,
             idempotency_key=idempotency_key,
         )
     )
@@ -323,7 +439,7 @@ async def record_agency_customer_consent(
         get_customer_lifecycle_service
     ),
 ):
-    """由已关联的平台客户记录本人授权决定及证据摘要。"""
+    """由已认领的平台客户记录本人决定；证据由服务端生成。"""
 
     return await _service_call(
         service.record_customer_consent(
@@ -331,10 +447,30 @@ async def record_agency_customer_consent(
             customer_id=customer_id,
             expected_revision=data.expected_revision,
             decision=data.decision,
-            consent_version=data.consent_version,
-            consent_evidence_hash=data.consent_evidence_hash,
+            expected_notice_version=data.expected_notice_version,
+            expected_notice_document_sha256=(
+                data.expected_notice_document_sha256
+            ),
             idempotency_key=idempotency_key,
         )
+    )
+
+
+@router.get(
+    "/customer-consent-notice",
+    response_model=AgencyCustomerConsentNoticeResponse,
+)
+async def get_agency_customer_consent_notice(
+    _user: User = Depends(get_current_user),
+):
+    """返回客户端提交授权决定前必须展示并确认的固定技术告知。"""
+
+    return AgencyCustomerConsentNoticeResponse(
+        consent_version=CUSTOMER_CONSENT_VERSION,
+        consent_document_sha256=CUSTOMER_CONSENT_DOCUMENT_SHA256,
+        evidence_schema_version=CUSTOMER_CONSENT_EVIDENCE_SCHEMA,
+        channel=CUSTOMER_CONSENT_CHANNEL,
+        notice_markdown=CUSTOMER_CONSENT_NOTICE_MARKDOWN,
     )
 
 

@@ -8,14 +8,16 @@ This directory contains several kinds of public project documentation: current c
 - 产品目标业务形态是“旅行社经营与交付工作台”。当前代码完成的是规划交付链路、门店与客户生命周期控制面及第一阶段交易数据/控制面骨架，不得把目标定位扩写成当前已经具备完整 CRM、真实供应链或资金交易能力。
 - 主执行链路是“单个 Travel Agent + `StepConfigMiddleware` + 状态迁移工具”；目的地 Router 和交通 Coordinator 是按需调用的嵌套能力。交通 Coordinator 直接调用航班、高铁、自驾查询工具，不存在再分发给三个交通方式子 Agent 的运行层。
 - `agency_plan` 是旅行社方案规划分支，不是交易状态；`agency_quote`、`agency_order` 等持久化模型也不等于真实预订、支付、退款或履约已经接通。`mock_checkout` 与 `generate_order_tool` 只提供演示编号和确认流程，不是订单系统。
-- `/api/v1/agency` 的交易子集覆盖报价草稿、发布、客户接受、订单草稿、提交审核和旅行社内部批准/拒绝，共 13 个操作、6 个 `POST`；门店与客户生命周期子集另有 16 个操作、10 个 `POST`，覆盖门店、门店角色授权、线下潜客登记、用户关联、本人同意、激活/停用、顾问分配和客户事件。
+- `/api/v1/agency` 的交易子集覆盖报价草稿、发布、客户接受、订单草稿、提交审核和旅行社内部批准/拒绝，共 13 个操作、6 个 `POST`；门店与客户生命周期子集另有 20 个操作、12 个 `POST`，覆盖门店、门店角色授权、线下潜客登记、目标账户认领邀请、客户认领、固定技术告知读取、本人同意、激活/停用、顾问分配和客户事件。
 - 门店权限是应用层行级授权，不是 PostgreSQL RLS（行级安全策略）。`owner`、`admin` 为旅行社全域角色；门店经理、顾问和审批员必须持有同一有效门店的有效授权，顾问还必须是客户当前主顾问。门店至少有一名有效专职 `approver` 才能提交订单，提交后不得撤掉最后一名审批员；只有该角色可以处理本门店审核。批准还要求客户保持 `active + granted`，客户停用后保留中的审核只能拒绝，且拒绝前不能重新激活客户关系；`owner`、`admin` 等角色不能代替，客户或审核发起人不能自审。
 - 内部 `approved` 只表示订单通过旅行社审核，不能扩写成供应商预订、支付、退款、通知或履约已执行；`external_action_enabled` 仍为 `false`。交易域审核也没有绑定平台 `/api/v1/approvals` 或 LangGraph HITL（人类在环）恢复链路。
-- 创建报价要求 `agency_customer` 已关联平台用户、关系为 `active`、同意为 `granted` 且所属门店有效。当前可逐条登记线下 `prospect` 并关联已有平台用户；未确认绑定可在 `invited + unknown` 阶段纠正，关联用户在记录本人同意决定前不可读取客户关系，但仍没有批量导入、邀请发送或安全认领流程。
-- 客户关系模型未引入姓名、电话、证件和联系人等 PII（个人可识别信息）字段，也不发送客户通知；同意版本和证据哈希只用于审计，不能充当法律合规证明。客户跨门店转移及门店停用/关闭 API 尚未实现。
+- 创建报价要求 `agency_customer` 已完成 `secure_claim`（安全认领）、关系为 `active`、同意为 `granted`、同意证据来源为 `server_canonical` 且所属门店有效。客户管理角色可为指定已有平台账户签发 256-bit 高熵、24 小时过期、可撤销、单次使用的认领凭证，数据库只保存 token（令牌）的 SHA-256 摘要，只有该已登录目标账户能完成认领；同一旅行社同一目标账户同一时刻最多一条待认领邀请。原始 token 只在首次签发事务已提交的响应返回，幂等重放不再返回；丢失时必须撤销并重新签发。当前仍没有批量导入、邀请投递或客户通知。
+- 认证用户通过 `GET /api/v1/agency/customer-consent-notice` 读取固定 [客户关系授权技术告知 v1](架构与流程/customer-consent-notice-v1.md) 的 Markdown、版本、文档摘要、证据 schema（模式）和渠道；提交决定时必须回传预期版本/文档摘要，服务端发现告知已变化则拒绝，但客户端不能上传任意 evidence hash（证据哈希）。服务端为每次决定生成 append-only（只追加）同意记录。存量直接绑定和旧客户端哈希分别明确标记为 `legacy_direct`、`legacy_client_hash`，不会冒充安全认领或服务端证据；原账户仍可拒绝/撤回，升级认领时旧同意投影会重置，原 `active` 关系会先停用并收口分配/内部交易，再由客户重新 `grant` 和激活。客户关系模型未引入姓名、电话、证件和联系人等 PII（个人可识别信息）字段；这些技术记录也不能证明真实身份核验、告知充分或法律合规。客户跨门店转移及门店停用/关闭 API 尚未实现。
 - `blocked` 客户保持失败关闭，不能经普通停用/激活接口解除；门店状态数据库门禁要求先结束有效授权、分配、客户关系和未终结交易，正式门店关闭工作流仍待实现。
 - 活跃客户拒绝/撤回同意或关系停用时，会在同一数据库事务中结束当前顾问分配并收口内部交易：`draft`/`offered` 和无订单的 `accepted` 报价内部取消；未执行的 `draft`/`approved` 订单内部取消；`pending_review` 保留给审批员拒绝且不能再批准，拒绝前客户关系也不能重新激活；异常或可能已有外部状态的订单进入 `cancellation_pending` 或保留人工处理标记。这不代表供应商取消、退款或通知已经完成。
 - `0004` 数据库触发器固化报价/订单绑定，复验客户/门店、报价有效期和订单/报价金额、币种、快照一致性，强制 `revision` 每次恰好加一、状态只按白名单迁移并保持外部动作关闭；订单与审核终态在事务提交时成对校验。写路径采用 `customer -> branch -> quote/order` 锁序，授权写持有门店/成员共享锁以防撤权 TOCTOU（检查与使用时序差）竞态。
+- `0005` 是当前 Alembic（数据库迁移工具）业务 head：新增客户认领邀请、只追加同意记录和 provenance（来源）字段，并用数据库门禁保护认领终态、同意记录不可修改及新交易的安全客户前置条件。`0005` 尚无可沿用的 PostgreSQL CI 或目标环境迁移结论；`0004` 的历史绿灯不能证明本次变更。
+- 旅行社领域 API 只有在事务提交和 DEFERRABLE（提交时延迟校验）数据库约束通过后才发送成功响应；提交失败不会先返回虚假的 `2xx`。
 - 真实供应商预订、支付、退款和通知当前尚未接入，并由 `TRANSACTION_MODE=disabled`、总熔断开关和细粒度动作开关默认阻断。任何未来放行都必须同时满足租户权限、四眼审批、`revision`（修订号）、`payload_hash`（业务负载哈希）、幂等、补偿和供应商适配器检查。
 - 审批模块当前提供策略、持久化请求、只追加事件、角色权限和 readiness（就绪状态）语义；尚未实现 LangGraph `interrupt/resume`（中断/恢复）执行闭环。`approval_persistence_ready` 只表示审批与审计可持久化，`hitl_closed_loop` 当前始终为 `false`，不能扩写成“审批后自动恢复原 Agent 动作”。
 - acceptance（验收）门禁主要检查报告、证据、工具治理、可观测摘要和运行预算；普通场景默认还要求工具失败数、失败率和 fallback 数为 0，只有专门降级场景可显式放宽。历史 `passed` 只代表当时单次场景门禁结果；它不等于最优工具轨迹、稳定成功率、当前工作树通过或完整生产就绪。
@@ -53,6 +55,7 @@ Local workspaces may contain ignored `历史轮次/` and `问题记录/` directo
 - Step prompt rule inventory: `架构与流程/step-prompt-rule-inventory.md`
 - Planning mode boundary: `架构与流程/planning-mode-boundary.md`
 - Agency customer and transaction domain: `架构与流程/agency-transaction-domain.md`
+- Customer consent technical notice v1: `架构与流程/customer-consent-notice-v1.md`
 - Planning guardrails: `架构与流程/planning-guardrails.md`
 - RAG demo and evaluation: `RAG与知识库/rag-demo-evaluation-guide.md`
 - RAG release checklist: `RAG与知识库/rag-release-checklist.md`
@@ -98,4 +101,4 @@ Local workspaces may contain ignored `历史轮次/` and `问题记录/` directo
 - Keep current architecture, deployment, testing, frontend and evaluation contracts in Git, and label public templates, dated evidence and historical archives explicitly.
 - Keep restricted deployment coordinates, local evidence snapshots, raw logs, database dumps, generated vector stores and local-only drafts out of Git.
 - Productized RAG route templates are demo catalog data. They do not represent real inventory, guaranteed group availability or locked pricing.
-- Branch/customer records, consent hashes, transaction tables, mock checkout and generated references are engineering evidence only. They do not prove legal consent, supplier booking, payment, refund, notification, ticket, hotel confirmation, contract or completed fulfillment.
+- Branch/customer records, claim-token digests, server-canonical consent records, transaction tables, mock checkout and generated references are engineering evidence only. They do not prove real-world identity or legal consent, supplier booking, payment, refund, notification, ticket, hotel confirmation, contract or completed fulfillment.

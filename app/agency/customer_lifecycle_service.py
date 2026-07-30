@@ -19,13 +19,13 @@ from app.agency.branch_authorization import (
 from app.agency.customer_transaction_settlement import (
     CustomerTransactionSettlementMixin,
 )
+from app.agency.customer_claim_service import CustomerClaimServiceMixin
 from app.agency.customer_lifecycle_support import CustomerLifecycleSupportMixin
 from app.agency.errors import (
     AgencyTransactionConflict,
     AgencyTransactionValidationError,
     hidden_not_found,
 )
-from app.agency.transaction_payloads import canonical_payload_hash
 from app.agency.transaction_service import (
     AgencyTransactionService,
 )
@@ -36,13 +36,13 @@ from app.models.agency_customer_lifecycle import (
     AgencyCustomerEvent,
 )
 from app.models.agency_transaction import AgencyMembership, AgencyOrder
-from app.models.user import User
 from app.schemas.agency_customer_lifecycle import AgencyCustomerCreateRequest
 
 
 class CustomerLifecycleService(
     BranchAdministrationMixin,
     CustomerLifecycleSupportMixin,
+    CustomerClaimServiceMixin,
     CustomerTransactionSettlementMixin,
     AgencyTransactionService,
 ):
@@ -78,7 +78,6 @@ class CustomerLifecycleService(
                 "actor_user_id": actor_user_id,
                 "agency_id": branch.agency_id,
                 "branch_id": branch.id,
-                "user_id": data.user_id,
                 "source_type": data.source_type,
                 "source_reference": data.source_reference,
             },
@@ -91,35 +90,16 @@ class CustomerLifecycleService(
                 agency_id=branch.agency_id,
             )
 
-        if data.user_id is not None:
-            user_result = await self.db.execute(
-                select(User.id).where(User.id == data.user_id)
-            )
-            if user_result.scalar_one_or_none() is None:
-                raise AgencyTransactionValidationError(
-                    "customer_user_invalid",
-                    "关联用户不存在",
-                )
-            existing_result = await self.db.execute(
-                select(AgencyCustomer.id)
-                .where(AgencyCustomer.agency_id == branch.agency_id)
-                .where(AgencyCustomer.user_id == data.user_id)
-            )
-            if existing_result.scalar_one_or_none() is not None:
-                raise AgencyTransactionConflict(
-                    "customer_relationship_exists",
-                    "该用户已在当前旅行社建立客户关系",
-                )
-
         customer = AgencyCustomer(
             agency_id=branch.agency_id,
             branch_id=branch.id,
             customer_no=f"CUST-{uuid.uuid4().hex[:20].upper()}",
-            user_id=data.user_id,
             source_type=data.source_type,
             source_reference=data.source_reference,
-            status="invited" if data.user_id is not None else "prospect",
+            status="prospect",
+            binding_provenance="unbound",
             consent_status="unknown",
+            consent_evidence_origin="none",
             lifecycle_revision=1,
             invited_at=self._now(),
         )
@@ -133,7 +113,7 @@ class CustomerLifecycleService(
             actor_user_id=actor_user_id,
             event_metadata={
                 "source_type": customer.source_type,
-                "linked_user": customer.user_id is not None,
+                "linked_user": False,
                 "notification_sent": False,
             },
         )
@@ -192,220 +172,6 @@ class CustomerLifecycleService(
         )
         return customer
 
-    async def link_customer_user(
-        self,
-        *,
-        actor_user_id: uuid.UUID,
-        customer_id: uuid.UUID,
-        expected_revision: int,
-        user_id: uuid.UUID,
-        idempotency_key: str,
-    ) -> AgencyCustomer:
-        customer = await self._get_customer(customer_id, for_update=True)
-        await self.authorization.require_customer_manager(
-            customer=customer,
-            actor_user_id=actor_user_id,
-            lock_scope=True,
-        )
-        state = await self._begin_idempotent_action(
-            agency_id=customer.agency_id,
-            scope="customer.link_user",
-            key=idempotency_key,
-            request_payload={
-                "actor_user_id": actor_user_id,
-                "customer_id": customer.id,
-                "expected_revision": expected_revision,
-                "user_id": user_id,
-            },
-        )
-        if state.replayed:
-            self._ensure_replay_matches(
-                state,
-                resource_type="agency_customer",
-                resource_id=customer.id,
-            )
-            return customer
-
-        self._ensure_revision(
-            customer.lifecycle_revision,
-            expected_revision,
-        )
-        if customer.status not in {"prospect", "invited", "inactive"}:
-            raise AgencyTransactionConflict(
-                "customer_user_link_state_conflict",
-                "当前客户状态不允许关联平台用户",
-            )
-        is_relink = customer.user_id is not None
-        if is_relink and (
-            customer.status != "invited"
-            or customer.consent_status != "unknown"
-            or customer.consent_version is not None
-            or customer.consent_evidence_hash is not None
-            or customer.consent_updated_at is not None
-        ):
-            raise AgencyTransactionConflict(
-                "customer_user_link_state_conflict",
-                "客户确认前才允许纠正关联用户",
-            )
-        if customer.user_id == user_id:
-            raise AgencyTransactionConflict(
-                "customer_user_link_state_conflict",
-                "客户关系已经关联该平台用户",
-            )
-        user_result = await self.db.execute(
-            select(User.id).where(User.id == user_id)
-        )
-        if user_result.scalar_one_or_none() is None:
-            raise AgencyTransactionValidationError(
-                "customer_user_invalid",
-                "关联用户不存在",
-            )
-        existing_result = await self.db.execute(
-            select(AgencyCustomer.id)
-            .where(AgencyCustomer.agency_id == customer.agency_id)
-            .where(AgencyCustomer.user_id == user_id)
-            .where(AgencyCustomer.id != customer.id)
-        )
-        if existing_result.scalar_one_or_none() is not None:
-            raise AgencyTransactionConflict(
-                "customer_relationship_exists",
-                "该用户已在当前旅行社建立客户关系",
-            )
-
-        from_status = customer.status
-        customer.user_id = user_id
-        customer.status = "invited"
-        customer.consent_status = "unknown"
-        customer.consent_version = None
-        customer.consent_evidence_hash = None
-        customer.consent_updated_at = None
-        customer.activated_at = None
-        customer.deactivated_at = None
-        customer.updated_at = self._now()
-        await self._flush()
-        await self._append_customer_event(
-            customer=customer,
-            event_type=(
-                "customer_user_relinked"
-                if is_relink
-                else "customer_user_linked"
-            ),
-            from_status=from_status,
-            to_status=customer.status,
-            actor_user_id=actor_user_id,
-            event_metadata={"linked": True, "notification_sent": False},
-        )
-        return await self._finish_action(
-            state,
-            resource_type="agency_customer",
-            resource=customer,
-        )
-
-    async def record_customer_consent(
-        self,
-        *,
-        actor_user_id: uuid.UUID,
-        customer_id: uuid.UUID,
-        expected_revision: int,
-        decision: str,
-        consent_version: str,
-        consent_evidence_hash: str,
-        idempotency_key: str,
-    ) -> AgencyCustomer:
-        customer = await self._get_customer(customer_id, for_update=True)
-        if customer.user_id != actor_user_id:
-            raise hidden_not_found()
-        target_status = {
-            "grant": "granted",
-            "deny": "denied",
-            "revoke": "revoked",
-        }.get(decision)
-        if target_status is None:
-            raise AgencyTransactionValidationError(
-                "customer_consent_decision_invalid",
-                "客户授权决定必须是 grant、deny 或 revoke",
-            )
-        state = await self._begin_idempotent_action(
-            agency_id=customer.agency_id,
-            scope="customer.consent",
-            key=idempotency_key,
-            request_payload={
-                "actor_user_id": actor_user_id,
-                "customer_id": customer.id,
-                "expected_revision": expected_revision,
-                "decision": decision,
-                "consent_version": consent_version,
-                "consent_evidence_hash": consent_evidence_hash,
-            },
-        )
-        if state.replayed:
-            self._ensure_replay_matches(
-                state,
-                resource_type="agency_customer",
-                resource_id=customer.id,
-            )
-            return customer
-
-        self._ensure_revision(
-            customer.lifecycle_revision,
-            expected_revision,
-        )
-        if (
-            customer.consent_status == target_status
-            and customer.consent_version == consent_version
-            and customer.consent_evidence_hash == consent_evidence_hash
-        ):
-            raise AgencyTransactionConflict(
-                "customer_consent_state_conflict",
-                "该客户授权决定已经记录",
-            )
-
-        now = self._now()
-        from_status = customer.status
-        ended_assignment = None
-        transaction_settlement = None
-        customer.consent_status = target_status
-        customer.consent_version = consent_version
-        customer.consent_evidence_hash = consent_evidence_hash.lower()
-        customer.consent_updated_at = now
-        if target_status in {"denied", "revoked"} and customer.status == "active":
-            customer.status = "inactive"
-            customer.deactivated_at = now
-            ended_assignment = await self._end_active_assignment(
-                customer=customer,
-                ended_at=now,
-                reason=f"consent_{target_status}",
-            )
-            transaction_settlement = (
-                await self._settle_customer_transactions(
-                    customer=customer,
-                    actor_user_id=actor_user_id,
-                )
-            )
-        await self._flush()
-        await self._append_customer_event(
-            customer=customer,
-            event_type=f"customer_consent_{target_status}",
-            from_status=from_status,
-            to_status=customer.status,
-            actor_user_id=actor_user_id,
-            event_metadata={
-                "consent_version": consent_version,
-                "consent_evidence_hash": consent_evidence_hash.lower(),
-                "assignment_ended": (
-                    str(ended_assignment.id)
-                    if ended_assignment is not None
-                    else None
-                ),
-                "transaction_settlement": transaction_settlement,
-            },
-        )
-        return await self._finish_action(
-            state,
-            resource_type="agency_customer",
-            resource=customer,
-        )
-
     async def activate_customer(
         self,
         *,
@@ -458,13 +224,24 @@ class CustomerLifecycleService(
                 "客户关系必须先关联平台用户才能激活",
             )
         if (
+            customer.binding_provenance != "secure_claim"
+            or customer.claimed_invitation_id is None
+            or customer.claimed_at is None
+        ):
+            raise AgencyTransactionValidationError(
+                "customer_claim_required",
+                "客户关系必须先完成一次性邀请认领才能激活",
+            )
+        if (
             customer.consent_status != "granted"
             or customer.consent_version is None
             or customer.consent_evidence_hash is None
+            or customer.current_consent_record_id is None
+            or customer.consent_evidence_origin != "server_canonical"
         ):
             raise AgencyTransactionValidationError(
                 "customer_consent_required",
-                "客户本人有效授权及证据摘要是激活前置条件",
+                "客户本人服务端同意证据是激活前置条件",
             )
         pending_review_result = await self.db.execute(
             select(AgencyOrder.id)
@@ -553,19 +330,21 @@ class CustomerLifecycleService(
 
         now = self._now()
         from_status = customer.status
+        consent_record = None
+        if is_self:
+            consent_record = await self._create_customer_consent_record(
+                customer=customer,
+                decision="revoke",
+                recorded_at=now,
+            )
         customer.status = "inactive"
         customer.deactivated_at = now
-        if is_self:
+        if consent_record is not None:
             customer.consent_status = "revoked"
-            customer.consent_version = "self-deactivate.v1"
-            customer.consent_evidence_hash = canonical_payload_hash(
-                {
-                    "customer_id": customer.id,
-                    "actor_user_id": actor_user_id,
-                    "reason": safe_reason,
-                    "revoked_at": now,
-                }
-            )
+            customer.consent_version = consent_record.consent_version
+            customer.consent_evidence_hash = consent_record.evidence_hash
+            customer.current_consent_record_id = consent_record.id
+            customer.consent_evidence_origin = "server_canonical"
             customer.consent_updated_at = now
         ended_assignment = await self._end_active_assignment(
             customer=customer,
@@ -592,6 +371,11 @@ class CustomerLifecycleService(
                 "consent_revoked": is_self,
                 "consent_evidence_hash": (
                     customer.consent_evidence_hash if is_self else None
+                ),
+                "consent_record_id": (
+                    str(consent_record.id)
+                    if consent_record is not None
+                    else None
                 ),
                 "assignment_ended": (
                     str(ended_assignment.id)

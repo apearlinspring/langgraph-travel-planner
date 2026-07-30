@@ -274,7 +274,7 @@ async def test_branch_access_matrix_approver_queue_and_inactive_fail_closed(
             ).end_customer_advisor_assignment(
                 actor_user_id=owner_id,
                 customer_id=actors.customer_record_id,
-                expected_revision=1,
+                expected_revision=3,
                 reason="门店停用前解除顾问分配",
                 idempotency_key=f"close-assignment-{unique}",
             ),
@@ -286,12 +286,12 @@ async def test_branch_access_matrix_approver_queue_and_inactive_fail_closed(
             ).deactivate_customer(
                 actor_user_id=owner_id,
                 customer_id=actors.customer_record_id,
-                expected_revision=2,
+                expected_revision=4,
                 reason="门店停用前结束客户服务",
                 idempotency_key=f"close-customer-{unique}",
             ),
         )
-        assert deactivated.lifecycle_revision == 3
+        assert deactivated.lifecycle_revision == 5
         async with engine.begin() as connection:
             await connection.execute(
                 text(
@@ -309,7 +309,7 @@ async def test_branch_access_matrix_approver_queue_and_inactive_fail_closed(
                 ).deactivate_customer(
                     actor_user_id=owner_id,
                     customer_id=actors.customer_record_id,
-                    expected_revision=4,
+                    expected_revision=6,
                     reason="不得绕过独立风险复核",
                     idempotency_key=f"blocked-customer-{unique}",
                 ),
@@ -377,7 +377,7 @@ async def test_branch_access_matrix_approver_queue_and_inactive_fail_closed(
                 ).assign_customer_advisor(
                     actor_user_id=owner_id,
                     customer_id=actors.customer_record_id,
-                    expected_revision=4,
+                    expected_revision=6,
                     advisor_role_grant_id=actors.advisor_grant_id,
                     reason=None,
                     idempotency_key=f"inactive-assign-{unique}",

@@ -127,4 +127,5 @@ jobs:
           python -m pytest --run-integration -q \
             tests/test_agency_transaction_postgres_integration.py \
             tests/test_agency_customer_lifecycle_postgres_integration.py \
+            tests/test_agency_customer_claim_postgres_integration.py \
             tests/test_agency_branch_permissions_postgres_integration.py

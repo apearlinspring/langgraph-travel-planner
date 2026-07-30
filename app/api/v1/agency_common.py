@@ -1,10 +1,12 @@
 """旅行社业务 API 共用的幂等 Header 与错误映射。"""
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from typing import Annotated, Awaitable, TypeVar
 
 from fastapi import Header, status
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agency.errors import (
     AgencyTransactionAccessDenied,
@@ -15,6 +17,7 @@ from app.agency.errors import (
     AgencyTransactionValidationError,
 )
 from app.api.dependencies import api_error
+from app.models.base import async_session_maker
 
 
 IdempotencyKeyHeader = Annotated[
@@ -27,6 +30,26 @@ IdempotencyKeyHeader = Annotated[
     ),
 ]
 T = TypeVar("T")
+
+
+async def get_agency_db() -> AsyncIterator[AsyncSession]:
+    """在响应发送前提交旅行社领域事务并映射提交阶段错误。"""
+
+    async with async_session_maker() as session:
+        try:
+            yield session
+            await session.commit()
+        except Exception as error:
+            await session.rollback()
+            if isinstance(error, IntegrityError):
+                conflict = AgencyTransactionConflict(
+                    "transaction_write_conflict",
+                    "交易数据已变化或违反数据库约束，请刷新后重试",
+                )
+                raise agency_error_to_http(conflict) from error
+            if isinstance(error, (AgencyTransactionError, SQLAlchemyError)):
+                raise agency_error_to_http(error) from error
+            raise
 
 
 def agency_error_to_http(error: Exception):

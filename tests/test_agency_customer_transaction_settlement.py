@@ -8,6 +8,11 @@ from unittest.mock import AsyncMock
 import pytest
 from sqlalchemy.dialects import postgresql
 
+from app.agency.customer_consent import (
+    CUSTOMER_CONSENT_DOCUMENT_SHA256,
+    CUSTOMER_CONSENT_EVIDENCE_SCHEMA,
+    CUSTOMER_CONSENT_VERSION,
+)
 from app.agency.customer_lifecycle_service import CustomerLifecycleService
 from app.agency.errors import AgencyTransactionConflict
 from app.agency.transaction_service import IdempotencyState
@@ -53,19 +58,35 @@ def _order(
 
 
 def _customer(*, status: str = "active") -> SimpleNamespace:
+    has_consent = status == "active"
     return SimpleNamespace(
         id=BUSINESS_CUSTOMER_ID,
         agency_id=AGENCY_ID,
         branch_id=BRANCH_ID,
         user_id=CUSTOMER_ID,
         status=status,
-        consent_status="granted" if status == "active" else "unknown",
-        consent_version="consent.v1" if status == "active" else None,
-        consent_evidence_hash="a" * 64 if status == "active" else None,
-        consent_updated_at=NOW if status == "active" else None,
+        binding_provenance="secure_claim",
+        claimed_invitation_id=_uuid(901),
+        claimed_at=NOW,
+        consent_status="granted" if has_consent else "unknown",
+        consent_version=CUSTOMER_CONSENT_VERSION if has_consent else None,
+        consent_evidence_hash="a" * 64 if has_consent else None,
+        current_consent_record_id=_uuid(902) if has_consent else None,
+        consent_evidence_origin="server_canonical" if has_consent else "none",
+        consent_updated_at=NOW if has_consent else None,
         lifecycle_revision=1,
         activated_at=NOW if status == "active" else None,
         deactivated_at=None,
+    )
+
+
+def _consent_record(value: int = 903) -> SimpleNamespace:
+    return SimpleNamespace(
+        id=_uuid(value),
+        consent_version=CUSTOMER_CONSENT_VERSION,
+        consent_document_hash=CUSTOMER_CONSENT_DOCUMENT_SHA256,
+        evidence_hash="b" * 64,
+        evidence_schema_version=CUSTOMER_CONSENT_EVIDENCE_SCHEMA,
     )
 
 
@@ -308,6 +329,12 @@ async def test_active_consent_shutdown_settles_once_across_idempotent_replay(
         settle_transactions,
     )
     monkeypatch.setattr(service, "_flush", AsyncMock())
+    create_consent_record = AsyncMock(return_value=_consent_record())
+    monkeypatch.setattr(
+        service,
+        "_create_customer_consent_record",
+        create_consent_record,
+    )
     append_customer_event = AsyncMock()
     monkeypatch.setattr(
         service,
@@ -321,8 +348,10 @@ async def test_active_consent_shutdown_settles_once_across_idempotent_replay(
             customer_id=BUSINESS_CUSTOMER_ID,
             expected_revision=1,
             decision=decision,
-            consent_version="consent.v2",
-            consent_evidence_hash="b" * 64,
+            expected_notice_version=CUSTOMER_CONSENT_VERSION,
+            expected_notice_document_sha256=(
+                CUSTOMER_CONSENT_DOCUMENT_SHA256
+            ),
             idempotency_key=idempotency_key,
         )
         assert result is customer
@@ -333,6 +362,7 @@ async def test_active_consent_shutdown_settles_once_across_idempotent_replay(
         actor_user_id=CUSTOMER_ID,
     )
     append_customer_event.assert_awaited_once()
+    create_consent_record.assert_awaited_once()
     assert (
         append_customer_event.await_args.kwargs["event_metadata"][
             "transaction_settlement"
@@ -359,6 +389,8 @@ async def test_consent_without_active_relationship_shutdown_does_not_settle(
         customer.consent_status = "unknown"
         customer.consent_version = None
         customer.consent_evidence_hash = None
+        customer.current_consent_record_id = None
+        customer.consent_evidence_origin = "none"
     service = CustomerLifecycleService(SimpleNamespace())  # type: ignore[arg-type]
     monkeypatch.setattr(
         service,
@@ -382,6 +414,11 @@ async def test_consent_without_active_relationship_shutdown_does_not_settle(
         settle_transactions,
     )
     monkeypatch.setattr(service, "_flush", AsyncMock())
+    monkeypatch.setattr(
+        service,
+        "_create_customer_consent_record",
+        AsyncMock(return_value=_consent_record()),
+    )
     monkeypatch.setattr(service, "_append_customer_event", AsyncMock())
 
     await service.record_customer_consent(
@@ -389,8 +426,8 @@ async def test_consent_without_active_relationship_shutdown_does_not_settle(
         customer_id=BUSINESS_CUSTOMER_ID,
         expected_revision=1,
         decision=decision,
-        consent_version="consent.v2",
-        consent_evidence_hash="c" * 64,
+        expected_notice_version=CUSTOMER_CONSENT_VERSION,
+        expected_notice_document_sha256=CUSTOMER_CONSENT_DOCUMENT_SHA256,
         idempotency_key=f"{status}-{decision}",
     )
 
@@ -436,6 +473,11 @@ async def test_deactivate_customer_embeds_internal_settlement_summary(
         settle_transactions,
     )
     monkeypatch.setattr(service, "_flush", AsyncMock())
+    monkeypatch.setattr(
+        service,
+        "_create_customer_consent_record",
+        AsyncMock(return_value=_consent_record()),
+    )
     append_customer_event = AsyncMock()
     monkeypatch.setattr(
         service,
@@ -466,8 +508,10 @@ async def test_customer_cannot_reactivate_before_pending_review_is_rejected(
 ):
     customer = _customer(status="inactive")
     customer.consent_status = "granted"
-    customer.consent_version = "consent.v2"
+    customer.consent_version = CUSTOMER_CONSENT_VERSION
     customer.consent_evidence_hash = "e" * 64
+    customer.current_consent_record_id = _uuid(904)
+    customer.consent_evidence_origin = "server_canonical"
     customer.consent_updated_at = NOW
     db = ExecuteSequence(_uuid(201))
     service = CustomerLifecycleService(  # type: ignore[arg-type]

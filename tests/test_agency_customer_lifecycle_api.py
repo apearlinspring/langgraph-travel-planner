@@ -7,6 +7,12 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from app.agency.customer_consent import (
+    CUSTOMER_CONSENT_DOCUMENT_SHA256,
+    CUSTOMER_CONSENT_EVIDENCE_SCHEMA,
+    CUSTOMER_CONSENT_NOTICE_MARKDOWN,
+    CUSTOMER_CONSENT_VERSION,
+)
 from app.agency.errors import (
     AgencyTransactionConflict,
     AgencyTransactionNotFound,
@@ -26,6 +32,9 @@ from tests.agency_transaction_test_support import (
     ROLE_GRANT_ID,
     copy_record,
 )
+
+INVITATION_ID = uuid.UUID("12345678-1234-5678-9234-567812345678")
+CLAIM_TOKEN = "A" * 43
 
 
 def _branch_record(**updates) -> SimpleNamespace:
@@ -70,14 +79,19 @@ def _customer_record(**updates) -> SimpleNamespace:
         "agency_id": AGENCY_ID,
         "branch_id": BRANCH_ID,
         "customer_no": "C-20300101-1234567890ABCDEF",
-        "user_id": CUSTOMER_ID,
+        "user_id": None,
+        "binding_provenance": "unbound",
+        "claimed_invitation_id": None,
+        "claimed_at": None,
         "source_type": "manual",
         "source_reference": "internal-import-row-42",
         "status": "prospect",
-        "consent_status": "pending",
-        "consent_version": "privacy-v1",
-        "consent_evidence_hash": "a" * 64,
-        "consent_updated_at": NOW,
+        "consent_status": "unknown",
+        "consent_version": None,
+        "consent_evidence_hash": None,
+        "current_consent_record_id": None,
+        "consent_evidence_origin": "none",
+        "consent_updated_at": None,
         "lifecycle_revision": 1,
         "invited_at": NOW,
         "activated_at": None,
@@ -132,6 +146,31 @@ def _customer_event_record(**updates) -> SimpleNamespace:
     return SimpleNamespace(**values)
 
 
+def _claim_invitation_record(**updates) -> SimpleNamespace:
+    values = {
+        "id": INVITATION_ID,
+        "agency_id": AGENCY_ID,
+        "branch_id": BRANCH_ID,
+        "customer_id": BUSINESS_CUSTOMER_ID,
+        "target_user_id": CUSTOMER_ID,
+        "token_digest": "b" * 64,
+        "status": "pending",
+        "revision": 1,
+        "issued_by_user_id": ADVISOR_ID,
+        "claimed_by_user_id": None,
+        "revoked_by_user_id": None,
+        "revocation_reason": None,
+        "issued_at": NOW,
+        "expires_at": NOW,
+        "claimed_at": None,
+        "revoked_at": None,
+        "created_at": NOW,
+        "updated_at": NOW,
+    }
+    values.update(updates)
+    return SimpleNamespace(**values)
+
+
 class _FakeLifecycleService:
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict]] = []
@@ -141,6 +180,8 @@ class _FakeLifecycleService:
         self.customer = _customer_record()
         self.assignment = _assignment_record()
         self.event = _customer_event_record()
+        self.invitation = _claim_invitation_record()
+        self.issue_count = 0
 
     def _capture(self, name: str, values: dict) -> None:
         error = self.errors.get(name)
@@ -185,15 +226,54 @@ class _FakeLifecycleService:
         self._capture("get_customer", kwargs)
         return self.customer
 
-    async def link_customer_user(self, **kwargs):
-        self._capture("link_customer_user", kwargs)
-        return copy_record(self.customer, lifecycle_revision=2)
+    async def issue_customer_claim_invitation(self, **kwargs):
+        self._capture("issue_customer_claim_invitation", kwargs)
+        self.issue_count += 1
+        claim_token = CLAIM_TOKEN if self.issue_count == 1 else None
+        return self.invitation, claim_token
+
+    async def list_customer_claim_invitations(self, **kwargs):
+        self._capture("list_customer_claim_invitations", kwargs)
+        return [self.invitation], 1
+
+    async def revoke_customer_claim_invitation(self, **kwargs):
+        self._capture("revoke_customer_claim_invitation", kwargs)
+        return copy_record(
+            self.invitation,
+            status="revoked",
+            revision=2,
+            revoked_by_user_id=ADVISOR_ID,
+            revocation_reason="客户要求重新发送",
+            revoked_at=NOW,
+        )
+
+    async def claim_customer(self, **kwargs):
+        self._capture("claim_customer", kwargs)
+        return copy_record(
+            self.customer,
+            user_id=CUSTOMER_ID,
+            binding_provenance="secure_claim",
+            claimed_invitation_id=INVITATION_ID,
+            claimed_at=NOW,
+            status="invited",
+            lifecycle_revision=2,
+        )
 
     async def record_customer_consent(self, **kwargs):
         self._capture("record_customer_consent", kwargs)
         return copy_record(
             self.customer,
+            user_id=CUSTOMER_ID,
+            binding_provenance="secure_claim",
+            claimed_invitation_id=INVITATION_ID,
+            claimed_at=NOW,
+            status="invited",
             consent_status="granted",
+            consent_version=CUSTOMER_CONSENT_VERSION,
+            consent_evidence_hash="a" * 64,
+            current_consent_record_id=uuid.uuid4(),
+            consent_evidence_origin="server_canonical",
+            consent_updated_at=NOW,
             lifecycle_revision=3,
         )
 
@@ -201,8 +281,17 @@ class _FakeLifecycleService:
         self._capture("activate_customer", kwargs)
         return copy_record(
             self.customer,
+            user_id=CUSTOMER_ID,
+            binding_provenance="secure_claim",
+            claimed_invitation_id=INVITATION_ID,
+            claimed_at=NOW,
             status="active",
             consent_status="granted",
+            consent_version=CUSTOMER_CONSENT_VERSION,
+            consent_evidence_hash="a" * 64,
+            current_consent_record_id=uuid.uuid4(),
+            consent_evidence_origin="server_canonical",
+            consent_updated_at=NOW,
             lifecycle_revision=4,
             activated_at=NOW,
         )
@@ -255,6 +344,17 @@ def _build_client(
     return TestClient(app)
 
 
+def _response_keys(value) -> set[str]:
+    if isinstance(value, dict):
+        return set(value).union(
+            *(_response_keys(item) for item in value.values()),
+            set(),
+        )
+    if isinstance(value, list):
+        return set().union(*(_response_keys(item) for item in value), set())
+    return set()
+
+
 def _post_cases() -> list[tuple[str, dict]]:
     return [
         (
@@ -288,16 +388,24 @@ def _post_cases() -> list[tuple[str, dict]]:
             },
         ),
         (
-            f"/api/v1/agency/customers/{BUSINESS_CUSTOMER_ID}/link-user",
-            {"expected_revision": 1, "user_id": str(CUSTOMER_ID)},
+            (
+                f"/api/v1/agency/customers/{BUSINESS_CUSTOMER_ID}/"
+                "claim-invitations"
+            ),
+            {
+                "expected_revision": 1,
+                "target_user_id": str(CUSTOMER_ID),
+            },
         ),
         (
             f"/api/v1/agency/customers/{BUSINESS_CUSTOMER_ID}/consent",
             {
                 "expected_revision": 2,
                 "decision": "grant",
-                "consent_version": "privacy-v1",
-                "consent_evidence_hash": "A" * 64,
+                "expected_notice_version": CUSTOMER_CONSENT_VERSION,
+                "expected_notice_document_sha256": (
+                    CUSTOMER_CONSENT_DOCUMENT_SHA256
+                ),
             },
         ),
         (
@@ -329,11 +437,26 @@ def _post_cases() -> list[tuple[str, dict]]:
                 "reason": "顾问离职且暂无接替人",
             },
         ),
+        (
+            (
+                f"/api/v1/agency/customers/{BUSINESS_CUSTOMER_ID}/"
+                f"claim-invitations/{INVITATION_ID}/revoke"
+            ),
+            {
+                "expected_revision": 7,
+                "expected_invitation_revision": 1,
+                "reason": "客户要求重新发送",
+            },
+        ),
+        (
+            "/api/v1/agency/customer-claims",
+            {"claim_token": CLAIM_TOKEN},
+        ),
     ]
 
 
 @pytest.mark.parametrize(("path", "payload"), _post_cases())
-def test_all_ten_lifecycle_posts_require_idempotency_key(
+def test_all_twelve_lifecycle_posts_require_idempotency_key(
     path: str,
     payload: dict,
 ):
@@ -342,7 +465,7 @@ def test_all_ten_lifecycle_posts_require_idempotency_key(
     assert response.status_code == 422
 
 
-def test_lifecycle_router_exposes_sixteen_operations_and_ten_posts():
+def test_lifecycle_router_exposes_twenty_operations_and_twelve_posts():
     routes = [
         route
         for route in customer_api.router.routes
@@ -351,9 +474,72 @@ def test_lifecycle_router_exposes_sixteen_operations_and_ten_posts():
     operations = sum(len(route.methods or set()) for route in routes)
     posts = sum("POST" in (route.methods or set()) for route in routes)
 
-    assert len(routes) == 16
-    assert operations == 16
-    assert posts == 10
+    assert len(routes) == 20
+    assert operations == 20
+    assert posts == 12
+
+
+def test_customer_create_rejects_direct_user_binding():
+    service = _FakeLifecycleService()
+    response = _build_client(service).post(
+        "/api/v1/agency/customers",
+        json={
+            "agency_id": str(AGENCY_ID),
+            "branch_id": str(BRANCH_ID),
+            "source_type": "manual",
+            "user_id": str(CUSTOMER_ID),
+        },
+        headers={"Idempotency-Key": "customer-direct-user-forbidden"},
+    )
+
+    assert response.status_code == 422
+    assert service.calls == []
+
+
+def test_customer_link_user_route_is_removed():
+    route_paths = {
+        route.path
+        for route in customer_api.router.routes
+        if hasattr(route, "path")
+    }
+
+    assert "/agency/customers/{customer_id}/link-user" not in route_paths
+
+
+def test_customer_consent_rejects_client_supplied_evidence():
+    service = _FakeLifecycleService()
+    response = _build_client(service).post(
+        f"/api/v1/agency/customers/{BUSINESS_CUSTOMER_ID}/consent",
+        json={
+            "expected_revision": 2,
+            "decision": "grant",
+            "expected_notice_version": CUSTOMER_CONSENT_VERSION,
+            "expected_notice_document_sha256": (
+                CUSTOMER_CONSENT_DOCUMENT_SHA256
+            ),
+            "consent_version": "privacy-v1",
+            "consent_evidence_hash": "a" * 64,
+        },
+        headers={"Idempotency-Key": "consent-client-evidence-forbidden"},
+    )
+
+    assert response.status_code == 422
+    assert service.calls == []
+
+
+def test_customer_consent_notice_exposes_the_fixed_display_contract():
+    response = _build_client(_FakeLifecycleService()).get(
+        "/api/v1/agency/customer-consent-notice"
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "consent_version": CUSTOMER_CONSENT_VERSION,
+        "consent_document_sha256": CUSTOMER_CONSENT_DOCUMENT_SHA256,
+        "evidence_schema_version": CUSTOMER_CONSENT_EVIDENCE_SCHEMA,
+        "channel": "authenticated_api",
+        "notice_markdown": CUSTOMER_CONSENT_NOTICE_MARKDOWN,
+    }
 
 
 def test_lifecycle_commands_forward_revisions_and_idempotency():
@@ -374,11 +560,13 @@ def test_lifecycle_commands_forward_revisions_and_idempotency():
         201,
         200,
         201,
-        200,
+        201,
         200,
         200,
         200,
         201,
+        200,
+        200,
         200,
     ]
     calls = {name: values for name, values in service.calls}
@@ -394,13 +582,25 @@ def test_lifecycle_commands_forward_revisions_and_idempotency():
         "idempotency_key": "lifecycle-3",
     }
     assert calls["create_customer"]["data"].branch_id == BRANCH_ID
-    assert calls["link_customer_user"]["expected_revision"] == 1
-    assert calls["link_customer_user"]["user_id"] == CUSTOMER_ID
-    assert calls["record_customer_consent"]["expected_revision"] == 2
-    assert (
-        calls["record_customer_consent"]["consent_evidence_hash"]
-        == "a" * 64
-    )
+    assert not hasattr(calls["create_customer"]["data"], "user_id")
+    assert calls["issue_customer_claim_invitation"] == {
+        "actor_user_id": ADVISOR_ID,
+        "customer_id": BUSINESS_CUSTOMER_ID,
+        "expected_revision": 1,
+        "target_user_id": CUSTOMER_ID,
+        "idempotency_key": "lifecycle-5",
+    }
+    assert calls["record_customer_consent"] == {
+        "actor_user_id": ADVISOR_ID,
+        "customer_id": BUSINESS_CUSTOMER_ID,
+        "expected_revision": 2,
+        "decision": "grant",
+        "expected_notice_version": CUSTOMER_CONSENT_VERSION,
+        "expected_notice_document_sha256": (
+            CUSTOMER_CONSENT_DOCUMENT_SHA256
+        ),
+        "idempotency_key": "lifecycle-6",
+    }
     assert calls["activate_customer"]["expected_revision"] == 3
     assert calls["deactivate_customer"]["expected_revision"] == 4
     assert calls["deactivate_customer"]["reason"] == "客户主动终止服务"
@@ -414,6 +614,61 @@ def test_lifecycle_commands_forward_revisions_and_idempotency():
         calls["end_customer_advisor_assignment"]["reason"]
         == "顾问离职且暂无接替人"
     )
+    assert calls["revoke_customer_claim_invitation"] == {
+        "actor_user_id": ADVISOR_ID,
+        "customer_id": BUSINESS_CUSTOMER_ID,
+        "invitation_id": INVITATION_ID,
+        "expected_revision": 7,
+        "expected_invitation_revision": 1,
+        "reason": "客户要求重新发送",
+        "idempotency_key": "lifecycle-11",
+    }
+    assert calls["claim_customer"] == {
+        "actor_user_id": ADVISOR_ID,
+        "claim_token": CLAIM_TOKEN,
+        "idempotency_key": "lifecycle-12",
+    }
+
+
+def test_claim_invitation_token_is_returned_once_and_never_by_list():
+    service = _FakeLifecycleService()
+    client = _build_client(service, user_id=ADVISOR_ID)
+    path = (
+        f"/api/v1/agency/customers/{BUSINESS_CUSTOMER_ID}/"
+        "claim-invitations"
+    )
+    payload = {
+        "expected_revision": 1,
+        "target_user_id": str(CUSTOMER_ID),
+    }
+    headers = {"Idempotency-Key": "claim-invitation-replay"}
+
+    first = client.post(path, json=payload, headers=headers)
+    replay = client.post(path, json=payload, headers=headers)
+    listed = client.get(path)
+
+    assert first.status_code == 201
+    assert first.json()["claim_token"] == CLAIM_TOKEN
+    assert first.headers["cache-control"] == "no-store"
+    assert first.headers["pragma"] == "no-cache"
+    assert replay.status_code == 201
+    assert replay.json().get("claim_token") is None
+    assert listed.status_code == 200
+    assert "claim_token" not in _response_keys(listed.json())
+
+    forbidden_keys = {
+        "user_id",
+        "target_user_id",
+        "token_hash",
+        "token_digest",
+        "issued_by_user_id",
+        "claimed_by_user_id",
+        "revoked_by_user_id",
+        "revocation_reason",
+    }
+    assert _response_keys(first.json()).isdisjoint(forbidden_keys)
+    assert _response_keys(replay.json()).isdisjoint(forbidden_keys)
+    assert _response_keys(listed.json()).isdisjoint(forbidden_keys)
 
 
 def test_lifecycle_reads_forward_scope_filters_and_pagination():
@@ -450,6 +705,13 @@ def test_lifecycle_reads_forward_scope_filters_and_pagination():
         client.get(
             (
                 f"/api/v1/agency/customers/{BUSINESS_CUSTOMER_ID}/"
+                "claim-invitations"
+            ),
+            params={"limit": 15, "offset": 6},
+        ),
+        client.get(
+            (
+                f"/api/v1/agency/customers/{BUSINESS_CUSTOMER_ID}/"
                 "advisor-assignments"
             ),
             params={"status": "active", "limit": 13, "offset": 4},
@@ -470,6 +732,12 @@ def test_lifecycle_reads_forward_scope_filters_and_pagination():
     assert calls["list_customers"]["status_filter"] == "prospect"
     assert calls["get_customer"]["customer_id"] == BUSINESS_CUSTOMER_ID
     assert (
+        calls["list_customer_claim_invitations"]["customer_id"]
+        == BUSINESS_CUSTOMER_ID
+    )
+    assert calls["list_customer_claim_invitations"]["limit"] == 15
+    assert calls["list_customer_claim_invitations"]["offset"] == 6
+    assert (
         calls["list_customer_advisor_assignments"]["status_filter"]
         == "active"
     )
@@ -483,6 +751,12 @@ def test_lifecycle_responses_exclude_internal_identity_evidence_and_reasons():
 
     customer = client.get(
         f"/api/v1/agency/customers/{BUSINESS_CUSTOMER_ID}"
+    ).json()
+    invitation_list = client.get(
+        (
+            f"/api/v1/agency/customers/{BUSINESS_CUSTOMER_ID}/"
+            "claim-invitations"
+        )
     ).json()
     grant = client.get(
         f"/api/v1/agency/branches/{BRANCH_ID}/role-grants"
@@ -500,13 +774,60 @@ def test_lifecycle_responses_exclude_internal_identity_evidence_and_reasons():
     assert "user_id" not in customer
     assert "source_reference" not in customer
     assert "consent_evidence_hash" not in customer
+    assert _response_keys(invitation_list).isdisjoint(
+        {
+            "claim_token",
+            "user_id",
+            "target_user_id",
+            "token_hash",
+            "token_digest",
+            "issued_by_user_id",
+            "claimed_by_user_id",
+            "revoked_by_user_id",
+            "revocation_reason",
+        }
+    )
     assert "granted_by_user_id" not in grant
     assert "reason" not in grant
     assert "assigned_by_user_id" not in assignment
     assert "reason" not in assignment
     assert "actor_user_id" not in event
+    assert "user_id" not in event
     assert "event_metadata" not in event
     assert "reason" not in event
+    assert "claim_token" not in event
+    assert "token_hash" not in event
+    assert "token_digest" not in event
+    assert "target_user_id" not in event
+
+
+def test_customer_claim_error_does_not_echo_token_hash_or_user_identity():
+    service = _FakeLifecycleService()
+    service.errors["claim_customer"] = AgencyTransactionConflict(
+        "customer_claim_invalid",
+        "认领凭据无效、已使用或已过期",
+    )
+    response = _build_client(service).post(
+        "/api/v1/agency/customer-claims",
+        json={"claim_token": CLAIM_TOKEN},
+        headers={"Idempotency-Key": "customer-claim-invalid"},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == {
+        "code": "customer_claim_invalid",
+        "message": "认领凭据无效、已使用或已过期",
+    }
+    assert CLAIM_TOKEN not in response.text
+    assert _response_keys(response.json()).isdisjoint(
+        {
+            "claim_token",
+            "token_hash",
+            "token_digest",
+            "target_user_id",
+            "user_id",
+        }
+    )
 
 
 @pytest.mark.parametrize(

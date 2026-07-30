@@ -65,13 +65,20 @@ class TransactionLockingMixin:
             )
         if (
             customer.status != "active"
+            or customer.binding_provenance != "secure_claim"
+            or customer.claimed_invitation_id is None
+            or customer.claimed_at is None
             or customer.consent_status != "granted"
+            or customer.consent_version is None
             or customer.consent_evidence_hash is None
+            or customer.current_consent_record_id is None
+            or customer.consent_evidence_origin != "server_canonical"
+            or customer.consent_updated_at is None
             or customer.user_id is None
         ):
             raise AgencyTransactionValidationError(
                 "quote_customer_not_active",
-                "客户尚未完成账号关联、同意确认和业务关系激活",
+                "客户尚未完成安全认领、服务端同意确认和业务关系激活",
             )
         return customer
 

@@ -502,7 +502,7 @@ def test_agency_transaction_migration_has_reversible_dependency_order():
             FulfillmentRecord,
         )
     }
-    columns_added_by_0004 = {
+    columns_added_after_0002 = {
         "agency_customer": {
             "branch_id",
             "customer_no",
@@ -515,17 +515,26 @@ def test_agency_transaction_migration_has_reversible_dependency_order():
             "lifecycle_revision",
             "invited_at",
             "deactivated_at",
+            "binding_provenance",
+            "claimed_invitation_id",
+            "claimed_at",
+            "current_consent_record_id",
+            "consent_evidence_origin",
         },
         "agency_quote": {"branch_id", "customer_id"},
         "agency_order": {"branch_id", "customer_id"},
         "agency_order_event": {"branch_id"},
     }
-    indexes_added_by_0004 = {
-        "agency_customer": {"ix_agency_customer_branch_status"},
+    indexes_added_after_0002 = {
+        "agency_customer": {
+            "ix_agency_customer_branch_status",
+            "ix_agency_customer_claimed_invitation",
+            "ix_agency_customer_current_consent_record",
+        },
         "agency_quote": {"ix_agency_quote_branch_customer_status"},
         "agency_order": {"ix_agency_order_branch_customer_status"},
     }
-    constraints_added_by_0004 = {
+    constraints_added_after_0002 = {
         "agency_membership": {"uq_agency_membership_agency_id"},
         "agency_customer": {
             "uq_agency_customer_branch_id",
@@ -538,7 +547,14 @@ def test_agency_transaction_migration_has_reversible_dependency_order():
             "ck_agency_customer_consent_evidence_hash",
             "ck_agency_customer_consent_evidence",
             "ck_agency_customer_lifecycle_revision",
-            "ck_agency_customer_deactivated",
+                "ck_agency_customer_deactivated",
+                "fk_agency_customer_claimed_invitation",
+                "fk_agency_customer_current_consent_record",
+                "ck_agency_customer_binding_provenance",
+                "ck_agency_customer_binding_evidence",
+                "ck_agency_customer_consent_evidence_origin",
+                "ck_agency_customer_consent_record_projection",
+                "ck_agency_customer_active_secure_claim",
         },
         "agency_quote": {
             "uq_agency_quote_order_binding",
@@ -566,8 +582,8 @@ def test_agency_transaction_migration_has_reversible_dependency_order():
             if isinstance(element, Column)
         }
         assert migrated_columns == (
-            {column.name for column in model.__table__.columns}
-            - columns_added_by_0004.get(table_name, set())
+                {column.name for column in model.__table__.columns}
+                - columns_added_after_0002.get(table_name, set())
         )
 
         migrated_indexes = {
@@ -576,7 +592,8 @@ def test_agency_transaction_migration_has_reversible_dependency_order():
             if indexed_table == table_name
         }
         assert migrated_indexes == (
-            _index_names(model) - indexes_added_by_0004.get(table_name, set())
+            _index_names(model)
+            - indexes_added_after_0002.get(table_name, set())
         )
 
         migrated_named_constraints = {
@@ -599,7 +616,7 @@ def test_agency_transaction_migration_has_reversible_dependency_order():
         }
         expected_baseline_constraints = (
             model_named_constraints
-            - constraints_added_by_0004.get(table_name, set())
+            - constraints_added_after_0002.get(table_name, set())
         ) | constraints_replaced_by_0004.get(table_name, set())
         assert migrated_named_constraints == expected_baseline_constraints
 
@@ -886,6 +903,7 @@ def test_sqlite_schema_blocks_relationship_driven_cross_tenant_reassignment():
             branch_id=branch_a.id,
             customer_no="CUSTOMER-A",
             user_id=user.id,
+            binding_provenance="legacy_direct",
             source_type="test",
             status="prospect",
             consent_status="unknown",

@@ -9,6 +9,8 @@ from copy import deepcopy
 from typing import Any, Awaitable, Callable
 
 from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -556,6 +558,34 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+
+@app.exception_handler(RequestValidationError)
+async def redact_sensitive_validation_input(
+    request: Request,
+    error: RequestValidationError,
+):
+    """保留标准 422 结构，但不回显 token、password 等敏感输入。"""
+
+    sensitive_markers = ("token", "password", "secret", "credential")
+    is_customer_claim = (
+        request.url.path.rstrip("/") == "/api/v1/agency/customer-claims"
+    )
+    safe_errors = []
+    for item in error.errors():
+        safe_item = dict(item)
+        location = tuple(str(part).lower() for part in item.get("loc", ()))
+        if is_customer_claim or any(
+            marker in part
+            for part in location
+            for marker in sensitive_markers
+        ):
+            safe_item["input"] = "[REDACTED]"
+        safe_errors.append(safe_item)
+    return JSONResponse(
+        status_code=422,
+        content=jsonable_encoder({"detail": safe_errors}),
+    )
+
 app.add_middleware(
     ApiRateLimitMiddleware,
     enabled=settings.api_rate_limit_enabled,
@@ -589,6 +619,9 @@ app.add_middleware(
 @app.middleware("http")
 async def append_security_headers(request: Request, call_next):
     response = await call_next(request)
+    if request.url.path.rstrip("/") == "/api/v1/agency/customer-claims":
+        response.headers.setdefault("Cache-Control", "no-store")
+        response.headers.setdefault("Pragma", "no-cache")
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")

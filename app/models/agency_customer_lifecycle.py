@@ -139,6 +139,44 @@ class AgencyCustomer(Base):
             name="fk_agency_customer_branch",
             ondelete="RESTRICT",
         ),
+        ForeignKeyConstraint(
+            [
+                "agency_id",
+                "branch_id",
+                "id",
+                "claimed_invitation_id",
+            ],
+            [
+                "agency_customer_invitation.agency_id",
+                "agency_customer_invitation.branch_id",
+                "agency_customer_invitation.customer_id",
+                "agency_customer_invitation.id",
+            ],
+            name="fk_agency_customer_claimed_invitation",
+            ondelete="RESTRICT",
+            deferrable=True,
+            initially="DEFERRED",
+            use_alter=True,
+        ),
+        ForeignKeyConstraint(
+            [
+                "agency_id",
+                "branch_id",
+                "id",
+                "current_consent_record_id",
+            ],
+            [
+                "agency_customer_consent_record.agency_id",
+                "agency_customer_consent_record.branch_id",
+                "agency_customer_consent_record.customer_id",
+                "agency_customer_consent_record.id",
+            ],
+            name="fk_agency_customer_current_consent_record",
+            ondelete="RESTRICT",
+            deferrable=True,
+            initially="DEFERRED",
+            use_alter=True,
+        ),
         CheckConstraint(
             "status IN "
             "('invited', 'prospect', 'active', 'inactive', 'blocked')",
@@ -180,6 +218,50 @@ class AgencyCustomer(Base):
             name="ck_agency_customer_consent_evidence",
         ),
         CheckConstraint(
+            "binding_provenance IN "
+            "('unbound', 'legacy_direct', 'secure_claim')",
+            name="ck_agency_customer_binding_provenance",
+        ),
+        CheckConstraint(
+            "(binding_provenance = 'unbound' "
+            "AND user_id IS NULL "
+            "AND claimed_invitation_id IS NULL "
+            "AND claimed_at IS NULL) "
+            "OR (binding_provenance = 'legacy_direct' "
+            "AND user_id IS NOT NULL "
+            "AND claimed_invitation_id IS NULL "
+            "AND claimed_at IS NULL) "
+            "OR (binding_provenance = 'secure_claim' "
+            "AND user_id IS NOT NULL "
+            "AND claimed_invitation_id IS NOT NULL "
+            "AND claimed_at IS NOT NULL)",
+            name="ck_agency_customer_binding_evidence",
+        ),
+        CheckConstraint(
+            "consent_evidence_origin IN "
+            "('none', 'legacy_client_hash', 'server_canonical')",
+            name="ck_agency_customer_consent_evidence_origin",
+        ),
+        CheckConstraint(
+            "(consent_evidence_origin = 'none' "
+            "AND current_consent_record_id IS NULL "
+            "AND consent_evidence_hash IS NULL) "
+            "OR (consent_evidence_origin = 'legacy_client_hash' "
+            "AND current_consent_record_id IS NOT NULL "
+            "AND consent_evidence_hash IS NOT NULL) "
+            "OR (consent_evidence_origin = 'server_canonical' "
+            "AND current_consent_record_id IS NOT NULL "
+            "AND consent_evidence_hash IS NOT NULL)",
+            name="ck_agency_customer_consent_record_projection",
+        ),
+        CheckConstraint(
+            "status <> 'active' "
+            "OR (binding_provenance = 'secure_claim' "
+            "AND consent_status = 'granted' "
+            "AND consent_evidence_origin = 'server_canonical')",
+            name="ck_agency_customer_active_secure_claim",
+        ),
+        CheckConstraint(
             "lifecycle_revision >= 1",
             name="ck_agency_customer_lifecycle_revision",
         ),
@@ -196,6 +278,14 @@ class AgencyCustomer(Base):
             "status",
             "created_at",
             "id",
+        ),
+        Index(
+            "ix_agency_customer_claimed_invitation",
+            "claimed_invitation_id",
+        ),
+        Index(
+            "ix_agency_customer_current_consent_record",
+            "current_consent_record_id",
         ),
     )
 
@@ -215,6 +305,18 @@ class AgencyCustomer(Base):
         ForeignKey("user.id", ondelete="RESTRICT"),
         nullable=True,
     )
+    binding_provenance: Mapped[str] = mapped_column(
+        String(24),
+        default="unbound",
+    )
+    claimed_invitation_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        nullable=True,
+    )
+    claimed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
     source_type: Mapped[str] = mapped_column(String(32), default="manual")
     source_reference: Mapped[str | None] = mapped_column(
         String(160),
@@ -229,6 +331,14 @@ class AgencyCustomer(Base):
     consent_evidence_hash: Mapped[str | None] = mapped_column(
         String(64),
         nullable=True,
+    )
+    current_consent_record_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        nullable=True,
+    )
+    consent_evidence_origin: Mapped[str] = mapped_column(
+        String(24),
+        default="none",
     )
     consent_updated_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),

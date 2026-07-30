@@ -601,8 +601,15 @@ async def test_transaction_customer_lock_targets_only_customer_row():
         branch_id=BRANCH_ID,
         user_id=CUSTOMER_ID,
         status="active",
+        binding_provenance="secure_claim",
+        claimed_invitation_id=uuid.uuid4(),
+        claimed_at=NOW,
         consent_status="granted",
+        consent_version="agency-customer-consent.v1",
         consent_evidence_hash="c" * 64,
+        current_consent_record_id=uuid.uuid4(),
+        consent_evidence_origin="server_canonical",
+        consent_updated_at=NOW,
     )
     db = _ExecuteSequence(customer)
     service = AgencyTransactionService(db)  # type: ignore[arg-type]
