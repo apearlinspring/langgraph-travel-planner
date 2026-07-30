@@ -31,6 +31,7 @@
 - 活跃客户 `deny/revoke` 同意或客户关系停用时，内部 `draft`/`offered` 报价及没有订单的 `accepted` 报价会变为 `cancelled`；未发生外部、支付或履约进展的 `draft`/`approved` 订单会变为 `cancelled`。`pending_review` 保留给门店审批员拒绝，批准路径会因客户不再 `active + granted` 而失败，并在明确拒绝前阻止客户关系重新激活；异常或可能已有外部状态的订单进入 `cancellation_pending` 或保留人工处理标记。以上只收口本系统内部状态，不代表供应商取消、退款或通知已经发生。
 - `0004` 的 PostgreSQL 触发器固化报价/订单的租户、门店、客户与账户绑定，复验客户同意、门店状态、报价有效期及订单/报价金额、币种和快照一致性，要求每次更新的 `revision` 恰好加一，只允许已声明的状态迁移，并保持订单外部动作关闭；订单与审核的终态还会在事务提交时成对校验。写路径统一按 `customer -> branch -> quote/order` 加锁，授权写同时持有门店/成员共享锁，避免授权撤销或门店状态变化造成 TOCTOU（检查与使用时序差）竞态。
 - `0005` 新增客户认领邀请与只追加同意记录，并把绑定来源标记为 `unbound`、`legacy_direct` 或 `secure_claim`，把同意证据来源标记为 `none`、`legacy_client_hash` 或 `server_canonical`。存量直接绑定不会被伪装成安全认领：原账户仍可 `deny/revoke`；一旦升级认领，旧同意投影会重置，原 `active` 关系会先转为 `inactive` 并收口当前分配/内部交易，之后必须重新记录服务端 `grant` 并激活，才能创建新的报价或订单。
+- `0006` 是当前迁移 head，只修正 `0005` 共享延迟约束触发器对不同表 `NEW` 字段的访问方式；`0005` frozen 迁移保持不变。
 - 旅行社领域 API 使用 function-scope（函数作用域）数据库依赖，只有事务提交及 DEFERRABLE（提交时延迟校验）数据库约束通过后才返回成功；提交失败不会先向客户端发送虚假的 `2xx`。
 - `mock_checkout` 和 `generate_order_tool` 生成的 `ORDER-` 编号只用于演示规划结果确认，不是交易系统订单、合同或支付凭证。
 - 当前没有邀请投递/客户通知、真实身份核验、法律级同意证据、客户 PII 档案、跨门店转移或门店关闭工作流，也没有真实供应商预订/取消、库存锁定、收款/退款、出票、酒店确认、供应商对账、财务清分和完整失败补偿。
@@ -145,7 +146,7 @@ $env:ZHIXING_TEST_POSTGRES_DSN = "postgresql://travel_user:change-me@127.0.0.1:5
 uv run python -m pytest --run-integration -q tests\test_agency_transaction_postgres_integration.py tests\test_agency_customer_lifecycle_postgres_integration.py tests\test_agency_customer_claim_postgres_integration.py tests\test_agency_branch_permissions_postgres_integration.py
 ```
 
-数据库名必须包含独立的 `test` 或 `ci` 段；测试会创建并删除随机 schema（数据库命名空间），不得连接 staging（预生产）或 production（生产）数据库。当前 CI 命令运行上述四个文件，其中新增客户认领场景；实现候选 [`20ff715`](https://github.com/apearlinspring/langgraph-travel-planner/commit/20ff71592096dfb4fc718cef050832a745bfe174) 的 [GitHub Actions 运行 30534862434](https://github.com/apearlinspring/langgraph-travel-planner/actions/runs/30534862434) 曾在 `0005` 之前精确执行原三个文件并得到 `10 passed`（3 项交易、5 项客户生命周期、2 项门店权限），同一运行的默认 job 为 `1713 passed, 34 deselected`。这是 `0004` 历史基线，只证明该实现提交的 CI 路径；当前 `0005` 变更仍需新 CI 和目标环境迁移证据，不能沿用旧绿灯。需要真实 LLM（大语言模型）、MCP 服务或外部 API 的其他集成测试仍单独标记，不属于默认快速回归。
+数据库名必须包含独立的 `test` 或 `ci` 段；测试会创建并删除随机 schema（数据库命名空间），不得连接 staging（预生产）或 production（生产）数据库。当前 CI 命令运行上述四个文件，其中新增客户认领场景；实现候选 [`20ff715`](https://github.com/apearlinspring/langgraph-travel-planner/commit/20ff71592096dfb4fc718cef050832a745bfe174) 的 [GitHub Actions 运行 30534862434](https://github.com/apearlinspring/langgraph-travel-planner/actions/runs/30534862434) 曾在 `0005` 之前精确执行原三个文件并得到 `10 passed`（3 项交易、5 项客户生命周期、2 项门店权限），同一运行的默认 job 为 `1713 passed, 34 deselected`。这是 `0004` 历史基线，只证明该实现提交的 CI 路径；当前 `0005 -> 0006` 变更仍需新的成功 CI 和目标环境迁移证据，不能沿用旧绿灯。需要真实 LLM（大语言模型）、MCP 服务或外部 API 的其他集成测试仍单独标记，不属于默认快速回归。
 
 ## 文档入口
 
