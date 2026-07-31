@@ -115,8 +115,15 @@ GitHub Actions run
 the default job reported 1738 passed and 39 deselected, while PostgreSQL 17
 reported 15 passed across four files (3 transaction, 5 customer lifecycle,
 5 customer claim and 2 branch permission tests). This proves the historical
-ephemeral CI path for `0005 -> 0006`; the new `0007` cancellation workflow
-still requires its own pushed CI result and target-environment migration
-evidence before any readiness claim.
+ephemeral CI path for `0005 -> 0006`.
+Implementation commit `e17b97d82c24b7f5271973cc8f18e884124b7d6b` is covered by
+GitHub Actions run
+`https://github.com/apearlinspring/langgraph-travel-planner/actions/runs/30602058425`:
+the default job reported 1841 passed and 49 deselected, while PostgreSQL 17
+reported 25 passed across five files (3 transaction, 5 customer lifecycle,
+5 customer claim, 2 branch permission and 10 cancellation tests). This proves
+the ephemeral CI migration and trigger path through `0007`; it does not prove
+target-environment migration, recovery, lock-wait or external-provider
+readiness.
 
 For deployment, use `docs/部署与运行/deployment-readiness.md`. Public deployment docs are templates; private production coordinates must stay outside Git.

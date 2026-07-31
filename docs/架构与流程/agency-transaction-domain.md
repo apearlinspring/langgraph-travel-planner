@@ -257,7 +257,7 @@ manual_intervention -> cancellation_pending / cancelled
 - 外部调用前先落本地意图和幂等记录，回执以可重放方式落账。
 - timeout（超时）不能直接推断为失败或成功，必须进入查询、重试或人工介入。
 
-现有测试已加入客户生命周期和交易 API 契约、客户停用时的内部交易收口、门店授权矩阵、顾问分配、禁止自审、审核绑定、幂等重放/冲突、行锁和外部动作关闭，以及 `0005` 安全认领、`0006` 触发器修正和 `0007` 取消模型/API/服务/迁移契约。`0007` 专项单元测试覆盖服务端暴露派生、专职审批、岗位分离、同键重放、最新结果重做、独立对账、响应脱敏和外部动作恒为关闭；真实 PostgreSQL 触发器仍以本次推送后的第五个集成测试文件和 CI 结果为准。实现候选 [`20ff715`](https://github.com/apearlinspring/langgraph-travel-planner/commit/20ff71592096dfb4fc718cef050832a745bfe174) / [运行 30534862434](https://github.com/apearlinspring/langgraph-travel-planner/actions/runs/30534862434) 是 `0004` 历史基线；最近已确认绿灯的 [`b8b8bea`](https://github.com/apearlinspring/langgraph-travel-planner/commit/b8b8bea29477b472c942b7df40e8da6e9dbf05ab) / [运行 30551146157](https://github.com/apearlinspring/langgraph-travel-planner/actions/runs/30551146157) 仍只证明 `0005 -> 0006`：默认 `1738 passed, 39 deselected`，PostgreSQL 17 四文件 `15 passed`。本机未执行真实 PostgreSQL，且 CI 不能代替目标环境迁移、事务故障和供应商故障注入测试。
+现有测试已加入客户生命周期和交易 API 契约、客户停用时的内部交易收口、门店授权矩阵、顾问分配、禁止自审、审核绑定、幂等重放/冲突、行锁和外部动作关闭，以及 `0005` 安全认领、`0006` 触发器修正和 `0007` 取消模型/API/服务/迁移契约。`0007` 专项单元测试覆盖服务端暴露派生、专职审批、岗位分离、同键重放、最新结果重做、独立对账、响应脱敏和外部动作恒为关闭；第五个 PostgreSQL 集成文件另验证非空旧数据回填、升降级、直接 SQL 篡改拒绝、账本冻结和案件/订单提交时一致性。[`e17b97d`](https://github.com/apearlinspring/langgraph-travel-planner/commit/e17b97d82c24b7f5271973cc8f18e884124b7d6b) / [运行 30602058425](https://github.com/apearlinspring/langgraph-travel-planner/actions/runs/30602058425) 已双绿：默认 `1841 passed, 49 deselected`，PostgreSQL 17 五文件 `25 passed`（3+5+5+2+10）。本机未执行真实 PostgreSQL，且 CI 不能代替目标环境迁移、事务故障和供应商故障注入测试。
 
 ## 外部执行的默认关闭策略
 
