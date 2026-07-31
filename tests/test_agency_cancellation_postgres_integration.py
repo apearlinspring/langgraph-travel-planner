@@ -1282,7 +1282,10 @@ async def test_postgres_rejects_tampering_and_scopes_legacy_pending(
             "review_note = 'self review', updated_at = :now "
             "WHERE id = :case_id",
             review_params,
-            contains="ck_agency_order_cancellation_case_four_eyes",
+            # A customer requester is not an active branch approver, so the
+            # BEFORE trigger rejects this write before PostgreSQL evaluates
+            # the independent four-eyes CHECK constraint.
+            contains="cancellation review requires active branch approver",
         )
         await _assert_sql_rejected(
             engine,
