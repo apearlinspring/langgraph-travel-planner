@@ -1357,27 +1357,28 @@ def _create_claim_consent_consistency_guards() -> None:
                 END IF;
             END IF;
 
-            IF TG_TABLE_NAME = 'agency_customer_invitation'
-                AND NEW.status = 'claimed'
-                AND (
-                    current_customer.binding_provenance <> 'secure_claim'
-                    OR current_customer.claimed_invitation_id
-                        IS DISTINCT FROM NEW.id
-                )
-            THEN
-                RAISE EXCEPTION
-                    'claimed invitation must be current customer claim';
+            IF TG_TABLE_NAME = 'agency_customer_invitation' THEN
+                IF NEW.status = 'claimed'
+                    AND (
+                        current_customer.binding_provenance <> 'secure_claim'
+                        OR current_customer.claimed_invitation_id
+                            IS DISTINCT FROM NEW.id
+                    )
+                THEN
+                    RAISE EXCEPTION
+                        'claimed invitation must be current customer claim';
+                END IF;
             END IF;
-            IF TG_TABLE_NAME = 'agency_customer_consent_record'
-                AND (
-                    current_customer.current_consent_record_id
+
+            IF TG_TABLE_NAME = 'agency_customer_consent_record' THEN
+                IF current_customer.current_consent_record_id
                         IS DISTINCT FROM NEW.id
                     OR current_customer.lifecycle_revision
                         <> NEW.customer_revision
-                )
-            THEN
-                RAISE EXCEPTION
-                    'new consent record must be current customer revision';
+                THEN
+                    RAISE EXCEPTION
+                        'new consent record must be current customer revision';
+                END IF;
             END IF;
             RETURN NULL;
         END;

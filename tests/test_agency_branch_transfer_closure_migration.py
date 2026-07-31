@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import re
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -756,6 +757,13 @@ def test_0008_empty_downgrade_is_fail_closed_and_restores_0007_shape(
     assert (
         "CREATE FUNCTION zhixing_validate_agency_customer_claim_consent()"
         in sql
+    )
+    assert "IF TG_TABLE_NAME = 'agency_customer_invitation' THEN" in sql
+    assert "IF TG_TABLE_NAME = 'agency_customer_consent_record' THEN" in sql
+    assert not re.search(
+        r"IF TG_TABLE_NAME = 'agency_customer_(?:invitation|consent_record)'\s+"
+        r"AND NEW\.",
+        sql,
     )
     restored_review = _statement_containing(
         recorder,
