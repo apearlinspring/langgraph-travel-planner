@@ -11,6 +11,7 @@ from decimal import Decimal
 
 from sqlalchemy import and_, desc, func, or_, select
 
+from app.agency.branch_authorization import BRANCH_DRAIN_STATUSES
 from app.agency.cancellation_support import (
     _CASE_OPERATION_ROLES,
     _REQUIRED_ACTIONS,
@@ -960,6 +961,7 @@ class CancellationService(
             actor_user_id=actor_user_id,
             roles={"auditor"},
             allow_agency_wide=False,
+            allowed_branch_statuses=BRANCH_DRAIN_STATUSES,
         )
         filters = [
             AgencyOrderCompensationRecord.agency_id == case.agency_id,

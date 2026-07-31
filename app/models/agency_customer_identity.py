@@ -34,16 +34,14 @@ class AgencyCustomerInvitation(Base):
         ),
         UniqueConstraint(
             "agency_id",
-            "branch_id",
             "customer_id",
             "id",
             name="uq_agency_customer_invitation_customer_id",
         ),
         ForeignKeyConstraint(
-            ["agency_id", "branch_id", "customer_id"],
+            ["agency_id", "customer_id"],
             [
                 "agency_customer.agency_id",
-                "agency_customer.branch_id",
                 "agency_customer.id",
             ],
             name="fk_agency_customer_invitation_customer",
@@ -94,7 +92,6 @@ class AgencyCustomerInvitation(Base):
         Index(
             "uq_agency_customer_invitation_pending",
             "agency_id",
-            "branch_id",
             "customer_id",
             unique=True,
             postgresql_where=text("status = 'pending'"),
@@ -191,30 +188,26 @@ class AgencyCustomerConsentRecord(Base):
     __table_args__ = (
         UniqueConstraint(
             "agency_id",
-            "branch_id",
             "customer_id",
             "id",
             name="uq_agency_customer_consent_record_customer_id",
         ),
         UniqueConstraint(
             "agency_id",
-            "branch_id",
             "customer_id",
             "consent_sequence",
             name="uq_agency_customer_consent_record_sequence",
         ),
         UniqueConstraint(
             "agency_id",
-            "branch_id",
             "customer_id",
             "customer_revision",
             name="uq_agency_customer_consent_record_revision",
         ),
         ForeignKeyConstraint(
-            ["agency_id", "branch_id", "customer_id"],
+            ["agency_id", "customer_id"],
             [
                 "agency_customer.agency_id",
-                "agency_customer.branch_id",
                 "agency_customer.id",
             ],
             name="fk_agency_customer_consent_record_customer",
@@ -223,13 +216,11 @@ class AgencyCustomerConsentRecord(Base):
         ForeignKeyConstraint(
             [
                 "agency_id",
-                "branch_id",
                 "customer_id",
                 "invitation_id",
             ],
             [
                 "agency_customer_invitation.agency_id",
-                "agency_customer_invitation.branch_id",
                 "agency_customer_invitation.customer_id",
                 "agency_customer_invitation.id",
             ],

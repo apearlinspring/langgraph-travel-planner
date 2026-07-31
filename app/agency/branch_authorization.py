@@ -46,6 +46,8 @@ ALLOWED_BRANCH_GRANT_ROLES = frozenset(
         "branch_manager",
     }
 )
+BRANCH_NEW_WORK_STATUSES = frozenset({"active"})
+BRANCH_DRAIN_STATUSES = frozenset({"active", "inactive"})
 
 
 @dataclass(frozen=True)
@@ -122,8 +124,11 @@ class BranchAuthorization:
         branch_id: uuid.UUID,
         membership: AgencyMembership,
         roles: Collection[str],
+        allowed_branch_statuses: Collection[str] = (
+            BRANCH_NEW_WORK_STATUSES
+        ),
     ) -> AgencyBranchRoleGrant | None:
-        if not roles:
+        if not roles or not allowed_branch_statuses:
             return None
         result = await self.db.execute(
             select(AgencyBranchRoleGrant)
@@ -143,7 +148,11 @@ class BranchAuthorization:
             .where(AgencyBranchRoleGrant.status == "active")
             .where(AgencyBranchRoleGrant.role.in_(tuple(roles)))
             .where(AgencyBranchRoleGrant.role == membership.role)
-            .where(AgencyBranch.status == "active")
+            .where(
+                AgencyBranch.status.in_(
+                    tuple(allowed_branch_statuses)
+                )
+            )
             .limit(1)
         )
         return result.scalar_one_or_none()
@@ -158,12 +167,26 @@ class BranchAuthorization:
         hide_resource: bool = True,
         allow_agency_wide: bool = True,
         lock_scope: bool = False,
+        allowed_branch_statuses: Collection[str] = (
+            BRANCH_NEW_WORK_STATUSES
+        ),
     ) -> BranchAccess:
+        if not allowed_branch_statuses:
+            if hide_resource:
+                raise hidden_not_found()
+            raise AgencyTransactionAccessDenied(
+                "agency_branch_not_active",
+                "门店不存在或当前不可用",
+            )
         branch_statement = (
             select(AgencyBranch.id)
             .where(AgencyBranch.agency_id == agency_id)
             .where(AgencyBranch.id == branch_id)
-            .where(AgencyBranch.status == "active")
+            .where(
+                AgencyBranch.status.in_(
+                    tuple(allowed_branch_statuses)
+                )
+            )
         )
         if lock_scope:
             branch_statement = branch_statement.with_for_update(read=True)
@@ -191,6 +214,7 @@ class BranchAuthorization:
                 branch_id=branch_id,
                 membership=membership,
                 roles=roles,
+                allowed_branch_statuses=allowed_branch_statuses,
             )
             if grant is not None:
                 return BranchAccess(membership=membership, grant=grant)
@@ -201,24 +225,30 @@ class BranchAuthorization:
             "当前用户没有该门店的有效角色授权",
         )
 
-    async def lock_active_branch_scope(
+    async def lock_branch_scope(
         self,
         *,
         agency_id: uuid.UUID,
         branch_id: uuid.UUID,
+        allowed_branch_statuses: Collection[str],
         hide_resource: bool = True,
     ) -> None:
-        """以共享行锁固定客户自助交易所依赖的有效门店。"""
+        """以共享行锁固定命令所允许的门店状态。"""
 
-        result = await self.db.execute(
-            select(AgencyBranch.id)
-            .where(AgencyBranch.agency_id == agency_id)
-            .where(AgencyBranch.id == branch_id)
-            .where(AgencyBranch.status == "active")
-            .with_for_update(read=True)
-        )
-        if result.scalar_one_or_none() is not None:
-            return
+        if allowed_branch_statuses:
+            result = await self.db.execute(
+                select(AgencyBranch.id)
+                .where(AgencyBranch.agency_id == agency_id)
+                .where(AgencyBranch.id == branch_id)
+                .where(
+                    AgencyBranch.status.in_(
+                        tuple(allowed_branch_statuses)
+                    )
+                )
+                .with_for_update(read=True)
+            )
+            if result.scalar_one_or_none() is not None:
+                return
         if hide_resource:
             raise hidden_not_found()
         raise AgencyTransactionAccessDenied(
@@ -226,17 +256,37 @@ class BranchAuthorization:
             "门店不存在或当前不可用",
         )
 
+    async def lock_active_branch_scope(
+        self,
+        *,
+        agency_id: uuid.UUID,
+        branch_id: uuid.UUID,
+        hide_resource: bool = True,
+    ) -> None:
+        """以共享行锁固定新业务所依赖的 active 门店。"""
+
+        await self.lock_branch_scope(
+            agency_id=agency_id,
+            branch_id=branch_id,
+            allowed_branch_statuses=BRANCH_NEW_WORK_STATUSES,
+            hide_resource=hide_resource,
+        )
+
     async def _has_active_assignment(
         self,
         *,
         customer: AgencyCustomer,
         membership: AgencyMembership,
+        allowed_branch_statuses: Collection[str] = (
+            BRANCH_DRAIN_STATUSES
+        ),
     ) -> bool:
         return await self._has_active_assignment_ids(
             agency_id=customer.agency_id,
             branch_id=customer.branch_id,
             customer_id=customer.id,
             membership=membership,
+            allowed_branch_statuses=allowed_branch_statuses,
         )
 
     async def _has_active_assignment_ids(
@@ -246,7 +296,12 @@ class BranchAuthorization:
         branch_id: uuid.UUID,
         customer_id: uuid.UUID,
         membership: AgencyMembership,
+        allowed_branch_statuses: Collection[str] = (
+            BRANCH_DRAIN_STATUSES
+        ),
     ) -> bool:
+        if not allowed_branch_statuses:
+            return False
         result = await self.db.execute(
             select(AgencyCustomerAdvisorAssignment.id)
             .join(
@@ -288,7 +343,11 @@ class BranchAuthorization:
             .where(AgencyBranchRoleGrant.status == "active")
             .where(AgencyBranchRoleGrant.role == "travel_advisor")
             .where(AgencyBranchRoleGrant.role == membership.role)
-            .where(AgencyBranch.status == "active")
+            .where(
+                AgencyBranch.status.in_(
+                    tuple(allowed_branch_statuses)
+                )
+            )
             .limit(1)
         )
         return result.scalar_one_or_none() is not None
@@ -319,6 +378,7 @@ class BranchAuthorization:
                 branch_id=customer.branch_id,
                 membership=membership,
                 roles=CUSTOMER_MANAGER_ROLES,
+                allowed_branch_statuses=BRANCH_DRAIN_STATUSES,
             )
             if manager_grant is not None:
                 return BranchAccess(membership, manager_grant)
@@ -327,6 +387,7 @@ class BranchAuthorization:
                 and await self._has_active_assignment(
                     customer=customer,
                     membership=membership,
+                    allowed_branch_statuses=BRANCH_DRAIN_STATUSES,
                 )
             ):
                 advisor_grant = await self._active_branch_grant(
@@ -334,6 +395,7 @@ class BranchAuthorization:
                     branch_id=customer.branch_id,
                     membership=membership,
                     roles={"travel_advisor"},
+                    allowed_branch_statuses=BRANCH_DRAIN_STATUSES,
                 )
                 if advisor_grant is not None:
                     return BranchAccess(membership, advisor_grant)
@@ -382,9 +444,12 @@ class BranchAuthorization:
                 membership=membership,  # type: ignore[arg-type]
                 grant=None,
             )
-        return await self.require_customer_manager(
-            customer=customer,
+        return await self.require_branch_role(
+            agency_id=customer.agency_id,
+            branch_id=customer.branch_id,
             actor_user_id=actor_user_id,
+            roles=CUSTOMER_MANAGER_ROLES,
+            allowed_branch_statuses=BRANCH_DRAIN_STATUSES,
         )
 
     async def require_quote_manager(
@@ -394,13 +459,20 @@ class BranchAuthorization:
         actor_user_id: uuid.UUID,
         hide_resource: bool = True,
         lock_scope: bool = False,
+        allowed_branch_statuses: Collection[str] = (
+            BRANCH_NEW_WORK_STATUSES
+        ),
     ) -> BranchAccess:
         if lock_scope:
             branch_result = await self.db.execute(
                 select(AgencyBranch.id)
                 .where(AgencyBranch.agency_id == customer.agency_id)
                 .where(AgencyBranch.id == customer.branch_id)
-                .where(AgencyBranch.status == "active")
+                .where(
+                    AgencyBranch.status.in_(
+                        tuple(allowed_branch_statuses)
+                    )
+                )
                 .with_for_update(read=True)
             )
             if branch_result.scalar_one_or_none() is None:
@@ -426,6 +498,7 @@ class BranchAuthorization:
                 branch_id=customer.branch_id,
                 membership=membership,
                 roles={"branch_manager"},
+                allowed_branch_statuses=allowed_branch_statuses,
             )
             if grant is not None:
                 return BranchAccess(membership, grant)
@@ -435,6 +508,7 @@ class BranchAuthorization:
             and await self._has_active_assignment(
                 customer=customer,
                 membership=membership,
+                allowed_branch_statuses=allowed_branch_statuses,
             )
         ):
             grant = await self._active_branch_grant(
@@ -442,6 +516,7 @@ class BranchAuthorization:
                 branch_id=customer.branch_id,
                 membership=membership,
                 roles={"travel_advisor"},
+                allowed_branch_statuses=allowed_branch_statuses,
             )
             if grant is not None:
                 return BranchAccess(membership, grant)
@@ -460,6 +535,9 @@ class BranchAuthorization:
         actor_user_id: uuid.UUID,
         hide_resource: bool = True,
         lock_scope: bool = False,
+        allowed_branch_statuses: Collection[str] = (
+            BRANCH_NEW_WORK_STATUSES
+        ),
     ) -> BranchAccess:
         return await self.require_branch_role(
             agency_id=agency_id,
@@ -469,6 +547,7 @@ class BranchAuthorization:
             hide_resource=hide_resource,
             allow_agency_wide=False,
             lock_scope=lock_scope,
+            allowed_branch_statuses=allowed_branch_statuses,
         )
 
     async def require_transaction_view(
@@ -508,6 +587,7 @@ class BranchAuthorization:
                 branch_id=branch_id,
                 membership=membership,
                 roles=allowed_roles,
+                allowed_branch_statuses=BRANCH_DRAIN_STATUSES,
             )
             if grant is not None:
                 return BranchAccess(membership, grant)
@@ -518,6 +598,7 @@ class BranchAuthorization:
                     branch_id=branch_id,
                     customer_id=customer_id,
                     membership=membership,
+                    allowed_branch_statuses=BRANCH_DRAIN_STATUSES,
                 )
             ):
                 advisor_grant = await self._active_branch_grant(
@@ -525,6 +606,7 @@ class BranchAuthorization:
                     branch_id=branch_id,
                     membership=membership,
                     roles={"travel_advisor"},
+                    allowed_branch_statuses=BRANCH_DRAIN_STATUSES,
                 )
                 if advisor_grant is not None:
                     return BranchAccess(membership, advisor_grant)
@@ -585,7 +667,7 @@ class BranchAuthorization:
             )
             .where(AgencyBranchRoleGrant.status == "active")
             .where(role_filter)
-            .where(scoped_branch.status == "active")
+            .where(scoped_branch.status.in_(BRANCH_DRAIN_STATUSES))
         )
 
     async def transaction_visibility_filter(
@@ -638,7 +720,7 @@ class BranchAuthorization:
             .where(AgencyBranchRoleGrant.role.in_(branch_roles))
             .where(AgencyBranchRoleGrant.role == membership.role)
             .where(AgencyBranchRoleGrant.status == "active")
-            .where(granted_branch.status == "active")
+            .where(granted_branch.status.in_(BRANCH_DRAIN_STATUSES))
         )
         assigned_branch = aliased(AgencyBranch)
         assigned_advisor = exists(
@@ -684,7 +766,7 @@ class BranchAuthorization:
             .where(AgencyBranchRoleGrant.status == "active")
             .where(AgencyBranchRoleGrant.role == "travel_advisor")
             .where(AgencyBranchRoleGrant.role == membership.role)
-            .where(assigned_branch.status == "active")
+            .where(assigned_branch.status.in_(BRANCH_DRAIN_STATUSES))
         )
         return or_(visible_as_customer, branch_grant, assigned_advisor)
 
@@ -735,7 +817,7 @@ class BranchAuthorization:
             .where(AgencyBranchRoleGrant.role == "branch_manager")
             .where(AgencyBranchRoleGrant.role == membership.role)
             .where(AgencyBranchRoleGrant.status == "active")
-            .where(manager_branch.status == "active")
+            .where(manager_branch.status.in_(BRANCH_DRAIN_STATUSES))
         )
         advisor_branch = aliased(AgencyBranch)
         assigned_advisor = exists(
@@ -783,6 +865,6 @@ class BranchAuthorization:
             .where(AgencyBranchRoleGrant.status == "active")
             .where(AgencyBranchRoleGrant.role == "travel_advisor")
             .where(AgencyBranchRoleGrant.role == membership.role)
-            .where(advisor_branch.status == "active")
+            .where(advisor_branch.status.in_(BRANCH_DRAIN_STATUSES))
         )
         return or_(visible_as_customer, manager_grant, assigned_advisor)

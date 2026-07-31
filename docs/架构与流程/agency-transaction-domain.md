@@ -11,20 +11,21 @@ ZhiXing 的目标产品不是面向散客的攻略生成器，而是旅行社经
 | 能力 | 当前代码证据 | 当前边界 |
 |---|---|---|
 | 多租户经营边界 | `agency`、`agency_membership` | 保存旅行社与成员角色；每个业务 API 必须校验有效成员和租户归属。`0007` 另以数据库触发器冻结成员记录的 `id`、`agency_id`、`user_id` 和 `created_at` 身份绑定，不允许把既有成员改绑到另一账户或旅行社。 |
-| 门店与岗位授权 | `agency_branch`、`agency_branch_role_grant` | 保存门店及成员在指定门店的有效岗位；`owner`、`admin` 维持旅行社全域权限，其他岗位按门店授权。当前没有门店停用/关闭 API。 |
-| 客户生命周期 | `agency_customer`、`agency_customer_invitation`、`agency_customer_consent_record`、`agency_customer_event` | 允许线下潜客无平台用户登记，再为指定已有平台账户签发安全认领凭证，由该已登录账户认领；服务端生成规范化同意证据并保存只追加决定记录，之后才能激活。活跃客户拒绝/撤回同意或关系停用时，会原子结束当前顾问分配并收口内部交易。没有批量导入、邀请投递、真实身份核验、客户通知或跨门店转移。 |
+| 门店与岗位授权 | `agency_branch`、`agency_branch_role_grant`、`agency_branch_lifecycle_event` | 保存门店及成员在指定门店的有效岗位；`owner`、`admin` 维持旅行社全域权限，其他岗位按门店授权。门店按 `active -> inactive -> closed` 推进：`inactive` 停止新业务并保留清理动作，`closed` 是阻断项清零后的不可逆终态；停用和关闭写入门店生命周期事件。 |
+| 客户生命周期 | `agency_customer`、`agency_customer_invitation`、`agency_customer_consent_record`、`agency_customer_event` | 允许线下潜客无平台用户登记，再为指定已有平台账户签发安全认领凭证，由该已登录账户认领；服务端生成规范化同意证据并保存只追加决定记录，之后才能激活。活跃客户拒绝/撤回同意或关系停用时，会原子结束当前顾问分配并收口内部交易。没有批量导入、邀请投递、真实身份核验或客户通知。 |
+| 客户当前门店转移 | `agency_customer_branch_transfer` | 仅旅行社 `owner/admin` 可把客户从 `active/inactive` 来源门店即时原子转入另一个 `active` 门店；`active` 客户可选目标主顾问，`inactive/blocked` 客户可转但不新建主顾问。只修改客户当前服务门店，历史邀请、同意、事件、分配、报价、订单和取消记录保留发生时门店。待认领邀请或开放报价、订单、审核、取消案会阻断；不发送通知、不处理外部订单。 |
 | 顾问分配 | `agency_customer_advisor_assignment` | 同一客户只保留一个当前有效主顾问，可更换或结束；顾问必须持有同门店有效 `travel_advisor` 授权。 |
 | 供应商产品目录 | `supplier_product` | 保存旅行社可销售产品及供应商外部编号；不代表实时库存或价格同步。 |
 | 报价快照 | `agency_quote` | 保存客户、产品、金额、币种、有效期、报价快照、`revision`（修订号）和 `payload_hash`（业务负载哈希）。 |
 | 订单快照 | `agency_order` | 保存报价来源、客户、金额、支付状态、履约状态和外部动作开关；不自动调用外部服务。 |
 | 内部订单审核 | `agency_order_review` | 绑定旅行社、门店、订单、提交时 `revision`、`payload_hash`、金额、币种和发起人；只有订单门店持有有效授权的专职 `approver` 可决定，内部通过不触发外部动作。 |
 | 人工取消与对账 | `agency_order_cancellation_case`、`agency_order_cancellation_event`、`agency_order_compensation_record`、`agency_order_reconciliation_record` | 受理取消申请、分岗登记平台外人工结果并由不同审计人员核验；外部引用与证据只保存 SHA-256 摘要，绝不调用外部取消或退款接口。 |
-| 状态审计 | `agency_order_event` | 按订单和事件序号只追加记录状态变化及对应负载哈希。 |
+| 状态审计 | `agency_customer_event`、`agency_branch_lifecycle_event`、`agency_order_event` | 按客户、门店或订单的事件序号记录生命周期变化；对外响应裁剪内部操作者和事件元数据。 |
 | 持久化幂等 | `idempotency_record`，以及报价、订单、支付尝试、履约记录的唯一键 | 当前报价/订单服务已校验“同键同请求”，同键异请求返回冲突；未来外部动作仍需保存不可变响应快照并验证供应商侧幂等。 |
 | 执行账本 | `payment_attempt`、`fulfillment_record` | 为未来支付与供应商履约保留尝试记录；当前不会执行真实支付或预订。 |
 | 并发版本 | 报价和订单使用 SQLAlchemy `version_id_col` | 提供乐观并发控制基础；业务入口还必须要求并校验预期修订号。 |
 | 租户角色 | `agency_membership.role` | 租户内区分旅行顾问、预订操作员、审批员、财务、审计、管理员和所有者；只有 `approver` 具有当前订单审核决定权。它与平台级 `user`、`approver`、`admin` 角色分离。 |
-| 门店与客户 API | `/api/v1/agency` | 共 20 个操作、12 个 `POST`；支持门店、授权、客户认领邀请、认领、固定技术告知读取、服务端同意证据、客户生命周期、顾问分配和事件查询，不包含邀请投递、通知、PII 档案或门店转移。 |
+| 门店与客户 API | `/api/v1/agency` | 共 24 个操作、15 个 `POST`；支持门店、授权、停用/关店、关店就绪计数、客户认领邀请、认领、固定技术告知读取、服务端同意证据、客户生命周期、当前门店转移、顾问分配和事件查询，不包含邀请投递、通知、PII 档案或跨门店经理双向交接审批。 |
 | 内部交易 API | `/api/v1/agency` | 交易子集共 13 个操作、6 个 `POST`；支持报价、订单和内部审核查询/决定，不包含供应商预订、支付、退款或通知执行。 |
 | 人工取消 API | `/api/v1/agency` | 取消子集共 9 个操作、5 个 `POST`；支持申请、专职审批、人工结果登记、脱敏结果队列、独立对账、恢复和脱敏查询，不包含任何外部执行。 |
 | 外部执行门禁 | `app/agency/transaction_policy.py`、配置样例和 Compose 模板 | 总开关、运行模式和四类动作开关默认关闭；配置门禁通过也不等于业务动作获准。 |
@@ -42,11 +43,13 @@ ZhiXing 的目标产品不是面向散客的攻略生成器，而是旅行社经
   -> 线下潜客登记 -> 为目标账户签发认领凭证 -> 已登录目标账户认领
   -> 服务端记录本人同意 -> 关系激活
   -> 门店主顾问分配
+  -> 可选：owner/admin 原子转移当前服务门店与主顾问
   -> 显式进入交易域
   -> 报价草稿 -> 正式报价 -> 客户接受
   -> 订单草稿 -> 提交人工审核
   -> 专职审批员批准 / 拒绝
   -> 必要时：取消申请 -> 专职审批 -> 平台外人工结果登记 -> 独立对账
+  -> 门店停止新业务 -> inactive 清理 -> 阻断项清零 -> closed
   -> 未来：真实支付 / 供应商预订 / 履约 / 退款
 ```
 
@@ -67,9 +70,13 @@ ZhiXing 的目标产品不是面向散客的攻略生成器，而是旅行社经
 | 方法与路径 | 当前职责 | 关键门禁 |
 |---|---|---|
 | `POST /branches`、`GET /branches` | 创建门店；按当前权限列出旅行社门店。 | 仅 `owner`、`admin` 可创建；其他成员只看有有效授权的门店。 |
+| `POST /branches/{branch_id}/deactivate` | 把 `active` 门店转入停止新业务的 `inactive` 清理期。 | 仅 `owner/admin`；要求原因、`expected_revision` 和 `Idempotency-Key`。进入清理期不要求阻断项预先清零，也不表示门店已关闭。 |
+| `GET /branches/{branch_id}/closure-readiness` | 返回关店阻断项聚合计数。 | `owner/admin` 或当前门店经理可读；只返回当前客户、待邀请、有效分配/授权、待审核、开放报价/订单/取消案数量，不暴露具体资源 ID。只有 `inactive` 且全部计数为零时 `ready=true`。 |
+| `POST /branches/{branch_id}/close` | 把已清理完毕的 `inactive` 门店转为不可逆 `closed`。 | 仅 `owner/admin`；要求原因、`expected_revision` 和 `Idempotency-Key`。所有当前客户（不论 `invited/prospect/active/inactive/blocked`）、待认领邀请、有效顾问分配/岗位授权、待审核记录、开放报价/订单/取消案必须清零。 |
 | `POST /branches/{branch_id}/role-grants`、`GET /branches/{branch_id}/role-grants` | 授予或查询成员的门店岗位。 | 仅旅行社全域管理员可授予；授权角色必须与成员角色一致，且不向 `owner`、`admin` 发门店授权。 |
 | `POST /branches/{branch_id}/role-grants/{grant_id}/revoke` | 撤销门店岗位授权。 | 要求 `expected_revision`、原因和 `Idempotency-Key`；授权仍绑定当前有效顾问分配时拒绝撤销。若存在待处理订单审核或 `approval_pending` 取消案，撤权后必须逐笔业务仍有至少一名排除该业务发起人和订单客户的 eligible approver（合格审批员），不能只按门店审批员总数判断。 |
 | `POST /customers`、`GET /customers`、`GET /customers/{customer_id}` | 登记未绑定账户的线下潜客并按门店/顾问范围查询。 | 创建者为全域管理员或同门店 `branch_manager`；顾问只看当前分配客户，客户认领后才按本人身份取得关系可见性。 |
+| `POST /customers/{customer_id}/transfer` | 原子改变客户当前服务门店，并可为 `active` 客户选择目标主顾问。 | 仅 `owner/admin`；来源门店须为 `active/inactive`，目标门店须为同旅行社 `active` 且客户编号无冲突。待认领邀请或开放报价、订单、审核、取消案会阻断。旧主顾问在同一事务结束；`inactive/blocked` 客户可转但不得指定新主顾问。历史记录门店不改写，不通知客户、不改变外部订单。 |
 | `POST /customers/{customer_id}/claim-invitations`、`GET /customers/{customer_id}/claim-invitations` | 为指定已有平台账户签发认领凭证并查询邀请元数据。 | 仅客户管理角色；凭证使用 32-byte（256-bit）高熵随机数，24 小时过期、可撤销、单次使用，数据库只保存 SHA-256 摘要。同一旅行社同一目标账户同一时刻最多一条 `pending` 邀请。原始 token 只在首次签发事务提交成功后的响应返回，幂等重放不再返回；响应丢失时必须撤销并重发。当前不投递短信、邮件或站内信。 |
 | `POST /customers/{customer_id}/claim-invitations/{invitation_id}/revoke` | 撤销尚未使用的认领邀请。 | 要求客户与邀请各自的预期修订号、原因及 `Idempotency-Key`；待处理邀请必须先撤销才能重新签发。 |
 | `POST /customer-claims` | 由已登录目标账户使用认领 token 绑定客户关系。 | token 必须存在、未过期、未撤销、未使用且目标账户等于当前登录账户；失败统一按不可用处理，成功后邀请进入不可逆 `claimed` 终态。 |
@@ -79,7 +86,7 @@ ZhiXing 的目标产品不是面向散客的攻略生成器，而是旅行社经
 | `POST /customers/{customer_id}/advisor-assignments`、`POST /customers/{customer_id}/advisor-assignments/end` | 创建、更换或结束当前主顾问。 | 仅全域管理员或同门店经理；顾问必须持有同门店有效 `travel_advisor` 授权。 |
 | `GET /customers/{customer_id}/advisor-assignments`、`GET /customers/{customer_id}/events` | 查询顾问分配历史和客户生命周期只追加事件。 | 按同一客户可见性授权；响应不返回客户事件原始元数据。 |
 
-这组接口共 20 个操作，其中 12 个 `POST` 都强制 `Idempotency-Key`。状态变更要求对应 `expected_revision`，使用行锁和持久化幂等记录；客户事件、同意记录只追加，顾问分配同一时刻只允许一条 `active`。客户响应不暴露已关联 `user_id`，邀请列表不返回 token 或摘要，token 格式错误也不得在 `422` 中回显，签发/认领响应使用 `Cache-Control: no-store`。模型没有姓名、电话、证件或联系人等 PII（个人可识别信息）字段。写操作按 `customer -> branch -> quote/order` 的顺序锁定资源；授权敏感写入还对门店和成员范围持有共享行锁，使并发撤销岗位授权或改变门店状态必须等待，避免 TOCTOU（检查与使用时序差）竞态。旅行社 API 使用 function-scope（函数作用域）数据库依赖，在响应发送前完成提交和提交阶段错误映射；DEFERRABLE（提交时延迟校验）约束失败不会先返回虚假的 `2xx`。
+这组接口共 24 个操作，其中 15 个 `POST` 都强制 `Idempotency-Key`。状态变更要求对应 `expected_revision`，使用行锁和持久化幂等记录；客户事件、同意记录只追加，顾问分配同一时刻只允许一条 `active`。客户响应不暴露已关联 `user_id`，转店响应不返回操作者、原因或分配 ID，关店就绪只返回聚合计数；邀请列表不返回 token 或摘要，token 格式错误也不得在 `422` 中回显，签发/认领响应使用 `Cache-Control: no-store`。模型没有姓名、电话、证件或联系人等 PII（个人可识别信息）字段。普通交易写按 `customer -> branch -> quote/order` 锁定；转店按 `customer -> source/target branches（UUID 顺序） -> membership/grant -> assignment` 固定范围。授权敏感写入还对门店和成员范围持有共享行锁，使并发撤销岗位授权或改变门店状态必须等待，避免 TOCTOU（检查与使用时序差）竞态。当前这些锁序已有代码和单元测试，但目标 PostgreSQL 的并发锁等待证据仍未完成。旅行社 API 使用 function-scope（函数作用域）数据库依赖，在响应发送前完成提交和提交阶段错误映射；DEFERRABLE（提交时延迟校验）约束失败不会先返回虚假的 `2xx`。
 
 ### 报价、订单与内部审核
 
@@ -91,11 +98,11 @@ ZhiXing 的目标产品不是面向散客的攻略生成器，而是旅行社经
 | `POST /quotes/{quote_id}/accept` | 报价所属客户接受有效报价。 | 客户本人、`Idempotency-Key`、`expected_revision`。 |
 | `POST /orders` | 客户从本人已接受报价创建订单草稿。 | `Idempotency-Key`、`expected_quote_revision`、报价未过期。 |
 | `GET /orders`、`GET /orders/{order_id}` | 全域管理员、同门店经理、当前主顾问、客户本人按范围读取；同门店专职 `approver` 只读已生成审核记录的订单。 | `approver` 看不到尚未提交审核的订单，也不能创建或发布报价；预订、财务和审计岗位仍需 purpose-specific（按职责裁剪）DTO。 |
-| `GET /order-reviews` | 查询门店范围内结构化审核工作队列，支持状态和分页。 | 只允许同一有效门店中持有有效门店授权的专职 `approver`。 |
+| `GET /order-reviews` | 查询门店范围内结构化审核工作队列，支持状态和分页。 | 只允许同一 `active/inactive` 门店中持有有效授权的专职 `approver`；`inactive` 可见性只服务于清理。 |
 | `GET /orders/{order_id}/review` | 读取单个订单的结构化审核记录。 | 仅订单门店的有效专职 `approver` 可读；客户通过订单 DTO 查看状态，不取得内部原因和决定人信息。 |
 | `GET /orders/{order_id}/events` | 客户本人或具有该订单可见性的成员读取订单只追加事件。 | 响应只允许公开的元数据字段，不能借事件接口绕过快照权限。 |
 | `POST /orders/{order_id}/submit` | 客户将订单草稿提交为 `pending_review`。 | 客户本人、`Idempotency-Key`、`expected_revision`，且订单门店至少有一名排除审核发起人和订单客户的 eligible approver；订单存在开放取消案时禁止送审。提交后每笔待审核业务都必须继续保留满足同一排除条件的替代审批员。 |
-| `POST /orders/{order_id}/review` | 处理 `pending_review`。 | 仅订单门店的专职 `approver`；批准要求客户仍为 `active + granted`，客户停用后保留中的审核只能拒绝为 `review_rejected`，且拒绝前客户关系不能重新激活。请求包含 `decision=approve\|reject`、`expected_revision`、`reason` 和 `Idempotency-Key`，拒绝时 `reason` 必填。 |
+| `POST /orders/{order_id}/review` | 处理 `pending_review`。 | 仅订单门店的专职 `approver`；批准要求门店 `active` 且客户仍为 `active + granted`，门店进入 `inactive` 或客户停用后只能拒绝为 `review_rejected`。请求包含 `decision=approve\|reject`、`expected_revision`、`reason` 和 `Idempotency-Key`，拒绝时 `reason` 必填。 |
 
 交易子集共有 13 个操作，所有六个 `POST` 都强制要求 `Idempotency-Key`。服务使用 PostgreSQL 持久化幂等记录；审核批准和拒绝共用单一 `order.review.decide` scope（作用域），同键同请求返回原审核资源，同键异请求返回 `409 Conflict`。报价、订单和审核状态变化使用 `SELECT ... FOR UPDATE`；订单提交会创建审核记录，审核决定会同时更新订单、审核记录并追加 `order_review_approved` 或 `order_review_rejected` 事件。`0004` 的 PostgreSQL mutation guard（变更门禁）会固化报价/订单的租户、门店、客户和账户绑定，复验客户同意、门店状态、报价有效期和订单/报价金额、币种、快照一致性，要求 `revision` 每次恰好加一，只允许声明过的状态迁移，并要求新订单以 `draft + not_started + external_action_enabled=false` 的惰性状态创建；`0005` 进一步要求新报价/订单所用客户为 `secure_claim + server_canonical`。订单与审核的批准/拒绝终态还会通过 DEFERRABLE（延迟到事务提交校验）约束触发器成对检查，阻止只改一侧的直接 SQL。当前 API 没有供应商预订、支付、退款或通知调用。
 
@@ -105,9 +112,9 @@ ZhiXing 的目标产品不是面向散客的攻略生成器，而是旅行社经
 |---|---|---|
 | `POST /orders/{order_id}/cancellation-requests` | 为可取消订单创建案件。 | 客户本人、当前主顾问、同门店经理或全域管理员；服务端从锁定的订单、支付尝试和履约记录派生所需动作，客户端不能指定，数据库 INSERT 门禁还会从锁定账本独立复算。建案时必须已有排除案件发起人和订单客户的 eligible approver；原订单仍为 `pending_review` 时必须先由原审核流程拒绝，案件开放期间该订单也不能再送审。 |
 | `GET /orders/{order_id}/cancellation-case`、`GET /cancellation-cases` | 读取单案或按授权范围列出案件。 | 客户、交易可见岗位、专职审批员及按职责参与的预订、财务、审计岗位只读脱敏投影。 |
-| `POST /cancellation-cases/{case_id}/review` | 批准或拒绝申请。 | 仅同门店专职 `approver`，`owner/admin` 不可替代；申请人和订单客户不能审批。数据库还会复验旅行社、门店、成员、门店授权均为 `active`，角色均严格为 `approver`。存在财务核验需求时批准金额必须与订单同币种且不超过订单总额。 |
+| `POST /cancellation-cases/{case_id}/review` | 批准或拒绝申请。 | 仅同门店专职 `approver`，`owner/admin` 不可替代；申请人和订单客户不能审批。门店处于 `active` 或 `inactive` 清理期均可继续处理取消案件，成员与授权仍须有效且角色严格为 `approver`。存在财务核验需求时批准金额必须与订单同币种且不超过订单总额。 |
 | `POST /cancellation-cases/{case_id}/manual-results` | 登记平台外人工取得的供应商取消或财务结果。 | `booking_operator` 只能登记 `supplier_cancel`，`finance` 只能登记 `refund`；只接收外部引用和证据的 SHA-256 摘要，`system_external_action_triggered=false`。 |
-| `GET /cancellation-cases/{case_id}/manual-results` | 按案件列出脱敏人工结果、opaque（不透明）记录 ID 和对账状态，供独立审计岗位发现待办。 | 仅同一有效门店中持有有效授权的专职 `auditor` 可读，`owner/admin` 和普通案件查看者不能替代；不返回登记人、外部引用摘要或证据摘要，供应商取消结果的存储占位金额/币种投影为 `null`。 |
+| `GET /cancellation-cases/{case_id}/manual-results` | 按案件列出脱敏人工结果、opaque（不透明）记录 ID 和对账状态，供独立审计岗位发现待办。 | 仅同一 `active/inactive` 门店中持有有效授权的专职 `auditor` 可读，`owner/admin` 和普通案件查看者不能替代；不返回登记人、外部引用摘要或证据摘要，供应商取消结果的存储占位金额/币种投影为 `null`。 |
 | `POST /manual-results/{record_id}/reconcile` | 对最新成功结果做独立核验；退款对账由审计员独立提交观察金额、币种和证据，而不是复制财务登记值。 | 仅同门店 `auditor`，且不能核验自己登记的结果；`matched` 退款必须与财务记录一致，每条结果最多一条对账记录。 |
 | `POST /cancellation-cases/{case_id}/resume` | 从 `manual_intervention` 恢复待处理动作。 | 同门店经理或全域管理员；不会自动重试外部动作。 |
 | `GET /cancellation-cases/{case_id}/events` | 查询案件只追加事件。 | 与案件可见性一致；不返回负载摘要、原始备注或事件元数据。 |
@@ -124,7 +131,7 @@ ZhiXing 的目标产品不是面向散客的攻略生成器，而是旅行社经
 
 - `agency` 是旅行社数据隔离和授权的根边界。
 - `agency_membership` 将员工关联到旅行社，并保存租户内角色和成员状态。`0007` 冻结其 `id`、`agency_id`、`user_id`、`created_at` 身份绑定；这不等于冻结受控的角色或状态生命周期。
-- `agency_branch` 是门店归属与应用层权限范围；迁移为每个旧旅行社建立一个 `MAIN` 门店。数据库 mutation guard（变更门禁）要求 revision 逐次递增，`closed` 为终态，并拒绝在仍有有效授权、活跃客户、当前顾问分配、待审核记录或未终结报价/订单时停用门店。当前没有门店停用/关闭 API，也不能转移客户所属门店。
+- `agency_branch` 是门店归属与应用层权限范围；迁移为每个旧旅行社建立一个 `MAIN` 门店。`active` 接受新业务；`inactive` 表示已经停止新客户、岗位授权、认领、激活、顾问分配、报价、订单和审核批准，只保留可见性与关店清理；`closed` 在所有当前客户（含 `inactive/blocked`）、待邀请、有效分配/授权、待审核和开放报价/订单/取消案清零后进入，并且不可逆。`deactivated_at` 和 `closed_at` 分别记录进入清理期和最终关闭时间，生命周期事件按门店修订号只追加。
 - `agency_branch_role_grant` 把非全域岗位授权到指定门店；`owner`、`admin` 不使用该表，其余门店岗位必须与 `agency_membership.role` 一致。
 - `supplier_product` 保存旅行社可销售的供应商产品。`supplier_code` 和 `external_product_code` 只用于识别上游对象，不代表上游对象当前可售。
 
@@ -137,6 +144,7 @@ ZhiXing 的目标产品不是面向散客的攻略生成器，而是旅行社经
 - `consent_version` 和 `consent_evidence_hash` 是当前决定的投影；权威审计事实是只追加同意记录。API 允许客户端回传当前告知的预期版本和文档摘要以检测 stale notice（过期告知），但不接收客户端自定义 evidence hash，也不保存原始法律材料；这些摘要不能证明条款有效、身份核验或法律合规已经完成。
 - `agency_customer_event` 按客户和事件序号只追加记录生命周期变化，公开响应不返回原始 `event_metadata`。
 - `agency_customer_advisor_assignment` 绑定同门店 `travel_advisor` 授权，同一客户同一时刻只允许一个 `active` 主顾问；更换时先结束旧分配，也可单独结束而不自动停用客户。
+- `agency_customer_branch_transfer` 绑定旅行社、客户、来源/目标门店和客户新修订号。转店在同一事务结束旧主顾问、更新客户当前 `branch_id`，并按需为 `active` 客户建立目标主顾问；客户状态、账户/同意投影及历史邀请、同意、事件、旧分配、报价、订单和取消事实保持不变。响应不暴露操作者或原因。
 - 当前客户模型没有姓名、电话、邮箱、证件、联系人或详细画像字段。内部 `user_id` 只用于账户绑定，并从客户、报价、订单和事件公开 DTO 中裁剪；`source_reference` 只能保存不含 PII 的外部系统不透明引用。这些限制仍不等于已经完成 PII 治理。
 
 ### 报价
@@ -219,20 +227,20 @@ manual_intervention -> cancellation_pending / cancelled
 | 角色 | 预期职责 |
 |---|---|
 | `travel_advisor` | 只管理持有同门店授权且当前分配给自己的客户、方案和报价。 |
-| `branch_manager` | 管理同一有效门店的客户、顾问分配及报价/订单可见性。 |
+| `branch_manager` | 管理同一 `active` 门店的新客户、顾问分配和报价；在 `inactive` 清理期保留范围读取与清理权限。首版不能发起或批准跨门店转移。 |
 | `booking_operator` | 登记平台外人工取得的供应商取消结果；不能调用供应商接口，未来预订执行仍未实现。 |
-| `approver` | 当前唯一可决定内部订单审核的岗位；必须是同一有效旅行社的有效成员，并持有订单门店的有效授权。 |
+| `approver` | 当前唯一可决定内部订单审核的岗位；必须是同一有效旅行社的有效成员，并持有订单门店的有效授权。`active` 门店可批准或拒绝，`inactive` 清理期只能拒绝订单审核；取消案件仍可继续审批。 |
 | `finance` | 登记平台外人工财务结果；不能发起支付或退款，也不能替代独立审计。 |
 | `auditor` | 独立核验最新人工结果且不得自我对账；可按职责读取取消案件，不能执行供应商或财务动作。 |
-| `admin` / `owner` | 旅行社全域管理角色，可管理门店、授权和客户；高风险动作仍应遵循职责分离，不能代替专职审批员。 |
+| `admin` / `owner` | 旅行社全域管理角色，可管理门店、授权和客户，也是首版唯一可执行客户转店、门店停用与最终关闭的角色；高风险审核仍遵循职责分离，不能代替专职审批员。 |
 
-当前授权由应用服务和 SQL 查询过滤器执行，属于门店范围的应用层行级授权，不是 PostgreSQL RLS（Row-Level Security，行级安全策略）。`owner`、`admin` 具有旅行社全域可见性；`branch_manager` 需要同门店有效授权；`travel_advisor` 还需要客户当前有效分配；`approver` 只可查看和决定自己有效授权门店的已提交订单；客户完成安全认领后可读取本人客户关系及历史报价/订单。报价写入还会重新校验客户为 `secure_claim`、`active`、同意为 `granted`、证据为 `server_canonical` 且门店有效。越权访问具体对象统一按未找到处理，列表查询使用相同范围过滤。
+当前授权由应用服务和 SQL 查询过滤器执行，属于门店范围的应用层行级授权，不是 PostgreSQL RLS（Row-Level Security，行级安全策略）。`owner`、`admin` 具有旅行社全域可见性；`branch_manager` 需要同门店有效授权；`travel_advisor` 还需要客户当前有效分配；`approver` 只可查看自己授权门店的已提交订单。列表和单资源可见性覆盖 `active/inactive`，以便关店清理；所有普通新增业务仍要求门店 `active`。订单审核批准也要求 `active`，拒绝及取消收口允许 `inactive`。客户完成安全认领后可读取本人客户关系及历史报价/订单。报价写入还会重新校验客户为 `secure_claim`、`active`、同意为 `granted`、证据为 `server_canonical` 且门店有效。越权访问具体对象统一按未找到处理，列表查询使用相同范围过滤。
 
 这套应用层授权不能被表述为数据库强制隔离：绕过服务层直接执行 SQL、遗漏可见性过滤器或使用高权限数据库账号，均可能绕过它。生产化仍需最小权限数据库账号、系统化越权测试，并评估是否引入 PostgreSQL RLS 或独立策略引擎。
 
 内部订单审核当前保证：
 
-1. 决定人属于目标 `agency_id`，旅行社、成员和订单门店均为 `active`，岗位必须严格为 `approver`，并持有订单门店的有效授权。
+1. 决定人属于目标 `agency_id`，旅行社、成员和门店岗位授权均有效，角色必须严格为 `approver`；订单批准要求门店为 `active`，`inactive` 清理期只允许拒绝。
 2. 订单处于 `pending_review`，审核记录处于 `pending`，且两者通过旅行社、门店、订单、提交修订号、`payload_hash`、金额和币种绑定。
 3. 决定请求校验当前订单 `expected_revision`，并锁定客户、门店、订单行和审核行；批准还会重新校验客户仍为 `active + granted`，客户停用后只能拒绝保留中的审核，且旧审核拒绝前不能重新激活客户关系。
 4. 订单客户或审核发起人不能决定自己的审核。
@@ -257,7 +265,7 @@ manual_intervention -> cancellation_pending / cancelled
 - 外部调用前先落本地意图和幂等记录，回执以可重放方式落账。
 - timeout（超时）不能直接推断为失败或成功，必须进入查询、重试或人工介入。
 
-现有测试已加入客户生命周期和交易 API 契约、客户停用时的内部交易收口、门店授权矩阵、顾问分配、禁止自审、审核绑定、幂等重放/冲突、行锁和外部动作关闭，以及 `0005` 安全认领、`0006` 触发器修正和 `0007` 取消模型/API/服务/迁移契约。`0007` 专项单元测试覆盖服务端暴露派生、专职审批、岗位分离、同键重放、最新结果重做、独立对账、响应脱敏和外部动作恒为关闭；第五个 PostgreSQL 集成文件另验证非空旧数据回填、升降级、直接 SQL 篡改拒绝、账本冻结和案件/订单提交时一致性。[`e17b97d`](https://github.com/apearlinspring/langgraph-travel-planner/commit/e17b97d82c24b7f5271973cc8f18e884124b7d6b) / [运行 30602058425](https://github.com/apearlinspring/langgraph-travel-planner/actions/runs/30602058425) 已双绿：默认 `1841 passed, 49 deselected`，PostgreSQL 17 五文件 `25 passed`（3+5+5+2+10）。本机未执行真实 PostgreSQL，且 CI 不能代替目标环境迁移、事务故障和供应商故障注入测试。
+现有测试已加入客户生命周期和交易 API 契约、客户停用时的内部交易收口、门店授权矩阵、顾问分配、禁止自审、审核绑定、幂等重放/冲突、行锁和外部动作关闭，以及 `0005` 安全认领、`0006` 触发器修正和 `0007` 取消模型/API/服务/迁移契约。`0008` 当前另有客户转店、门店清理/关闭、状态分层授权、响应裁剪和静态迁移契约测试；它证明本工作树的确定性服务意图，不等于 PostgreSQL 触发器已经实际运行。[`e17b97d`](https://github.com/apearlinspring/langgraph-travel-planner/commit/e17b97d82c24b7f5271973cc8f18e884124b7d6b) / [运行 30602058425](https://github.com/apearlinspring/langgraph-travel-planner/actions/runs/30602058425) 的默认 `1841 passed, 49 deselected`、PostgreSQL 17 五文件 `25 passed`（3+5+5+2+10）只覆盖到 `0007`。`0008` 的 PostgreSQL 17 CI、目标环境迁移/恢复、事务故障和并发锁等待证据仍待完成。
 
 ## 外部执行的默认关闭策略
 
@@ -285,15 +293,15 @@ LIVE_NOTIFICATION_ENABLED=false
 
 ## 下一阶段缺口
 
-1. 在隔离 PostgreSQL 验证 `0001 -> 0002 -> 0003 -> 0004 -> 0005 -> 0006 -> 0007` 全链迁移、非空旧数据回填、升级/降级、只追加取消记录、状态机、跨租户与跨门店越权、并发和事务回滚；应用层门店授权仍需评估数据库 RLS 或独立策略引擎。
-2. 补批量客户导入、认领邀请投递与客户通知、真实身份核验、PII 档案及分级、法律级同意证据与撤回通知流程、客户跨门店转移、门店停用/关闭和 `blocked` 管理入口。
+1. 在隔离 PostgreSQL 验证 `0001 -> ... -> 0008` 全链迁移、非空旧数据回填、升级/失败关闭降级、历史门店保留、转店/关店守卫、状态机、跨租户与跨门店越权、并发锁等待和事务回滚；应用层门店授权仍需评估数据库 RLS 或独立策略引擎。
+2. 补批量客户导入、认领邀请投递与客户通知、真实身份核验、PII 档案及分级、法律级同意证据与撤回通知流程、跨门店经理双向交接审批和 `blocked` 风险复核入口。首版 owner/admin 即时转店不能扩写成完整门店交接流程。
 3. 在现有人工取消记录与独立对账之上接入经过平台 Approval/HITL 绑定的供应商取消、退款和通知适配器，并补回调验签、查询补偿和跨系统最终一致性；当前入口仍只记录平台外结果。
 4. 将平台 `approval_request` 强绑定到未来外部动作、订单、金额、币种、修订号和负载哈希；内部订单审核不能代替平台 Approval/HITL。
 5. 在 sandbox（沙箱）环境实现供应商预订和支付适配器，包括回调验签、查询补偿、限流、熔断和故障注入。
 6. 增加退款、改签、部分履约和 Saga（分布式事务补偿流程）状态机。
 7. 建立供应商对账、财务清分、发票/合同、客服工单、通知偏好和服务质量反馈。
 8. 完成 PII 分级、保留与删除、操作审计、商户权限、同意合法性验证、支付合规和正式用户条款。
-9. 在目标环境绑定 commit，真实执行 `0001 -> 0002 -> 0003 -> 0004 -> 0005 -> 0006 -> 0007` 迁移、备份恢复、并发、回调重放、故障恢复和小流量验收，再评估是否放行单个真实动作。
+9. 在目标环境绑定 commit，真实执行 `0001 -> ... -> 0008` 迁移、备份恢复、转店/关店并发、回调重放、故障恢复和小流量验收，再评估是否放行单个真实动作。
 10. 明确幂等记录的长期保留、归档和删除策略；真实支付或预订重放还需保存首次响应快照，不能只返回资源当前状态。
 
-在这些缺口补齐前，统一对外口径是：“项目的目标业务是旅行社；当前已具备 Agent 规划交付、目标账户安全认领、服务端同意记录、门店与客户生命周期控制、顾问分配、交易数据控制面以及平台外人工取消结果的分岗登记与独立对账，仍不是完整 CRM；邀请通知、真实身份与法律合规链路、真实供应商、支付、退款和通知动作尚未接入且默认关闭。”
+在这些缺口补齐前，统一对外口径是：“项目的目标业务是旅行社；当前已具备 Agent 规划交付、目标账户安全认领、服务端同意记录、门店清理/关闭、owner/admin 客户转店、顾问分配、交易数据控制面以及平台外人工取消结果的分岗登记与独立对账，仍不是完整 CRM；跨门店经理双向交接、邀请通知、真实身份与法律合规链路、真实供应商、支付、退款和通知动作尚未接入且默认关闭。”

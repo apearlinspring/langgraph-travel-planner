@@ -8,6 +8,10 @@ import pytest
 from sqlalchemy import false, true
 from sqlalchemy.dialects import postgresql
 
+from app.agency.branch_authorization import (
+    BRANCH_DRAIN_STATUSES,
+    BRANCH_NEW_WORK_STATUSES,
+)
 from app.agency.order_review_service import AgencyOrderReviewService
 from app.agency.transaction_service import (
     AgencyTransactionAccessDenied,
@@ -303,6 +307,7 @@ async def test_reviewer_gate_is_bound_to_the_order_branch():
         hide_resource=False,
         allow_agency_wide=False,
         lock_scope=False,
+        allowed_branch_statuses=BRANCH_DRAIN_STATUSES,
     )
 
 
@@ -333,6 +338,7 @@ async def test_dedicated_tenant_approver_role_is_accepted():
         hide_resource=False,
         allow_agency_wide=False,
         lock_scope=False,
+        allowed_branch_statuses=BRANCH_DRAIN_STATUSES,
     )
 
 
@@ -497,6 +503,11 @@ async def test_order_review_decision_is_atomic_bound_and_never_external(
         actor_user_id=APPROVER_ID,
         hide_resource=True,
         lock_scope=True,
+        allowed_branch_statuses=(
+            BRANCH_NEW_WORK_STATUSES
+            if decision == "approve"
+            else BRANCH_DRAIN_STATUSES
+        ),
     )
 
 

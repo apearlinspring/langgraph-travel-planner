@@ -157,9 +157,6 @@ class CustomerClaimServiceMixin:
                 AgencyCustomerInvitation.agency_id == customer.agency_id
             )
             .where(
-                AgencyCustomerInvitation.branch_id == customer.branch_id
-            )
-            .where(
                 AgencyCustomerInvitation.customer_id == customer.id
             )
             .where(AgencyCustomerInvitation.status == "pending")
@@ -215,13 +212,12 @@ class CustomerClaimServiceMixin:
         offset: int,
     ) -> tuple[list[AgencyCustomerInvitation], int]:
         customer = await self._get_customer(customer_id)
-        await self.authorization.require_customer_manager(
+        await self.authorization.require_customer_cleanup_manager(
             customer=customer,
             actor_user_id=actor_user_id,
         )
         filters = (
             AgencyCustomerInvitation.agency_id == customer.agency_id,
-            AgencyCustomerInvitation.branch_id == customer.branch_id,
             AgencyCustomerInvitation.customer_id == customer.id,
         )
         return await self._page(
@@ -251,10 +247,9 @@ class CustomerClaimServiceMixin:
     ) -> AgencyCustomerInvitation:
         safe_reason = self._safe_reason(reason)
         customer = await self._get_customer(customer_id, for_update=True)
-        await self.authorization.require_customer_manager(
+        await self.authorization.require_customer_cleanup_manager(
             customer=customer,
             actor_user_id=actor_user_id,
-            lock_scope=True,
         )
         state = await self._begin_idempotent_action(
             agency_id=customer.agency_id,
@@ -554,10 +549,6 @@ class CustomerClaimServiceMixin:
             .where(
                 AgencyCustomerConsentRecord.agency_id
                 == customer.agency_id
-            )
-            .where(
-                AgencyCustomerConsentRecord.branch_id
-                == customer.branch_id
             )
             .where(
                 AgencyCustomerConsentRecord.customer_id == customer.id

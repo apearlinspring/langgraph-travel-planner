@@ -62,8 +62,17 @@ class AgencyBranch(Base):
             name="ck_agency_branch_revision",
         ),
         CheckConstraint(
-            "deactivated_at IS NULL OR status <> 'active'",
-            name="ck_agency_branch_deactivated",
+            "(status = 'active' "
+            "AND deactivated_at IS NULL "
+            "AND closed_at IS NULL) "
+            "OR (status = 'inactive' "
+            "AND deactivated_at IS NOT NULL "
+            "AND closed_at IS NULL) "
+            "OR (status = 'closed' "
+            "AND deactivated_at IS NOT NULL "
+            "AND closed_at IS NOT NULL "
+            "AND closed_at >= deactivated_at)",
+            name="ck_agency_branch_lifecycle_timestamps",
         ),
         Index(
             "ix_agency_branch_agency_status",
@@ -88,6 +97,10 @@ class AgencyBranch(Base):
     status: Mapped[str] = mapped_column(String(20), default="active")
     revision: Mapped[int] = mapped_column(Integer, default=1)
     deactivated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    closed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
     )
@@ -116,9 +129,8 @@ class AgencyCustomer(Base):
         ),
         UniqueConstraint(
             "agency_id",
-            "branch_id",
             "id",
-            name="uq_agency_customer_branch_id",
+            name="uq_agency_customer_agency_id",
         ),
         UniqueConstraint(
             "agency_id",
@@ -128,7 +140,6 @@ class AgencyCustomer(Base):
         ),
         UniqueConstraint(
             "agency_id",
-            "branch_id",
             "id",
             "user_id",
             name="uq_agency_customer_quote_binding",
@@ -142,13 +153,11 @@ class AgencyCustomer(Base):
         ForeignKeyConstraint(
             [
                 "agency_id",
-                "branch_id",
                 "id",
                 "claimed_invitation_id",
             ],
             [
                 "agency_customer_invitation.agency_id",
-                "agency_customer_invitation.branch_id",
                 "agency_customer_invitation.customer_id",
                 "agency_customer_invitation.id",
             ],
@@ -161,13 +170,11 @@ class AgencyCustomer(Base):
         ForeignKeyConstraint(
             [
                 "agency_id",
-                "branch_id",
                 "id",
                 "current_consent_record_id",
             ],
             [
                 "agency_customer_consent_record.agency_id",
-                "agency_customer_consent_record.branch_id",
                 "agency_customer_consent_record.customer_id",
                 "agency_customer_consent_record.id",
             ],
@@ -482,7 +489,6 @@ class AgencyCustomerEvent(Base):
     __table_args__ = (
         UniqueConstraint(
             "agency_id",
-            "branch_id",
             "customer_id",
             "event_sequence",
             name="uq_agency_customer_event_sequence",
@@ -494,10 +500,9 @@ class AgencyCustomerEvent(Base):
             ondelete="RESTRICT",
         ),
         ForeignKeyConstraint(
-            ["agency_id", "branch_id", "customer_id"],
+            ["agency_id", "customer_id"],
             [
                 "agency_customer.agency_id",
-                "agency_customer.branch_id",
                 "agency_customer.id",
             ],
             name="fk_agency_customer_event_customer",
@@ -567,10 +572,9 @@ class AgencyCustomerAdvisorAssignment(Base):
             ondelete="RESTRICT",
         ),
         ForeignKeyConstraint(
-            ["agency_id", "branch_id", "customer_id"],
+            ["agency_id", "customer_id"],
             [
                 "agency_customer.agency_id",
-                "agency_customer.branch_id",
                 "agency_customer.id",
             ],
             name="fk_customer_advisor_assignment_customer",
@@ -613,7 +617,6 @@ class AgencyCustomerAdvisorAssignment(Base):
         Index(
             "uq_customer_advisor_assignment_active",
             "agency_id",
-            "branch_id",
             "customer_id",
             unique=True,
             postgresql_where=text("status = 'active'"),
@@ -665,3 +668,150 @@ class AgencyCustomerAdvisorAssignment(Base):
     )
 
     __mapper_args__ = {"version_id_col": revision}
+
+
+class AgencyCustomerBranchTransfer(Base):
+    """客户当前服务门店变更的只追加审计事实。"""
+
+    __tablename__ = "agency_customer_branch_transfer"
+    __table_args__ = (
+        UniqueConstraint(
+            "agency_id",
+            "customer_id",
+            "customer_revision",
+            name="uq_customer_branch_transfer_revision",
+        ),
+        ForeignKeyConstraint(
+            ["agency_id", "customer_id"],
+            ["agency_customer.agency_id", "agency_customer.id"],
+            name="fk_customer_branch_transfer_customer",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["agency_id", "from_branch_id"],
+            ["agency_branch.agency_id", "agency_branch.id"],
+            name="fk_customer_branch_transfer_from_branch",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["agency_id", "to_branch_id"],
+            ["agency_branch.agency_id", "agency_branch.id"],
+            name="fk_customer_branch_transfer_to_branch",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "from_branch_id <> to_branch_id",
+            name="ck_customer_branch_transfer_distinct_branches",
+        ),
+        CheckConstraint(
+            "customer_revision >= 2",
+            name="ck_customer_branch_transfer_revision",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) BETWEEN 1 AND 500",
+            name="ck_customer_branch_transfer_reason",
+        ),
+        Index(
+            "ix_customer_branch_transfer_customer_time",
+            "agency_id",
+            "customer_id",
+            "transferred_at",
+            "id",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    agency_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("agency.id", ondelete="RESTRICT"),
+    )
+    customer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    from_branch_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    to_branch_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    customer_revision: Mapped[int] = mapped_column(Integer)
+    transferred_by_user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("user.id", ondelete="RESTRICT"),
+    )
+    reason: Mapped[str] = mapped_column(Text)
+    transferred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=func.now(),
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=func.now(),
+    )
+
+
+class AgencyBranchLifecycleEvent(Base):
+    """门店停用和关闭的只追加审计事件。"""
+
+    __tablename__ = "agency_branch_lifecycle_event"
+    __table_args__ = (
+        UniqueConstraint(
+            "agency_id",
+            "branch_id",
+            "event_sequence",
+            name="uq_agency_branch_lifecycle_event_sequence",
+        ),
+        UniqueConstraint(
+            "agency_id",
+            "branch_id",
+            "branch_revision",
+            name="uq_agency_branch_lifecycle_event_revision",
+        ),
+        ForeignKeyConstraint(
+            ["agency_id", "branch_id"],
+            ["agency_branch.agency_id", "agency_branch.id"],
+            name="fk_agency_branch_lifecycle_event_branch",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "event_sequence >= 1",
+            name="ck_agency_branch_lifecycle_event_sequence",
+        ),
+        CheckConstraint(
+            "branch_revision >= 2",
+            name="ck_agency_branch_lifecycle_event_revision",
+        ),
+        CheckConstraint(
+            "event_type IN ('deactivated', 'closed')",
+            name="ck_agency_branch_lifecycle_event_type",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) BETWEEN 1 AND 500",
+            name="ck_agency_branch_lifecycle_event_reason",
+        ),
+        Index(
+            "ix_agency_branch_lifecycle_event_branch_created",
+            "agency_id",
+            "branch_id",
+            "created_at",
+            "id",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    agency_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    branch_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    event_sequence: Mapped[int] = mapped_column(Integer)
+    branch_revision: Mapped[int] = mapped_column(Integer)
+    event_type: Mapped[str] = mapped_column(String(20))
+    actor_user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("user.id", ondelete="RESTRICT"),
+    )
+    reason: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=func.now(),
+    )

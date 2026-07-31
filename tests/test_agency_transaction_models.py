@@ -152,7 +152,7 @@ def test_agency_membership_and_transaction_tenant_boundaries_are_explicit():
     }.issubset(_constraint_names(AgencyMembership, UniqueConstraint))
     assert {
         "uq_agency_customer_agency_user",
-        "uq_agency_customer_branch_id",
+        "uq_agency_customer_agency_id",
         "uq_agency_customer_branch_no",
         "uq_agency_customer_quote_binding",
     }.issubset(_constraint_names(AgencyCustomer, UniqueConstraint))
@@ -217,7 +217,6 @@ def test_agency_membership_and_transaction_tenant_boundaries_are_explicit():
     ]
     assert tenant_foreign_keys["fk_agency_quote_customer"] == [
         "agency_id",
-        "branch_id",
         "customer_id",
         "user_id",
     ]
@@ -230,7 +229,6 @@ def test_agency_membership_and_transaction_tenant_boundaries_are_explicit():
     ]
     assert tenant_foreign_keys["fk_agency_order_customer"] == [
         "agency_id",
-        "branch_id",
         "customer_id",
     ]
     assert tenant_foreign_keys["fk_agency_order_event_order_branch"] == [
@@ -542,6 +540,7 @@ def test_agency_transaction_migration_has_reversible_dependency_order():
         "agency_membership": {"uq_agency_membership_agency_id"},
         "agency_customer": {
             "uq_agency_customer_branch_id",
+            "uq_agency_customer_agency_id",
             "uq_agency_customer_branch_no",
             "uq_agency_customer_quote_binding",
             "fk_agency_customer_branch",

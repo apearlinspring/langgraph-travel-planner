@@ -12,7 +12,7 @@ from typing import Any, Callable
 
 from sqlalchemy import and_, desc, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
-from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.exc import StaleDataError
 
@@ -25,6 +25,7 @@ from app.agency.errors import (
     AgencyTransactionPersistenceError,
     AgencyTransactionValidationError,
     hidden_not_found as _hidden_not_found,
+    is_database_write_conflict,
 )
 from app.agency.transaction_payloads import (
     build_quote_payload,
@@ -97,12 +98,17 @@ class AgencyTransactionService(TransactionLockingMixin):
     async def _flush(self) -> None:
         try:
             await self.db.flush()
-        except (IntegrityError, StaleDataError) as error:
+        except StaleDataError as error:
             raise AgencyTransactionConflict(
                 "transaction_write_conflict",
                 "交易数据已变化或存在重复记录，请刷新后重试",
             ) from error
         except SQLAlchemyError as error:
+            if is_database_write_conflict(error):
+                raise AgencyTransactionConflict(
+                    "transaction_write_conflict",
+                    "交易数据已变化或存在重复记录，请刷新后重试",
+                ) from error
             raise AgencyTransactionPersistenceError(
                 "transaction_persistence_unavailable",
                 "交易数据暂时无法保存，请稍后重试",

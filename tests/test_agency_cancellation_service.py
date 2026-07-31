@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from sqlalchemy import false, true
 
+from app.agency.branch_authorization import BRANCH_DRAIN_STATUSES
 from app.agency.cancellation_service import CancellationService
 from app.agency.customer_lifecycle_service import CustomerLifecycleService
 from app.agency.errors import (
@@ -362,7 +363,7 @@ async def test_request_authorization_accepts_customer_or_scoped_staff():
     service = CancellationService(_Db())  # type: ignore[arg-type]
     order = order_record()
     customer = _customer()
-    service.authorization.lock_active_branch_scope = AsyncMock()
+    service.authorization.lock_branch_scope = AsyncMock()
     service.authorization.require_quote_manager = AsyncMock()
 
     await service._authorize_locked_context(
@@ -378,14 +379,16 @@ async def test_request_authorization_accepts_customer_or_scoped_staff():
         order=order,
     )
 
-    service.authorization.lock_active_branch_scope.assert_awaited_once_with(
+    service.authorization.lock_branch_scope.assert_awaited_once_with(
         agency_id=AGENCY_ID,
         branch_id=BRANCH_ID,
+        allowed_branch_statuses=BRANCH_DRAIN_STATUSES,
     )
     service.authorization.require_quote_manager.assert_awaited_once_with(
         customer=customer,
         actor_user_id=ADVISOR_ID,
         lock_scope=True,
+        allowed_branch_statuses=BRANCH_DRAIN_STATUSES,
     )
 
 
@@ -421,6 +424,7 @@ async def test_operational_roles_never_inherit_agency_wide_permission(
         roles={role},
         allow_agency_wide=False,
         lock_scope=True,
+        allowed_branch_statuses=BRANCH_DRAIN_STATUSES,
     )
 
 
@@ -450,6 +454,7 @@ async def test_review_is_dedicated_approver_and_resume_is_manager_scoped():
         branch_id=BRANCH_ID,
         actor_user_id=APPROVER_ID,
         lock_scope=True,
+        allowed_branch_statuses=BRANCH_DRAIN_STATUSES,
     )
     service.authorization.require_branch_role.assert_awaited_once_with(
         agency_id=AGENCY_ID,
@@ -458,6 +463,7 @@ async def test_review_is_dedicated_approver_and_resume_is_manager_scoped():
         roles={"branch_manager"},
         allow_agency_wide=True,
         lock_scope=True,
+        allowed_branch_statuses=BRANCH_DRAIN_STATUSES,
     )
 
 
@@ -1421,6 +1427,7 @@ async def test_manual_result_queue_is_case_scoped_and_includes_reconciliation():
         actor_user_id=AUDITOR_ID,
         roles={"auditor"},
         allow_agency_wide=False,
+        allowed_branch_statuses=BRANCH_DRAIN_STATUSES,
     )
     assert "cancellation_case_id" in str(db.statements[0])
 
@@ -1491,6 +1498,7 @@ async def test_case_visibility_falls_back_only_to_scoped_operation_roles():
         actor_user_id=FINANCE_ID,
         roles={"booking_operator", "finance", "auditor"},
         allow_agency_wide=False,
+        allowed_branch_statuses=BRANCH_DRAIN_STATUSES,
     )
 
 

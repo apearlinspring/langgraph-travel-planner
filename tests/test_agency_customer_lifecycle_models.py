@@ -16,10 +16,14 @@ from sqlalchemy import (
 from app.models import (
     BRANCH_ROLES,
     AgencyBranch,
+    AgencyBranchLifecycleEvent,
     AgencyBranchRoleGrant,
     AgencyCustomer,
     AgencyCustomerAdvisorAssignment,
+    AgencyCustomerBranchTransfer,
+    AgencyCustomerConsentRecord,
     AgencyCustomerEvent,
+    AgencyCustomerInvitation,
     AgencyMembership,
     AgencyOrder,
     AgencyOrderEvent,
@@ -28,6 +32,14 @@ from app.models import (
 )
 from app.models.base import Base
 from app.models.migration_contract import BUSINESS_MANAGED_TABLES
+from app.schemas.agency_customer_lifecycle import (
+    AgencyBranchCloseRequest,
+    AgencyBranchClosureReadinessResponse,
+    AgencyBranchDeactivateRequest,
+    AgencyBranchResponse,
+    AgencyCustomerBranchTransferRequest,
+    AgencyCustomerBranchTransferResponse,
+)
 
 
 REVISION_PATH = Path(
@@ -39,11 +51,14 @@ FROZEN_HELPER_PATH = Path(
 TRANSACTION_GUARDS_HELPER_PATH = Path(
     "app/models/_20260726_0004_agency_transaction_guards_frozen.py"
 )
-NEW_TABLE_MODELS = (
-    AgencyBranch,
+FROZEN_0004_TABLE_NAMES = {
+    "agency_branch",
+    "agency_branch_role_grant",
+    "agency_customer_event",
+    "agency_customer_advisor_assignment",
+}
+UNCHANGED_0004_TABLE_MODELS = (
     AgencyBranchRoleGrant,
-    AgencyCustomerEvent,
-    AgencyCustomerAdvisorAssignment,
 )
 
 
@@ -198,14 +213,114 @@ def _record_upgrade() -> tuple[ModuleType, ModuleType, _LifecycleMigrationRecord
 
 
 def test_lifecycle_models_are_registered_and_migration_owned():
-    expected_tables = {
-        "agency_branch",
-        "agency_branch_role_grant",
-        "agency_customer_event",
-        "agency_customer_advisor_assignment",
+    assert FROZEN_0004_TABLE_NAMES.issubset(Base.metadata.tables)
+    assert FROZEN_0004_TABLE_NAMES.issubset(BUSINESS_MANAGED_TABLES)
+    assert {
+        "agency_customer_branch_transfer",
+        "agency_branch_lifecycle_event",
+    }.issubset(Base.metadata.tables)
+
+
+def test_branch_model_has_terminal_lifecycle_timestamps():
+    columns = AgencyBranch.__table__.columns
+    assert columns["deactivated_at"].nullable is True
+    assert columns["closed_at"].nullable is True
+    lifecycle = next(
+        constraint
+        for constraint in AgencyBranch.__table__.constraints
+        if constraint.name == "ck_agency_branch_lifecycle_timestamps"
+    )
+    lifecycle_sql = str(lifecycle.sqltext)
+    assert "status = 'active'" in lifecycle_sql
+    assert "status = 'inactive'" in lifecycle_sql
+    assert "status = 'closed'" in lifecycle_sql
+    assert "closed_at >= deactivated_at" in lifecycle_sql
+
+
+def test_customer_identity_fks_preserve_historical_branch_attribution():
+    expected_unique_columns = {
+        (AgencyCustomer, "uq_agency_customer_agency_id"): (
+            "agency_id",
+            "id",
+        ),
+        (AgencyCustomer, "uq_agency_customer_quote_binding"): (
+            "agency_id",
+            "id",
+            "user_id",
+        ),
+        (
+            AgencyCustomerInvitation,
+            "uq_agency_customer_invitation_customer_id",
+        ): ("agency_id", "customer_id", "id"),
+        (
+            AgencyCustomerConsentRecord,
+            "uq_agency_customer_consent_record_customer_id",
+        ): ("agency_id", "customer_id", "id"),
+        (
+            AgencyCustomerConsentRecord,
+            "uq_agency_customer_consent_record_sequence",
+        ): ("agency_id", "customer_id", "consent_sequence"),
+        (
+            AgencyCustomerConsentRecord,
+            "uq_agency_customer_consent_record_revision",
+        ): ("agency_id", "customer_id", "customer_revision"),
     }
-    assert expected_tables.issubset(Base.metadata.tables)
-    assert expected_tables.issubset(BUSINESS_MANAGED_TABLES)
+    for (model, name), columns in expected_unique_columns.items():
+        constraint = next(
+            item
+            for item in model.__table__.constraints
+            if item.name == name
+        )
+        assert _constraint_columns(constraint) == columns
+
+    expected_fk_columns = {
+        (AgencyCustomer, "fk_agency_customer_claimed_invitation"): (
+            "agency_id",
+            "id",
+            "claimed_invitation_id",
+        ),
+        (AgencyCustomer, "fk_agency_customer_current_consent_record"): (
+            "agency_id",
+            "id",
+            "current_consent_record_id",
+        ),
+        (
+            AgencyCustomerInvitation,
+            "fk_agency_customer_invitation_customer",
+        ): ("agency_id", "customer_id"),
+        (
+            AgencyCustomerConsentRecord,
+            "fk_agency_customer_consent_record_customer",
+        ): ("agency_id", "customer_id"),
+        (
+            AgencyCustomerConsentRecord,
+            "fk_agency_customer_consent_record_invitation",
+        ): ("agency_id", "customer_id", "invitation_id"),
+        (AgencyCustomerEvent, "fk_agency_customer_event_customer"): (
+            "agency_id",
+            "customer_id",
+        ),
+        (
+            AgencyCustomerAdvisorAssignment,
+            "fk_customer_advisor_assignment_customer",
+        ): ("agency_id", "customer_id"),
+        (AgencyQuote, "fk_agency_quote_customer"): (
+            "agency_id",
+            "customer_id",
+            "user_id",
+        ),
+        (AgencyOrder, "fk_agency_order_customer"): (
+            "agency_id",
+            "customer_id",
+        ),
+    }
+    for (model, name), columns in expected_fk_columns.items():
+        constraint = next(
+            item
+            for item in model.__table__.constraints
+            if item.name == name
+        )
+        assert _constraint_columns(constraint) == columns
 
 
 def test_branch_roles_are_store_scoped_and_exclude_tenant_admin_roles():
@@ -251,7 +366,7 @@ def test_customer_and_transaction_bindings_are_branch_explicit():
         assert model.__table__.columns["branch_id"].nullable is False
 
     assert {
-        "uq_agency_customer_branch_id",
+        "uq_agency_customer_agency_id",
         "uq_agency_customer_branch_no",
         "uq_agency_customer_quote_binding",
     }.issubset(_constraint_names(AgencyCustomer, UniqueConstraint))
@@ -274,7 +389,6 @@ def test_advisor_assignment_has_one_active_owner_and_auditable_ending():
     assert active_index.unique is True
     assert tuple(column.name for column in active_index.columns) == (
         "agency_id",
-        "branch_id",
         "customer_id",
     )
     assert str(active_index.dialect_options["postgresql"]["where"]) == (
@@ -304,10 +418,142 @@ def test_customer_event_model_is_append_only_shaped_and_revisioned():
     )
     assert _constraint_columns(sequence) == (
         "agency_id",
-        "branch_id",
         "customer_id",
         "event_sequence",
     )
+
+
+def test_branch_transfer_model_is_append_only_and_revision_bound():
+    columns = AgencyCustomerBranchTransfer.__table__.columns
+    assert "updated_at" not in columns
+    assert {
+        "id",
+        "agency_id",
+        "customer_id",
+        "from_branch_id",
+        "to_branch_id",
+        "customer_revision",
+        "transferred_by_user_id",
+        "reason",
+        "transferred_at",
+        "created_at",
+    } == set(columns.keys())
+
+    revision = next(
+        constraint
+        for constraint in AgencyCustomerBranchTransfer.__table__.constraints
+        if constraint.name == "uq_customer_branch_transfer_revision"
+    )
+    assert _constraint_columns(revision) == (
+        "agency_id",
+        "customer_id",
+        "customer_revision",
+    )
+    customer_fk = next(
+        constraint
+        for constraint in AgencyCustomerBranchTransfer.__table__.constraints
+        if constraint.name == "fk_customer_branch_transfer_customer"
+    )
+    assert _constraint_columns(customer_fk) == (
+        "agency_id",
+        "customer_id",
+    )
+    checks = {
+        constraint.name: str(constraint.sqltext)
+        for constraint in AgencyCustomerBranchTransfer.__table__.constraints
+        if isinstance(constraint, CheckConstraint)
+    }
+    assert (
+        checks["ck_customer_branch_transfer_distinct_branches"]
+        == "from_branch_id <> to_branch_id"
+    )
+    assert "customer_revision >= 2" in checks[
+        "ck_customer_branch_transfer_revision"
+    ]
+    assert "length(trim(reason)) BETWEEN 1 AND 500" in checks[
+        "ck_customer_branch_transfer_reason"
+    ]
+
+
+def test_branch_lifecycle_event_model_is_append_only_and_redactable():
+    columns = AgencyBranchLifecycleEvent.__table__.columns
+    assert "updated_at" not in columns
+    assert {
+        "id",
+        "agency_id",
+        "branch_id",
+        "event_sequence",
+        "branch_revision",
+        "event_type",
+        "actor_user_id",
+        "reason",
+        "created_at",
+    } == set(columns.keys())
+    sequence = next(
+        constraint
+        for constraint in AgencyBranchLifecycleEvent.__table__.constraints
+        if constraint.name == "uq_agency_branch_lifecycle_event_sequence"
+    )
+    revision = next(
+        constraint
+        for constraint in AgencyBranchLifecycleEvent.__table__.constraints
+        if constraint.name == "uq_agency_branch_lifecycle_event_revision"
+    )
+    assert _constraint_columns(sequence) == (
+        "agency_id",
+        "branch_id",
+        "event_sequence",
+    )
+    assert _constraint_columns(revision) == (
+        "agency_id",
+        "branch_id",
+        "branch_revision",
+    )
+    event_type = next(
+        constraint
+        for constraint in AgencyBranchLifecycleEvent.__table__.constraints
+        if constraint.name == "ck_agency_branch_lifecycle_event_type"
+    )
+    assert "deactivated" in str(event_type.sqltext)
+    assert "closed" in str(event_type.sqltext)
+
+
+def test_branch_lifecycle_and_transfer_dtos_are_strict_and_redacted():
+    for request_model in (
+        AgencyBranchDeactivateRequest,
+        AgencyBranchCloseRequest,
+        AgencyCustomerBranchTransferRequest,
+    ):
+        assert request_model.model_config["extra"] == "forbid"
+
+    assert "closed_at" in AgencyBranchResponse.model_fields
+    assert set(AgencyBranchClosureReadinessResponse.model_fields) == {
+        "branch_id",
+        "status",
+        "revision",
+        "ready",
+        "current_customer_count",
+        "pending_invitation_count",
+        "active_assignment_count",
+        "active_role_grant_count",
+        "pending_review_count",
+        "open_quote_count",
+        "open_order_count",
+        "open_cancellation_case_count",
+    }
+    transfer_fields = set(AgencyCustomerBranchTransferResponse.model_fields)
+    assert transfer_fields == {
+        "id",
+        "agency_id",
+        "customer_id",
+        "from_branch_id",
+        "to_branch_id",
+        "customer_revision",
+        "transferred_at",
+        "created_at",
+    }
+    assert "reason" not in transfer_fields
+    assert "transferred_by_user_id" not in transfer_fields
 
 
 def test_0004_revision_uses_revision_frozen_helper_contract():
@@ -354,13 +600,11 @@ def test_0004_orders_quote_binding_ddl_for_postgres_dependencies():
     )
 
 
-def test_0004_new_table_columns_constraints_and_indexes_match_models():
+def test_0004_unchanged_table_contract_still_matches_live_model():
     _revision, _frozen, recorder = _record_upgrade()
 
-    assert set(recorder.created_tables) == {
-        model.__tablename__ for model in NEW_TABLE_MODELS
-    }
-    for model in NEW_TABLE_MODELS:
+    assert set(recorder.created_tables) == FROZEN_0004_TABLE_NAMES
+    for model in UNCHANGED_0004_TABLE_MODELS:
         table_name = model.__tablename__
         elements = recorder.created_tables[table_name]
         migrated_columns = {

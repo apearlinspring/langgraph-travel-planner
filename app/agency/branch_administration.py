@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy import and_, desc, func, select
+from sqlalchemy import and_, desc, exists, func, or_, select
 
 from app.agency.branch_authorization import (
     ALLOWED_BRANCH_GRANT_ROLES,
+    BRANCH_DRAIN_STATUSES,
     CUSTOMER_MANAGER_ROLES,
 )
 from app.agency.errors import (
@@ -16,13 +18,38 @@ from app.agency.errors import (
     hidden_not_found,
 )
 from app.models.agency_cancellation import AgencyOrderCancellationCase
+from app.models.agency_customer_identity import AgencyCustomerInvitation
 from app.models.agency_customer_lifecycle import (
     AgencyBranch,
+    AgencyBranchLifecycleEvent,
     AgencyBranchRoleGrant,
+    AgencyCustomer,
     AgencyCustomerAdvisorAssignment,
 )
 from app.models.agency_order_review import AgencyOrderReview
-from app.models.agency_transaction import AgencyMembership, AgencyOrder
+from app.models.agency_transaction import (
+    AgencyMembership,
+    AgencyOrder,
+    AgencyQuote,
+)
+
+
+@dataclass(frozen=True)
+class BranchClosureReadiness:
+    """不暴露具体客户、员工或交易 ID 的关店阻断汇总。"""
+
+    branch_id: uuid.UUID
+    status: str
+    revision: int
+    ready: bool
+    current_customer_count: int
+    pending_invitation_count: int
+    active_assignment_count: int
+    active_role_grant_count: int
+    pending_review_count: int
+    open_quote_count: int
+    open_order_count: int
+    open_cancellation_case_count: int
 
 
 class BranchAdministrationMixin:
@@ -98,6 +125,150 @@ class BranchAdministrationMixin:
             count_statement=select(func.count())
             .select_from(AgencyBranch)
             .where(*filters),
+        )
+
+    async def deactivate_branch(
+        self,
+        *,
+        actor_user_id: uuid.UUID,
+        branch_id: uuid.UUID,
+        expected_revision: int,
+        reason: str,
+        idempotency_key: str,
+    ) -> AgencyBranch:
+        """把门店置为存量清理期，不把它误报为已经关店。"""
+
+        safe_reason = self._safe_reason(reason)
+        branch = await self._get_branch(branch_id, for_update=True)
+        await self.authorization.require_agency_wide(
+            agency_id=branch.agency_id,
+            actor_user_id=actor_user_id,
+            hide_resource=True,
+            lock_scope=True,
+        )
+        state = await self._begin_idempotent_action(
+            agency_id=branch.agency_id,
+            scope="branch.deactivate",
+            key=idempotency_key,
+            request_payload={
+                "actor_user_id": actor_user_id,
+                "branch_id": branch.id,
+                "expected_revision": expected_revision,
+                "reason": safe_reason,
+            },
+        )
+        if state.replayed:
+            self._ensure_replay_matches(
+                state,
+                resource_type="agency_branch",
+                resource_id=branch.id,
+            )
+            return branch
+
+        self._ensure_revision(branch.revision, expected_revision)
+        if branch.status != "active":
+            raise AgencyTransactionConflict(
+                "branch_state_conflict",
+                "只有 active 门店可以进入 inactive 清理期",
+            )
+        now = self._now()
+        branch.status = "inactive"
+        branch.revision += 1
+        branch.deactivated_at = now
+        branch.closed_at = None
+        await self._append_branch_lifecycle_event(
+            branch=branch,
+            event_type="deactivated",
+            actor_user_id=actor_user_id,
+            reason=safe_reason,
+        )
+        return await self._finish_action(
+            state,
+            resource_type="agency_branch",
+            resource=branch,
+        )
+
+    async def get_branch_closure_readiness(
+        self,
+        *,
+        actor_user_id: uuid.UUID,
+        branch_id: uuid.UUID,
+    ) -> BranchClosureReadiness:
+        branch = await self._get_branch(branch_id)
+        await self.authorization.require_branch_role(
+            agency_id=branch.agency_id,
+            branch_id=branch.id,
+            actor_user_id=actor_user_id,
+            roles=CUSTOMER_MANAGER_ROLES,
+            allowed_branch_statuses={"active", "inactive", "closed"},
+        )
+        return await self._branch_closure_readiness(branch)
+
+    async def close_branch(
+        self,
+        *,
+        actor_user_id: uuid.UUID,
+        branch_id: uuid.UUID,
+        expected_revision: int,
+        reason: str,
+        idempotency_key: str,
+    ) -> AgencyBranch:
+        """在全部阻断项清零后把 inactive 门店置为不可逆 closed。"""
+
+        safe_reason = self._safe_reason(reason)
+        branch = await self._get_branch(branch_id, for_update=True)
+        await self.authorization.require_agency_wide(
+            agency_id=branch.agency_id,
+            actor_user_id=actor_user_id,
+            hide_resource=True,
+            lock_scope=True,
+        )
+        state = await self._begin_idempotent_action(
+            agency_id=branch.agency_id,
+            scope="branch.close",
+            key=idempotency_key,
+            request_payload={
+                "actor_user_id": actor_user_id,
+                "branch_id": branch.id,
+                "expected_revision": expected_revision,
+                "reason": safe_reason,
+            },
+        )
+        if state.replayed:
+            self._ensure_replay_matches(
+                state,
+                resource_type="agency_branch",
+                resource_id=branch.id,
+            )
+            return branch
+
+        self._ensure_revision(branch.revision, expected_revision)
+        if branch.status != "inactive":
+            raise AgencyTransactionConflict(
+                "branch_state_conflict",
+                "只有 inactive 清理期门店可以执行最终关闭",
+            )
+        readiness = await self._branch_closure_readiness(branch)
+        if not readiness.ready:
+            raise AgencyTransactionConflict(
+                "branch_close_blocked",
+                "门店仍有客户、岗位授权或开放业务，必须先完成清理",
+            )
+
+        now = self._now()
+        branch.status = "closed"
+        branch.revision += 1
+        branch.closed_at = now
+        await self._append_branch_lifecycle_event(
+            branch=branch,
+            event_type="closed",
+            actor_user_id=actor_user_id,
+            reason=safe_reason,
+        )
+        return await self._finish_action(
+            state,
+            resource_type="agency_branch",
+            resource=branch,
         )
 
     async def create_branch_role_grant(
@@ -201,6 +372,7 @@ class BranchAdministrationMixin:
             branch_id=branch.id,
             actor_user_id=actor_user_id,
             roles=CUSTOMER_MANAGER_ROLES,
+            allowed_branch_statuses=BRANCH_DRAIN_STATUSES,
         )
         filters = [
             AgencyBranchRoleGrant.agency_id == branch.agency_id,
@@ -386,4 +558,161 @@ class BranchAdministrationMixin:
             state,
             resource_type="agency_branch_role_grant",
             resource=grant,
+        )
+
+    async def _append_branch_lifecycle_event(
+        self,
+        *,
+        branch: AgencyBranch,
+        event_type: str,
+        actor_user_id: uuid.UUID,
+        reason: str,
+    ) -> AgencyBranchLifecycleEvent:
+        sequence_result = await self.db.execute(
+            select(
+                func.coalesce(
+                    func.max(AgencyBranchLifecycleEvent.event_sequence),
+                    0,
+                )
+            )
+            .where(
+                AgencyBranchLifecycleEvent.agency_id == branch.agency_id
+            )
+            .where(AgencyBranchLifecycleEvent.branch_id == branch.id)
+        )
+        event = AgencyBranchLifecycleEvent(
+            agency_id=branch.agency_id,
+            branch_id=branch.id,
+            event_sequence=int(sequence_result.scalar_one()) + 1,
+            branch_revision=branch.revision,
+            event_type=event_type,
+            actor_user_id=actor_user_id,
+            reason=reason,
+        )
+        self.db.add(event)
+        return event
+
+    async def _branch_closure_readiness(
+        self,
+        branch: AgencyBranch,
+    ) -> BranchClosureReadiness:
+        async def count(statement: Any) -> int:
+            result = await self.db.execute(statement)
+            return int(result.scalar_one())
+
+        current_customer_count = await count(
+            select(func.count())
+            .select_from(AgencyCustomer)
+            .where(AgencyCustomer.agency_id == branch.agency_id)
+            .where(AgencyCustomer.branch_id == branch.id)
+        )
+        pending_invitation_count = await count(
+            select(func.count())
+            .select_from(AgencyCustomerInvitation)
+            .where(
+                AgencyCustomerInvitation.agency_id == branch.agency_id
+            )
+            .where(AgencyCustomerInvitation.branch_id == branch.id)
+            .where(AgencyCustomerInvitation.status == "pending")
+        )
+        active_assignment_count = await count(
+            select(func.count())
+            .select_from(AgencyCustomerAdvisorAssignment)
+            .where(
+                AgencyCustomerAdvisorAssignment.agency_id
+                == branch.agency_id
+            )
+            .where(
+                AgencyCustomerAdvisorAssignment.branch_id == branch.id
+            )
+            .where(AgencyCustomerAdvisorAssignment.status == "active")
+        )
+        active_role_grant_count = await count(
+            select(func.count())
+            .select_from(AgencyBranchRoleGrant)
+            .where(AgencyBranchRoleGrant.agency_id == branch.agency_id)
+            .where(AgencyBranchRoleGrant.branch_id == branch.id)
+            .where(AgencyBranchRoleGrant.status == "active")
+        )
+        pending_review_count = await count(
+            select(func.count())
+            .select_from(AgencyOrderReview)
+            .where(AgencyOrderReview.agency_id == branch.agency_id)
+            .where(AgencyOrderReview.branch_id == branch.id)
+            .where(AgencyOrderReview.status == "pending")
+        )
+        accepted_without_order = and_(
+            AgencyQuote.status == "accepted",
+            ~exists(
+                select(AgencyOrder.id)
+                .where(AgencyOrder.agency_id == AgencyQuote.agency_id)
+                .where(AgencyOrder.quote_id == AgencyQuote.id)
+            ),
+        )
+        open_quote_count = await count(
+            select(func.count())
+            .select_from(AgencyQuote)
+            .where(AgencyQuote.agency_id == branch.agency_id)
+            .where(AgencyQuote.branch_id == branch.id)
+            .where(
+                or_(
+                    AgencyQuote.status.in_(("draft", "offered")),
+                    accepted_without_order,
+                )
+            )
+        )
+        open_order_count = await count(
+            select(func.count())
+            .select_from(AgencyOrder)
+            .where(AgencyOrder.agency_id == branch.agency_id)
+            .where(AgencyOrder.branch_id == branch.id)
+            .where(
+                AgencyOrder.status.not_in(
+                    ("review_rejected", "completed", "cancelled")
+                )
+            )
+        )
+        open_cancellation_case_count = await count(
+            select(func.count())
+            .select_from(AgencyOrderCancellationCase)
+            .where(
+                AgencyOrderCancellationCase.agency_id == branch.agency_id
+            )
+            .where(
+                AgencyOrderCancellationCase.branch_id == branch.id
+            )
+            .where(
+                AgencyOrderCancellationCase.status.in_(
+                    (
+                        "approval_pending",
+                        "action_pending",
+                        "reconciliation_pending",
+                        "manual_intervention",
+                    )
+                )
+            )
+        )
+        blocker_counts = (
+            current_customer_count,
+            pending_invitation_count,
+            active_assignment_count,
+            active_role_grant_count,
+            pending_review_count,
+            open_quote_count,
+            open_order_count,
+            open_cancellation_case_count,
+        )
+        return BranchClosureReadiness(
+            branch_id=branch.id,
+            status=branch.status,
+            revision=branch.revision,
+            ready=branch.status == "inactive" and not any(blocker_counts),
+            current_customer_count=current_customer_count,
+            pending_invitation_count=pending_invitation_count,
+            active_assignment_count=active_assignment_count,
+            active_role_grant_count=active_role_grant_count,
+            pending_review_count=pending_review_count,
+            open_quote_count=open_quote_count,
+            open_order_count=open_order_count,
+            open_cancellation_case_count=open_cancellation_case_count,
         )

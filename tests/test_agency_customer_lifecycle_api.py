@@ -465,7 +465,7 @@ def test_all_twelve_lifecycle_posts_require_idempotency_key(
     assert response.status_code == 422
 
 
-def test_lifecycle_router_exposes_twenty_operations_and_twelve_posts():
+def test_lifecycle_router_exposes_twenty_four_operations_and_fifteen_posts():
     routes = [
         route
         for route in customer_api.router.routes
@@ -474,9 +474,9 @@ def test_lifecycle_router_exposes_twenty_operations_and_twelve_posts():
     operations = sum(len(route.methods or set()) for route in routes)
     posts = sum("POST" in (route.methods or set()) for route in routes)
 
-    assert len(routes) == 20
-    assert operations == 20
-    assert posts == 12
+    assert len(routes) == 24
+    assert operations == 24
+    assert posts == 15
 
 
 def test_customer_create_rejects_direct_user_binding():

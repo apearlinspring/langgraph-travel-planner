@@ -20,6 +20,7 @@ from app.agency.customer_transaction_settlement import (
     CustomerTransactionSettlementMixin,
 )
 from app.agency.customer_claim_service import CustomerClaimServiceMixin
+from app.agency.customer_branch_transfer import CustomerBranchTransferMixin
 from app.agency.customer_lifecycle_support import CustomerLifecycleSupportMixin
 from app.agency.errors import (
     AgencyTransactionConflict,
@@ -41,6 +42,7 @@ from app.schemas.agency_customer_lifecycle import AgencyCustomerCreateRequest
 
 class CustomerLifecycleService(
     BranchAdministrationMixin,
+    CustomerBranchTransferMixin,
     CustomerLifecycleSupportMixin,
     CustomerClaimServiceMixin,
     CustomerTransactionSettlementMixin,
@@ -627,8 +629,6 @@ class CustomerLifecycleService(
         filters = [
             AgencyCustomerAdvisorAssignment.agency_id
             == customer.agency_id,
-            AgencyCustomerAdvisorAssignment.branch_id
-            == customer.branch_id,
             AgencyCustomerAdvisorAssignment.customer_id == customer.id,
         ]
         if status_filter is not None:
@@ -664,7 +664,6 @@ class CustomerLifecycleService(
         )
         filters = [
             AgencyCustomerEvent.agency_id == customer.agency_id,
-            AgencyCustomerEvent.branch_id == customer.branch_id,
             AgencyCustomerEvent.customer_id == customer.id,
         ]
         return await self._page(

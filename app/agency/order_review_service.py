@@ -2,9 +2,14 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Collection
 
 from sqlalchemy import desc, func, select
 
+from app.agency.branch_authorization import (
+    BRANCH_DRAIN_STATUSES,
+    BRANCH_NEW_WORK_STATUSES,
+)
 from app.agency.errors import (
     AgencyTransactionAccessDenied,
     AgencyTransactionConflict,
@@ -35,6 +40,9 @@ class AgencyOrderReviewService(AgencyTransactionService):
         actor_user_id: uuid.UUID,
         hide_resource: bool,
         lock_scope: bool = False,
+        allowed_branch_statuses: Collection[str] = (
+            BRANCH_DRAIN_STATUSES
+        ),
     ) -> AgencyMembership:
         access = await self.authorization.require_branch_approver(
             agency_id=agency_id,
@@ -42,6 +50,7 @@ class AgencyOrderReviewService(AgencyTransactionService):
             actor_user_id=actor_user_id,
             hide_resource=hide_resource,
             lock_scope=lock_scope,
+            allowed_branch_statuses=allowed_branch_statuses,
         )
         return access.membership
 
@@ -239,6 +248,11 @@ class AgencyOrderReviewService(AgencyTransactionService):
             actor_user_id=actor_user_id,
             hide_resource=True,
             lock_scope=True,
+            allowed_branch_statuses=(
+                BRANCH_NEW_WORK_STATUSES
+                if normalized_decision == "approve"
+                else BRANCH_DRAIN_STATUSES
+            ),
         )
         order = await self._get_order(order_id, for_update=True)
         self._ensure_transaction_binding(order, binding)

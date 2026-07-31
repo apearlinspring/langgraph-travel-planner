@@ -9,9 +9,11 @@ from app.models.approval import ApprovalEvent, ApprovalRequest, ToolAuditEvent
 from app.models.agency_customer_lifecycle import (
     BRANCH_ROLES,
     AgencyBranch,
+    AgencyBranchLifecycleEvent,
     AgencyBranchRoleGrant,
     AgencyCustomer,
     AgencyCustomerAdvisorAssignment,
+    AgencyCustomerBranchTransfer,
     AgencyCustomerEvent,
 )
 from app.models.agency_customer_identity import (
@@ -48,8 +50,10 @@ __all__ = [
     "Agency",
     "BRANCH_ROLES",
     "AgencyBranch",
+    "AgencyBranchLifecycleEvent",
     "AgencyBranchRoleGrant",
     "AgencyCustomer",
+    "AgencyCustomerBranchTransfer",
     "AgencyCustomerInvitation",
     "AgencyCustomerConsentRecord",
     "AgencyCustomerEvent",

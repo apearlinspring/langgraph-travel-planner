@@ -13,6 +13,7 @@ from typing import Any
 
 from sqlalchemy import desc, func, select
 
+from app.agency.branch_authorization import BRANCH_DRAIN_STATUSES
 from app.agency.errors import (
     AgencyTransactionConflict,
     AgencyTransactionNotFound,
@@ -271,15 +272,17 @@ class CancellationSupportMixin:
     ) -> None:
         if permission == "request":
             if actor_user_id == order.user_id:
-                await self.authorization.lock_active_branch_scope(
+                await self.authorization.lock_branch_scope(
                     agency_id=order.agency_id,
                     branch_id=order.branch_id,
+                    allowed_branch_statuses=BRANCH_DRAIN_STATUSES,
                 )
                 return
             await self.authorization.require_quote_manager(
                 customer=customer,
                 actor_user_id=actor_user_id,
                 lock_scope=True,
+                allowed_branch_statuses=BRANCH_DRAIN_STATUSES,
             )
             return
         if permission == "review":
@@ -288,6 +291,7 @@ class CancellationSupportMixin:
                 branch_id=order.branch_id,
                 actor_user_id=actor_user_id,
                 lock_scope=True,
+                allowed_branch_statuses=BRANCH_DRAIN_STATUSES,
             )
             return
         if permission in {"booking_operator", "finance", "auditor"}:
@@ -298,6 +302,7 @@ class CancellationSupportMixin:
                 roles={permission},
                 allow_agency_wide=False,
                 lock_scope=True,
+                allowed_branch_statuses=BRANCH_DRAIN_STATUSES,
             )
             return
         if permission == "resume":
@@ -308,6 +313,7 @@ class CancellationSupportMixin:
                 roles={"branch_manager"},
                 allow_agency_wide=True,
                 lock_scope=True,
+                allowed_branch_statuses=BRANCH_DRAIN_STATUSES,
             )
             return
         raise RuntimeError(f"unknown cancellation permission: {permission}")
@@ -692,4 +698,5 @@ class CancellationSupportMixin:
             actor_user_id=actor_user_id,
             roles=_CASE_OPERATION_ROLES,
             allow_agency_wide=False,
+            allowed_branch_statuses=BRANCH_DRAIN_STATUSES,
         )

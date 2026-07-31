@@ -1,6 +1,8 @@
 """旅行社业务服务可安全映射到 API 的领域错误。"""
 from __future__ import annotations
 
+from sqlalchemy.exc import DBAPIError, IntegrityError
+
 
 class AgencyTransactionError(Exception):
     """旅行社业务域错误基类。"""
@@ -29,6 +31,22 @@ class AgencyTransactionValidationError(AgencyTransactionError):
 
 class AgencyTransactionPersistenceError(AgencyTransactionError):
     """数据库暂时无法可靠完成业务操作。"""
+
+
+def is_database_write_conflict(error: BaseException) -> bool:
+    """识别普通约束异常与 PostgreSQL ``RAISE EXCEPTION`` 业务门禁。"""
+
+    if isinstance(error, IntegrityError):
+        return True
+    if not isinstance(error, DBAPIError):
+        return False
+    original = error.orig
+    sqlstate = getattr(original, "sqlstate", None) or getattr(
+        original,
+        "pgcode",
+        None,
+    )
+    return sqlstate == "P0001"
 
 
 def hidden_not_found() -> AgencyTransactionNotFound:

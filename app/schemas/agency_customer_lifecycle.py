@@ -91,6 +91,14 @@ class AgencyBranchRoleGrantRevokeRequest(ExpectedRevisionRequest):
     reason: str = Field(..., min_length=1, max_length=500)
 
 
+class AgencyBranchDeactivateRequest(ExpectedRevisionRequest):
+    reason: str = Field(..., min_length=1, max_length=500)
+
+
+class AgencyBranchCloseRequest(ExpectedRevisionRequest):
+    reason: str = Field(..., min_length=1, max_length=500)
+
+
 class AgencyCustomerCreateRequest(StrictRequest):
     agency_id: uuid.UUID
     branch_id: uuid.UUID
@@ -141,6 +149,12 @@ class AgencyCustomerDeactivateRequest(ExpectedRevisionRequest):
     reason: str = Field(..., min_length=1, max_length=500)
 
 
+class AgencyCustomerBranchTransferRequest(ExpectedRevisionRequest):
+    target_branch_id: uuid.UUID
+    target_advisor_role_grant_id: uuid.UUID | None = None
+    reason: str = Field(..., min_length=1, max_length=500)
+
+
 class AgencyCustomerAdvisorAssignRequest(ExpectedRevisionRequest):
     advisor_role_grant_id: uuid.UUID
     reason: str | None = Field(default=None, max_length=500)
@@ -163,6 +177,7 @@ class AgencyBranchResponse(BaseModel):
     status: BranchStatus
     revision: int
     deactivated_at: datetime | None = None
+    closed_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -174,6 +189,23 @@ class AgencyBranchListResponse(BaseModel):
     total: int
     offset: int
     limit: int
+
+
+class AgencyBranchClosureReadinessResponse(BaseModel):
+    branch_id: uuid.UUID
+    status: BranchStatus
+    revision: int = Field(..., ge=1)
+    ready: bool
+    current_customer_count: int = Field(..., ge=0)
+    pending_invitation_count: int = Field(..., ge=0)
+    active_assignment_count: int = Field(..., ge=0)
+    active_role_grant_count: int = Field(..., ge=0)
+    pending_review_count: int = Field(..., ge=0)
+    open_quote_count: int = Field(..., ge=0)
+    open_order_count: int = Field(..., ge=0)
+    open_cancellation_case_count: int = Field(..., ge=0)
+
+    model_config = ConfigDict(from_attributes=True)
 
 
 class AgencyBranchRoleGrantResponse(BaseModel):
@@ -227,6 +259,19 @@ class AgencyCustomerListResponse(BaseModel):
     total: int
     offset: int
     limit: int
+
+
+class AgencyCustomerBranchTransferResponse(BaseModel):
+    id: uuid.UUID
+    agency_id: uuid.UUID
+    customer_id: uuid.UUID
+    from_branch_id: uuid.UUID
+    to_branch_id: uuid.UUID
+    customer_revision: int = Field(..., ge=2)
+    transferred_at: datetime
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
 
 
 class AgencyCustomerConsentNoticeResponse(BaseModel):

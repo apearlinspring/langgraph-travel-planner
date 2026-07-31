@@ -113,7 +113,6 @@ class CustomerLifecycleSupportMixin:
                 )
             )
             .where(AgencyCustomerEvent.agency_id == customer.agency_id)
-            .where(AgencyCustomerEvent.branch_id == customer.branch_id)
             .where(AgencyCustomerEvent.customer_id == customer.id)
         )
         event = AgencyCustomerEvent(

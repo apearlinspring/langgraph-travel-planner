@@ -10,7 +10,11 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy.dialects import postgresql
 
-from app.agency.branch_authorization import BranchAuthorization
+from app.agency.branch_authorization import (
+    BRANCH_DRAIN_STATUSES,
+    BRANCH_NEW_WORK_STATUSES,
+    BranchAuthorization,
+)
 from app.agency.transaction_service import (
     AgencyTransactionAccessDenied,
     AgencyTransactionConflict,
@@ -727,6 +731,7 @@ async def test_travel_advisor_quote_access_requires_active_customer_assignment(
             branch_id=BRANCH_ID,
             membership=membership,
             roles={"travel_advisor"},
+            allowed_branch_statuses=BRANCH_NEW_WORK_STATUSES,
         )
     else:
         with pytest.raises(AgencyTransactionAccessDenied) as exc_info:
@@ -952,4 +957,5 @@ async def test_non_advisor_staff_cannot_read_full_order_snapshot(
         branch_id=BRANCH_ID,
         membership=membership,
         roles={"branch_manager", "approver"},
+        allowed_branch_statuses=BRANCH_DRAIN_STATUSES,
     )

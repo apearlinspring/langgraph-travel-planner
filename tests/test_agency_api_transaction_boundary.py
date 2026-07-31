@@ -7,9 +7,11 @@ from types import SimpleNamespace
 import pytest
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 
 from app import main as app_main
+from app.agency.errors import AgencyTransactionConflict
+from app.agency.transaction_service import AgencyTransactionService
 from app.api.dependencies import get_current_user
 from app.api.v1 import (
     agency_cancellations,
@@ -19,19 +21,29 @@ from app.api.v1 import (
 )
 
 
+class _PostgresRaiseException(Exception):
+    sqlstate = "P0001"
+
+
 class _CommitFailingSession:
-    def __init__(self) -> None:
+    def __init__(self, commit_error: Exception) -> None:
         self.rollback_count = 0
+        self.commit_error = commit_error
 
     async def commit(self) -> None:
-        raise IntegrityError(
-            "COMMIT",
-            {},
-            RuntimeError("synthetic deferred constraint failure"),
-        )
+        raise self.commit_error
 
     async def rollback(self) -> None:
         self.rollback_count += 1
+
+
+class _FlushFailingSession:
+    async def flush(self) -> None:
+        raise DBAPIError(
+            "FLUSH",
+            {},
+            _PostgresRaiseException("synthetic trigger rejection"),
+        )
 
 
 class _SessionContext:
@@ -57,10 +69,27 @@ def test_all_agency_services_use_function_scoped_transaction_dependency():
         assert dependency.scope == "function"
 
 
+@pytest.mark.parametrize(
+    "commit_error",
+    [
+        IntegrityError(
+            "COMMIT",
+            {},
+            RuntimeError("synthetic deferred constraint failure"),
+        ),
+        DBAPIError(
+            "COMMIT",
+            {},
+            _PostgresRaiseException("synthetic deferred trigger rejection"),
+        ),
+    ],
+    ids=["integrity-error", "postgres-raise-exception"],
+)
 def test_agency_commit_failure_is_returned_before_a_success_response(
     monkeypatch,
+    commit_error,
 ):
-    session = _CommitFailingSession()
+    session = _CommitFailingSession(commit_error)
     monkeypatch.setattr(
         agency_common,
         "async_session_maker",
@@ -79,6 +108,16 @@ def test_agency_commit_failure_is_returned_before_a_success_response(
     assert response.status_code == 409
     assert response.json()["detail"]["code"] == "transaction_write_conflict"
     assert session.rollback_count == 1
+
+
+@pytest.mark.asyncio
+async def test_postgres_trigger_rejection_during_flush_is_a_conflict():
+    service = AgencyTransactionService(_FlushFailingSession())
+
+    with pytest.raises(AgencyTransactionConflict) as captured:
+        await service._flush()
+
+    assert captured.value.code == "transaction_write_conflict"
 
 
 @pytest.mark.parametrize(

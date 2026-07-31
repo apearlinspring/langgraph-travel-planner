@@ -248,10 +248,9 @@ class AgencyQuote(Base):
             ondelete="RESTRICT",
         ),
         ForeignKeyConstraint(
-            ["agency_id", "branch_id", "customer_id", "user_id"],
+            ["agency_id", "customer_id", "user_id"],
             [
                 "agency_customer.agency_id",
-                "agency_customer.branch_id",
                 "agency_customer.id",
                 "agency_customer.user_id",
             ],
@@ -434,10 +433,9 @@ class AgencyOrder(Base):
             ondelete="RESTRICT",
         ),
         ForeignKeyConstraint(
-            ["agency_id", "branch_id", "customer_id"],
+            ["agency_id", "customer_id"],
             [
                 "agency_customer.agency_id",
-                "agency_customer.branch_id",
                 "agency_customer.id",
             ],
             name="fk_agency_order_customer",

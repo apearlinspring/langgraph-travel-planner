@@ -5,7 +5,7 @@ from collections.abc import AsyncIterator
 from typing import Annotated, Awaitable, TypeVar
 
 from fastapi import Header, status
-from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agency.errors import (
@@ -15,6 +15,7 @@ from app.agency.errors import (
     AgencyTransactionNotFound,
     AgencyTransactionPersistenceError,
     AgencyTransactionValidationError,
+    is_database_write_conflict,
 )
 from app.api.dependencies import api_error
 from app.models.base import async_session_maker
@@ -41,7 +42,7 @@ async def get_agency_db() -> AsyncIterator[AsyncSession]:
             await session.commit()
         except Exception as error:
             await session.rollback()
-            if isinstance(error, IntegrityError):
+            if is_database_write_conflict(error):
                 conflict = AgencyTransactionConflict(
                     "transaction_write_conflict",
                     "交易数据已变化或违反数据库约束，请刷新后重试",

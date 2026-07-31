@@ -23,7 +23,10 @@ from app.api.v1.agency_common import (
 from app.models.user import User
 from app.schemas.agency_customer_lifecycle import (
     AdvisorAssignmentStatus,
+    AgencyBranchCloseRequest,
+    AgencyBranchClosureReadinessResponse,
     AgencyBranchCreateRequest,
+    AgencyBranchDeactivateRequest,
     AgencyBranchListResponse,
     AgencyBranchResponse,
     AgencyBranchRoleGrantCreateRequest,
@@ -34,6 +37,8 @@ from app.schemas.agency_customer_lifecycle import (
     AgencyCustomerAdvisorEndRequest,
     AgencyCustomerAdvisorAssignmentListResponse,
     AgencyCustomerAdvisorAssignmentResponse,
+    AgencyCustomerBranchTransferRequest,
+    AgencyCustomerBranchTransferResponse,
     AgencyCustomerClaimInvitationIssueRequest,
     AgencyCustomerClaimInvitationIssuedResponse,
     AgencyCustomerClaimInvitationListResponse,
@@ -118,6 +123,79 @@ async def list_agency_branches(
         total=total,
         offset=offset,
         limit=limit,
+    )
+
+
+@router.post(
+    "/branches/{branch_id}/deactivate",
+    response_model=AgencyBranchResponse,
+)
+async def deactivate_agency_branch(
+    branch_id: uuid.UUID,
+    data: AgencyBranchDeactivateRequest,
+    idempotency_key: IdempotencyKeyHeader,
+    user: User = Depends(get_current_user),
+    service: CustomerLifecycleService = Depends(
+        get_customer_lifecycle_service
+    ),
+):
+    """停止门店接收新业务，并进入存量业务清理阶段。"""
+
+    return await _service_call(
+        service.deactivate_branch(
+            actor_user_id=user.id,
+            branch_id=branch_id,
+            expected_revision=data.expected_revision,
+            reason=data.reason,
+            idempotency_key=idempotency_key,
+        )
+    )
+
+
+@router.get(
+    "/branches/{branch_id}/closure-readiness",
+    response_model=AgencyBranchClosureReadinessResponse,
+)
+async def get_agency_branch_closure_readiness(
+    branch_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    service: CustomerLifecycleService = Depends(
+        get_customer_lifecycle_service
+    ),
+):
+    """返回门店关闭前仍需清理的聚合计数，不暴露资源明细。"""
+
+    return await _service_call(
+        service.get_branch_closure_readiness(
+            actor_user_id=user.id,
+            branch_id=branch_id,
+        )
+    )
+
+
+@router.post(
+    "/branches/{branch_id}/close",
+    response_model=AgencyBranchResponse,
+)
+async def close_agency_branch(
+    branch_id: uuid.UUID,
+    data: AgencyBranchCloseRequest,
+    idempotency_key: IdempotencyKeyHeader,
+    user: User = Depends(get_current_user),
+    service: CustomerLifecycleService = Depends(
+        get_customer_lifecycle_service
+    ),
+):
+    """在所有门店关系和开放业务清零后终态关闭门店。"""
+
+    return await _service_call(
+        service.close_branch(
+            actor_user_id=user.id,
+            branch_id=branch_id,
+            expected_revision=data.expected_revision,
+            reason=data.reason,
+            idempotency_key=idempotency_key,
+        )
     )
 
 
@@ -233,6 +311,37 @@ async def create_agency_customer(
         service.create_customer(
             actor_user_id=user.id,
             data=data,
+            idempotency_key=idempotency_key,
+        )
+    )
+
+
+@router.post(
+    "/customers/{customer_id}/transfer",
+    response_model=AgencyCustomerBranchTransferResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def transfer_agency_customer_branch(
+    customer_id: uuid.UUID,
+    data: AgencyCustomerBranchTransferRequest,
+    idempotency_key: IdempotencyKeyHeader,
+    user: User = Depends(get_current_user),
+    service: CustomerLifecycleService = Depends(
+        get_customer_lifecycle_service
+    ),
+):
+    """把客户当前服务关系转入另一有效门店，历史门店事实保持不变。"""
+
+    return await _service_call(
+        service.transfer_customer_branch(
+            actor_user_id=user.id,
+            customer_id=customer_id,
+            expected_revision=data.expected_revision,
+            target_branch_id=data.target_branch_id,
+            target_advisor_role_grant_id=(
+                data.target_advisor_role_grant_id
+            ),
+            reason=data.reason,
             idempotency_key=idempotency_key,
         )
     )
