@@ -216,6 +216,12 @@ def test_0007_upgrade_adds_order_delta_and_four_bound_tables(
         if operation[0] == "execute"
         and "UPDATE agency_order" in operation[1]
     )
+    parent_constraint_at = recorder.operations.index(
+        (
+            "create_constraint",
+            "uq_agency_order_branch_customer_id",
+        )
+    )
     create_guard_at = next(
         index
         for index, operation in enumerate(recorder.operations)
@@ -223,6 +229,7 @@ def test_0007_upgrade_adds_order_delta_and_four_bound_tables(
         and "CREATE TRIGGER trg_agency_order_mutation_guard"
         in operation[1]
     )
+    assert parent_constraint_at < backfill_at
     assert drop_guard_at < backfill_at < create_guard_at
     assert list(recorder.created_tables) == [
         "agency_order_cancellation_case",

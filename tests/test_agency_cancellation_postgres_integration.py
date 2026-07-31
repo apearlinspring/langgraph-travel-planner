@@ -263,9 +263,7 @@ async def _create_order(
             idempotency_key=f"cancel-submit-{unique}",
         )
     async with session_factory() as session, session.begin():
-        order = await AgencyOrderReviewService(
-            session
-        ).decide_order_review(
+        await AgencyOrderReviewService(session).decide_order_review(
             actor_user_id=actors.approver_id,
             order_id=order.id,
             decision="approve",
@@ -273,7 +271,7 @@ async def _create_order(
             reason=None,
             idempotency_key=f"cancel-approve-order-{unique}",
         )
-    return order
+    return await _get_order(session_factory, order.id)
 
 
 async def _add_exposure(

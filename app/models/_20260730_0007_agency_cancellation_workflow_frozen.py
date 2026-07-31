@@ -527,6 +527,15 @@ def upgrade_agency_cancellation_workflow() -> None:
         "agency_order",
         sa.Column("cancellation_requested_at", TIMESTAMP, nullable=True),
     )
+    # Add the parent key before touching legacy order rows.  The 0004
+    # review-consistency constraint trigger is deferred, so updating an order
+    # first would leave pending trigger events and PostgreSQL would reject the
+    # subsequent ALTER TABLE.
+    op.create_unique_constraint(
+        "uq_agency_order_branch_customer_id",
+        "agency_order",
+        ["agency_id", "branch_id", "customer_id", "id"],
+    )
     # The 0004 guard rejects same-status maintenance updates and requires a
     # business revision bump.  Remove it before translating the legacy
     # ``cancelled_at`` projection; PostgreSQL transactional DDL keeps this
@@ -539,11 +548,6 @@ def upgrade_agency_cancellation_workflow() -> None:
             cancelled_at = NULL
         WHERE status IN ('cancellation_pending', 'manual_intervention')
         """
-    )
-    op.create_unique_constraint(
-        "uq_agency_order_branch_customer_id",
-        "agency_order",
-        ["agency_id", "branch_id", "customer_id", "id"],
     )
     _create_case_table()
     _create_event_table()
