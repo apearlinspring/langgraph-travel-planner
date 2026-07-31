@@ -1234,6 +1234,8 @@ async def test_postgres_rejects_tampering_and_scopes_legacy_pending(
     from app.models.agency_cancellation import (
         AgencyOrderCancellationEvent,
     )
+    from app.models.agency_customer_lifecycle import AgencyBranchRoleGrant
+    from app.models.agency_transaction import AgencyMembership
 
     engine, session_factory = _session_factory(migrated_postgres)
     try:
@@ -1344,6 +1346,31 @@ async def test_postgres_rejects_tampering_and_scopes_legacy_pending(
             staff_requested_order,
             requester_id=actors.advisor_id,
         )
+        customer_approver_membership_id = uuid.uuid4()
+        customer_approver_granted_at = datetime.now(UTC)
+        async with session_factory() as session, session.begin():
+            session.add(
+                AgencyMembership(
+                    id=customer_approver_membership_id,
+                    agency_id=actors.agency_id,
+                    user_id=actors.customer_user_id,
+                    role="approver",
+                    status="active",
+                    joined_at=customer_approver_granted_at,
+                )
+            )
+            await session.flush()
+            session.add(
+                AgencyBranchRoleGrant(
+                    agency_id=actors.agency_id,
+                    branch_id=actors.branch_id,
+                    membership_id=customer_approver_membership_id,
+                    role="approver",
+                    status="active",
+                    revision=1,
+                    granted_at=customer_approver_granted_at,
+                )
+            )
         await _assert_sql_rejected(
             engine,
             "UPDATE agency_order_cancellation_case "
