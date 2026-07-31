@@ -578,9 +578,28 @@ def test_0008_guards_keep_history_but_validate_new_current_branch_records(
         recorder,
         "CREATE FUNCTION zhixing_guard_agency_customer_event_insert()",
     )
+    claim_consent_guard = _statement_containing(
+        recorder,
+        "CREATE FUNCTION zhixing_validate_agency_customer_claim_consent()",
+    )
     assert "customer.branch_id = NEW.branch_id" in invitation_guard
     assert "customer.branch_id = NEW.branch_id" in consent_guard
     assert "customer.branch_id = NEW.branch_id" in event_guard
+    assert re.search(
+        r"IF TG_TABLE_NAME = 'agency_customer_invitation' THEN\s+"
+        r"IF NEW\.status",
+        claim_consent_guard,
+    )
+    assert re.search(
+        r"IF TG_TABLE_NAME = 'agency_customer_consent_record' THEN\s+"
+        r"IF current_customer\.current_consent_record_id",
+        claim_consent_guard,
+    )
+    assert not re.search(
+        r"IF TG_TABLE_NAME = 'agency_customer_(?:invitation|consent_record)'\s+"
+        r"AND\b",
+        claim_consent_guard,
+    )
 
     assert "record.branch_id" not in consent_guard
     assert (
@@ -757,13 +776,6 @@ def test_0008_empty_downgrade_is_fail_closed_and_restores_0007_shape(
     assert (
         "CREATE FUNCTION zhixing_validate_agency_customer_claim_consent()"
         in sql
-    )
-    assert "IF TG_TABLE_NAME = 'agency_customer_invitation' THEN" in sql
-    assert "IF TG_TABLE_NAME = 'agency_customer_consent_record' THEN" in sql
-    assert not re.search(
-        r"IF TG_TABLE_NAME = 'agency_customer_(?:invitation|consent_record)'\s+"
-        r"AND NEW\.",
-        sql,
     )
     restored_review = _statement_containing(
         recorder,
