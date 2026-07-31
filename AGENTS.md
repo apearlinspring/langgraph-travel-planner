@@ -76,7 +76,7 @@ The `0005` migration adds claim invitations and append-only consent records, pre
 
 The `0007` migration adds cancellation cases, append-only case events, manual compensation-result records and independent reconciliation records. Required supplier/refund evidence is derived from locked order/payment/fulfillment state; clients cannot select it, and the database insert guard independently recomputes the flags from the locked ledgers. Creating an open case immediately freezes the original payment/fulfillment ledgers so exposure cannot change before review. A same-branch dedicated `approver`, distinct from the requester and order customer, reviews the request; database guards verify this eligibility, keep a qualified replacement for pending work and prevent order submission while a cancellation case is open. If neither action is required, approval directly completes the case and internally cancels an eligible `draft`/`approved` order; otherwise `booking_operator` and `finance` record only their respective platform-outside result summaries, and a different `auditor` uses an auditor-only sanitized result queue to discover opaque record IDs before independently submitting observed refund amount/currency and evidence. Requesters/customers cannot self-approve and result recorders cannot self-reconcile. Unified responses omit internal actor account IDs. Every external-action flag remains false, raw provider references/evidence are not stored, and `refund_required` is an evidence/reconciliation gate rather than a platform refund command. Cancellation-case `requested_at` records case creation; order `cancellation_requested_at` is set only after approval enters order cancellation handling; order `cancelled_at` is reserved for true internal `cancelled`. Downgrade is fail-closed once `0007` business data exists.
 
-The `0008` migration is the current business head. It adds customer current-branch transfer, branch lifecycle events and explicit `closed_at`; reshapes customer foreign keys and uniqueness so historical invitation, consent, event, assignment, quote, order and cancellation rows keep their event-time branch while the customer points to its current service branch; and adds database guards for transfer bindings, branch lifecycle, append-only records and irreversible closure. Downgrade is fail-closed after transfer/branch-lifecycle business data exists or historical child branches no longer match the current customer branch. `0008` has unit/API/static migration coverage in the current worktree, but fresh PostgreSQL 17 CI, target-environment migration/restore and concurrent lock-wait evidence are still pending and must not be claimed as passed.
+The `0008` migration is the current business head. It adds customer current-branch transfer, branch lifecycle events and explicit `closed_at`; reshapes customer foreign keys and uniqueness so historical invitation, consent, event, assignment, quote, order and cancellation rows keep their event-time branch while the customer points to its current service branch; and adds database guards for transfer bindings, branch lifecycle, append-only records and irreversible closure. Downgrade is fail-closed after transfer/branch-lifecycle business data exists or historical child branches no longer match the current customer branch. Implementation commit `c5746496203f628fe9a93a91ebb998c910c2a920` is covered by GitHub Actions run `30606856484`: the default job reported 1878 passed and 58 deselected, while PostgreSQL 17 reported 34 passed across six files. This is ephemeral CI evidence through `0008`; target-environment migration/restore and concurrent lock-wait evidence are still pending and must not be claimed as passed.
 
 Agency APIs use a function-scoped database dependency. The transaction commit and deferred PostgreSQL constraints must complete before a success response is sent; commit-stage integrity conflicts are mapped to a stable conflict response, and persistence failures must not leak a false `2xx`.
 
@@ -128,10 +128,15 @@ the ephemeral CI migration and trigger path through `0007`; it does not prove
 target-environment migration, recovery, lock-wait or external-provider
 readiness.
 
-The current candidate workflow runs all six PostgreSQL files, including the
-`0008` branch-transfer and closure scenarios. Until that workflow completes,
-the last confirmed PostgreSQL evidence remains the five-file `0007` run above;
-do not report `0008` as PostgreSQL-verified from configuration or collection
-alone.
+Implementation commit `c5746496203f628fe9a93a91ebb998c910c2a920` is covered by
+GitHub Actions run
+`https://github.com/apearlinspring/langgraph-travel-planner/actions/runs/30606856484`:
+the default job reported 1878 passed and 58 deselected, while PostgreSQL 17
+reported 34 passed across six files (3 transaction, 5 customer lifecycle,
+5 customer claim, 2 branch permission, 10 cancellation and 9 branch-transfer
+and closure tests). This proves the ephemeral CI migration, trigger and covered
+integration paths through `0008`; it does not prove target-environment
+migration/restore, concurrent lock-wait behavior or external-provider
+readiness.
 
 For deployment, use `docs/部署与运行/deployment-readiness.md`. Public deployment docs are templates; private production coordinates must stay outside Git.
