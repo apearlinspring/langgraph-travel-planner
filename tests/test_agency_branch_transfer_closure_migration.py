@@ -636,6 +636,17 @@ def test_0008_closure_guard_requires_inactive_terminal_and_full_drain(
     assert "NEW.event_type = 'deactivated'" in lifecycle_event_guard
     assert "NEW.event_type = 'closed'" in lifecycle_event_guard
     assert "event.event_sequence" in lifecycle_event_guard
+    lifecycle_event_consistency = _statement_containing(
+        recorder,
+        "CREATE FUNCTION zhixing_validate_agency_branch_lifecycle_event()",
+    )
+    assert (
+        "current_branch.status <> (CASE NEW.event_type"
+        in lifecycle_event_consistency
+    )
+    assert "WHEN 'closed' THEN 'closed'\n                END)" in (
+        lifecycle_event_consistency
+    )
 
 
 def test_0008_replaces_live_guards_for_inactive_branch_drain_only(

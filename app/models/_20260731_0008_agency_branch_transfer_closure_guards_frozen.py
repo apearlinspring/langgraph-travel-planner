@@ -349,10 +349,10 @@ def _create_branch_lifecycle_event_guards() -> None:
               AND branch.id = NEW.branch_id;
             IF NOT FOUND
                 OR current_branch.revision <> NEW.branch_revision
-                OR current_branch.status <> CASE NEW.event_type
+                OR current_branch.status <> (CASE NEW.event_type
                     WHEN 'deactivated' THEN 'inactive'
                     WHEN 'closed' THEN 'closed'
-                END
+                END)
             THEN
                 RAISE EXCEPTION
                     'agency_branch lifecycle event does not match branch';
