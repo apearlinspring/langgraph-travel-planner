@@ -4,7 +4,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from sqlalchemy import desc, func, select
+from sqlalchemy import and_, desc, func, select
 
 from app.agency.branch_authorization import (
     ALLOWED_BRANCH_GRANT_ROLES,
@@ -15,13 +15,14 @@ from app.agency.errors import (
     AgencyTransactionValidationError,
     hidden_not_found,
 )
+from app.models.agency_cancellation import AgencyOrderCancellationCase
 from app.models.agency_customer_lifecycle import (
     AgencyBranch,
     AgencyBranchRoleGrant,
     AgencyCustomerAdvisorAssignment,
 )
 from app.models.agency_order_review import AgencyOrderReview
-from app.models.agency_transaction import AgencyMembership
+from app.models.agency_transaction import AgencyMembership, AgencyOrder
 
 
 class BranchAdministrationMixin:
@@ -286,16 +287,69 @@ class BranchAdministrationMixin:
                 "该顾问仍有有效客户分配，必须先完成客户转移",
             )
         if grant.role == "approver":
-            pending_result = await self.db.execute(
-                select(AgencyOrderReview.id)
+            pending_review_participants = (
+                select(
+                    AgencyOrderReview.requested_by_user_id,
+                    AgencyOrder.user_id,
+                )
+                .join(
+                    AgencyOrder,
+                    and_(
+                        AgencyOrder.agency_id
+                        == AgencyOrderReview.agency_id,
+                        AgencyOrder.branch_id
+                        == AgencyOrderReview.branch_id,
+                        AgencyOrder.id == AgencyOrderReview.order_id,
+                    ),
+                )
                 .where(AgencyOrderReview.agency_id == grant.agency_id)
                 .where(AgencyOrderReview.branch_id == grant.branch_id)
                 .where(AgencyOrderReview.status == "pending")
-                .limit(1)
             )
-            if pending_result.scalar_one_or_none() is not None:
+            pending_cancellation_participants = (
+                select(
+                    AgencyOrderCancellationCase.requested_by_user_id,
+                    AgencyOrder.user_id,
+                )
+                .join(
+                    AgencyOrder,
+                    and_(
+                        AgencyOrder.agency_id
+                        == AgencyOrderCancellationCase.agency_id,
+                        AgencyOrder.branch_id
+                        == AgencyOrderCancellationCase.branch_id,
+                        AgencyOrder.id
+                        == AgencyOrderCancellationCase.order_id,
+                    ),
+                )
+                .where(
+                    AgencyOrderCancellationCase.agency_id == grant.agency_id
+                )
+                .where(
+                    AgencyOrderCancellationCase.branch_id == grant.branch_id
+                )
+                .where(
+                    AgencyOrderCancellationCase.status == "approval_pending"
+                )
+            )
+            pending_result = await self.db.execute(
+                pending_review_participants.union_all(
+                    pending_cancellation_participants
+                )
+            )
+            pending_participants = pending_result.all()
+            if pending_participants:
                 replacement_result = await self.db.execute(
-                    select(AgencyBranchRoleGrant.id)
+                    select(AgencyMembership.user_id)
+                    .join(
+                        AgencyBranchRoleGrant,
+                        and_(
+                            AgencyBranchRoleGrant.agency_id
+                            == AgencyMembership.agency_id,
+                            AgencyBranchRoleGrant.membership_id
+                            == AgencyMembership.id,
+                        ),
+                    )
                     .where(
                         AgencyBranchRoleGrant.agency_id == grant.agency_id
                     )
@@ -305,12 +359,24 @@ class BranchAdministrationMixin:
                     .where(AgencyBranchRoleGrant.role == "approver")
                     .where(AgencyBranchRoleGrant.status == "active")
                     .where(AgencyBranchRoleGrant.id != grant.id)
-                    .limit(1)
+                    .where(AgencyMembership.role == "approver")
+                    .where(AgencyMembership.status == "active")
                 )
-                if replacement_result.scalar_one_or_none() is None:
+                replacement_user_ids = set(
+                    replacement_result.scalars().all()
+                )
+                uncovered_approval_exists = any(
+                    not (
+                        replacement_user_ids
+                        - {requester_user_id, customer_user_id}
+                    )
+                    for requester_user_id, customer_user_id
+                    in pending_participants
+                )
+                if uncovered_approval_exists:
                     raise AgencyTransactionConflict(
                         "branch_approver_grant_in_use",
-                        "该门店仍有待审核订单，必须先完成审核或保留另一名审批员",
+                        "该门店仍有待审批业务，必须保留与发起人、客户相互独立的审批员",
                     )
         grant.status = "revoked"
         grant.revoked_at = self._now()

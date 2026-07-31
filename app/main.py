@@ -17,6 +17,7 @@ from fastapi.responses import JSONResponse
 from app.agency.transaction_policy import build_transaction_execution_snapshot
 from app.api.v1 import (
     admin,
+    agency_cancellations,
     agency_customers,
     agency_transactions,
     approvals,
@@ -564,17 +565,39 @@ async def redact_sensitive_validation_input(
     request: Request,
     error: RequestValidationError,
 ):
-    """保留标准 422 结构，但不回显 token、password 等敏感输入。"""
+    """保留标准 422 结构，但不回显凭据、原因或证据输入。"""
 
-    sensitive_markers = ("token", "password", "secret", "credential")
-    is_customer_claim = (
-        request.url.path.rstrip("/") == "/api/v1/agency/customer-claims"
+    sensitive_markers = (
+        "token",
+        "password",
+        "secret",
+        "credential",
+        "reason",
+        "reference",
+        "evidence",
+        "hash",
+        "sha256",
+    )
+    path = request.url.path.rstrip("/")
+    redact_whole_body = path == "/api/v1/agency/customer-claims" or (
+        path.startswith("/api/v1/agency/")
+        and any(
+            marker in path
+            for marker in (
+                "/cancellation-",
+                "/cancellation-cases",
+                "/manual-results",
+            )
+        )
     )
     safe_errors = []
     for item in error.errors():
         safe_item = dict(item)
         location = tuple(str(part).lower() for part in item.get("loc", ()))
-        if is_customer_claim or any(
+        if redact_whole_body:
+            safe_item["loc"] = ("body", "[REDACTED]")
+            safe_item["input"] = "[REDACTED]"
+        elif any(
             marker in part
             for part in location
             for marker in sensitive_markers
@@ -641,6 +664,7 @@ app.include_router(users.router, prefix="/api/v1")
 app.include_router(conversations.router, prefix="/api/v1")
 app.include_router(agency_customers.router, prefix="/api/v1")
 app.include_router(agency_transactions.router, prefix="/api/v1")
+app.include_router(agency_cancellations.router, prefix="/api/v1")
 app.include_router(guide_import.router, prefix="/api/v1")
 app.include_router(maps.router, prefix="/api/v1")
 app.include_router(mock_checkout.router, prefix="/api/v1")

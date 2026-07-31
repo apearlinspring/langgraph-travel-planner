@@ -74,6 +74,7 @@ def order_record(**updates) -> SimpleNamespace:
         "quote_snapshot": {"destination": "杭州", "days": 3},
         "external_action_enabled": False,
         "confirmed_at": None,
+        "cancellation_requested_at": None,
         "cancelled_at": None,
         "completed_at": None,
         "created_at": NOW,

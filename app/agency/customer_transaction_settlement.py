@@ -104,6 +104,7 @@ class CustomerTransactionSettlementMixin:
                 and pristine_internal_order
             ):
                 order.status = "cancelled"
+                order.cancellation_requested_at = now
                 order.cancelled_at = now
                 await self._flush()
                 await self._append_order_event(
@@ -132,7 +133,8 @@ class CustomerTransactionSettlementMixin:
                 "failed",
             }:
                 order.status = "cancellation_pending"
-                order.cancelled_at = now
+                order.cancellation_requested_at = now
+                order.cancelled_at = None
                 await self._flush()
                 await self._append_order_event(
                     order=order,

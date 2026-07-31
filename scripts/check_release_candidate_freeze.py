@@ -225,6 +225,7 @@ WORKSTREAMS: tuple[dict[str, Any], ...] = (
         "label": "Project documentation",
         "owner": "Coordinator / Docs",
         "exact": {
+            "AGENTS.md",
             "README.md",
             "docs/README.md",
         },

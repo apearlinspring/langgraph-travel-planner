@@ -9,13 +9,14 @@ from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError
 
+from app import main as app_main
 from app.api.dependencies import get_current_user
 from app.api.v1 import (
+    agency_cancellations,
     agency_common,
     agency_customers,
     agency_transactions,
 )
-from app import main as app_main
 
 
 class _CommitFailingSession:
@@ -48,6 +49,7 @@ def test_all_agency_services_use_function_scoped_transaction_dependency():
     for factory in (
         agency_customers.get_customer_lifecycle_service,
         agency_transactions.get_agency_transaction_service,
+        agency_cancellations.get_cancellation_service,
     ):
         dependency = inspect.signature(factory).parameters["db"].default
 
@@ -112,3 +114,32 @@ def test_customer_claim_validation_never_echoes_token_and_is_not_cached(
     assert "[REDACTED]" in response.text
     assert response.headers["cache-control"] == "no-store"
     assert response.headers["pragma"] == "no-cache"
+
+
+def test_cancellation_validation_never_echoes_reason_or_evidence_input():
+    sensitive_reason = "private-cancellation-reason-" + ("x" * 500)
+    sensitive_field_name = "private-secret-token-in-field-name"
+    app_main.app.dependency_overrides[get_current_user] = lambda: (
+        SimpleNamespace(
+            id=uuid.UUID(int=1),
+            preferences={"role": "user"},
+        )
+    )
+    try:
+        response = TestClient(app_main.app).post(
+            f"/api/v1/agency/orders/{uuid.UUID(int=2)}/cancellation-requests",
+            json={
+                "expected_order_revision": 1,
+                "reason_code": "customer_request",
+                "reason_detail": sensitive_reason,
+                sensitive_field_name: "unexpected",
+            },
+            headers={"Idempotency-Key": "malformed-cancellation-reason"},
+        )
+    finally:
+        app_main.app.dependency_overrides.pop(get_current_user, None)
+
+    assert response.status_code == 422
+    assert sensitive_reason not in response.text
+    assert sensitive_field_name not in response.text
+    assert "[REDACTED]" in response.text

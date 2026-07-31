@@ -151,6 +151,12 @@ async def test_submit_order_creates_a_review_bound_to_the_new_revision(
         "_ensure_branch_has_active_approver",
         ensure_approver,
     )
+    ensure_no_open_cancellation = AsyncMock()
+    monkeypatch.setattr(
+        service,
+        "_ensure_order_has_no_open_cancellation_case",
+        ensure_no_open_cancellation,
+    )
     get_customer = AsyncMock(
         return_value=SimpleNamespace(
             id=BUSINESS_CUSTOMER_ID,
@@ -218,6 +224,11 @@ async def test_submit_order_creates_a_review_bound_to_the_new_revision(
     ensure_approver.assert_awaited_once_with(
         agency_id=AGENCY_ID,
         branch_id=BRANCH_ID,
+        excluded_user_ids=(CUSTOMER_ID,),
+    )
+    ensure_no_open_cancellation.assert_awaited_once_with(
+        agency_id=AGENCY_ID,
+        order_id=ORDER_ID,
     )
 
 
@@ -230,6 +241,7 @@ async def test_order_submission_requires_active_branch_approver():
         await service._ensure_branch_has_active_approver(
             agency_id=AGENCY_ID,
             branch_id=BRANCH_ID,
+            excluded_user_ids=(CUSTOMER_ID,),
         )
 
     assert exc_info.value.code == "branch_approver_required"
@@ -238,7 +250,27 @@ async def test_order_submission_requires_active_branch_approver():
     )
     assert "agency_branch_role_grant" in statement
     assert "agency_membership" in statement
+    assert "agency_membership.user_id NOT IN" in statement
     assert statement.endswith("FOR SHARE")
+
+
+@pytest.mark.asyncio
+async def test_order_submission_rejects_an_open_cancellation_case():
+    db = ExecuteSequence(ORDER_ID)
+    service = AgencyTransactionService(db)  # type: ignore[arg-type]
+
+    with pytest.raises(AgencyTransactionConflict) as exc_info:
+        await service._ensure_order_has_no_open_cancellation_case(
+            agency_id=AGENCY_ID,
+            order_id=ORDER_ID,
+        )
+
+    assert exc_info.value.code == "cancellation_case_open"
+    statement = str(
+        db.statements[0].compile(dialect=postgresql.dialect())
+    )
+    assert "agency_order_cancellation_case" in statement
+    assert "agency_order_cancellation_case.status IN" in statement
 
 
 @pytest.mark.asyncio

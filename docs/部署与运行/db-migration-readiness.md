@@ -14,6 +14,7 @@ Alembic 只管理本项目 `app.models` 下的业务表：
 | 旅行社租户、门店与客户 | `agency`、`agency_membership`、`agency_branch`、`agency_branch_role_grant`、`agency_customer`、`agency_customer_invitation`、`agency_customer_consent_record`、`agency_customer_event`、`agency_customer_advisor_assignment` | 旅行社、门店、成员授权、目标账户安全认领、只追加同意记录、客户生命周期和主顾问分配；门店范围由应用层执行，不是 PostgreSQL RLS（行级安全策略）。 |
 | 供应商产品 | `supplier_product` | 供应商产品目录；不代表实时库存、锁价或供应商同步。 |
 | 报价、订单与审核 | `agency_quote`、`agency_order`、`agency_order_review`、`agency_order_event`、`idempotency_record` | 报价/订单快照、绑定式内部审核、只追加事件和幂等记录；内部审核通过不代表支付、预订或履约已完成。 |
+| 人工取消与对账 | `agency_order_cancellation_case`、`agency_order_cancellation_event`、`agency_order_compensation_record`、`agency_order_reconciliation_record` | 平台外人工结果的分岗登记和独立核验；事件、结果和对账只追加，所有外部动作标记固定为关闭。 |
 | 交易执行账本 | `payment_attempt`、`fulfillment_record` | 为未来支付与供应商履约保存尝试记录；当前真实外部动作默认关闭。 |
 
 LangGraph（图式智能体编排框架）相关表不进入 Alembic 迁移：
@@ -37,6 +38,7 @@ LangGraph（图式智能体编排框架）相关表不进入 Alembic 迁移：
   -> 20260726_0004
   -> 20260730_0005
   -> 20260730_0006
+  -> 20260730_0007
 ```
 
 - `20260511_0001`：用户、会话、消息、审批和工具审计等初始业务表。
@@ -45,8 +47,9 @@ LangGraph（图式智能体编排框架）相关表不进入 Alembic 迁移：
 - `20260726_0004`：新增门店、门店岗位授权、客户生命周期事件和主顾问分配；把报价、订单、审核和事件绑定到门店与客户关系。升级会为每个旧旅行社创建 `MAIN` 门店、回填旧客户/交易归属，并将旧客户同意统一置为 `unknown`，不会伪造历史同意。报价/订单触发器会固化租户、门店、客户和账户绑定，复验客户同意、门店状态、报价有效期和订单/报价金额、币种、快照一致性，要求更新时 `revision` 恰好加一、状态只按白名单迁移，并要求新订单保持 `external_action_enabled=false` 的惰性状态；客户触发器还阻止在停用前的 `pending_review` 被明确拒绝前重新激活关系；DEFERRABLE（延迟到事务提交校验）约束触发器会确认待审核订单至少有一名有效门店审批员，并校验订单与审核批准/拒绝终态成对一致。
 - `20260730_0005`：新增 `agency_customer_invitation` 和 `agency_customer_consent_record`。认领邀请只保存 256-bit 高熵原始 token 的 SHA-256 摘要，状态为 `pending -> claimed|revoked`，终态不可修改且记录不可删除；同一客户以及同一旅行社同一目标账户各自同一时刻最多一条 `pending` 邀请。服务端按固定技术告知版本和文档摘要生成 `server_canonical` 同意记录，记录只允许追加。迁移把存量账户绑定标记为 `legacy_direct`、旧客户端同意摘要标记为 `legacy_client_hash`，不会伪装成 `secure_claim` 或服务端证据；原账户仍可 `deny/revoke`，升级认领时应用会重置旧同意投影并先停用原 active 关系，再要求新的规范化 `grant` 与激活。为保留历史 `active + legacy_direct` 行，active 安全约束以 `NOT VALID` 加入但会约束之后的新写入/更新；一旦存在任何认领邀请、安全认领或服务端规范化证据，`downgrade()` 会失败关闭而不是静默丢弃。
 - `20260730_0006`：不改写 frozen `0005`，只替换客户、认领邀请和同意记录共用的 DEFERRABLE（提交时延迟校验）触发器函数。表专属的 `NEW.status`、`NEW.target_user_id` 和 `NEW.customer_revision` 只在对应 `TG_TABLE_NAME` 分支内访问，避免 PostgreSQL 在其他表行类型上抛出 `UndefinedColumn`。
+- `20260730_0007`：新增取消案件、只追加案件事件、人工补偿结果和独立对账表；先移除旧订单守卫再回填历史取消时间，随后安装新订单、案件和账本守卫。新门禁区分 `cancellation_requested_at` 与真正完成取消的 `cancelled_at`，从案件创建起冻结支付/履约账本并独立复算所需动作，在提交阶段约束案件/订单状态一致、`revision + 1`、四眼制、自我对账禁止、独立观察金额、最新结果匹配和外部动作恒为关闭。旧 `cancellation_pending` / `manual_intervention` 的错误 `cancelled_at` 会迁到申请时间；一旦存在 `0007` 业务数据或申请时间，降级失败关闭。
 
-这只说明仓库中的迁移依赖关系和 DDL 已版本化，不代表这些迁移已经在目标 PostgreSQL（关系型数据库）执行。实现候选 [`20ff715`](https://github.com/apearlinspring/langgraph-travel-planner/commit/20ff71592096dfb4fc718cef050832a745bfe174) 曾由 [GitHub Actions 运行 30534862434](https://github.com/apearlinspring/langgraph-travel-planner/actions/runs/30534862434) 在一次性 PostgreSQL 17 中执行到 `0004`，数据库 job 为 `10 passed`，默认 job 为 `1713 passed, 34 deselected`；该结果是 `0005` 之前的历史基线。首次包含 `0005` 的 [运行 30542366036](https://github.com/apearlinspring/langgraph-travel-planner/actions/runs/30542366036) 默认 job 通过，但 PostgreSQL job 因共享触发器访问了错误表行类型的 `NEW.target_user_id` / `NEW.status` 而失败，因此也不是绿灯证据。新增 `0006` 修正后，实现提交 [`b8b8bea`](https://github.com/apearlinspring/langgraph-travel-planner/commit/b8b8bea29477b472c942b7df40e8da6e9dbf05ab) 的 [运行 30551146157](https://github.com/apearlinspring/langgraph-travel-planner/actions/runs/30551146157) 已成功执行 `0001 -> 0002 -> 0003 -> 0004 -> 0005 -> 0006`，默认 job 为 `1738 passed, 39 deselected`，PostgreSQL 17 job 为 `15 passed`。这是一次性 CI 数据库证据；目标环境还要在发布窗口内完成备份、`alembic current`、迁移执行、集成测试和迁移后验证。
+这只说明仓库中的迁移依赖关系和 DDL 已版本化，不代表这些迁移已经在目标 PostgreSQL（关系型数据库）执行。实现候选 [`20ff715`](https://github.com/apearlinspring/langgraph-travel-planner/commit/20ff71592096dfb4fc718cef050832a745bfe174) / [运行 30534862434](https://github.com/apearlinspring/langgraph-travel-planner/actions/runs/30534862434) 是执行到 `0004` 的历史基线。首次包含 `0005` 的运行 `30542366036` 因共享触发器错误访问表专属字段而失败，不能作为绿灯证据。新增 `0006` 后，[`b8b8bea`](https://github.com/apearlinspring/langgraph-travel-planner/commit/b8b8bea29477b472c942b7df40e8da6e9dbf05ab) / [运行 30551146157](https://github.com/apearlinspring/langgraph-travel-planner/actions/runs/30551146157) 已成功执行到 `0006`，默认 job 为 `1738 passed, 39 deselected`，PostgreSQL 17 job 为 `15 passed`。`0007` 仍须以本次推送后的新 CI 结果为准；任何一次性 CI 数据库证据都不能替代目标环境的备份、`alembic current`、迁移执行、集成测试和迁移后验证。
 
 ## 入口分层
 
@@ -122,17 +125,17 @@ alembic upgrade head --sql
 `check_runtime_readiness.py` 会输出 `database_migrations` 区块，列出 Alembic 配置、迁移文件、业务表范围和 LangGraph 边界。CI 的 `Static Checks And Tests` job 不连接数据库，只验证静态契约；独立的 `PostgreSQL Transaction Integration` job 只连接 runner（流水线执行机）内一次性 PostgreSQL 17 service，并精确执行：
 
 ```powershell
-uv run python -m pytest --run-integration -q tests\test_agency_transaction_postgres_integration.py tests\test_agency_customer_lifecycle_postgres_integration.py tests\test_agency_customer_claim_postgres_integration.py tests\test_agency_branch_permissions_postgres_integration.py
+uv run python -m pytest --run-integration -q tests\test_agency_transaction_postgres_integration.py tests\test_agency_customer_lifecycle_postgres_integration.py tests\test_agency_customer_claim_postgres_integration.py tests\test_agency_branch_permissions_postgres_integration.py tests\test_agency_cancellation_postgres_integration.py
 ```
 
-`0004` 历史候选只运行原 3 个文件、共 10 项 PostgreSQL 集成测试：3 项交易、5 项客户生命周期和 2 项门店权限，并已在运行 `30534862434` 得到 `10 passed`。当前 `0005 -> 0006` workflow 新增 `tests/test_agency_customer_claim_postgres_integration.py`，在同一隔离数据库边界下覆盖全链迁移、非空 legacy provenance 回填、目标账户认领、过期/撤销/重复 token、同 target 待邀请唯一、legacy 认领重置、同意记录不可变和新交易安全客户门禁；运行 `30551146157` 已得到四文件 `15 passed`（3+5+5+2）。CI 不得读取 staging 或 production 数据库 secret（密钥配置）。旅行社 API 在响应发送前完成事务提交，避免 DEFERRABLE 约束失败却先返回 `2xx`；业务写入采用 `customer -> branch -> quote/order` 锁序，授权敏感写入持有门店/成员共享锁，以阻止并发撤权或门店状态变化造成 TOCTOU（检查与使用时序差）竞态。这仍不能替代目标环境的锁等待和事务回滚验证。
+`0004` 历史候选运行原 3 个文件共 `10 passed`；`0005 -> 0006` workflow 增加客户认领文件，运行 `30551146157` 得到四文件 `15 passed`（3+5+5+2）。当前 workflow 再增加 `tests/test_agency_cancellation_postgres_integration.py`，覆盖 `0007` 升降级、订单/案件提交时一致性、只追加结果、四眼与自我对账拒绝、最新结果完成语义和外部动作关闭；具体通过数量必须在本次推送后从 CI 读取，不能沿用旧 `15 passed`。CI 不得读取 staging 或 production 数据库 secret（密钥配置）。旅行社 API 在响应发送前完成事务提交；取消写入采用 `customer -> branch/auth -> order -> payment/fulfillment -> case` 锁序。这仍不能替代目标环境的锁等待和事务回滚验证。
 
 ## 环境命令
 
 | 环境 | 迁移命令 | 验收命令 | 数据库策略 |
 |---|---|---|---|
 | 本地 development（开发） | `python -m scripts.init_db --mode bootstrap` 或 `alembic upgrade head` | `python scripts/check_runtime_readiness.py --target development --json` | 可用本地 PostgreSQL；不写真实客户数据。 |
-| CI（持续集成） | 一次性 PostgreSQL service 中执行 `upgrade head -> downgrade base -> legacy upgrade head` | 静态 job 运行 development readiness；数据库 job 精确运行交易、客户生命周期、客户认领与门店权限四个 PostgreSQL 测试文件。实现提交 `b8b8bea` / 运行 `30551146157` 已得到默认 `1738 passed, 39 deselected` 与 PostgreSQL `15 passed`，覆盖 `0005 -> 0006` | 仅使用固定 CI-only 凭据和隔离数据库，不读取部署环境 secret；CI 不能替代目标环境迁移验收。 |
+| CI（持续集成） | 一次性 PostgreSQL service 中执行 `upgrade head -> downgrade base -> legacy upgrade head` | 静态 job 运行 development readiness；数据库 job 精确运行交易、客户生命周期、客户认领、门店权限和取消域五个 PostgreSQL 测试文件。`b8b8bea` / 运行 `30551146157` 的 `1738 passed, 39 deselected` 与 PostgreSQL `15 passed` 仅覆盖 `0005 -> 0006`；`0007` 等待本次候选的新结果。 | 仅使用固定 CI-only 凭据和隔离数据库，不读取部署环境 secret；CI 不能替代目标环境迁移验收。 |
 | staging（预生产） | `alembic upgrade head`，首次环境补跑 `python -m scripts.init_db --mode langgraph` 和 `--mode pgvector` | `alembic current`、`python scripts/check_runtime_readiness.py --target acceptance --check-backend --base-url <staging-url> --json` | 使用预生产密钥和隔离数据，不复用生产客户数据。 |
 | production（生产） | `alembic upgrade head`，必要时只由运维窗口执行 LangGraph/pgvector 引导 | `alembic current`、`python scripts/check_runtime_readiness.py --target production --json` | 只使用部署密钥系统注入，不在文档、日志或提交中写真实连接串。 |
 

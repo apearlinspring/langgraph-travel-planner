@@ -73,7 +73,7 @@ def agency_error_to_http(error: Exception):
         )
     if isinstance(error, AgencyTransactionValidationError):
         return api_error(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             code=error.code,
             message=error.message,
         )
@@ -93,7 +93,7 @@ def agency_error_to_http(error: Exception):
         )
     if isinstance(error, AgencyTransactionError):
         return api_error(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             code=error.code,
             message=error.message,
         )

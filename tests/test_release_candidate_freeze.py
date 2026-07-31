@@ -63,6 +63,25 @@ def test_release_candidate_freeze_groups_dirty_paths_by_workstream():
     assert any(item["key"] == "unknown_path_review" for item in report["blocked_reasons"])
 
 
+def test_release_candidate_freeze_classifies_root_agents_as_project_docs():
+    report = freeze.build_release_candidate_freeze_report(
+        command_runner=_runner_with_status(
+            "## main...origin/main\n M AGENTS.md\n"
+        )
+    )
+
+    project_docs = next(
+        item
+        for item in report["workstreams"]
+        if item["key"] == "project_docs"
+    )
+
+    assert [item["path"] for item in project_docs["paths"]] == [
+        "AGENTS.md"
+    ]
+    assert report["unknown_paths"] == []
+
+
 def test_release_candidate_freeze_flags_forbidden_paths_without_reading_content():
     report = freeze.build_release_candidate_freeze_report(
         command_runner=_runner_with_status("## main\n?? .env\n?? .runtime/state.json\n")

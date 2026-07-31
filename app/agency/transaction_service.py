@@ -8,7 +8,6 @@ import uuid
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from decimal import Decimal
 from typing import Any, Callable
 
 from sqlalchemy import and_, desc, func, or_, select
@@ -33,11 +32,12 @@ from app.agency.transaction_payloads import (
     canonical_payload_hash,
 )
 from app.agency.transaction_locking import TransactionLockingMixin
-from app.models.agency_order_review import AgencyOrderReview
+from app.models.agency_cancellation import AgencyOrderCancellationCase
 from app.models.agency_customer_lifecycle import (
     AgencyBranchRoleGrant,
     AgencyCustomer,
 )
+from app.models.agency_order_review import AgencyOrderReview
 from app.models.agency_transaction import (
     Agency,
     AgencyMembership,
@@ -136,8 +136,9 @@ class AgencyTransactionService(TransactionLockingMixin):
         *,
         agency_id: uuid.UUID,
         branch_id: uuid.UUID,
+        excluded_user_ids: tuple[uuid.UUID, ...] = (),
     ) -> None:
-        result = await self.db.execute(
+        statement = (
             select(AgencyBranchRoleGrant.id)
             .join(
                 AgencyMembership,
@@ -157,10 +158,43 @@ class AgencyTransactionService(TransactionLockingMixin):
             .limit(1)
             .with_for_update(read=True)
         )
+        if excluded_user_ids:
+            statement = statement.where(
+                AgencyMembership.user_id.not_in(excluded_user_ids)
+            )
+        result = await self.db.execute(statement)
         if result.scalar_one_or_none() is None:
             raise AgencyTransactionConflict(
                 "branch_approver_required",
-                "门店必须至少保留一名有效审批员才能提交订单",
+                "门店必须至少保留一名有效且独立的审批员才能发起需审批业务",
+            )
+
+    async def _ensure_order_has_no_open_cancellation_case(
+        self,
+        *,
+        agency_id: uuid.UUID,
+        order_id: uuid.UUID,
+    ) -> None:
+        result = await self.db.execute(
+            select(AgencyOrderCancellationCase.id)
+            .where(AgencyOrderCancellationCase.agency_id == agency_id)
+            .where(AgencyOrderCancellationCase.order_id == order_id)
+            .where(
+                AgencyOrderCancellationCase.status.in_(
+                    (
+                        "approval_pending",
+                        "action_pending",
+                        "reconciliation_pending",
+                        "manual_intervention",
+                    )
+                )
+            )
+            .limit(1)
+        )
+        if result.scalar_one_or_none() is not None:
+            raise AgencyTransactionConflict(
+                "cancellation_case_open",
+                "该订单已有未完成的取消案件，不能提交内部审核",
             )
 
     async def _ensure_can_view_order(
@@ -927,11 +961,6 @@ class AgencyTransactionService(TransactionLockingMixin):
             or customer.user_id != actor_user_id
         ):
             raise _hidden_not_found()
-        await self._ensure_agency_active(order.agency_id)
-        await self._ensure_branch_has_active_approver(
-            agency_id=order.agency_id,
-            branch_id=order.branch_id,
-        )
         state = await self._begin_idempotent_action(
             agency_id=order.agency_id,
             scope="order.submit",
@@ -950,6 +979,16 @@ class AgencyTransactionService(TransactionLockingMixin):
             )
             return order
 
+        await self._ensure_agency_active(order.agency_id)
+        await self._ensure_branch_has_active_approver(
+            agency_id=order.agency_id,
+            branch_id=order.branch_id,
+            excluded_user_ids=(order.user_id,),
+        )
+        await self._ensure_order_has_no_open_cancellation_case(
+            agency_id=order.agency_id,
+            order_id=order.id,
+        )
         self._ensure_revision(order.revision, expected_revision)
         if order.status != "draft":
             raise AgencyTransactionConflict(

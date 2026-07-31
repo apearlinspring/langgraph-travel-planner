@@ -53,6 +53,11 @@ def _order(
         external_action_enabled=external_action_enabled,
         payment_status=payment_status,
         fulfillment_status=fulfillment_status,
+        cancellation_requested_at=(
+            NOW
+            if status in {"manual_intervention", "cancellation_pending"}
+            else None
+        ),
         cancelled_at=None,
     )
 
@@ -232,7 +237,11 @@ async def test_customer_settlement_locks_and_closes_internal_transactions(
     ]
     assert orders[0].cancelled_at == NOW
     assert orders[1].cancelled_at == NOW
-    assert all(order.cancelled_at == NOW for order in orders[3:6])
+    assert all(order.cancellation_requested_at == NOW for order in orders[:2])
+    assert all(
+        order.cancellation_requested_at == NOW for order in orders[3:8]
+    )
+    assert all(order.cancelled_at is None for order in orders[3:8])
     assert orders[2].cancelled_at is None
     assert all(event["order_revision"] == 2 for event in appended_events[:2])
     assert appended_events[2]["order_revision"] == 1

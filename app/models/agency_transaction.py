@@ -399,6 +399,13 @@ class AgencyOrder(Base):
         ),
         UniqueConstraint(
             "agency_id",
+            "branch_id",
+            "customer_id",
+            "id",
+            name="uq_agency_order_branch_customer_id",
+        ),
+        UniqueConstraint(
+            "agency_id",
             "idempotency_key",
             name="uq_agency_order_agency_idempotency",
         ),
@@ -539,6 +546,10 @@ class AgencyOrder(Base):
         DateTime(timezone=True),
         nullable=True,
     )
+    cancellation_requested_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
     cancelled_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
@@ -594,6 +605,12 @@ class AgencyOrder(Base):
             AgencyOrder.id == foreign(AgencyOrderEvent.order_id),
         ),
         foreign_keys=lambda: [AgencyOrderEvent.order_id],
+    )
+    cancellation_cases: Mapped[
+        list["AgencyOrderCancellationCase"]
+    ] = relationship(
+        "AgencyOrderCancellationCase",
+        back_populates="order",
     )
     __mapper_args__ = {"version_id_col": revision}
 

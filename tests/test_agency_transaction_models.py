@@ -522,7 +522,11 @@ def test_agency_transaction_migration_has_reversible_dependency_order():
             "consent_evidence_origin",
         },
         "agency_quote": {"branch_id", "customer_id"},
-        "agency_order": {"branch_id", "customer_id"},
+        "agency_order": {
+            "branch_id",
+            "customer_id",
+            "cancellation_requested_at",
+        },
         "agency_order_event": {"branch_id"},
     }
     indexes_added_after_0002 = {
@@ -563,6 +567,7 @@ def test_agency_transaction_migration_has_reversible_dependency_order():
         },
         "agency_order": {
             "uq_agency_order_branch_id",
+            "uq_agency_order_branch_customer_id",
             "fk_agency_order_quote_binding",
             "fk_agency_order_branch",
             "fk_agency_order_customer",

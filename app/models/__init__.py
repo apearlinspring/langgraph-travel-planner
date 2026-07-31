@@ -19,6 +19,12 @@ from app.models.agency_customer_identity import (
     AgencyCustomerInvitation,
 )
 from app.models.agency_order_review import AgencyOrderReview
+from app.models.agency_cancellation import (
+    AgencyOrderCancellationCase,
+    AgencyOrderCancellationEvent,
+    AgencyOrderCompensationRecord,
+    AgencyOrderReconciliationRecord,
+)
 from app.models.agency_transaction import (
     Agency,
     AgencyMembership,
@@ -54,6 +60,10 @@ __all__ = [
     "AgencyOrder",
     "AgencyOrderEvent",
     "AgencyOrderReview",
+    "AgencyOrderCancellationCase",
+    "AgencyOrderCancellationEvent",
+    "AgencyOrderCompensationRecord",
+    "AgencyOrderReconciliationRecord",
     "IdempotencyRecord",
     "PaymentAttempt",
     "FulfillmentRecord",
