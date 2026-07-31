@@ -345,15 +345,19 @@ async def test_branch_access_matrix_approver_queue_and_inactive_fail_closed(
                     )
                 ),
             )
-        async with engine.begin() as connection:
-            await connection.execute(
-                text(
-                    "UPDATE agency_branch SET status = 'inactive', "
-                    "revision = revision + 1, deactivated_at = now() "
-                    "WHERE id = :branch_id"
-                ),
-                {"branch_id": actors.branch_id},
-            )
+        deactivated_branch = await _call(
+            session_factory,
+            lambda session: CustomerLifecycleService(
+                session
+            ).deactivate_branch(
+                actor_user_id=owner_id,
+                branch_id=actors.branch_id,
+                expected_revision=1,
+                reason="门店完成存量清理后停用",
+                idempotency_key=f"deactivate-branch-{unique}",
+            ),
+        )
+        assert deactivated_branch.status == "inactive"
         assert (await visible_customers(actors.advisor_id))[1] == 0
         reviews_after, total_after = await _call(
             session_factory,

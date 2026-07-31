@@ -1043,13 +1043,23 @@ async def test_database_rejects_illegal_branch_role_and_fake_active_customer(
 async def test_customer_event_is_append_only_and_customer_binding_is_immutable(
     migrated_postgres: PostgresSandbox,
 ) -> None:
-    from app.models.agency_customer_lifecycle import AgencyCustomerEvent
+    from app.models.agency_customer_lifecycle import (
+        AgencyCustomer,
+        AgencyCustomerEvent,
+    )
 
     engine, session_factory = _session_factory(migrated_postgres)
     try:
         actors = await _seed_tenant(session_factory)
         event_id = uuid.uuid4()
         async with session_factory() as session, session.begin():
+            customer_revision = (
+                await session.execute(
+                    select(AgencyCustomer.lifecycle_revision).where(
+                        AgencyCustomer.id == actors.customer_record_id
+                    )
+                )
+            ).scalar_one()
             session.add(
                 AgencyCustomerEvent(
                     id=event_id,
@@ -1057,7 +1067,7 @@ async def test_customer_event_is_append_only_and_customer_binding_is_immutable(
                     branch_id=actors.branch_id,
                     customer_id=actors.customer_record_id,
                     event_sequence=1,
-                    customer_revision=1,
+                    customer_revision=customer_revision,
                     event_type="integration_seeded",
                     from_status=None,
                     to_status="active",

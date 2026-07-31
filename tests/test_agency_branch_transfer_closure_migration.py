@@ -331,7 +331,15 @@ def test_0008_upgrade_rejects_legacy_closed_branches_before_mutation(
         "agency_order_cancellation_case",
     ):
         assert f"FROM {table_name}" in preflight
-    assert recorder.operations[1][0:2] == (
+    assert recorder.operations[1] == (
+        "execute",
+        "SET CONSTRAINTS ALL IMMEDIATE",
+    )
+    assert recorder.operations[2] == (
+        "execute",
+        "SET CONSTRAINTS ALL DEFERRED",
+    )
+    assert recorder.operations[3][0:2] == (
         "execute",
         "DROP TRIGGER trg_agency_customer_consent_record_consistency "
         "ON agency_customer_consent_record",
@@ -447,6 +455,16 @@ def test_0008_upgrade_orders_guard_fk_unique_and_table_operations(
 ):
     _revision, recorder = _record_upgrade(monkeypatch)
 
+    flush_pending_events = _operation_index(
+        recorder,
+        "execute",
+        "SET CONSTRAINTS ALL IMMEDIATE",
+    )
+    restore_deferred_mode = _operation_index(
+        recorder,
+        "execute",
+        "SET CONSTRAINTS ALL DEFERRED",
+    )
     drop_guard = _operation_index(
         recorder,
         "execute",
@@ -493,7 +511,9 @@ def test_0008_upgrade_orders_guard_fk_unique_and_table_operations(
         "CREATE FUNCTION zhixing_guard_agency_branch_lifecycle()",
     )
     assert (
-        drop_guard
+        flush_pending_events
+        < restore_deferred_mode
+        < drop_guard
         < add_closed_at
         < drop_customer_fk
         < drop_old_unique

@@ -454,7 +454,7 @@ async def test_inactive_branch_rejects_pending_review_but_not_approval(
                 idempotency_key=f"review-drain-reject-{uuid.uuid4().hex}",
             ),
         )
-        assert rejected.status == "review_rejected"
+        assert rejected.status == "rejected"
 
         with pytest.raises(DBAPIError) as approval:
             async with engine.begin() as connection:
@@ -941,7 +941,7 @@ async def test_transfer_rejects_blockers_target_and_stale_revision(
             session.add(
                 User(
                     id=invitee_id,
-                    username=f"pending-transfer-invitee-{unique}",
+                    username=f"pending-invitee-{unique}",
                     email=f"pending-transfer-invitee-{unique}@example.test",
                     password_hash="integration-test-only",
                 )

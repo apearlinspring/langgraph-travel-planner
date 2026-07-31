@@ -775,6 +775,11 @@ def _raise_if_legacy_closed_branch_has_0008_blockers() -> None:
 
 def upgrade_agency_branch_transfer_closure() -> None:
     _raise_if_legacy_closed_branch_has_0008_blockers()
+    # The 0007 legacy backfill can leave deferred order-review trigger events
+    # queued in the same Alembic transaction. Flush them before 0008 alters
+    # customer-scoped foreign keys, then restore the intended deferred mode.
+    op.execute("SET CONSTRAINTS ALL IMMEDIATE")
+    op.execute("SET CONSTRAINTS ALL DEFERRED")
     drop_pre_0008_branch_customer_guards()
     _upgrade_branch_lifecycle_columns()
     _drop_customer_scope_foreign_keys()

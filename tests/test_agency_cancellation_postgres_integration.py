@@ -896,7 +896,10 @@ async def test_pending_case_preserves_eligible_approver_and_review_invariants(
                 "reviewer_id": actors.advisor_id,
                 "now": datetime.now(UTC),
             },
-            contains="cancellation review requires active branch approver",
+            contains=(
+                "cancellation review requires active or inactive "
+                "branch approver"
+            ),
         )
 
         revoked = await _call(
@@ -1284,10 +1287,13 @@ async def test_postgres_rejects_tampering_and_scopes_legacy_pending(
             "review_note = 'self review', updated_at = :now "
             "WHERE id = :case_id",
             review_params,
-            # A customer requester is not an active branch approver, so the
-            # BEFORE trigger rejects this write before PostgreSQL evaluates
-            # the independent four-eyes CHECK constraint.
-            contains="cancellation review requires active branch approver",
+            # A customer requester is not an active or inactive branch
+            # approver, so the BEFORE trigger rejects this write before
+            # PostgreSQL evaluates the independent four-eyes CHECK constraint.
+            contains=(
+                "cancellation review requires active or inactive "
+                "branch approver"
+            ),
         )
         await _assert_sql_rejected(
             engine,
