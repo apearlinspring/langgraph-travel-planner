@@ -1,0 +1,72 @@
+{
+  "version": "rag_quality_scenarios.v1",
+  "description": "Fixed regression scenarios for RAG evidence coverage, precision, and mode alignment.",
+  "scenarios": [
+    {
+      "id": "rag_agency_couple_evidence_mix",
+      "name": "RAG: couple agency evidence mix",
+      "prompt": "两个人从西安去长沙4天3晚，希望省心一点，按旅行社顾问方案安排，预算7000。",
+      "expected_mode": "agency_plan",
+      "min_score": 85,
+      "required_categories": ["products", "sop", "pricing", "risk"],
+      "required_evidence_count": 4,
+      "focus": ["product route", "service SOP", "pricing basis", "risk reminder"],
+      "tags": ["agency", "rag", "couple"]
+    },
+    {
+      "id": "rag_agency_family_pricing_risk",
+      "name": "RAG: family pricing and risk evidence",
+      "prompt": "亲子游，2大1小，从上海去杭州3天2晚，少走路、酒店干净、行程轻松，需要说明价格依据和风险。",
+      "expected_mode": "agency_plan",
+      "min_score": 85,
+      "required_categories": ["products", "sop", "pricing", "risk"],
+      "required_evidence_count": 4,
+      "focus": ["family segment", "pricing rules", "risk fallback", "service standards"],
+      "tags": ["agency", "rag", "family", "pricing"]
+    },
+    {
+      "id": "rag_agency_quote_policy",
+      "name": "RAG: quote policy evidence",
+      "prompt": "4个大人从成都去重庆3天2晚，想要旅行社省心方案，重点解释费用包含、不包含和待核验价格。",
+      "expected_mode": "agency_plan",
+      "min_score": 86,
+      "required_categories": ["pricing", "products", "sop", "report"],
+      "required_evidence_count": 4,
+      "focus": ["quote policy", "service boundaries", "report delivery", "verification"],
+      "tags": ["agency", "rag", "pricing"]
+    },
+    {
+      "id": "rag_free_city_no_sales",
+      "name": "RAG: free planning no sales pressure",
+      "prompt": "第一次去南京3天2晚，自由行，文化和美食，不想跟团，只要中立实用的路线。",
+      "expected_mode": "free_planning",
+      "min_score": 82,
+      "required_categories": ["risk", "report"],
+      "required_evidence_count": 2,
+      "focus": ["mode precision", "public guide", "risk basics", "no agency hard sell"],
+      "tags": ["free", "rag", "city"]
+    },
+    {
+      "id": "rag_free_tight_budget_constraint",
+      "name": "RAG: free planning tight budget constraint",
+      "prompt": "2个人去三亚5天4晚总预算2500，自由行，如果预算不够请说明并给替代方案。",
+      "expected_mode": "free_planning",
+      "min_score": 82,
+      "required_categories": ["pricing", "risk", "report"],
+      "required_evidence_count": 3,
+      "focus": ["budget constraint", "honest fallback", "mode precision", "risk"],
+      "tags": ["free", "rag", "budget", "edge"]
+    },
+    {
+      "id": "rag_long_context_agency_revision",
+      "name": "RAG: long context agency revision",
+      "prompt": "一家三口暑假从杭州出发，先想去厦门，后来改成青岛5天4晚，孩子喜欢海边、老人不能走太多路，最终按省心旅行社方案输出。",
+      "expected_mode": "agency_plan",
+      "min_score": 84,
+      "required_categories": ["products", "sop", "risk", "report"],
+      "required_evidence_count": 4,
+      "focus": ["long context", "family segment", "mode stability", "delivery standard"],
+      "tags": ["agency", "rag", "long-context", "family"]
+    }
+  ]
+}

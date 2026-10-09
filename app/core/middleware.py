@@ -1,0 +1,3671 @@
+import re
+import time
+from datetime import date, datetime
+from types import SimpleNamespace
+from typing import Any, Callable
+from uuid import uuid4
+
+from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+from app.core.context_pack import abuild_context_pack
+from app.core.intent import PlanningModeDecision, TravelIntent, detect_travel_intent, resolve_planning_mode
+from app.core.observability import build_observability_context
+from app.core.state import TravelState
+from app.core.store import get_user_memory_service
+from app.core.workflow import AGENCY_STEP_LABELS, INITIAL_AGENCY_STEP, INITIAL_PLANNING_STEP
+from app.journey.route_preferences import (
+    extract_route_segment_preferences,
+    format_route_segment_preferences_summary,
+)
+from app.utils.llm_factory import get_model_compatibility
+from app.utils.logger import app_logger
+from app.utils.message_utils import (
+    applied_state_transition_tool_name,
+    state_transition_outcome_from_message,
+    tool_names_from_message as _tool_names_from_message,
+)
+
+
+SELECTION_KEYWORDS = (
+    "选第",
+    "就这",
+    "选这个",
+    "确认",
+    "锁定",
+    "记录",
+    "定这个",
+    "就它",
+)
+
+DIRECT_QUERY_KEYWORDS = (
+    "直接查",
+    "真实",
+    "不要只口头",
+    "不要泛泛",
+    "不要继续追问",
+    "信息已经齐",
+    "不用继续问",
+)
+
+CROSS_STEP_VERIFY_KEYWORDS = (
+    "查",
+    "查询",
+    "查证",
+    "核实",
+    "验证",
+    "真实",
+    "具体",
+    "安排",
+)
+
+CROSS_STEP_TRANSPORT_KEYWORDS = ("交通", "高铁", "火车", "航班", "飞机", "自驾")
+CROSS_STEP_HOTEL_KEYWORDS = ("住宿", "酒店", "住哪里", "住哪", "民宿")
+
+STATE_ACCOMMODATION_TYPES = frozenset(
+    {"star_hotel", "economy_hotel", "hostel", "youth_hostel"}
+)
+ACCOMMODATION_TYPE_ALIASES = {
+    "comfort_hotel": "star_hotel",
+    "comfortable_hotel": "star_hotel",
+    "business_hotel": "star_hotel",
+    "midscale_hotel": "star_hotel",
+    "upscale_hotel": "star_hotel",
+    "hotel": "star_hotel",
+    "酒店": "star_hotel",
+    "舒适型酒店": "star_hotel",
+    "舒适型": "star_hotel",
+    "舒适酒店": "star_hotel",
+    "星级酒店": "star_hotel",
+    "中档酒店": "star_hotel",
+    "核心商圈酒店": "star_hotel",
+    "economy": "economy_hotel",
+    "budget_hotel": "economy_hotel",
+    "快捷酒店": "economy_hotel",
+    "经济酒店": "economy_hotel",
+    "民宿": "hostel",
+    "特色民宿": "hostel",
+    "客栈": "hostel",
+    "青旅": "youth_hostel",
+    "青年旅舍": "youth_hostel",
+}
+
+REQUIREMENT_RECORD_KEYWORDS = (
+    "记录",
+    "整理需求",
+    "整理一下",
+    "开始推荐",
+    "开始规划",
+    "开始安排行程",
+    "锁定需求",
+    "确认需求",
+)
+
+DESTINATION_QUERY_KEYWORDS = (
+    "景点",
+    "玩法",
+    "攻略",
+    "天气",
+    "气温",
+    "适合吗",
+    "推荐",
+    "好玩吗",
+    "值得去",
+    "怎么安排",
+)
+
+DESTINATION_HINT_KEYWORDS = (
+    "去",
+    "到",
+    "在",
+    "那边",
+    "这个地方",
+    "目的地",
+    "城市",
+)
+
+COMMON_CITY_NAMES = (
+    "北京",
+    "上海",
+    "广州",
+    "深圳",
+    "杭州",
+    "南京",
+    "成都",
+    "重庆",
+    "西安",
+    "武汉",
+    "长沙",
+    "苏州",
+    "厦门",
+    "青岛",
+    "三亚",
+    "桂林",
+    "丽江",
+    "大理",
+    "昆明",
+    "云南",
+    "新疆",
+    "西藏",
+    "拉萨",
+    "乌鲁木齐",
+    "张家界",
+)
+
+PRODUCT_DEMO_DESTINATION_KEYWORDS = (
+    "新疆",
+    "西藏",
+    "云南",
+    "西安",
+    "厦门",
+    "桂林",
+    "苏州",
+    "长沙",
+    "拉萨",
+    "乌鲁木齐",
+    "大理",
+    "丽江",
+)
+
+PRODUCT_SOFT_REJECTION_KEYWORDS = (
+    "自由行",
+    "自己订",
+    "自己安排",
+    "不要旅行社",
+    "不需要旅行社",
+    "不要产品",
+    "不需要产品",
+    "别推产品",
+    "不要推销",
+    "不跟团",
+    "不要跟团",
+)
+
+AGENCY_INTERNAL_TOOL_NAMES = frozenset(
+    {
+        "search_agency_product_templates",
+        "search_agency_service_sop",
+        "search_agency_pricing_rules",
+        "search_agency_risk_playbook",
+        "search_agency_report_standards",
+    }
+)
+
+MODE_MANAGEMENT_TOOL_NAMES = frozenset(
+    {
+        "set_planning_mode_tool",
+        "confirm_planning_mode_tool",
+        "record_evidence_bundle_tool",
+    }
+)
+
+INTENT_INTERNAL_TOOL_ALLOWLIST = {
+    "pricing_query": frozenset({"search_agency_pricing_rules"}),
+    "risk_query": frozenset({"search_agency_risk_playbook"}),
+    "product_candidate_query": frozenset(
+        {
+            "search_agency_product_templates",
+            "search_agency_service_sop",
+            "search_agency_risk_playbook",
+        }
+    ),
+    "agency_plan_query": frozenset(
+        {
+            "search_agency_product_templates",
+            "search_agency_service_sop",
+            "search_agency_risk_playbook",
+        }
+    ),
+}
+
+AGENCY_PRICING_PRE_ITINERARY_ALLOWED_TOOL_NAMES = frozenset(
+    {
+        "record_requirement_tool",
+        "set_planning_mode_tool",
+        "confirm_planning_mode_tool",
+        "record_evidence_bundle_tool",
+        "search_agency_pricing_rules",
+    }
+)
+
+ATTEMPT_ONCE_TOOLS_AFTER_CALL = frozenset(
+    {
+        "record_requirement_tool",
+        "query_destination_info",
+        "search_travel_info",
+        "search_food_recommendations",
+        "query_hotel_options",
+        "query_transport_options",
+        "select_destination_tool",
+        "select_food_tool",
+        "generate_visual_journey_tool",
+        "scenic_price_lookup_tool",
+        "generate_itinerary_tool",
+        "summarize_budget_tool",
+        "generate_order_tool",
+        "search_agency_pricing_rules",
+    }
+)
+
+APPLIED_ONCE_STATE_TRANSITION_TOOLS = frozenset(
+    {"select_transport_tool", "select_accommodation_tool"}
+)
+
+DETERMINISTIC_NO_ARG_REPORT_TOOLS = frozenset(
+    {
+        "generate_itinerary_tool",
+        "summarize_budget_tool",
+        "generate_order_tool",
+    }
+)
+
+FORCE_NARROW_TOOL_NAMES = frozenset(
+    {
+        "record_requirement_tool",
+        "query_destination_info",
+        "search_travel_info",
+        "search_food_recommendations",
+        "query_hotel_options",
+        "query_transport_options",
+        "select_destination_tool",
+        "select_transport_tool",
+        "select_accommodation_tool",
+        "select_food_tool",
+        "generate_visual_journey_tool",
+        "scenic_price_lookup_tool",
+        "generate_itinerary_tool",
+        "summarize_budget_tool",
+        "generate_order_tool",
+    }
+)
+
+DATE_TOOL_NAMES = frozenset({"get-current-date", "getTodayDate"})
+LIVE_DATE_REQUIRED_TOOL_NAMES = frozenset({"query_transport_options", "query_hotel_options"})
+AGENCY_PLAN_PREFERENCE_TOOL_NAMES = frozenset(
+    {
+        "query_transport_options",
+        "query_hotel_options",
+        "select_transport_tool",
+        "select_accommodation_tool",
+        "update_accommodation_preference_tool",
+    }
+)
+AGENCY_PLAN_ALLOWED_TOOL_NAMES = frozenset(
+    {
+        "record_requirement_tool",
+        "set_planning_mode_tool",
+        "confirm_planning_mode_tool",
+        "record_evidence_bundle_tool",
+        "query_destination_info",
+        "scenic_price_lookup_tool",
+        "generate_itinerary_tool",
+        "summarize_budget_tool",
+        "generate_order_tool",
+        "search_agency_product_templates",
+        "search_agency_service_sop",
+        "search_agency_pricing_rules",
+        "search_agency_risk_playbook",
+        "search_agency_report_standards",
+        "update_travel_style_tool",
+        "update_dietary_restriction_tool",
+        "update_food_preference_tool",
+        "add_travel_record_tool",
+    }
+)
+AGENCY_PLAN_LIVE_QUERY_OVERRIDE_TOOL_NAMES = frozenset(
+    {"query_transport_options", "query_hotel_options"}
+)
+DESTINATION_REFRESH_TOOL_NAMES = frozenset(
+    {"query_destination_info", "search_travel_info", "search_food_recommendations"}
+)
+REQUIREMENT_MEMORY_TOOL_NAMES = frozenset(
+    {
+        "update_travel_style_tool",
+        "update_dietary_restriction_tool",
+        "update_food_preference_tool",
+        "add_travel_record_tool",
+        "update_accommodation_preference_tool",
+    }
+)
+
+RELATIVE_DATE_TOOL_KEYWORDS = (
+    "今天",
+    "明天",
+    "后天",
+    "大后天",
+    "本周",
+    "这周",
+    "下周",
+    "下下周",
+    "周末",
+    "月初",
+    "月底",
+    "下个月",
+    "春节",
+    "五一",
+    "端午",
+    "中秋",
+    "国庆",
+    "暑假",
+    "寒假",
+    "元旦",
+    "清明",
+    "劳动节",
+)
+
+FIRST_TURN_SLOW_INTENT_KEYWORDS = (
+    "酒店",
+    "住宿",
+    "民宿",
+    "交通",
+    "高铁",
+    "火车",
+    "航班",
+    "飞机",
+    "自驾",
+    "天气",
+    "气温",
+    "下雨",
+    "雨季",
+    "台风",
+    "暴雨",
+    "风险",
+    "避坑",
+    "Plan B",
+    "plan b",
+    "兜底",
+    "查不到",
+    "待核验",
+    "老人",
+    "父母",
+    "长辈",
+    "银发",
+    "走不动",
+)
+
+FIRST_TURN_AGENCY_PLAN_KEYWORDS = (
+    "旅行社方案",
+    "旅行社顾问方案",
+    "旅行社帮我",
+    "按旅行社",
+    "顾问方案",
+    "省心方案",
+    "省心安排",
+    "省心规划",
+    "不用我操心",
+    "不想自己操心",
+)
+
+FINAL_REPORT_REQUEST_KEYWORDS = (
+    "最终报告",
+    "旅游报告",
+    "旅行报告",
+    "旅游规划报告",
+    "旅行规划报告",
+    "规划报告",
+    "完整报告",
+    "生成报告",
+    "最终方案",
+    "完整方案",
+    "report_data",
+    "生成订单",
+)
+
+PENDING_DATE_VALUES = {
+    "",
+    "日期",
+    "日期待确认",
+    "出发日期",
+    "出发日期待确认",
+    "入住日期",
+    "入住日期待确认",
+    "待确认",
+    "未确认",
+    "待核验",
+    "待核实",
+}
+
+PENDING_DEPARTURE_CITY_VALUES = {
+    "",
+    "出发地",
+    "出发地待确认",
+    "出发城市",
+    "出发城市待确认",
+    "待确认",
+    "未确认",
+    "待核验",
+    "待核实",
+}
+
+
+def _to_prompt_value(value: Any) -> Any:
+    """Convert nested dicts into attribute-accessible objects for str.format()."""
+    if isinstance(value, dict):
+        return SimpleNamespace(**{key: _to_prompt_value(item) for key, item in value.items()})
+    if isinstance(value, list):
+        return [_to_prompt_value(item) for item in value]
+    return value
+
+
+def _append_system_instructions(
+    override_kwargs: dict[str, Any],
+    *instructions: str,
+) -> None:
+    prompt = override_kwargs["system_prompt"]
+    for instruction in instructions:
+        prompt = f"{prompt}\n\n{instruction}"
+    override_kwargs["system_prompt"] = prompt
+
+
+def _deterministic_report_tool_response(tool_name: str) -> ModelResponse:
+    """Dispatch a validated no-argument report tool without another model call."""
+
+    if tool_name not in DETERMINISTIC_NO_ARG_REPORT_TOOLS:
+        raise ValueError(f"不支持确定性调用的报告工具: {tool_name}")
+    return ModelResponse(
+        result=[
+            AIMessage(
+                content="",
+                response_metadata={
+                    "synthetic_tool_dispatch": True,
+                    "dispatch_source": "state_machine",
+                },
+                tool_calls=[
+                    {
+                        "name": tool_name,
+                        "args": {},
+                        "id": f"call_{tool_name}_{uuid4().hex}",
+                        "type": "tool_call",
+                    }
+                ],
+            )
+        ]
+    )
+
+
+def _format_selected_accommodation(state_dict: dict[str, Any]) -> str:
+    option = state_dict.get("selected_accommodation_option")
+    if isinstance(option, dict) and option.get("name"):
+        details = [str(option["name"])]
+        if option.get("hotel_id"):
+            details.append(f"酒店ID {option['hotel_id']}")
+        if option.get("location"):
+            details.append(str(option["location"]))
+        if option.get("price_per_night"):
+            details.append(f"{option['price_per_night']} 元/晚")
+        return "，".join(details)
+
+    accommodation_types = state_dict.get("selected_accommodation_types")
+    if accommodation_types:
+        return f"已确认住宿类型：{accommodation_types}"
+    return "尚未确认具体酒店"
+
+
+def _format_selected_transport(state_dict: dict[str, Any]) -> str:
+    option = state_dict.get("selected_transport_option")
+    if isinstance(option, dict) and option:
+        parts: list[str] = []
+        details = option.get("details")
+        if details:
+            parts.append(str(details))
+        if option.get("departure_time") or option.get("arrival_time"):
+            parts.append(
+                f"{option.get('departure_time', '待确认')} -> {option.get('arrival_time', '待确认')}"
+            )
+        if option.get("duration"):
+            parts.append(f"耗时 {option['duration']}")
+        if option.get("price"):
+            parts.append(f"参考价格 {option['price']} 元/人")
+        if option.get("source"):
+            parts.append(f"来源 {option['source']}")
+        if parts:
+            return "，".join(parts)
+
+    selected_transport = state_dict.get("selected_transport")
+    return str(selected_transport) if selected_transport else "尚未确认交通方案"
+
+
+def _format_budget_summary(state_dict: dict[str, Any]) -> str:
+    budget = state_dict.get("budget")
+    if not isinstance(budget, dict) or not budget:
+        return "尚未完成预算汇总"
+
+    lines = []
+    for label, key in [
+        ("交通", "transport"),
+        ("住宿", "accommodation"),
+        ("餐饮", "food"),
+        ("景点/体验", "attractions"),
+        ("其他机动", "misc"),
+        ("总计", "total"),
+        ("人均", "per_person"),
+    ]:
+        value = budget.get(key)
+        if isinstance(value, (int, float)):
+            lines.append(f"{label}：{value:.2f} 元")
+    assumptions = budget.get("assumptions") or []
+    if assumptions:
+        lines.append("关键假设：" + "；".join(str(item) for item in assumptions[:3]))
+    return "；".join(lines) if lines else "预算已有记录，但明细不完整"
+
+
+def _format_itinerary_summary(state_dict: dict[str, Any]) -> str:
+    itinerary = state_dict.get("itinerary")
+    if not isinstance(itinerary, list) or not itinerary:
+        return "尚未生成行程"
+
+    lines = []
+    for day in itinerary[:5]:
+        if not isinstance(day, dict):
+            continue
+        day_number = day.get("day_number", len(lines) + 1)
+        theme = day.get("theme") or "当日安排"
+        activities = day.get("activities") or []
+        activity_text = "；".join(str(item) for item in activities[:2]) if activities else "活动待确认"
+        lines.append(f"Day {day_number} {theme}：{activity_text}")
+    if len(itinerary) > 5:
+        lines.append(f"其余 {len(itinerary) - 5} 天按已生成行程执行")
+    return "\n".join(lines) if lines else "行程已有记录，但明细不完整"
+
+
+def _format_visual_journey_summary(state_dict: dict[str, Any]) -> str:
+    journey_plan = state_dict.get("journey_plan")
+    if not isinstance(journey_plan, dict) or journey_plan.get("version") != "journey_plan.v1":
+        return "尚未生成可视化旅程草案"
+
+    overview = journey_plan.get("overview") if isinstance(journey_plan.get("overview"), dict) else {}
+    days = journey_plan.get("days") if isinstance(journey_plan.get("days"), list) else []
+    title = overview.get("title") or "可视化旅程草案"
+    route_label = overview.get("route_label") or overview.get("summary") or ""
+    lines = [f"{title}：{route_label}".rstrip("：")]
+    for day in days[:5]:
+        if not isinstance(day, dict):
+            continue
+        day_number = day.get("day_number") or len(lines)
+        day_title = day.get("title") or day.get("summary") or f"Day {day_number}"
+        pois = [
+            str(poi.get("name"))
+            for poi in day.get("pois") or []
+            if isinstance(poi, dict) and poi.get("name")
+        ]
+        poi_text = " → ".join(pois[:4]) if pois else "点位待核验"
+        lines.append(f"Day {day_number} {day_title}：{poi_text}")
+    if len(days) > 5:
+        lines.append(f"其余 {len(days) - 5} 天按地图草案顺序继续执行")
+    route_preferences = (
+        state_dict.get("route_segment_preferences")
+        if isinstance(state_dict.get("route_segment_preferences"), list)
+        else extract_route_segment_preferences(journey_plan)
+    )
+    preference_summary = format_route_segment_preferences_summary(route_preferences)
+    if preference_summary:
+        lines.append(preference_summary)
+    return "\n".join(lines)
+
+
+def _latest_human_text(request: ModelRequest) -> str:
+    def latest_human_content(messages: list[Any]) -> Any:
+        if not messages:
+            return None
+        latest = messages[-1]
+        if isinstance(latest, HumanMessage):
+            return latest.content
+        if isinstance(latest, dict):
+            role = latest.get("role") or latest.get("type")
+            if role in {"user", "human"}:
+                return latest.get("content")
+        if getattr(latest, "type", None) == "human" or getattr(latest, "role", None) == "user":
+            return getattr(latest, "content", None)
+        return None
+
+    content = latest_human_content(request.messages or [])
+    latest_request_message = (request.messages or [None])[-1]
+    if content is None and isinstance(latest_request_message, ToolMessage):
+        return ""
+    if content is None:
+        state = request.state
+        if hasattr(state, "get"):
+            content = latest_human_content(state.get("messages") or [])
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    return str(content)
+
+
+def _recent_human_text(request: ModelRequest, limit: int = 4) -> str:
+    def iter_human_messages(messages: list[Any]) -> list[str]:
+        collected: list[str] = []
+        for message in messages or []:
+            content = None
+            if isinstance(message, HumanMessage):
+                content = message.content
+            elif isinstance(message, dict):
+                role = message.get("role") or message.get("type")
+                if role in {"user", "human"}:
+                    content = message.get("content")
+            elif getattr(message, "type", None) == "human" or getattr(message, "role", None) == "user":
+                content = getattr(message, "content", None)
+
+            if content is None:
+                continue
+            collected.append(content if isinstance(content, str) else str(content))
+        return collected[-limit:]
+
+    messages = iter_human_messages(request.messages or [])
+    if not messages:
+        state = request.state
+        if hasattr(state, "get"):
+            messages = iter_human_messages(state.get("messages") or [])
+    return "\n".join(item.strip() for item in messages if item and item.strip())
+
+
+def _message_has_human_role(message: Any) -> bool:
+    if isinstance(message, HumanMessage):
+        return True
+    if isinstance(message, dict):
+        role = message.get("role") or message.get("type")
+        return role in {"user", "human"}
+    return getattr(message, "type", None) == "human" or getattr(message, "role", None) == "user"
+
+
+def _message_has_assistant_text(message: Any) -> bool:
+    content = None
+    if isinstance(message, dict):
+        role = message.get("role") or message.get("type")
+        if role not in {"assistant", "ai"}:
+            return False
+        content = message.get("content")
+    elif getattr(message, "type", None) in {"ai", "assistant"} or getattr(message, "role", None) in {
+        "ai",
+        "assistant",
+    }:
+        content = getattr(message, "content", None)
+    return bool(str(content or "").strip())
+
+
+def _request_or_state_messages(request: ModelRequest) -> list[Any]:
+    messages = list(request.messages or [])
+    if messages:
+        return messages
+    state = request.state
+    if hasattr(state, "get"):
+        return list(state.get("messages") or [])
+    return []
+
+
+def _is_first_user_turn_without_assistant_text(request: ModelRequest) -> bool:
+    messages = _request_or_state_messages(request)
+    if not messages:
+        return False
+
+    human_count = sum(1 for message in messages if _message_has_human_role(message))
+    if human_count != 1:
+        return False
+    return not any(_message_has_assistant_text(message) for message in messages)
+
+
+def _latest_message_is_tool_result(request: ModelRequest) -> bool:
+    messages = list(request.messages or [])
+    if not messages:
+        state = request.state
+        if hasattr(state, "get"):
+            messages = list(state.get("messages") or [])
+    if not messages:
+        return False
+    latest = messages[-1]
+    if isinstance(latest, ToolMessage):
+        return True
+    if isinstance(latest, dict):
+        return (latest.get("role") or latest.get("type")) == "tool"
+    return getattr(latest, "type", None) == "tool" or getattr(latest, "role", None) == "tool"
+
+
+def _latest_tool_result_names(request: ModelRequest) -> set[str]:
+    messages = list(request.messages or [])
+    if not messages:
+        state = request.state
+        if hasattr(state, "get"):
+            messages = list(state.get("messages") or [])
+    if not messages:
+        return set()
+    latest = messages[-1]
+    is_tool_result = False
+    if isinstance(latest, ToolMessage):
+        is_tool_result = True
+    elif isinstance(latest, dict):
+        is_tool_result = (latest.get("role") or latest.get("type")) == "tool"
+    else:
+        is_tool_result = (
+            getattr(latest, "type", None) == "tool"
+            or getattr(latest, "role", None) == "tool"
+        )
+    if not is_tool_result:
+        return set()
+    return _tool_names_from_message(latest)
+
+
+def _messages_since_latest_human(request: ModelRequest) -> list[Any]:
+    messages = _request_or_state_messages(request)
+    if not messages:
+        return []
+
+    latest_human_index = None
+    for index in range(len(messages) - 1, -1, -1):
+        if _message_has_human_role(messages[index]):
+            latest_human_index = index
+            break
+    if latest_human_index is None:
+        return []
+    return messages[latest_human_index + 1:]
+
+
+def _recent_tool_names_since_latest_human(request: ModelRequest) -> set[str]:
+    names: set[str] = set()
+    for message in _messages_since_latest_human(request):
+        names.update(_tool_names_from_message(message))
+    return names
+
+
+def _recent_state_transition_outcomes_since_latest_human(
+    request: ModelRequest,
+) -> dict[str, dict[str, Any]]:
+    outcomes: dict[str, dict[str, Any]] = {}
+    for message in _messages_since_latest_human(request):
+        outcome = state_transition_outcome_from_message(message)
+        if outcome:
+            outcomes[str(outcome["tool"])] = outcome
+    return outcomes
+
+
+def _recent_applied_state_transition_tools_since_latest_human(
+    request: ModelRequest,
+) -> set[str]:
+    applied_tools: set[str] = set()
+    for message in _messages_since_latest_human(request):
+        tool_name = applied_state_transition_tool_name(message)
+        if tool_name:
+            applied_tools.add(tool_name)
+    return applied_tools
+
+
+def _tool_repeat_instruction(
+    current_step: str,
+    recent_tool_names: set[str],
+    applied_state_transition_tools: set[str],
+) -> str:
+    if current_step == "accommodation_planning" and "query_hotel_options" in recent_tool_names:
+        return (
+            "本轮已经执行过 `query_hotel_options`。不要在同一轮再次调用酒店查询；"
+            "请直接基于已有工具结果总结候选，或说明本次没有查到并给出下一轮可放宽的方向。"
+        )
+    if current_step == "transport_planning" and "query_transport_options" in recent_tool_names:
+        return (
+            "本轮已经执行过 `query_transport_options`。不要在同一轮再次调用交通查询；"
+            "请直接基于已有工具结果做比较和推荐。"
+        )
+    repeated_one_shot_tools = sorted(
+        (ATTEMPT_ONCE_TOOLS_AFTER_CALL & recent_tool_names)
+        | (
+            APPLIED_ONCE_STATE_TRANSITION_TOOLS
+            & applied_state_transition_tools
+        )
+    )
+    if repeated_one_shot_tools:
+        return (
+            "本轮已经完成这些一次性工具调用："
+            f"{', '.join(f'`{name}`' for name in repeated_one_shot_tools)}。"
+            "不要在同一轮再次调用它们；请基于已有工具结果继续总结、推荐或推进下一步。"
+        )
+    return ""
+
+
+def _has_nonempty_list(value: Any) -> bool:
+    return isinstance(value, list) and any(item for item in value)
+
+
+def _has_destination_candidates(state_dict: dict[str, Any]) -> bool:
+    return _has_nonempty_list(state_dict.get("destination_options"))
+
+
+def _has_selected_transport(state_dict: dict[str, Any]) -> bool:
+    return bool(
+        state_dict.get("selected_transport")
+        or state_dict.get("selected_transport_option")
+    )
+
+
+def _has_accommodation_candidates(state_dict: dict[str, Any]) -> bool:
+    return _has_nonempty_list(state_dict.get("accommodation_options"))
+
+
+def _has_selected_accommodation(state_dict: dict[str, Any]) -> bool:
+    return bool(
+        state_dict.get("selected_accommodation_option")
+        or state_dict.get("selected_accommodation_types")
+    )
+
+
+def _normalize_state_accommodation_type(value: Any) -> str | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    if raw in STATE_ACCOMMODATION_TYPES:
+        return raw
+    lowered = raw.lower().replace("-", "_").replace(" ", "_")
+    if lowered in STATE_ACCOMMODATION_TYPES:
+        return lowered
+    if lowered in ACCOMMODATION_TYPE_ALIASES:
+        return ACCOMMODATION_TYPE_ALIASES[lowered]
+    if raw in ACCOMMODATION_TYPE_ALIASES:
+        return ACCOMMODATION_TYPE_ALIASES[raw]
+    for keyword, normalized in ACCOMMODATION_TYPE_ALIASES.items():
+        if keyword and keyword in raw:
+            return normalized
+    return None
+
+
+def _infer_selected_accommodation_types(state_dict: dict[str, Any]) -> list[str]:
+    current = state_dict.get("selected_accommodation_types")
+    if isinstance(current, str):
+        normalized = _normalize_state_accommodation_type(current)
+        if normalized:
+            return [normalized]
+    if isinstance(current, list):
+        normalized_types = []
+        for item in current:
+            normalized = _normalize_state_accommodation_type(item)
+            if normalized and normalized not in normalized_types:
+                normalized_types.append(normalized)
+        if normalized_types:
+            return normalized_types
+
+    accommodation_sources = []
+    selected_option = state_dict.get("selected_accommodation_option")
+    if isinstance(selected_option, dict):
+        accommodation_sources.append(selected_option)
+    accommodation_sources.extend(
+        item for item in state_dict.get("accommodation_options") or [] if isinstance(item, dict)
+    )
+    for option in accommodation_sources:
+        for key in ("type", "category", "hotel_type", "type_label", "name", "location"):
+            normalized = _normalize_state_accommodation_type(option.get(key))
+            if normalized:
+                return [normalized]
+    if accommodation_sources:
+        return ["star_hotel"]
+    return []
+
+
+def _heal_missing_accommodation_prerequisites(
+    state: TravelState,
+    state_dict: dict[str, Any],
+    *,
+    current_step: str,
+    required_fields: list[str],
+) -> None:
+    if "selected_accommodation_types" not in required_fields:
+        return
+    if _state_value_ready(state_dict.get("selected_accommodation_types")):
+        return
+    inferred_types = _infer_selected_accommodation_types(state_dict)
+    if not inferred_types:
+        return
+    state_dict["selected_accommodation_types"] = inferred_types
+    if hasattr(state, "__setitem__"):
+        state["selected_accommodation_types"] = inferred_types
+    app_logger.warning(
+        "住宿前置状态缺少 selected_accommodation_types，已基于已有住宿候选/酒店信息补齐安全默认值: "
+        f"current_step={current_step}, selected_accommodation_types={inferred_types}"
+    )
+
+
+def _accommodation_memory_is_stable(text: str) -> bool:
+    if not text.strip():
+        return False
+    negative_stable_keywords = (
+        "不要记成长期",
+        "别记成长期",
+        "不要作为长期",
+        "不作为长期",
+        "不是长期",
+        "无需记住",
+        "不用记住",
+        "不要记住",
+        "别记住",
+    )
+    if any(keyword in text for keyword in negative_stable_keywords):
+        return False
+    stable_keywords = (
+        "记住",
+        "请记",
+        "以后",
+        "每次",
+        "一直",
+        "长期",
+        "我习惯",
+        "常住",
+        "固定偏好",
+    )
+    temporary_keywords = (
+        "这次",
+        "本次",
+        "这趟",
+        "这回",
+        "当前行程",
+        "本轮",
+    )
+    if any(keyword in text for keyword in temporary_keywords) and not any(
+        keyword in text for keyword in stable_keywords
+    ):
+        return False
+    return any(keyword in text for keyword in stable_keywords)
+
+
+def _allowed_requirement_memory_tools(text: str) -> set[str]:
+    """Return long-term memory tools that are safe to expose for this utterance."""
+    if not text.strip():
+        return set()
+
+    negative_keywords = (
+        "不要记成长期",
+        "别记成长期",
+        "不要作为长期",
+        "不作为长期",
+        "不是长期",
+        "无需记住",
+        "不用记住",
+        "不要记住",
+        "别记住",
+    )
+    if any(keyword in text for keyword in negative_keywords):
+        return set()
+
+    allowed: set[str] = set()
+    history_keywords = ("去过", "以前去", "之前去", "上次去", "来过", "玩过")
+    if any(keyword in text for keyword in history_keywords):
+        allowed.add("add_travel_record_tool")
+
+    stable_keywords = (
+        "请记住",
+        "帮我记住",
+        "记住我",
+        "以后",
+        "每次",
+        "一直",
+        "长期",
+        "我习惯",
+        "固定偏好",
+        "常住",
+    )
+    has_stable_scope = any(keyword in text for keyword in stable_keywords)
+    if has_stable_scope:
+        allowed.update(
+            {
+                "update_travel_style_tool",
+                "update_dietary_restriction_tool",
+                "update_food_preference_tool",
+                "update_accommodation_preference_tool",
+            }
+        )
+
+    safety_keywords = ("过敏", "严重忌口", "不能吃", "清真", "素食")
+    temporary_keywords = ("这次", "本次", "这趟", "这回", "当前行程", "本轮")
+    if any(keyword in text for keyword in safety_keywords) and not any(
+        keyword in text for keyword in temporary_keywords
+    ):
+        allowed.add("update_dietary_restriction_tool")
+
+    return allowed
+
+
+def _temporary_requirement_memory_instruction() -> str:
+    return (
+        "本轮需求收集中的轻松、少走路、美食、住宿、口味等描述，"
+        "默认都是当前行程条件，不要调用长期记忆工具。"
+        "请把它们写入本轮需求、特殊需求或后续查询参数；"
+        "只有用户明确说“请记住/以后/每次/我一直/我过敏”"
+        "或提到已经去过的真实历史旅行时，才写入长期记忆。"
+    )
+
+
+def _destination_candidate_instruction() -> str:
+    return (
+        "本轮已经拿到目的地候选或目的地信息。"
+        " 在用户明确确认前，不要调用 `select_destination_tool`，"
+        " 也不要再次调用 `query_destination_info` 或搜索工具刷新同类信息；"
+        "请直接基于已有候选做简短总结，并等待用户确认目的地。"
+    )
+
+
+def _transport_query_result_instruction(*, allow_selection: bool = False) -> str:
+    if allow_selection:
+        return (
+            "本轮已经完成真实交通查询。"
+            " 用户已经明确授权按推荐结果直接记录交通方案，"
+            "请基于已有交通候选选择最省心或最符合用户偏好的方案，"
+            "并调用 `select_transport_tool` 记录。"
+            "不要再次调用 `query_transport_options` 刷新同类信息。"
+        )
+    return (
+        "本轮已经完成真实交通查询。"
+        " 请直接基于已有交通候选做简短总结和推荐，"
+        "不要在同一轮继续调用 `select_transport_tool` 抢先记录；"
+        "等待用户确认具体交通方式或候选后，再记录交通方案。"
+    )
+
+
+def _transport_selection_fallback_instruction() -> str:
+    return (
+        "当前还没有记录交通方案，但用户已经要求按推荐方式继续推进，"
+        "或后续消息已经进入住宿确认。"
+        " 本轮必须先调用 `select_transport_tool` 记录交通，不要继续追问出发地，"
+        "也不要跨过交通去查询或记录住宿。"
+        " 如果缺少出发地或具体班次，就把交通类型按省心和时间合理优先记录为 train，"
+        "details 写明“出发地待确认，真实班次和价格待二次核验”。"
+    )
+
+
+def _is_transport_selection_request(text: str) -> bool:
+    if not text or any(keyword in text for keyword in ("重新", "换个", "改成")):
+        return False
+
+    has_transport_context = any(
+        keyword in text
+        for keyword in (
+            "交通",
+            "方式",
+            "班次",
+            "出行",
+            "高铁",
+            "火车",
+            "航班",
+            "飞机",
+            "自驾",
+        )
+    )
+    if not has_transport_context:
+        return False
+
+    explicit_record = any(
+        keyword in text
+        for keyword in (
+            "请直接记录",
+            "直接记录",
+            "记录推荐",
+            "记录你推荐",
+            "按推荐",
+            "按省心",
+            "交通按",
+            "优先记录",
+            "锁定",
+        )
+    )
+    selection_signal = any(keyword in text for keyword in SELECTION_KEYWORDS) or any(
+        keyword in text for keyword in ("优先", "推荐方式", "推荐的方式")
+    )
+    preference_signal = any(
+        keyword in text
+        for keyword in ("省心", "时间合理", "少折腾", "优先高铁", "待核验", "待二次核验")
+    )
+    return selection_signal and (explicit_record or preference_signal)
+
+
+def _recent_transport_selection_request(
+    request: ModelRequest,
+    latest_human_text: str,
+    *,
+    limit: int = 4,
+) -> bool:
+    texts = [latest_human_text, _recent_human_text(request, limit=limit)]
+    return any(_is_transport_selection_request(text) for text in texts if text)
+
+
+def _accommodation_candidate_instruction() -> str:
+    return (
+        "当前已经有酒店候选或住宿查询结果。"
+        " 不要再次调用 `query_hotel_options`，也不要把本次住宿条件写入长期住宿记忆；"
+        "请直接从已有候选里选择最符合省心、干净、动线方便的方案，"
+        "并调用 `select_accommodation_tool` 记录。"
+        " 如果没有合适的具体酒店，也可以记录住宿类型/区域，并把真实价格标注为待核验。"
+    )
+
+
+def _temporary_accommodation_instruction() -> str:
+    return (
+        "本轮住宿偏好属于当前行程条件，不是长期稳定偏好。"
+        " 不要调用 `update_accommodation_preference_tool`；"
+        "请把这些偏好作为酒店查询或住宿选择参数使用。"
+    )
+
+
+def _post_transport_accommodation_instruction() -> str:
+    return (
+        "本轮刚刚完成交通方案记录。"
+        " 不要在同一轮继续调用酒店查询或住宿选择工具，避免把交通确认轮扩成长工具链；"
+        "请先简短说明交通已记录，住宿会在下一条住宿确认消息中继续处理。"
+    )
+
+
+def _is_accommodation_record_request(text: str) -> bool:
+    hotel_keywords = ("酒店", "住宿", "住")
+    stage_record_keywords = ("记录", "确认", "就按", "按", "安排")
+    return any(keyword in text for keyword in hotel_keywords) and any(
+        keyword in text for keyword in stage_record_keywords
+    )
+
+
+def _is_accommodation_query_request(text: str) -> bool:
+    hotel_keywords = ("酒店", "住宿", "住")
+    return any(keyword in text for keyword in ("查", "查询", "看看", "有没有")) and any(
+        keyword in text for keyword in hotel_keywords
+    )
+
+
+def _forced_tool_choice(
+    current_step: str,
+    latest_human_text: str,
+    request: ModelRequest | None = None,
+) -> str | None:
+    text = latest_human_text.strip()
+    if not text:
+        return None
+
+    if current_step == "requirement_collection" and _should_prioritize_requirement_record(text):
+        return "record_requirement_tool"
+
+    if (
+        current_step == "requirement_collection"
+        and request is not None
+        and _should_finalize_requirement_after_followup(request, text)
+    ):
+        return "record_requirement_tool"
+
+    if current_step in {
+        "requirement_collection",
+        "destination_recommendation",
+        "agency_product_match",
+    } and _should_prioritize_destination_query(text):
+        return "query_destination_info"
+
+    stage_record_keywords = ("记录", "确认", "就按", "按", "安排")
+    if current_step == "accommodation_planning":
+        if _is_accommodation_record_request(text):
+            return "select_accommodation_tool"
+        if _is_accommodation_query_request(text):
+            return "query_hotel_options"
+
+    if current_step == "food_planning" and any(
+        keyword in text for keyword in ("餐饮", "美食", "吃")
+    ) and any(keyword in text for keyword in stage_record_keywords):
+        return "select_food_tool"
+
+    if current_step == "itinerary_generation" and any(
+        keyword in text for keyword in ("行程", "路线", "日程")
+    ) and any(keyword in text for keyword in ("生成", "记录", "确认", "最终")):
+        return "generate_itinerary_tool"
+
+    if current_step == "budget_summarization" and any(
+        keyword in text for keyword in ("预算", "费用", "报价")
+    ) and any(keyword in text for keyword in ("汇总", "生成", "记录", "确认", "说明")):
+        return "summarize_budget_tool"
+
+    if any(keyword in text for keyword in SELECTION_KEYWORDS):
+        return None
+
+    if current_step == "transport_planning":
+        transport_keywords = ("飞机", "航班", "高铁", "火车", "自驾", "交通")
+        query_intent_keywords = ("查", "查询", "看看", "推荐", "方案", "有没有", "多少")
+        if any(keyword in text for keyword in DIRECT_QUERY_KEYWORDS) or (
+            any(keyword in text for keyword in transport_keywords)
+            and any(keyword in text for keyword in query_intent_keywords)
+        ):
+            return "query_transport_options"
+
+    return None
+
+
+def _tool_choice_instruction(tool_name: str) -> str:
+    if tool_name == "generate_visual_journey_tool":
+        return (
+            "本轮用户想先看可视化经典路线。请直接调用 `generate_visual_journey_tool`，"
+            "尽量从上下文读取目的地，并把用户本轮提到的相对日期、天数和风格传给工具。"
+            "该工具只生成旅程草案和地图工作台，不生成最终报告、订单、锁价、真实交通或酒店预订。"
+        )
+    return (
+        f"本轮优先直接调用工具 `{tool_name}`，不要先继续追问。"
+        " 如果工具返回候选结果，再基于结果继续回答。"
+    )
+
+
+def _cross_step_verification_tools(text: str) -> list[str]:
+    """识别用户一口气要求核验交通和住宿的复合场景。"""
+    if not text.strip():
+        return []
+
+    if not any(keyword in text for keyword in CROSS_STEP_VERIFY_KEYWORDS):
+        return []
+
+    requested_tools: list[str] = []
+    if any(keyword in text for keyword in CROSS_STEP_TRANSPORT_KEYWORDS):
+        requested_tools.append("query_transport_options")
+    if any(keyword in text for keyword in CROSS_STEP_HOTEL_KEYWORDS):
+        requested_tools.append("query_hotel_options")
+    return requested_tools
+
+
+def _cross_step_verification_instruction(tool_names: list[str]) -> str:
+    if len(tool_names) >= 2:
+        return (
+            "本轮用户同时要求核验交通和住宿。"
+            " 如果出发地、目的地、用户明确或确认过的日期、人数和预算上下文已经存在，"
+            " 请优先调用 `query_transport_options` 和 `query_hotel_options` 获取真实候选；"
+            " 不要只用公开攻略、搜索结果或经验估算替代真实交通/酒店候选。"
+            " 如果日期仍待确认，先请用户确认日期，不能用模型推测日期查真实库存。"
+            " 如果两个工具都可用，建议先查交通，再查住宿。"
+        )
+
+    if "query_transport_options" in tool_names:
+        return _tool_choice_instruction("query_transport_options")
+    if "query_hotel_options" in tool_names:
+        return _tool_choice_instruction("query_hotel_options")
+    return ""
+
+
+def _tool_names(tools: list[Any]) -> set[str]:
+    names: set[str] = set()
+    for tool in tools:
+        name = getattr(tool, "name", None)
+        if isinstance(name, str) and name:
+            names.add(name)
+        elif isinstance(tool, str) and tool:
+            names.add(tool)
+    return names
+
+
+def _exclude_tools_by_name(tools: list[Any], excluded_names: set[str] | frozenset[str]) -> list[Any]:
+    return [
+        tool
+        for tool in tools
+        if (
+            getattr(tool, "name", tool if isinstance(tool, str) else None)
+            not in excluded_names
+        )
+    ]
+
+
+def _keep_tools_by_name(tools: list[Any], kept_names: set[str] | frozenset[str]) -> list[Any]:
+    return [
+        tool
+        for tool in tools
+        if (
+            getattr(tool, "name", tool if isinstance(tool, str) else None)
+            in kept_names
+        )
+    ]
+
+
+def _find_tool_by_name(step_config: dict[str, Any], tool_name: str) -> Any | None:
+    for config in step_config.values():
+        for tool in config.get("tools", []):
+            name = getattr(tool, "name", None)
+            if name == tool_name or tool == tool_name:
+                return tool
+    return None
+
+
+def _append_tools_by_name(
+    tools: list[Any],
+    step_config: dict[str, Any],
+    tool_names: set[str] | frozenset[str],
+) -> list[Any]:
+    available_names = _tool_names(tools)
+    updated_tools = list(tools)
+    for tool_name in tool_names:
+        if tool_name in available_names:
+            continue
+        extra_tool = _find_tool_by_name(step_config, tool_name)
+        if extra_tool is not None:
+            updated_tools.append(extra_tool)
+            available_names.add(tool_name)
+    return updated_tools
+
+
+def _is_iso_date_text(value: Any) -> bool:
+    try:
+        datetime.strptime(str(value or "").strip(), "%Y-%m-%d")
+    except ValueError:
+        return False
+    return True
+
+
+def _has_confirmed_departure_date(state_dict: dict[str, Any]) -> bool:
+    requirement = state_dict.get("user_requirement") or {}
+    confirmed_facts = state_dict.get("confirmed_facts") or {}
+    if isinstance(confirmed_facts, dict):
+        confirmed_date = str(confirmed_facts.get("departure_date") or "").strip()
+        if confirmed_date and _is_iso_date_text(confirmed_date):
+            return True
+    if not isinstance(requirement, dict):
+        return False
+
+    departure_date = str(requirement.get("departure_date") or "").strip()
+    if departure_date in PENDING_DATE_VALUES or not _is_iso_date_text(departure_date):
+        return False
+    if requirement.get("departure_date_confirmed") is False:
+        return False
+    return True
+
+
+def _confirmed_facts_instruction(state_dict: dict[str, Any]) -> str:
+    facts = state_dict.get("confirmed_facts") or {}
+    if not isinstance(facts, dict) or not facts:
+        return ""
+    lines: list[str] = []
+    labels = {
+        "departure_city": "出发城市",
+        "destination": "目的地",
+        "departure_date": "出发日期",
+        "travel_days": "行程天数",
+        "return_date": "行程结束日期",
+        "check_in_date": "入住日期",
+        "check_out_date": "退房日期",
+        "adult_count": "成人数",
+        "children_count": "儿童数",
+        "budget_min": "预算下限",
+        "budget_max": "预算上限",
+    }
+    for key in (
+        "departure_city",
+        "destination",
+        "departure_date",
+        "travel_days",
+        "return_date",
+        "check_in_date",
+        "check_out_date",
+        "adult_count",
+        "children_count",
+        "budget_min",
+        "budget_max",
+    ):
+        value = facts.get(key)
+        if value not in (None, "", [], {}):
+            lines.append(f"- {labels[key]}：{value}")
+    if not lines:
+        return ""
+    return (
+        "【已确认事实】\n"
+        + "\n".join(lines[:12])
+        + "\n用户已经确认过上述事实；交通、住宿、预算和报告阶段不得再次询问同一出发日期、入住日期或退房日期。"
+        "只有用户明确修改日期、改成自由行/自己订/不要旅行社，或指出信息错误时，才重新确认相关事实。"
+    )
+
+
+def _agency_plan_workflow_instruction(state_dict: dict[str, Any]) -> str:
+    if not _is_agency_plan_workflow(state_dict):
+        return ""
+    matched_product = state_dict.get("matched_product") if isinstance(state_dict.get("matched_product"), dict) else {}
+    product_name = matched_product.get("name") or "成熟路线样板"
+    return (
+        "【旅行社方案工作流已锁定】\n"
+        f"当前按“{product_name}”的省心方案交付思路推进，active_workflow=agency_plan。"
+        "流程固定为：确认基础需求 → 给成熟路线样板 → 等用户评价 → 满意后生成报告；"
+        "用户不满意时记录修改意见并出修订版。不要漂回自由行逐项追问交通方式、酒店偏好或自行订购方式；"
+        "应直接给产品化交通口径、住宿商圈/档次、景点门票参考、餐饮安排、服务节点和不承诺边界。"
+        "不要空说“对一下关键信息”；如果要核对，必须列出已经识别到的目的地、天数、人数、预算和待补项。"
+        "只有用户明确说“自由行/自己订/不要旅行社/不需要旅行社产品”时，才切回 free_planning。"
+    )
+
+
+def _is_agency_plan_workflow(state_dict: dict[str, Any]) -> bool:
+    requirement = state_dict.get("user_requirement")
+    requirement_confirmed = (
+        bool(requirement.get("planning_mode_confirmed"))
+        if isinstance(requirement, dict)
+        else False
+    )
+    return (
+        state_dict.get("active_workflow") == "agency_plan"
+        and bool(state_dict.get("planning_mode_confirmed") or requirement_confirmed)
+    )
+
+
+def _agency_step_from_state(state_dict: dict[str, Any]) -> str:
+    raw_step = str(state_dict.get("agency_step") or "").strip()
+    if raw_step in AGENCY_STEP_LABELS:
+        return raw_step
+    return INITIAL_AGENCY_STEP
+
+
+def _agency_step_for_request(
+    state_dict: dict[str, Any],
+    request: ModelRequest | None = None,
+) -> str:
+    step = _agency_step_from_state(state_dict)
+    latest_text = _latest_human_text(request) if request is not None else ""
+    recent_text = _recent_human_text(request, limit=1) if request is not None else ""
+    text = latest_text or recent_text
+    if _looks_like_final_report_request(text) or any(
+        keyword in text for keyword in ("满意", "没问题", "可以了", "就按这个", "生成报告", "出报告")
+    ):
+        return "agency_report"
+    if request is not None and _latest_message_is_tool_result(request):
+        latest_tool_names = _latest_tool_result_names(request)
+        if step == "agency_product_match" and latest_tool_names:
+            return "agency_plan_draft"
+    if step == "agency_plan_draft" and text and not _looks_like_final_report_request(text):
+        if any(keyword in text for keyword in ("改", "调整", "换", "不想", "增加", "减少", "删掉")):
+            return "agency_feedback"
+    return step
+
+
+def _workflow_step_for_request(
+    state_dict: dict[str, Any],
+    request: ModelRequest | None = None,
+) -> str:
+    if _is_agency_plan_workflow(state_dict):
+        return _agency_step_for_request(state_dict, request)
+    return str(state_dict.get("current_step") or INITIAL_PLANNING_STEP)
+
+
+def _agency_progress_instruction(agency_step: str) -> str:
+    label = AGENCY_STEP_LABELS.get(agency_step, "基础需求")
+    return (
+        f"【省心方案当前阶段】{label}。"
+        "这是一条独立的省心方案工作流，不使用自由规划的交通规划、住宿规划、餐饮规划阶段。"
+        "如果用户没有明确要求实时查票或酒店库存，不要调用实时交通/酒店工具，也不要写入这些自由规划阶段。"
+    )
+
+
+def _memory_prompt_preferences(memory_prompt: str) -> list[str]:
+    if not memory_prompt:
+        return []
+    preferences: list[str] = []
+    for raw_line in memory_prompt.splitlines():
+        line = raw_line.strip(" -•\t")
+        if not line:
+            continue
+        if any(keyword in line for keyword in ("偏好", "喜欢", "习惯", "禁忌", "不吃", "去过", "住宿")):
+            compact = re.sub(r"\s+", " ", line)
+            if compact not in preferences:
+                preferences.append(compact[:60])
+        if len(preferences) >= 6:
+            break
+    return preferences
+
+
+def _is_explicit_live_transport_or_hotel_query(text: str) -> bool:
+    normalized = (text or "").strip()
+    if not normalized:
+        return False
+    query_keywords = ("查", "查询", "看看", "有没有", "实时", "票价", "班次", "余票", "航班", "酒店价格")
+    domain_keywords = CROSS_STEP_TRANSPORT_KEYWORDS + CROSS_STEP_HOTEL_KEYWORDS
+    return any(keyword in normalized for keyword in query_keywords) and any(
+        keyword in normalized for keyword in domain_keywords
+    )
+
+
+def _agency_plan_no_preference_instruction(current_step: str) -> str:
+    stage_hint = (
+        "即使当前内部阶段是交通或住宿，也不要询问用户选择飞机/高铁或酒店偏好；"
+        if current_step in {"transport_planning", "accommodation_planning"}
+        else ""
+    )
+    return (
+        "【省心方案工具护栏】"
+        f"{stage_hint}"
+        "请按成熟产品口径直接给交通安排建议、住宿商圈/档次与示例酒店、门票参考、餐饮安排、费用说明和涵盖服务。"
+        "只有用户明确要求实时查航班/高铁/酒店时，才调用真实交通或酒店查询工具。"
+        "没有成功的实时交通查询证据时，不得把高铁、火车、车次或航班写成已确认、有票、可订、准点或已出票；"
+        "只能给交通方式与衔接原则，并在同一项明确写班次、时刻和票价待二次核验。"
+        "没有成功的实时酒店查询证据时，也不得写酒店有房、房型可订或已锁房。"
+        "没有成功的实时供应商库存证据时，不得写库存、名额、余位或席位有、充足、可订、已预留或已锁定；"
+        "确需提及必须在同一句写明库存或名额待二次核验、当前未确认，‘确认后说明’不能代替核验限定。"
+    )
+
+
+def _should_force_planning_mode_confirmation(
+    decision: PlanningModeDecision,
+    state_dict: dict[str, Any],
+    current_step: str,
+) -> bool:
+    if current_step != "requirement_collection":
+        return False
+    if decision.mode not in {"agency_plan", "free_planning"}:
+        return False
+    if not decision.confirmed or decision.source != "latest_user":
+        return False
+    state_mode = (
+        state_dict.get("active_workflow")
+        or state_dict.get("planning_mode")
+        or (state_dict.get("user_requirement") or {}).get("planning_mode")
+    )
+    state_confirmed = bool(
+        state_dict.get("planning_mode_confirmed")
+        or (state_dict.get("user_requirement") or {}).get("planning_mode_confirmed")
+    )
+    return not (state_mode == decision.mode and state_confirmed)
+
+
+def _confirm_planning_mode_instruction(mode: str) -> str:
+    label = "省心方案" if mode == "agency_plan" else "个性化旅游规划"
+    followup = (
+        "如果状态里已有首句提取的出发地、目的地、日期、人数或预算，不要让用户重说；"
+        "省心方案要直接进入成熟路线样板表达，不要追问交通方式或酒店偏好。"
+        if mode == "agency_plan"
+        else "如果状态里已有首句提取的出发地、目的地、日期、人数或预算，不要让用户重说；"
+    )
+    return (
+        f"用户本轮已经选择“{label}”。本轮必须先调用 confirm_planning_mode_tool，"
+        f"mode 参数传 {mode}，reason 写“用户明确选择{label}”。"
+        f"{followup}"
+        "工具返回后再用一句自然话确认已按该方案类型推进，不要继续显示待确认。"
+    )
+
+
+def _has_confirmed_departure_city(state_dict: dict[str, Any]) -> bool:
+    requirement = state_dict.get("user_requirement") or {}
+    if not isinstance(requirement, dict):
+        return False
+
+    departure_city = str(
+        requirement.get("departure_city")
+        or state_dict.get("origin_city")
+        or state_dict.get("departure_city")
+        or ""
+    ).strip()
+    if departure_city in PENDING_DEPARTURE_CITY_VALUES:
+        return False
+    return bool(departure_city)
+
+
+def _live_query_date_gate_instruction(blocked_tools: set[str] | frozenset[str]) -> str:
+    if not blocked_tools:
+        return ""
+    tool_labels = []
+    if "query_transport_options" in blocked_tools:
+        tool_labels.append("真实交通")
+    if "query_hotel_options" in blocked_tools:
+        tool_labels.append("真实酒店")
+    label_text = "、".join(tool_labels) or "真实查询"
+    return (
+        f"当前出发/入住日期仍未由用户明确或确认，本轮已暂缓{label_text}查询。"
+        "请先用一句话请用户确认具体出发日期或日期范围；"
+        "不要自己生成类似“5月22日”的真实查询日期，也不要调用真实交通、酒店或票务工具。"
+        "如需临时估算，只能写“日期待确认”或“暂按某日期待核验估算”。"
+    )
+
+
+def _requirement_context_text(state_dict: dict[str, Any], latest_human_text: str) -> str:
+    requirement = state_dict.get("user_requirement") or {}
+    requirement_parts: list[str] = [latest_human_text]
+    for message in (state_dict.get("messages") or [])[-12:]:
+        content = None
+        if isinstance(message, HumanMessage):
+            content = message.content
+        elif isinstance(message, dict):
+            role = message.get("role") or message.get("type")
+            if role in {"user", "human"}:
+                content = message.get("content")
+        elif getattr(message, "type", None) == "human" or getattr(message, "role", None) == "user":
+            content = getattr(message, "content", None)
+        if content:
+            requirement_parts.append(content if isinstance(content, str) else str(content))
+    if isinstance(requirement, dict):
+        for key in (
+            "special_needs",
+            "travel_styles",
+            "destination",
+            "departure_city",
+            "planning_mode_reason",
+        ):
+            value = requirement.get(key)
+            if isinstance(value, (list, tuple, set)):
+                requirement_parts.extend(str(item) for item in value if item)
+            elif value:
+                requirement_parts.append(str(value))
+    return " ".join(part.strip() for part in requirement_parts if part and part.strip())
+
+
+def _wants_fallback_audit_query(
+    tool_name: str,
+    latest_human_text: str,
+    state_dict: dict[str, Any],
+) -> bool:
+    """Return whether a fallback request should leave an auditable guarded query."""
+
+    text = _requirement_context_text(state_dict, latest_human_text)
+    if not text:
+        return False
+
+    fallback_keywords = (
+        "查不到",
+        "没有查到",
+        "查不到具体",
+        "如果没有",
+        "没有真实",
+        "没有锁定",
+        "没有真实锁价",
+        "没有真实价格",
+        "未锁价",
+        "没锁价",
+        "兜底",
+        "待核验",
+        "待二次核验",
+        "二次核验",
+    )
+    if not any(keyword in text for keyword in fallback_keywords):
+        return False
+
+    if tool_name == "query_transport_options":
+        return any(
+            keyword in text
+            for keyword in (
+                "交通",
+                "高铁",
+                "火车",
+                "车次",
+                "航班",
+                "飞机",
+                "班次",
+                "票价",
+                "自驾",
+            )
+        )
+    if tool_name == "query_hotel_options":
+        return any(
+            keyword in text
+            for keyword in (
+                "酒店",
+                "住宿",
+                "住",
+                "江景",
+                "海景",
+                "房",
+                "民宿",
+                "锁价",
+            )
+        )
+    return False
+
+
+def _fallback_audit_query_instruction(tool_names: set[str] | frozenset[str]) -> str:
+    if not tool_names:
+        return ""
+    labels = []
+    if "query_transport_options" in tool_names:
+        labels.append("交通")
+    if "query_hotel_options" in tool_names:
+        labels.append("酒店")
+    label_text = "、".join(labels) or "查询"
+    return (
+        f"用户要求“查不到/兜底/待核验”也要可执行方案，本轮保留一次{label_text}查询工具调用作为治理证据。"
+        "如果日期仍未确认，调用工具时必须使用状态中的“日期待确认/入住日期待确认”等占位信息，"
+        "让工具守卫返回 skipped 审计结果；不要编造 YYYY-MM-DD 日期，"
+        "不要执行真实库存、班次、票价或锁价查询，也不要承诺真实价格。"
+        "工具返回后，再基于审计结果记录待核验兜底方案。"
+    )
+
+
+def _state_value_ready(value: Any) -> bool:
+    return value not in (None, "", [], {})
+
+
+def _coerce_expected_days(value: Any) -> int:
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int) and value > 0:
+        return value
+    if isinstance(value, str):
+        digit_match = re.search(r"\d+", value)
+        if digit_match:
+            parsed = int(digit_match.group(0))
+            return parsed if parsed > 0 else 0
+    return 0
+
+
+def _has_complete_itinerary_for_report(
+    state_dict: dict[str, Any],
+    user_requirement: dict[str, Any],
+) -> bool:
+    itinerary = state_dict.get("itinerary")
+    if not isinstance(itinerary, list) or not itinerary:
+        return False
+
+    expected_days = _coerce_expected_days(user_requirement.get("travel_days")) or len(
+        itinerary
+    )
+    if expected_days <= 0:
+        return False
+
+    day_numbers: set[int] = set()
+    for index, day in enumerate(itinerary, start=1):
+        if not isinstance(day, dict):
+            continue
+        raw_day = day.get("day_number") or day.get("day") or index
+        day_number = _coerce_expected_days(raw_day)
+        if day_number > 0:
+            day_numbers.add(day_number)
+
+    return all(day_number in day_numbers for day_number in range(1, expected_days + 1))
+
+
+def _can_generate_final_report(state_dict: dict[str, Any]) -> bool:
+    user_requirement = state_dict.get("user_requirement") or {}
+    if not isinstance(user_requirement, dict) or not _state_value_ready(user_requirement):
+        return False
+
+    destination = state_dict.get("selected_destination") or user_requirement.get("destination")
+    if not _state_value_ready(destination):
+        return False
+
+    if _is_agency_plan_workflow(state_dict):
+        total_people = (
+            (user_requirement.get("adult_count") or 0)
+            + (user_requirement.get("children_count") or 0)
+        )
+        has_budget_hint = (
+            user_requirement.get("budget_min") is not None
+            or user_requirement.get("budget_max") is not None
+            or bool(user_requirement.get("budget_level"))
+            or bool(str(user_requirement.get("budget_text") or "").strip())
+        )
+        return (
+            _has_confirmed_departure_city(state_dict)
+            and _has_confirmed_departure_date(state_dict)
+            and int(user_requirement.get("travel_days") or 0) > 0
+            and total_people > 0
+            and has_budget_hint
+        )
+
+    if not _has_confirmed_departure_city(state_dict):
+        return False
+    if not _has_confirmed_departure_date(state_dict):
+        return False
+    if not _has_selected_transport(state_dict):
+        return False
+    if not _has_selected_accommodation(state_dict):
+        return False
+    return _has_complete_itinerary_for_report(
+        state_dict, user_requirement
+    ) and _state_value_ready(state_dict.get("budget"))
+
+
+def _agency_report_next_tool(state_dict: dict[str, Any]) -> str | None:
+    """Return the only safe state-writing tool for the current agency report phase."""
+
+    if not _is_agency_plan_workflow(state_dict) or not _can_generate_final_report(state_dict):
+        return None
+
+    user_requirement = state_dict.get("user_requirement") or {}
+    if not isinstance(user_requirement, dict):
+        return None
+    if not _has_complete_itinerary_for_report(state_dict, user_requirement):
+        return "generate_itinerary_tool"
+    if not _state_value_ready(state_dict.get("budget")):
+        return "summarize_budget_tool"
+    return "generate_order_tool"
+
+
+def _agency_report_sequence_instruction(tool_name: str) -> str:
+    phase_instructions = {
+        "generate_itinerary_tool": (
+            "当前还没有覆盖全部旅行天数的结构化行程；本轮只能调用 "
+            "`generate_itinerary_tool`。等工具结果写入状态后，再进入预算汇总阶段。"
+        ),
+        "summarize_budget_tool": (
+            "当前已有完整结构化行程，但还没有结构化预算；本轮只能调用 "
+            "`summarize_budget_tool`。等工具结果写入状态后，再生成正式报告。"
+        ),
+        "generate_order_tool": (
+            "当前完整结构化行程和预算均已写入；本轮只能调用 "
+            "`generate_order_tool` 生成正式 report_data，不要手写报告。"
+        ),
+    }
+    instruction = phase_instructions.get(tool_name, "")
+    if not instruction:
+        return ""
+    return (
+        "省心方案最终报告必须按“行程生成 → 预算汇总 → 正式报告”串行推进，"
+        "不要在同一次模型调用中并行调用这些写状态工具。"
+        f" {instruction}"
+    )
+
+
+def _has_itinerary_prerequisites(state_dict: dict[str, Any]) -> bool:
+    user_requirement = state_dict.get("user_requirement") or {}
+    if not isinstance(user_requirement, dict) or not _state_value_ready(user_requirement):
+        return False
+    destination = state_dict.get("selected_destination") or user_requirement.get("destination")
+    if not _state_value_ready(destination):
+        return False
+    if _is_agency_plan_workflow(state_dict):
+        return True
+    return _has_selected_transport(state_dict) and _has_selected_accommodation(state_dict)
+
+
+def _has_destination_context_for_visual_journey(state_dict: dict[str, Any]) -> bool:
+    user_requirement = state_dict.get("user_requirement") or {}
+    destination = state_dict.get("selected_destination")
+    if not destination and isinstance(user_requirement, dict):
+        destination = user_requirement.get("destination")
+    return _state_value_ready(destination)
+
+
+def _looks_like_visual_journey_request(text: str) -> bool:
+    normalized = (text or "").strip()
+    if not normalized:
+        return False
+    route_keywords = (
+        "经典线",
+        "经典路线",
+        "路线图",
+        "地图路线",
+        "可视化",
+        "旅程地图",
+        "先排路线",
+        "排个路线",
+        "圆周旅迹",
+    )
+    day_pattern = re.search(r"\d{1,2}\s*天", normalized) is not None
+    return (
+        any(keyword in normalized for keyword in route_keywords)
+        and any(keyword in normalized for keyword in ("路线", "行程", "经典", "地图", "天"))
+    ) or (day_pattern and "经典" in normalized and "记录" not in normalized and "结构化" not in normalized)
+
+
+def _progress_tool_for_explicit_request(
+    latest_human_text: str,
+    state_dict: dict[str, Any],
+) -> str | None:
+    text = latest_human_text.strip()
+    if not text:
+        return None
+
+    intent_name = detect_travel_intent(text).name
+    report_delivery_requested = (
+        _looks_like_final_report_request(text)
+        or intent_name in {"final_report", "export_report"}
+    )
+    structured_itinerary_requested = any(
+        keyword in text for keyword in ("行程", "日程")
+    ) and (
+        "结构化" in text or ("生成" in text and "记录" in text)
+    )
+
+    if report_delivery_requested:
+        agency_report_tool = _agency_report_next_tool(state_dict)
+        if agency_report_tool:
+            return agency_report_tool
+        if _can_generate_final_report(state_dict):
+            return "generate_order_tool"
+        if not _has_confirmed_departure_city(state_dict) or not _has_confirmed_departure_date(state_dict):
+            return None
+        if not _state_value_ready(state_dict.get("itinerary")) and _has_itinerary_prerequisites(
+            state_dict
+        ):
+            return "generate_itinerary_tool"
+        if _state_value_ready(state_dict.get("itinerary")) and not _state_value_ready(
+            state_dict.get("budget")
+        ):
+            return "summarize_budget_tool"
+        return None
+
+    if structured_itinerary_requested and _has_itinerary_prerequisites(state_dict):
+        return "generate_itinerary_tool"
+
+    if (
+        not structured_itinerary_requested
+        and _looks_like_visual_journey_request(text)
+        and _has_destination_context_for_visual_journey(state_dict)
+    ):
+        return "generate_visual_journey_tool"
+
+    if any(keyword in text for keyword in ("预算", "费用", "报价")) and any(
+        keyword in text for keyword in ("汇总", "生成", "记录", "确认", "说明")
+    ):
+        if _state_value_ready(state_dict.get("itinerary")):
+            return "summarize_budget_tool"
+
+    if any(keyword in text for keyword in ("行程", "路线", "日程")) and any(
+        keyword in text for keyword in ("生成", "记录", "确认", "最终", "结构化")
+    ):
+        if _has_itinerary_prerequisites(state_dict):
+            return "generate_itinerary_tool"
+
+    return None
+
+
+def _explicitly_defers_structured_itinerary(text: str) -> bool:
+    """Honor a same-turn request to record food only and generate the itinerary later."""
+
+    normalized = (text or "").strip()
+    if not normalized:
+        return False
+    if any(
+        phrase in normalized
+        for phrase in (
+            "下一轮再生成结构化行程",
+            "下一轮再生成行程",
+            "本轮不要生成结构化行程",
+            "本轮不要生成行程",
+            "本轮不生成结构化行程",
+            "本轮不生成行程",
+        )
+    ):
+        return True
+    return "餐饮" in normalized and any(
+        phrase in normalized for phrase in ("仅记录", "只记录")
+    )
+
+
+def _preferred_tool_for_intent(intent: TravelIntent, state_dict: dict[str, Any]) -> str | None:
+    if intent.name in {"final_report", "export_report"}:
+        agency_report_tool = _agency_report_next_tool(state_dict)
+        if agency_report_tool:
+            return agency_report_tool
+        if _can_generate_final_report(state_dict):
+            return "generate_order_tool"
+        if not _has_confirmed_departure_city(state_dict) or not _has_confirmed_departure_date(state_dict):
+            return None
+        if not _state_value_ready(state_dict.get("itinerary")) and _has_itinerary_prerequisites(
+            state_dict
+        ):
+            return "generate_itinerary_tool"
+        if _state_value_ready(state_dict.get("itinerary")) and not _state_value_ready(
+            state_dict.get("budget")
+        ):
+            return "summarize_budget_tool"
+        return None
+    return intent.preferred_tool
+
+
+def _intent_instruction(
+    intent: TravelIntent,
+    state_dict: dict[str, Any],
+    current_step: str,
+) -> str:
+    if intent.name == "unknown":
+        return ""
+
+    if intent.name == "hotel_query":
+        return (
+            "本轮用户的主要意图是查询住宿/酒店候选。"
+            " 如果目的地、用户明确或确认过的日期、人数等上下文已经存在，请优先调用 `query_hotel_options`，"
+            " 不要退回泛泛区域建议，也不要只用公开攻略替代真实酒店候选。"
+            " 若日期仍是“日期待确认”，必须先确认日期，不要编造入住日期。"
+        )
+
+    if intent.name == "transport_query":
+        return (
+            "本轮用户的主要意图是查询或对比交通方案。"
+            " 如果出发地、目的地和用户明确或确认过的日期上下文已经存在，请优先调用 `query_transport_options`，"
+            " 并把不同交通方式的耗时、费用、稳定性和适配理由讲清楚。"
+            " 若日期仍待确认，必须先请用户确认出发日期，不能用推测日期查真实航班或车次。"
+        )
+
+    if intent.name == "final_report":
+        agency_report_tool = _agency_report_next_tool(state_dict)
+        if agency_report_tool:
+            return _agency_report_sequence_instruction(agency_report_tool)
+        if _can_generate_final_report(state_dict):
+            return (
+                "本轮用户明确要求生成最终旅游规划报告。"
+                " 当前已有生成报告所需的核心信息，必须优先调用 `generate_order_tool`，"
+                " 并以工具返回的 report 作为正文，不要手写、压缩或删减正式报告章节。"
+            )
+        return (
+            "本轮用户明确要求生成最终旅游规划报告，但当前状态还未具备正式生成条件。"
+            " 不要手写伪最终报告，也不要假装已经完成结构化报告。"
+            " 请先用简短方式说明还缺哪些关键确认，或继续推进当前阶段补齐缺口。"
+        )
+
+    if intent.name == "export_report":
+        agency_report_tool = _agency_report_next_tool(state_dict)
+        if agency_report_tool:
+            return _agency_report_sequence_instruction(agency_report_tool)
+        if _can_generate_final_report(state_dict):
+            return (
+                "本轮用户想导出或保存报告。"
+                " 如果尚未生成正式报告，请先调用 `generate_order_tool` 生成结构化报告；"
+                " 如果已经有正式报告，则说明前端导出入口会基于报告内容导出。"
+            )
+        return (
+            "本轮用户想导出或保存报告，但正式报告尚未具备生成条件。"
+            " 不要编造 PDF/图片下载结果，请先补齐最终报告所需信息。"
+        )
+
+    if intent.name == "map_route_query":
+        return (
+            "本轮用户关注地图、路线或分日路线可视化。"
+            " 回复时必须保留可解析的路线节点，例如 Day 1：酒店 -> 景点A -> 餐厅；"
+            " 如果还没有完整日程，请先说明当前只能生成轻量路线草图，后续完整日程会补齐地图路线。"
+        )
+
+    if intent.name == "agency_plan_query":
+        return (
+            "本轮用户倾向旅行社省心方案或成熟产品路线。"
+            " 请先匹配内部产品或成熟路线样板，给 2-3 个方向，并说明适用人群、涵盖服务、费用说明和报价口径；"
+            " 如果出发城市或出发日期还没确认，只能先给轻量方向感，并同时追问这两个关键项，不能生成正式推荐或最终报告；"
+            " 再参考服务标准和风险避坑经验，把它自然转化为方案依据；"
+            " 不要暴露内部知识库、RAG 或工具名，也不要承诺真实库存、锁价或支付能力。"
+        )
+
+    if intent.name == "product_candidate_query":
+        return (
+            "本轮用户没有拒绝产品化方向，且目的地、人群或风格可能与成熟路线样板重合。"
+            " 可以先检索产品模板，并把命中内容自然表达为“成熟路线样板”“合作产品候选”或“省心路线方向”；"
+            " 不要求用户条件完全匹配后才推荐，目的地级命中也可以给一个候选方向。"
+            " 但如果出发城市或出发日期缺失，只能说“可以按这个方向继续核算”，并优先请用户补齐出发城市和出发日期；"
+            " 回复必须同时保留自由规划选项，避免销售感；"
+            " 不要暴露内部知识库、RAG、工具名或产品编号，也不要承诺真实库存、成团、锁价或支付能力。"
+        )
+
+    if intent.name == "free_planning_query":
+        return (
+            "本轮用户倾向自由行/自助规划。"
+            " 回复应保持中立实用，重点给路线、预算、住宿区域和避坑建议；"
+            " 不要把旅行社方案硬推给用户。"
+        )
+
+    if intent.name == "pricing_query":
+        return (
+            "本轮用户关注报价、费用包含或预算依据。"
+            " 请优先参考内部报价规则，清楚区分已确认价格、估算项和待核验项；"
+            " 不要把估算价格说成真实锁价。"
+            " 没有成功的实时供应商库存证据时，不得写库存、名额、余位或席位有、充足、可订、已预留或已锁定；"
+            "如需提及，必须同句写明待二次核验、当前未确认。"
+        )
+
+    if intent.name == "risk_query":
+        return (
+            "本轮用户关注风险、避坑、预约或 Plan B。"
+            " 请优先参考内部风险手册，给出具体、温和、可执行的提醒；"
+            " 不要制造焦虑，也不要编造实时开放和库存情况。"
+        )
+
+    if intent.name == "progress_check":
+        return (
+            "本轮用户在询问当前规划进度。"
+            " 请优先调用 `check_current_progress` 或用当前状态简短说明已完成和待补齐内容，"
+            " 不要顺势生成新的长篇规划。"
+        )
+
+    if intent.name == "destination_query":
+        return (
+            "本轮用户关注目的地、景点或玩法。"
+            " 请优先回答目的地问题；只有用户明确要求完整规划时，才继续推进完整流程。"
+        )
+
+    return ""
+
+
+def _planning_mode_instruction(decision: PlanningModeDecision) -> str:
+    if decision.needs_confirmation:
+        return (
+            "本轮用户的规划模式表达不够明确。"
+            " 请输出 1-2 句：先用一句自然、具体但不夸张的话承接目的地和旅行期待，"
+            "必须使用用户原文里的目的地，不要照抄示例目的地；"
+            "可以按“这个目的地是个不错的选择，也适合提前把节奏规划好。”这种轻量表达；"
+            "然后立刻询问：您想要现成省心方案，还是个性化旅游规划？"
+            " 不要整理已知信息，不要给路线方向，不要补充预算、住宿、景点或地图建议。"
+            " 在确认前不要默认切到旅行社方案，也不要主动使用内部产品模板做推销式表达。"
+        )
+
+    if decision.mode == "agency_plan":
+        return (
+            "当前规划模式：旅行社顾问方案。"
+            " 你要像真实旅行社顾问一样，把托付诉求转化为成熟路线、服务节奏、预算依据和风险预案；"
+            " 在产品框架阶段，先给可选方向和边界，不要直接生成最终报告或 report_data；"
+            " 可以自然参考内部产品模板、服务标准、报价规则和风险经验，但不要暴露内部资料、RAG 或工具名。"
+        )
+
+    if decision.mode == "free_planning":
+        return (
+            "当前规划模式：自由规划。"
+            " 回复保持中立实用，重点帮助用户自己完成路线、交通、住宿区域、预算和避坑判断；"
+            " 用户拒绝旅行社产品后，不要主动推旅行社产品或省心套餐；"
+            " 只有用户明确重新询问报价、风险或托付式服务时才切换相应表达。"
+        )
+
+    return ""
+
+
+def _record_requirement_instruction() -> str:
+    return (
+        "如果用户这条消息或最近几轮已经提供了目的地、行程天数、主要风格或规划模式，"
+        "并且本轮明确要求你整理需求、记录需求、确认无误或继续推进规划，"
+        "那就把这条消息视为一次显式确认。"
+        " 你可以先用一句简短摘要确认你的理解，但必须在本轮直接调用 `record_requirement_tool`。"
+        " 如果缺少出发日期，必须把出发日期写为 `日期待确认`；"
+        "不要自己生成类似“5月22日”或今天加若干天的真实查询日期；"
+        "缺少出发地时使用 `出发地待确认`；缺少人数时按 1 位成人；"
+        "缺少预算时按目的地常规轻松行程做保守估算。"
+        " 这些兜底假设必须写进 `special_needs`，并明确标注待核验。"
+        " 不要为了补充非关键偏好而继续追问，也不要把记录动作拖到下一轮。"
+    )
+
+
+def _destination_query_instruction() -> str:
+    return (
+        "如果用户这轮已经在直接询问某个具体目的地的景点、玩法、天气或是否值得去，"
+        "就先直接调用 `query_destination_info` 回答这个问题。"
+        " 优先从用户消息里提取明确目的地名称作为 destination，query 里保留用户原始问题。"
+        " 本轮只回答用户实际询问的目的地或天气范围；"
+        "如果没有调用真实交通或酒店查询工具，不得断言班次准点、余票、航班可订、酒店有房或实时价格，"
+        "确需提及时只能写成待二次核验。"
+        " 回答完后，只需要顺带说明如果用户愿意继续做完整旅行规划，后面还可以继续补日期、人数、预算，并最终生成完整旅游报告。"
+        " 不要因为当前还在需求收集阶段，就先强行追问一整套表单式信息。"
+    )
+
+
+def _confirmed_destination_name(state_dict: dict[str, Any], text: str) -> str | None:
+    if not any(keyword in text for keyword in SELECTION_KEYWORDS):
+        return None
+
+    candidate_names: list[str] = []
+    for option in state_dict.get("destination_options") or []:
+        name = str(option.get("name") or "").strip()
+        if name and name not in candidate_names:
+            candidate_names.append(name)
+
+    user_requirement = state_dict.get("user_requirement") or {}
+    if isinstance(user_requirement, dict):
+        destination = str(user_requirement.get("destination") or "").strip()
+        if destination and destination not in candidate_names:
+            candidate_names.append(destination)
+
+    for name in candidate_names:
+        if name and name in text:
+            return name
+
+    if len(candidate_names) == 1:
+        return candidate_names[0]
+
+    inferred_destination = _infer_destination_from_state_messages(state_dict)
+    if inferred_destination:
+        return inferred_destination
+
+    return None
+
+
+def _infer_destination_from_route_text(text: str) -> str | None:
+    for match in re.finditer(r"(?:去|到)([^，。；\n]{0,24})", text or ""):
+        segment = match.group(1)
+        for city in COMMON_CITY_NAMES:
+            if city in segment:
+                return city
+    return None
+
+
+def _infer_destination_from_state_messages(state_dict: dict[str, Any]) -> str | None:
+    texts: list[str] = []
+    for message in state_dict.get("messages") or []:
+        content = None
+        if isinstance(message, dict):
+            role = message.get("role") or message.get("type")
+            if role in {"user", "human"}:
+                content = message.get("content")
+        elif getattr(message, "type", None) == "human" or getattr(message, "role", None) == "user":
+            content = getattr(message, "content", None)
+        if content:
+            texts.append(content if isinstance(content, str) else str(content))
+
+    for text in reversed(texts):
+        destination = _infer_destination_from_route_text(text)
+        if destination:
+            return destination
+    return None
+
+
+def _destination_selection_instruction(destination: str) -> str:
+    return (
+        f"用户本轮已经确认目的地为 `{destination}`。"
+        " 你必须在本轮直接调用 `select_destination_tool` 记录该目的地，"
+        " 不要继续停留在目的地比较阶段，也不要重复追问是否确认。"
+        " 记录后再继续衔接交通规划。"
+    )
+
+
+def _has_date_hint(text: str) -> bool:
+    patterns = (
+        r"\d{4}-\d{1,2}-\d{1,2}",
+        r"\d{4}年\d{1,2}月\d{1,2}日",
+        r"\d{1,2}月\d{1,2}日",
+        r"[一二两三四五六七八九十\d]+月(?:上旬|中旬|下旬|月初|月底)?",
+        r"(这周|本周|下周|下下周|这月|本月|下个月|周末|小长假|暑假|寒假|春节|五一|端午|中秋|国庆)",
+    )
+    return any(re.search(pattern, text) for pattern in patterns)
+
+
+def _has_days_hint(text: str) -> bool:
+    return bool(
+        re.search(r"\d+\s*天", text)
+        or re.search(r"[一二两三四五六七八九十]+\s*天", text)
+        or re.search(r"[一二两三四五六七八九十\d]+天[一二两三四五六七八九十\d]+夜", text)
+    )
+
+
+def _has_budget_hint(text: str) -> bool:
+    return bool(
+        re.search(r"预算[^\n，。；]{0,8}\d", text)
+        or re.search(r"\d+(?:\.\d+)?\s*(?:万|元)", text)
+        or re.search(r"(总预算|总共预算|人均预算|预算希望控制在)\s*\d", text)
+    )
+
+
+def _has_people_hint(text: str) -> bool:
+    adult_or_child = ("大人", "成人", "孩子", "儿童", "一家", "亲子", "同行人数")
+    return bool(
+        any(keyword in text for keyword in adult_or_child) and re.search(r"\d", text)
+    ) or bool(re.search(r"(\d+|[一二两三四五六七八九十]+)\s*人", text))
+
+
+def _has_route_hint(text: str) -> bool:
+    route_keywords = ("从", "出发", "去", "目的地", "想去")
+    return (
+        any(keyword in text for keyword in route_keywords)
+        and sum(1 for city in COMMON_CITY_NAMES if city in text) >= 1
+    )
+
+
+def _has_style_hint(text: str) -> bool:
+    style_keywords = (
+        "亲子",
+        "休闲",
+        "休息",
+        "放松",
+        "文化",
+        "人文",
+        "自然",
+        "美食",
+        "冒险",
+        "情侣",
+        "环球影城",
+        "主题乐园",
+        "博物馆",
+    )
+    return any(keyword in text for keyword in style_keywords)
+
+
+def _has_planning_mode_or_style_hint(text: str) -> bool:
+    mode_keywords = (
+        "自由行",
+        "自由规划",
+        "自助游",
+        "自己订",
+        "不跟团",
+        "旅行社",
+        "顾问方案",
+        "省心方案",
+        "定制游",
+        "小包团",
+        "私家团",
+    )
+    return _has_style_hint(text) or any(keyword in text for keyword in mode_keywords)
+
+
+def _has_specific_accommodation_preference(text: str) -> bool:
+    """Recognize concrete stay preferences as enough context for an explicit confirmation."""
+
+    return any(
+        keyword in text
+        for keyword in (
+            "酒店偏好",
+            "住宿偏好",
+            "江景房",
+            "海景房",
+            "湖景房",
+            "民宿",
+        )
+    )
+
+
+def _has_minimum_plannable_requirement(text: str) -> bool:
+    return (
+        _has_route_hint(text)
+        and (_has_days_hint(text) or _has_date_hint(text))
+        and (
+            _has_planning_mode_or_style_hint(text)
+            or _has_specific_accommodation_preference(text)
+        )
+    )
+
+
+def _should_prioritize_destination_query(text: str) -> bool:
+    if not any(keyword in text for keyword in DESTINATION_QUERY_KEYWORDS):
+        return False
+
+    if "天气" in text or "气温" in text:
+        return True
+
+    if any(keyword in text for keyword in DESTINATION_HINT_KEYWORDS):
+        return True
+
+    return _has_route_hint(text)
+
+
+def _should_prioritize_requirement_record(text: str) -> bool:
+    if not any(keyword in text for keyword in REQUIREMENT_RECORD_KEYWORDS):
+        return False
+
+    checks = [
+        _has_route_hint(text),
+        _has_date_hint(text),
+        _has_days_hint(text),
+        _has_people_hint(text),
+        _has_budget_hint(text),
+        _has_style_hint(text),
+    ]
+    return sum(1 for item in checks if item) >= 5
+
+
+def _looks_like_initial_complex_trip_request(text: str) -> bool:
+    normalized = (text or "").strip()
+    if not normalized:
+        return False
+
+    has_trip_shape = _has_route_hint(normalized) and (
+        _has_days_hint(normalized) or _has_date_hint(normalized)
+    )
+    if not has_trip_shape:
+        return False
+
+    has_slow_intent = any(
+        keyword in normalized for keyword in FIRST_TURN_SLOW_INTENT_KEYWORDS
+    )
+    has_full_agency_plan_intent = (
+        _has_budget_hint(normalized)
+        and any(keyword in normalized for keyword in FIRST_TURN_AGENCY_PLAN_KEYWORDS)
+    )
+    has_budgeted_style_trip = _has_budget_hint(normalized) and _has_style_hint(normalized)
+    return has_slow_intent or has_full_agency_plan_intent or has_budgeted_style_trip
+
+
+def _has_productized_route_soft_match(text: str) -> bool:
+    normalized = (text or "").strip()
+    if not normalized:
+        return False
+    if any(keyword in normalized for keyword in PRODUCT_SOFT_REJECTION_KEYWORDS):
+        return False
+    target_destinations = [
+        destination
+        for destination in PRODUCT_DEMO_DESTINATION_KEYWORDS
+        if (
+            re.search(rf"(想去|计划去|去|到|目的地).{{0,8}}{re.escape(destination)}", normalized)
+            or re.search(
+                rf"{re.escape(destination)}.{{0,10}}(路线|行程|省心|产品|候选|成熟|小团|包车|预算|亲子|情侣)",
+                normalized,
+            )
+        )
+        and not re.search(rf"从{re.escape(destination)}.{{0,6}}(出发|走)", normalized)
+    ]
+    if not target_destinations:
+        return False
+    if any(keyword in normalized for keyword in ("真实酒店", "具体酒店", "江景房", "天气", "下雨", "交通", "Plan B", "风险")) and not any(
+        keyword in normalized for keyword in ("产品", "成熟路线", "路线样板", "小团", "包车", "旅行社方案")
+    ):
+        return False
+    return any(
+        keyword in normalized
+        for keyword in ("想去", "计划去", "路线", "行程", "省心", "预算", "亲子", "情侣", "小团", "包车", "旅行社方案")
+    )
+
+
+def _should_defer_initial_slow_tools(request: ModelRequest, text: str) -> bool:
+    """Keep the first visible response ahead of slow external lookups."""
+
+    if not _is_first_user_turn_without_assistant_text(request):
+        return False
+    if resolve_planning_mode(text, state=getattr(request, "state", {}) or {}).needs_confirmation:
+        return False
+    if _should_prioritize_requirement_record(text):
+        return False
+    if _has_productized_route_soft_match(text):
+        return False
+    return _looks_like_initial_complex_trip_request(text)
+
+
+def _initial_slow_tool_deferral_instruction() -> str:
+    return (
+        "你是知行旅行顾问。本轮只做首轮轻量响应，不调用任何工具，"
+        "也不编造实时价格、库存、班次或天气。"
+        "请用 1-2 句确认你已理解用户的目的地、天数、同行人和慢项诉求；"
+        "如果用户没有拒绝产品化方向，可以顺带说明后续会同时查看是否有成熟路线样板可参考；"
+        "说明会在需求确认后核验真实交通、酒店、天气和风险证据，"
+        "然后请用户确认是否按此记录并推进。"
+    )
+
+
+def _post_initial_requirement_record_instruction() -> str:
+    return (
+        "本轮已经完成需求记录。请只用 1-2 句确认需求已记录，"
+        "说明下一轮会继续做目的地推荐、真实候选核验和报价依据整理。"
+        "不要继续调用目的地、天气、攻略、报价或内部资料工具，"
+        "也不要展开长篇方案。"
+    )
+
+
+def _looks_like_final_report_request(text: str) -> bool:
+    normalized = (text or "").strip()
+    if not normalized:
+        return False
+    return any(keyword in normalized for keyword in FINAL_REPORT_REQUEST_KEYWORDS)
+
+
+def _final_report_tool_instruction() -> str:
+    return (
+        "本轮已经处于最终报告生成阶段，用户明确要求生成最终报告或 report_data。"
+        " 只能调用 `generate_order_tool`，不要先输出寒暄、确认语或手写报告。"
+        " 工具会用已确认状态生成结构化报告、预算置信度、风险和待核验项。"
+    )
+
+
+def _final_report_not_ready_instruction() -> str:
+    return (
+        "用户要求生成最终报告或 report_data，但当前还没有同时确认出发城市、出发日期、交通、住宿、完整每日行程和预算汇总。"
+        "本轮不要调用 `generate_order_tool`，也不要手写最终报告卡片；"
+        "请简短说明还缺哪些关键确认，并继续推进当前阶段。"
+    )
+
+
+def _should_finalize_requirement_after_followup(
+    request: ModelRequest,
+    text: str,
+) -> bool:
+    if not text.strip():
+        return False
+
+    followup_keywords = (
+        "继续规划",
+        "继续吧",
+        "就按这个",
+        "按这个来",
+        "开始规划",
+        "可以了",
+        "没问题",
+    )
+    if not any(keyword in text for keyword in SELECTION_KEYWORDS + followup_keywords):
+        return False
+
+    combined_text = _recent_human_text(request)
+    checks = [
+        _has_route_hint(combined_text),
+        _has_date_hint(combined_text),
+        _has_days_hint(combined_text),
+        _has_people_hint(combined_text),
+        _has_budget_hint(combined_text),
+        _has_style_hint(combined_text),
+    ]
+    return sum(1 for item in checks if item) >= 5 or _has_minimum_plannable_requirement(
+        combined_text
+    )
+
+
+def _should_allow_date_tools(text: str) -> bool:
+    normalized = (text or "").strip()
+    if not normalized:
+        return False
+    if any(keyword in normalized for keyword in RELATIVE_DATE_TOOL_KEYWORDS):
+        return True
+    return bool(
+        re.search(r"(这|本|下|下下)周[一二三四五六日天]?", normalized)
+        or re.search(r"\d{1,2}\s*月\s*(上旬|中旬|下旬|月初|月底)", normalized)
+    )
+
+
+class StepConfigMiddleware(AgentMiddleware):
+    """
+    步骤配置中间件，根据 current_step 动态配置 Agent。
+    """
+
+    def __init__(self, step_config: dict):
+        self._step_config = step_config
+
+    async def awrap_model_call(
+        self,
+        request: ModelRequest,
+        handler: Callable[[ModelRequest], ModelResponse],
+    ) -> ModelResponse:
+        state: TravelState = request.state
+        state_dict = dict(state) if hasattr(state, "items") else {}
+        stored_step = state.get("current_step", INITIAL_PLANNING_STEP)
+        current_step = _workflow_step_for_request(state_dict, request)
+        agency_plan_workflow = _is_agency_plan_workflow(state_dict)
+        if (
+            agency_plan_workflow
+            and current_step not in self._step_config
+            and stored_step in self._step_config
+        ):
+            app_logger.warning(
+                "省心方案阶段配置缺失，回退到当前配置中的旧阶段: "
+                f"agency_step={current_step}, fallback={stored_step}"
+            )
+            current_step = str(stored_step)
+        if agency_plan_workflow and current_step in AGENCY_STEP_LABELS:
+            state["agency_step"] = current_step
+        user_id = state.get("user_id")
+
+        app_logger.info(f"用户ID: {user_id}")
+        app_logger.info(
+            "当前步骤: "
+            f"{current_step} (stored_current_step={stored_step}, "
+            f"active_workflow={state_dict.get('active_workflow')})"
+        )
+
+        if current_step not in self._step_config:
+            app_logger.error(f"未知步骤: {current_step}")
+            raise ValueError(f"未知步骤: {current_step}")
+
+        step_config = self._step_config[current_step]
+        required_fields = list(step_config["requires"])
+        _heal_missing_accommodation_prerequisites(
+            state,
+            state_dict,
+            current_step=current_step,
+            required_fields=required_fields,
+        )
+
+        for required_field in required_fields:
+            if required_field not in state or state[required_field] is None:
+                error_msg = f"步骤 {current_step} 需要完整状态，{required_field} 未设置"
+                app_logger.error(error_msg)
+                raise ValueError(error_msg)
+
+        memory_prompt = ""
+        if user_id:
+            try:
+                service = await get_user_memory_service()
+                memory_prompt = await service.format_memory_for_prompt(user_id)
+                if memory_prompt:
+                    state["long_term_preferences_snapshot"] = _memory_prompt_preferences(
+                        memory_prompt
+                    )
+                    app_logger.info(f"已加载用户长期记忆: {user_id}")
+                else:
+                    state["long_term_preferences_snapshot"] = []
+                    app_logger.info(f"用户暂无长期记忆: {user_id}")
+            except Exception as exc:
+                app_logger.warning(f"加载长期记忆失败: {exc}")
+
+        try:
+            user_requirement = state_dict.get("user_requirement") or {}
+            if isinstance(user_requirement, dict):
+                state_dict.setdefault("origin_city", user_requirement.get("departure_city"))
+                state_dict.setdefault("destination", user_requirement.get("destination"))
+            state_dict.setdefault(
+                "selected_accommodation_summary",
+                _format_selected_accommodation(state_dict),
+            )
+            state_dict.setdefault(
+                "selected_transport_summary",
+                _format_selected_transport(state_dict),
+            )
+            state_dict.setdefault("budget_summary", _format_budget_summary(state_dict))
+            state_dict.setdefault("itinerary_summary", _format_itinerary_summary(state_dict))
+            state_dict.setdefault(
+                "visual_journey_summary",
+                _format_visual_journey_summary(state_dict),
+            )
+
+            state_dict["user_memory"] = memory_prompt
+            prompt_values = {key: _to_prompt_value(value) for key, value in state_dict.items()}
+            system_prompt = step_config["prompt"].format_map(prompt_values)
+            visual_journey_summary = str(prompt_values.get("visual_journey_summary") or "")
+            if visual_journey_summary and visual_journey_summary != "尚未生成可视化旅程草案":
+                system_prompt = (
+                    f"{system_prompt}\n\n"
+                    "【已保存可视化旅程草案】\n"
+                    f"{visual_journey_summary}\n"
+                    "- 后续交通、住宿、预算和最终报告应优先沿用这份草案的分日顺序与用户编辑结果；"
+                    "但不能绕过交通、住宿、预算和最终报告门禁。"
+                )
+
+        except (KeyError, AttributeError) as exc:
+            app_logger.warning(f"提示词变量缺失: {exc}，使用原始模板")
+            system_prompt = step_config["prompt"]
+
+        context_messages = list(request.messages or [])
+        if not context_messages:
+            context_messages = list(state_dict.get("messages") or [])
+        context_pack = await abuild_context_pack(
+            state=state_dict,
+            messages=context_messages,
+            memory_prompt=memory_prompt,
+        )
+        system_prompt = f"{system_prompt}\n\n{context_pack.system_appendix}"
+        if context_pack.summary_text:
+            state["conversation_summary"] = context_pack.summary_text
+            state["context_summary_updated_at"] = time.time()
+        state["context_last_step"] = current_step
+        state["context_pack_metadata"] = context_pack.metadata
+        state["key_history_turns"] = context_pack.key_history_turns
+        state["context_layer_boundaries"] = context_pack.metadata.get("context_layer_boundaries", {})
+        app_logger.info(
+            "上下文打包完成: "
+            f"messages={context_pack.metadata['message_count']}, "
+            f"retained={context_pack.metadata['retained_message_count']}, "
+            f"summary={context_pack.metadata['summary_triggered']}, "
+            f"reason={context_pack.metadata['summary_reason']}"
+        )
+
+        override_kwargs = {
+            "system_prompt": system_prompt,
+            "tools": step_config["tools"],
+            "model_settings": {
+                **(getattr(request, "model_settings", None) or {}),
+                "parallel_tool_calls": False,
+            },
+        }
+        if context_messages:
+            override_kwargs["messages"] = context_pack.messages
+
+        compatibility = get_model_compatibility(profile="planner")
+        latest_human_text = _latest_human_text(request)
+        active_human_text = latest_human_text or _recent_human_text(request, limit=1)
+        defer_initial_slow_tools = (
+            current_step == "requirement_collection"
+            and _should_defer_initial_slow_tools(request, active_human_text)
+        )
+        if current_step in {"requirement_collection", "agency_requirement"}:
+            today_text = date.today().isoformat()
+            _append_system_instructions(
+                override_kwargs,
+                "【当前日期】"
+                f"今天是 {today_text}。"
+                "处理“今天/明天/这个周末/下周/下个月”等相对日期时，"
+                "直接基于这个日期换算为 YYYY-MM-DD 或具体日期范围；"
+                "不要调用日期工具。",
+            )
+            filtered_tools = _exclude_tools_by_name(override_kwargs["tools"], DATE_TOOL_NAMES)
+            if len(filtered_tools) != len(override_kwargs["tools"]):
+                override_kwargs["tools"] = filtered_tools
+                app_logger.info(
+                    "需求收集阶段已注入当前日期并移除日期工具以降低首 token 延迟"
+                )
+            allowed_memory_tools = _allowed_requirement_memory_tools(latest_human_text)
+            memory_tools_to_exclude = REQUIREMENT_MEMORY_TOOL_NAMES - allowed_memory_tools
+            filtered_tools = _exclude_tools_by_name(
+                override_kwargs["tools"],
+                memory_tools_to_exclude,
+            )
+            if len(filtered_tools) != len(override_kwargs["tools"]):
+                override_kwargs["tools"] = filtered_tools
+                _append_system_instructions(
+                    override_kwargs,
+                    _temporary_requirement_memory_instruction(),
+                )
+                app_logger.info(
+                    "需求收集阶段按长期记忆语义收窄记忆工具: "
+                    f"excluded={sorted(memory_tools_to_exclude)}"
+                )
+        explicit_request_intent = detect_travel_intent(
+            active_human_text,
+            current_step=current_step,
+            state=state_dict,
+        )
+        travel_intent = explicit_request_intent
+        if (
+            not latest_human_text
+            and _latest_message_is_tool_result(request)
+            and travel_intent.name != "pricing_query"
+        ):
+            # 报价规则可能先返回 ToolMessage，后续仍需保持同一轮的报价门禁；
+            # 其他查询意图沿用旧语义，避免酒店/交通工具结束后再次被提示调用。
+            travel_intent = detect_travel_intent(
+                "",
+                current_step=current_step,
+                state=state_dict,
+            )
+        planning_mode = resolve_planning_mode(
+            active_human_text,
+            state=state_dict,
+            intent=travel_intent,
+        )
+        explicit_report_delivery_requested = (
+            explicit_request_intent.name in {"final_report", "export_report"}
+            or _looks_like_final_report_request(active_human_text)
+        )
+        final_report_requested = (
+            travel_intent.name in {"final_report", "export_report"}
+            or explicit_report_delivery_requested
+            or (
+                current_step == "order_generation"
+                and _looks_like_final_report_request(active_human_text)
+            )
+        )
+        confirmed_departure_date = _has_confirmed_departure_date(state_dict)
+        planning_instruction = _planning_mode_instruction(planning_mode)
+        confirmed_instruction = _confirmed_facts_instruction(state_dict)
+        agency_plan_workflow = (
+            agency_plan_workflow
+            and planning_mode.mode != "free_planning"
+            and not planning_mode.needs_confirmation
+        )
+        if confirmed_instruction:
+            _append_system_instructions(override_kwargs, confirmed_instruction)
+        agency_workflow_instruction = (
+            _agency_plan_workflow_instruction(state_dict) if agency_plan_workflow else ""
+        )
+        if agency_workflow_instruction:
+            _append_system_instructions(
+                override_kwargs,
+                agency_workflow_instruction,
+                _agency_progress_instruction(current_step),
+            )
+        if planning_instruction:
+            _append_system_instructions(override_kwargs, planning_instruction)
+            override_kwargs["tools"] = _append_tools_by_name(
+                override_kwargs["tools"],
+                self._step_config,
+                MODE_MANAGEMENT_TOOL_NAMES,
+            )
+            app_logger.info(
+                "识别规划模式并注入提示: "
+                f"mode={planning_mode.mode}, source={planning_mode.source}, "
+                f"confirmed={planning_mode.confirmed}, "
+                f"needs_confirmation={planning_mode.needs_confirmation}, "
+                f"reason={planning_mode.reason}"
+            )
+
+        intent_instruction = _intent_instruction(travel_intent, state_dict, current_step)
+        if intent_instruction:
+            _append_system_instructions(override_kwargs, intent_instruction)
+            app_logger.info(
+                "识别用户意图并注入提示: "
+                f"intent={travel_intent.name}, confidence={travel_intent.confidence:.2f}, "
+                f"reason={travel_intent.reason}"
+            )
+
+        if planning_mode.mode == "free_planning" or planning_mode.needs_confirmation:
+            allowed_internal_tools = (
+                frozenset()
+                if planning_mode.needs_confirmation
+                else INTENT_INTERNAL_TOOL_ALLOWLIST.get(
+                    travel_intent.name,
+                    frozenset(),
+                )
+            )
+            excluded_internal_tools = AGENCY_INTERNAL_TOOL_NAMES - allowed_internal_tools
+            filtered_tools = _exclude_tools_by_name(override_kwargs["tools"], excluded_internal_tools)
+            if len(filtered_tools) != len(override_kwargs["tools"]):
+                override_kwargs["tools"] = filtered_tools
+                app_logger.info(
+                    "自由规划或待确认模式：本轮移除不相关旅行社内部 RAG 工具"
+                )
+        if planning_mode.needs_confirmation:
+            if override_kwargs["tools"]:
+                override_kwargs["tools"] = []
+            app_logger.info(
+                "规划模式待确认：本轮不开放工具，优先只确认省心方案或个性化旅游规划"
+            )
+
+        if (
+            agency_plan_workflow
+            and travel_intent.name == "pricing_query"
+            and not _state_value_ready(state_dict.get("itinerary"))
+        ):
+            pricing_tools = _keep_tools_by_name(
+                override_kwargs["tools"],
+                AGENCY_PRICING_PRE_ITINERARY_ALLOWED_TOOL_NAMES,
+            )
+            if len(pricing_tools) != len(override_kwargs["tools"]):
+                override_kwargs["tools"] = pricing_tools
+                app_logger.info(
+                    "省心方案报价说明且行程未写入：仅保留内部报价与必要状态工具"
+                )
+            _append_system_instructions(
+                override_kwargs,
+                "【报价说明工具门禁】当前尚未写入结构化 itinerary。"
+                "本轮只说明内部报价规则、费用包含与不包含、估算依据和待核验项；"
+                "不得调用目的地动态搜索、景点票价或开放/预约查询，"
+                "也不得生成结构化行程、预算或最终报告。",
+            )
+
+        if agency_plan_workflow and not _is_explicit_live_transport_or_hotel_query(latest_human_text):
+            filtered_tools = _exclude_tools_by_name(
+                override_kwargs["tools"],
+                AGENCY_PLAN_PREFERENCE_TOOL_NAMES,
+            )
+            if len(filtered_tools) != len(override_kwargs["tools"]):
+                override_kwargs["tools"] = filtered_tools
+                available_tool_names = _tool_names(override_kwargs["tools"])
+                app_logger.info(
+                    "省心方案模式：移除自由规划式交通/住宿偏好工具"
+                )
+            _append_system_instructions(
+                override_kwargs,
+                _agency_plan_no_preference_instruction(current_step),
+            )
+
+        if defer_initial_slow_tools:
+            state["pending_initial_request_text"] = active_human_text
+            if planning_mode.mode:
+                state["pending_initial_planning_mode"] = planning_mode.mode
+                state["pending_initial_planning_mode_reason"] = planning_mode.reason
+            if override_kwargs["tools"]:
+                override_kwargs["tools"] = []
+            override_kwargs["system_prompt"] = _initial_slow_tool_deferral_instruction()
+            app_logger.info(
+                "需求收集首轮复杂规划请求：暂缓所有工具以降低首 token 延迟"
+            )
+
+        cross_step_tool_names = (
+            []
+            if defer_initial_slow_tools or planning_mode.needs_confirmation
+            else _cross_step_verification_tools(latest_human_text)
+        )
+        date_blocked_cross_step_tools = set()
+        date_guard_audit_tools: set[str] = set()
+        if not confirmed_departure_date and cross_step_tool_names:
+            date_blocked_cross_step_tools = set(cross_step_tool_names) & LIVE_DATE_REQUIRED_TOOL_NAMES
+            if date_blocked_cross_step_tools:
+                cross_step_audit_tools = {
+                    tool_name
+                    for tool_name in date_blocked_cross_step_tools
+                    if _wants_fallback_audit_query(tool_name, latest_human_text, state_dict)
+                }
+                date_guard_audit_tools.update(cross_step_audit_tools)
+                cross_step_tools_to_block = date_blocked_cross_step_tools - cross_step_audit_tools
+                cross_step_tool_names = [
+                    tool_name
+                    for tool_name in cross_step_tool_names
+                    if tool_name not in cross_step_tools_to_block
+                ]
+                if cross_step_tools_to_block:
+                    _append_system_instructions(
+                        override_kwargs,
+                        _live_query_date_gate_instruction(cross_step_tools_to_block),
+                    )
+                if cross_step_audit_tools:
+                    _append_system_instructions(
+                        override_kwargs,
+                        _fallback_audit_query_instruction(cross_step_audit_tools),
+                    )
+                if (
+                    current_step == "transport_planning"
+                    and not _has_selected_transport(state_dict)
+                    and "query_hotel_options" in cross_step_tools_to_block
+                ):
+                    _append_system_instructions(
+                        override_kwargs,
+                        "交通方案尚未记录时，不要跨阶段查询或记录住宿；"
+                        "请先完成交通记录，再处理住宿。",
+                    )
+                app_logger.info(
+                    "缺少已确认日期：暂缓跨阶段真实查询工具: "
+                    f"{sorted(date_blocked_cross_step_tools)}"
+                )
+        if (
+            current_step == "transport_planning"
+            and not _has_selected_transport(state_dict)
+            and "query_hotel_options" in cross_step_tool_names
+        ):
+            cross_step_tool_names = [
+                tool_name
+                for tool_name in cross_step_tool_names
+                if tool_name != "query_hotel_options"
+            ]
+            _append_system_instructions(
+                override_kwargs,
+                "交通方案尚未记录时，不要跨阶段查询或记录住宿；"
+                "请先完成交通记录，再处理住宿。",
+            )
+            app_logger.info(
+                "交通未记录：暂缓跨阶段酒店查询，避免跳过交通前置状态"
+            )
+        if cross_step_tool_names:
+            current_tool_names = _tool_names(override_kwargs["tools"])
+            added_tools: list[str] = []
+            for tool_name in cross_step_tool_names:
+                if tool_name in current_tool_names:
+                    continue
+                extra_tool = _find_tool_by_name(self._step_config, tool_name)
+                if extra_tool is not None:
+                    override_kwargs["tools"] = [*override_kwargs["tools"], extra_tool]
+                    current_tool_names.add(tool_name)
+                    added_tools.append(tool_name)
+
+            instruction = _cross_step_verification_instruction(cross_step_tool_names)
+            if instruction:
+                _append_system_instructions(override_kwargs, instruction)
+            if added_tools:
+                app_logger.info(
+                    "跨阶段核验请求：临时开放真实查询工具: "
+                    f"{added_tools}"
+                )
+
+        available_tool_names = _tool_names(override_kwargs["tools"])
+        intent_preferred_tool = (
+            None
+            if defer_initial_slow_tools
+            else _preferred_tool_for_intent(travel_intent, state_dict)
+        )
+        if planning_mode.needs_confirmation:
+            intent_preferred_tool = None
+        if intent_preferred_tool and intent_preferred_tool not in available_tool_names:
+            extra_tool = _find_tool_by_name(self._step_config, intent_preferred_tool)
+            if extra_tool is not None:
+                override_kwargs["tools"] = [*override_kwargs["tools"], extra_tool]
+                available_tool_names = _tool_names(override_kwargs["tools"])
+                app_logger.info(
+                    "按用户意图临时开放跨阶段工具: "
+                    f"intent={travel_intent.name}, tool={intent_preferred_tool}"
+                )
+
+        date_blocked_available_tools: set[str] = set()
+        if not confirmed_departure_date:
+            date_blocked_available_tools = available_tool_names & LIVE_DATE_REQUIRED_TOOL_NAMES
+            if date_blocked_available_tools:
+                available_audit_tools = {
+                    tool_name
+                    for tool_name in date_blocked_available_tools
+                    if _wants_fallback_audit_query(tool_name, latest_human_text, state_dict)
+                }
+                date_guard_audit_tools.update(available_audit_tools)
+                blocked_tools_to_remove = date_blocked_available_tools - available_audit_tools
+                if available_audit_tools:
+                    _append_system_instructions(
+                        override_kwargs,
+                        _fallback_audit_query_instruction(available_audit_tools),
+                    )
+                    app_logger.info(
+                        "缺少已确认日期：保留兜底审计式查询工具: "
+                        f"{sorted(available_audit_tools)}"
+                    )
+                filtered_tools = (
+                    _exclude_tools_by_name(
+                        override_kwargs["tools"],
+                        blocked_tools_to_remove,
+                    )
+                    if blocked_tools_to_remove
+                    else override_kwargs["tools"]
+                )
+                if blocked_tools_to_remove and len(filtered_tools) != len(override_kwargs["tools"]):
+                    override_kwargs["tools"] = filtered_tools
+                    available_tool_names = _tool_names(override_kwargs["tools"])
+                    _append_system_instructions(
+                        override_kwargs,
+                        _live_query_date_gate_instruction(blocked_tools_to_remove),
+                    )
+                    if intent_preferred_tool in blocked_tools_to_remove:
+                        intent_preferred_tool = None
+                    app_logger.info(
+                        "缺少已确认日期：本轮移除真实查询工具: "
+                        f"{sorted(blocked_tools_to_remove)}"
+                    )
+
+        if travel_intent.name in {"final_report", "export_report"} and intent_preferred_tool:
+            report_tools = _keep_tools_by_name(
+                override_kwargs["tools"],
+                {intent_preferred_tool},
+            )
+            if report_tools:
+                override_kwargs["tools"] = report_tools
+                available_tool_names = _tool_names(override_kwargs["tools"])
+                app_logger.info(
+                    "最终报告意图：本轮工具列表已收窄为结构化报告工具: "
+                    f"{sorted(available_tool_names)}"
+                )
+
+        if planning_mode.needs_confirmation and override_kwargs["tools"]:
+            override_kwargs["tools"] = []
+            available_tool_names = set()
+            middleware_forced_tool = None
+            app_logger.info("规划模式待确认：清空后续临时开放工具")
+
+        recent_tool_names = _recent_tool_names_since_latest_human(request)
+        recent_transition_outcomes = (
+            _recent_state_transition_outcomes_since_latest_human(request)
+        )
+        applied_state_transition_tools = (
+            _recent_applied_state_transition_tools_since_latest_human(request)
+        )
+        transport_selection_outcome = recent_transition_outcomes.get(
+            "select_transport_tool"
+        )
+        accommodation_selection_outcome = recent_transition_outcomes.get(
+            "select_accommodation_tool"
+        )
+        transport_selection_not_applied = bool(
+            transport_selection_outcome
+            and transport_selection_outcome.get("status") == "not_applied"
+        )
+        accommodation_selection_not_applied = bool(
+            accommodation_selection_outcome
+            and accommodation_selection_outcome.get("status") == "not_applied"
+        )
+        repeat_instruction = _tool_repeat_instruction(
+            current_step,
+            recent_tool_names,
+            applied_state_transition_tools,
+        )
+        used_one_shot_tools = (
+            ATTEMPT_ONCE_TOOLS_AFTER_CALL & recent_tool_names
+        ) | (
+            APPLIED_ONCE_STATE_TRANSITION_TOOLS
+            & applied_state_transition_tools
+        )
+        if used_one_shot_tools:
+            filtered_tools = _exclude_tools_by_name(override_kwargs["tools"], used_one_shot_tools)
+            if len(filtered_tools) != len(override_kwargs["tools"]):
+                override_kwargs["tools"] = filtered_tools
+                available_tool_names = _tool_names(override_kwargs["tools"])
+                app_logger.info(
+                    "本轮移除已完成的一次性工具: "
+                    f"step={current_step}, tools={sorted(used_one_shot_tools)}"
+                )
+        completed_stage_tools: set[str] = set()
+        if "select_transport_tool" in applied_state_transition_tools:
+            completed_stage_tools.update(
+                {"query_transport_options", "select_transport_tool"}
+            )
+        if "select_accommodation_tool" in applied_state_transition_tools:
+            completed_stage_tools.update(
+                {"query_hotel_options", "select_accommodation_tool"}
+            )
+        if completed_stage_tools:
+            filtered_tools = _exclude_tools_by_name(
+                override_kwargs["tools"], completed_stage_tools
+            )
+            if len(filtered_tools) != len(override_kwargs["tools"]):
+                override_kwargs["tools"] = filtered_tools
+                available_tool_names = _tool_names(override_kwargs["tools"])
+                app_logger.info(
+                    "本轮阶段选择已写入：移除同阶段查询和重复选择工具: "
+                    f"tools={sorted(completed_stage_tools)}"
+                )
+        if repeat_instruction:
+            _append_system_instructions(override_kwargs, repeat_instruction)
+            app_logger.info(
+                "本轮工具已调用，注入防重复提示: "
+                f"step={current_step}, tools={sorted(recent_tool_names)}"
+            )
+        confirmed_destination = (
+            _confirmed_destination_name(state_dict, latest_human_text)
+            if current_step == "destination_recommendation"
+            else None
+        )
+        middleware_forced_tool = None
+        latest_tool_result_names = _latest_tool_result_names(request)
+        if _should_force_planning_mode_confirmation(
+            planning_mode,
+            state_dict,
+            current_step,
+        ):
+            confirm_tool = _find_tool_by_name(self._step_config, "confirm_planning_mode_tool")
+            if confirm_tool is not None:
+                override_kwargs["tools"] = [confirm_tool]
+                available_tool_names = _tool_names(override_kwargs["tools"])
+                middleware_forced_tool = "confirm_planning_mode_tool"
+                intent_preferred_tool = None
+                _append_system_instructions(
+                    override_kwargs,
+                    _confirm_planning_mode_instruction(planning_mode.mode),
+                )
+                app_logger.info(
+                    "用户已选择规划模式：本轮强制写入模式状态: "
+                    f"mode={planning_mode.mode}"
+                )
+        if (
+            current_step == "destination_recommendation"
+            and "record_requirement_tool" in latest_tool_result_names
+            and _is_first_user_turn_without_assistant_text(request)
+        ):
+            override_kwargs["tools"] = []
+            available_tool_names = set()
+            override_kwargs["system_prompt"] = _post_initial_requirement_record_instruction()
+            app_logger.info(
+                "首轮需求记录后停止同轮慢工具扇出，降低首个可见响应延迟"
+            )
+        defer_structured_itinerary = _explicitly_defers_structured_itinerary(
+            active_human_text
+        )
+        if defer_structured_itinerary:
+            deferred_report_tools = set(DETERMINISTIC_NO_ARG_REPORT_TOOLS)
+            override_kwargs["tools"] = _exclude_tools_by_name(
+                override_kwargs["tools"],
+                deferred_report_tools,
+            )
+            available_tool_names = _tool_names(override_kwargs["tools"])
+            middleware_forced_tool = None
+            intent_preferred_tool = None
+            _append_system_instructions(
+                override_kwargs,
+                "用户明确要求本轮只记录餐饮方向，并把结构化行程留到下一轮。"
+                "本轮不得调用 `generate_itinerary_tool`、`summarize_budget_tool` "
+                "或 `generate_order_tool`；记录餐饮后用简短确认结束。",
+            )
+        progress_forced_tool = (
+            None
+            if defer_structured_itinerary
+            else _progress_tool_for_explicit_request(active_human_text, state_dict)
+        )
+        if progress_forced_tool and progress_forced_tool not in recent_tool_names:
+            progress_tool = _find_tool_by_name(self._step_config, progress_forced_tool)
+            if progress_tool is not None:
+                override_kwargs["tools"] = [progress_tool]
+                available_tool_names = _tool_names(override_kwargs["tools"])
+                middleware_forced_tool = progress_forced_tool
+                if current_step == "agency_report":
+                    progress_instruction = _agency_report_sequence_instruction(
+                        progress_forced_tool
+                    )
+                elif progress_forced_tool == "generate_order_tool":
+                    progress_instruction = _final_report_tool_instruction()
+                else:
+                    progress_instruction = _tool_choice_instruction(progress_forced_tool)
+                _append_system_instructions(override_kwargs, progress_instruction)
+                app_logger.info(
+                    "显式阶段推进请求：本轮工具列表已收窄: "
+                    f"{progress_forced_tool}"
+                )
+        if current_step == "transport_planning":
+            transport_human_text = latest_human_text or _recent_human_text(request, limit=1)
+            transport_selection_requested = _is_transport_selection_request(
+                transport_human_text
+            ) or any(keyword in transport_human_text for keyword in CROSS_STEP_HOTEL_KEYWORDS)
+            recent_transport_selection_requested = _recent_transport_selection_request(
+                request,
+                transport_human_text,
+            )
+            transport_audit_required = bool(
+                transport_selection_outcome
+                and transport_selection_outcome.get("reason") == "audit_required"
+            )
+            destination_selected_this_turn = bool(
+                "select_destination_tool" in latest_tool_result_names
+                and _state_value_ready(state_dict.get("selected_destination"))
+            )
+            if destination_selected_this_turn:
+                override_kwargs["tools"] = []
+                available_tool_names = set()
+                middleware_forced_tool = None
+                intent_preferred_tool = None
+                _append_system_instructions(
+                    override_kwargs,
+                    "本轮已经完成目的地确认并推进到交通阶段。"
+                    "请只简短确认目的地已经记录，不要在同一用户轮次继续查询或记录交通；"
+                    "等待用户下一条交通确认消息后再处理。",
+                )
+            elif (
+                transport_audit_required
+                and "query_transport_options" in available_tool_names
+                and "query_transport_options" not in recent_tool_names
+            ):
+                override_kwargs["tools"] = _keep_tools_by_name(
+                    override_kwargs["tools"],
+                    {"query_transport_options"},
+                )
+                available_tool_names = _tool_names(override_kwargs["tools"])
+                middleware_forced_tool = "query_transport_options"
+                _append_system_instructions(
+                    override_kwargs,
+                    "交通选择工具返回审计前置未满足，交通状态尚未写入。"
+                    "本轮先且只调用 `query_transport_options` 留下可审计查询结果；"
+                    "查询完成后再重试交通选择。",
+                )
+            elif (
+                transport_selection_not_applied
+                and "select_transport_tool" in latest_tool_result_names
+            ):
+                _append_system_instructions(
+                    override_kwargs,
+                    "本轮交通选择尚未写入。请依据工具返回的失败原因修正参数；"
+                    "不要把这次调用描述成已经完成交通确认。",
+                )
+            elif "query_transport_options" in latest_tool_result_names:
+                allow_transport_selection = (
+                    transport_selection_requested or recent_transport_selection_requested
+                )
+                excluded_after_transport_query = {"query_transport_options"}
+                if not allow_transport_selection:
+                    excluded_after_transport_query.add("select_transport_tool")
+                filtered_tools = _exclude_tools_by_name(
+                    override_kwargs["tools"],
+                    excluded_after_transport_query,
+                )
+                if len(filtered_tools) != len(override_kwargs["tools"]):
+                    override_kwargs["tools"] = filtered_tools
+                    available_tool_names = _tool_names(override_kwargs["tools"])
+                    app_logger.info(
+                        "本轮已完成交通查询：按用户确认语义收窄后续交通工具: "
+                        f"allow_selection={allow_transport_selection}"
+                    )
+                if allow_transport_selection and "select_transport_tool" in available_tool_names:
+                    middleware_forced_tool = "select_transport_tool"
+                _append_system_instructions(
+                    override_kwargs,
+                    _transport_query_result_instruction(
+                        allow_selection=allow_transport_selection
+                    ),
+                )
+            elif (
+                not _has_selected_transport(state_dict)
+                and "query_transport_options" in available_tool_names
+                and "query_transport_options" in date_guard_audit_tools
+                and "select_destination_tool" not in latest_tool_result_names
+            ):
+                middleware_forced_tool = "query_transport_options"
+            elif (
+                not _has_selected_transport(state_dict)
+                and "select_transport_tool" in available_tool_names
+                and transport_selection_requested
+            ):
+                middleware_forced_tool = "select_transport_tool"
+                filtered_tools = _keep_tools_by_name(
+                    override_kwargs["tools"],
+                    {"select_transport_tool"},
+                )
+                if filtered_tools:
+                    override_kwargs["tools"] = filtered_tools
+                    available_tool_names = _tool_names(override_kwargs["tools"])
+                _append_system_instructions(
+                    override_kwargs,
+                    _transport_selection_fallback_instruction(),
+                )
+            elif (
+                not _has_selected_transport(state_dict)
+                and "query_transport_options" in available_tool_names
+                and "select_destination_tool" not in latest_tool_result_names
+                and intent_preferred_tool is None
+                and not any(keyword in latest_human_text for keyword in SELECTION_KEYWORDS)
+            ):
+                middleware_forced_tool = "query_transport_options"
+
+        if (
+            current_step == "destination_recommendation"
+            and _has_destination_candidates(state_dict)
+            and not state_dict.get("selected_destination")
+            and not confirmed_destination
+            and _latest_message_is_tool_result(request)
+        ):
+            filtered_tools = _exclude_tools_by_name(
+                override_kwargs["tools"],
+                {"select_destination_tool", *DESTINATION_REFRESH_TOOL_NAMES},
+            )
+            if len(filtered_tools) != len(override_kwargs["tools"]):
+                override_kwargs["tools"] = filtered_tools
+                available_tool_names = _tool_names(override_kwargs["tools"])
+                app_logger.info(
+                    "已有目的地候选且用户尚未确认：本轮移除目的地选择和重复查询工具"
+                )
+            _append_system_instructions(override_kwargs, _destination_candidate_instruction())
+
+        if current_step == "accommodation_planning":
+            accommodation_excluded_tools: set[str] = set()
+            post_transport_selection = "select_transport_tool" in latest_tool_result_names
+            accommodation_human_text = latest_human_text or _recent_human_text(request, limit=1)
+            accommodation_record_requested = _is_accommodation_record_request(accommodation_human_text)
+            post_transport_requested_accommodation = any(
+                keyword in accommodation_human_text for keyword in CROSS_STEP_HOTEL_KEYWORDS
+            )
+            if post_transport_selection and not post_transport_requested_accommodation:
+                accommodation_excluded_tools.update(
+                    {
+                        "query_hotel_options",
+                        "select_accommodation_tool",
+                        "update_accommodation_preference_tool",
+                    }
+            )
+            if not _accommodation_memory_is_stable(latest_human_text):
+                accommodation_excluded_tools.add("update_accommodation_preference_tool")
+            accommodation_audit_required = bool(
+                accommodation_selection_outcome
+                and accommodation_selection_outcome.get("reason") == "audit_required"
+            )
+            if (
+                accommodation_audit_required
+                and "query_hotel_options" in available_tool_names
+                and "query_hotel_options" not in recent_tool_names
+            ):
+                middleware_forced_tool = "query_hotel_options"
+                accommodation_excluded_tools.update(
+                    {
+                        "select_accommodation_tool",
+                        "update_accommodation_preference_tool",
+                    }
+                )
+                _append_system_instructions(
+                    override_kwargs,
+                    "住宿选择工具返回审计前置未满足，住宿状态尚未写入。"
+                    "本轮先且只调用 `query_hotel_options` 留下可审计查询结果；"
+                    "查询完成后再重试住宿选择。",
+                )
+            elif (
+                accommodation_selection_not_applied
+                and "select_accommodation_tool" in latest_tool_result_names
+            ):
+                _append_system_instructions(
+                    override_kwargs,
+                    "本轮住宿选择尚未写入。请依据工具返回的失败原因修正参数；"
+                    "不要把这次调用描述成已经完成住宿确认。",
+                )
+            elif _has_selected_accommodation(state_dict):
+                accommodation_excluded_tools.update(
+                    {"query_hotel_options", "update_accommodation_preference_tool"}
+                )
+            elif (
+                "query_hotel_options" in available_tool_names
+                and "query_hotel_options" in date_guard_audit_tools
+                and "query_hotel_options" not in latest_tool_result_names
+                and (
+                    "select_transport_tool" not in latest_tool_result_names
+                    or post_transport_requested_accommodation
+                )
+            ):
+                middleware_forced_tool = "query_hotel_options"
+                accommodation_excluded_tools.add("update_accommodation_preference_tool")
+            elif (
+                accommodation_record_requested
+                and not post_transport_selection
+                and "select_accommodation_tool" in available_tool_names
+            ):
+                middleware_forced_tool = "select_accommodation_tool"
+                accommodation_excluded_tools.update(
+                    {"query_hotel_options", "update_accommodation_preference_tool"}
+                )
+            elif _has_accommodation_candidates(state_dict):
+                accommodation_excluded_tools.update(
+                    {"query_hotel_options", "update_accommodation_preference_tool"}
+                )
+                if "select_accommodation_tool" in available_tool_names:
+                    middleware_forced_tool = "select_accommodation_tool"
+            elif (
+                "query_hotel_options" in available_tool_names
+                and "query_hotel_options" not in latest_tool_result_names
+                and (
+                    "select_transport_tool" not in latest_tool_result_names
+                    or post_transport_requested_accommodation
+                )
+            ):
+                middleware_forced_tool = "query_hotel_options"
+
+            if accommodation_excluded_tools:
+                filtered_tools = _exclude_tools_by_name(
+                    override_kwargs["tools"],
+                    accommodation_excluded_tools,
+                )
+                if len(filtered_tools) != len(override_kwargs["tools"]):
+                    override_kwargs["tools"] = filtered_tools
+                    available_tool_names = _tool_names(override_kwargs["tools"])
+                    app_logger.info(
+                        "住宿阶段按候选/记忆语义收窄工具: "
+                        f"excluded={sorted(accommodation_excluded_tools)}"
+                    )
+            if _has_accommodation_candidates(state_dict) and not _has_selected_accommodation(state_dict):
+                _append_system_instructions(
+                    override_kwargs,
+                    _accommodation_candidate_instruction(),
+                )
+            elif (
+                accommodation_record_requested
+                and not post_transport_selection
+                and not _has_selected_accommodation(state_dict)
+            ):
+                _append_system_instructions(
+                    override_kwargs,
+                    _accommodation_candidate_instruction(),
+                    _temporary_accommodation_instruction(),
+                )
+            elif post_transport_selection and not post_transport_requested_accommodation:
+                _append_system_instructions(
+                    override_kwargs,
+                    _post_transport_accommodation_instruction(),
+                )
+            elif "update_accommodation_preference_tool" in accommodation_excluded_tools:
+                _append_system_instructions(
+                    override_kwargs,
+                    _temporary_accommodation_instruction(),
+                )
+
+        if agency_plan_workflow:
+            agency_allowed_tools = set(AGENCY_PLAN_ALLOWED_TOOL_NAMES)
+            if _is_explicit_live_transport_or_hotel_query(latest_human_text):
+                agency_allowed_tools.update(AGENCY_PLAN_LIVE_QUERY_OVERRIDE_TOOL_NAMES)
+                _append_system_instructions(
+                    override_kwargs,
+                    "用户本轮明确要求实时交通或酒店查询，可以临时调用对应查询工具；"
+                    "查询结果只作为待核验参考，不要把流程切入自由规划的交通/住宿确认阶段。",
+                )
+            else:
+                _append_system_instructions(
+                    override_kwargs,
+                    "本轮按省心方案白名单收口：只能记录基础需求、检索产品/报价/风险/报告资料、"
+                    "查询目的地攻略与天气、查询景点票价参考、生成结构化行程、"
+                    "汇总结构化预算、整理证据或生成报告；"
+                    "不得调用自由规划的交通/酒店查询或选择工具。",
+                )
+
+            filtered_tools = _keep_tools_by_name(
+                override_kwargs["tools"],
+                agency_allowed_tools,
+            )
+            if len(filtered_tools) != len(override_kwargs["tools"]):
+                override_kwargs["tools"] = filtered_tools
+                available_tool_names = _tool_names(override_kwargs["tools"])
+                app_logger.info(
+                    "省心方案工作流：按独立工具白名单最终收口: "
+                    f"tools={sorted(available_tool_names)}"
+                )
+            if middleware_forced_tool and middleware_forced_tool not in available_tool_names:
+                app_logger.info(
+                    "省心方案工作流：取消自由规划式强制工具: "
+                    f"{middleware_forced_tool}"
+                )
+                middleware_forced_tool = None
+            if intent_preferred_tool and intent_preferred_tool not in available_tool_names:
+                intent_preferred_tool = None
+
+        if (
+            current_step == "order_generation"
+            and final_report_requested
+            and not state_dict.get("report_data")
+        ):
+            if _can_generate_final_report(state_dict):
+                final_report_tool = _find_tool_by_name(
+                    self._step_config,
+                    "generate_order_tool",
+                )
+                if final_report_tool is not None:
+                    override_kwargs["tools"] = [final_report_tool]
+                    available_tool_names = _tool_names(override_kwargs["tools"])
+                    middleware_forced_tool = "generate_order_tool"
+                    _append_system_instructions(
+                        override_kwargs,
+                        _final_report_tool_instruction(),
+                    )
+                    app_logger.info(
+                        "最终报告阶段：本轮收窄为 generate_order_tool，确保产出 report_data"
+                    )
+            else:
+                filtered_tools = _exclude_tools_by_name(
+                    override_kwargs["tools"],
+                    {"generate_order_tool"},
+                )
+                if len(filtered_tools) != len(override_kwargs["tools"]):
+                    override_kwargs["tools"] = filtered_tools
+                    available_tool_names = _tool_names(override_kwargs["tools"])
+                _append_system_instructions(
+                    override_kwargs,
+                    _final_report_not_ready_instruction(),
+                )
+                app_logger.info(
+                    "最终报告阶段信息未齐：移除 generate_order_tool，避免提前产出 report_data"
+                )
+
+        itinerary_ready = _state_value_ready(state_dict.get("itinerary"))
+        report_tool_ready = _can_generate_final_report(state_dict)
+        if _is_agency_plan_workflow(state_dict):
+            report_tool_ready = (
+                report_tool_ready
+                and _agency_report_next_tool(state_dict) == "generate_order_tool"
+            )
+
+        blocked_report_tools: set[str] = set()
+        if not itinerary_ready:
+            blocked_report_tools.update(
+                {"summarize_budget_tool", "generate_order_tool"}
+            )
+        elif not report_tool_ready:
+            blocked_report_tools.add("generate_order_tool")
+
+        blocked_available_report_tools = available_tool_names & blocked_report_tools
+        if blocked_available_report_tools:
+            filtered_tools = _exclude_tools_by_name(
+                override_kwargs["tools"],
+                blocked_available_report_tools,
+            )
+            override_kwargs["tools"] = filtered_tools
+            available_tool_names = _tool_names(override_kwargs["tools"])
+            app_logger.info(
+                "报告前置条件未满足：本轮移除状态写入工具: "
+                f"{sorted(blocked_available_report_tools)}"
+            )
+            if (
+                not itinerary_ready
+                and "summarize_budget_tool" in blocked_available_report_tools
+            ):
+                _append_system_instructions(
+                    override_kwargs,
+                    "预算汇总必须先由 `generate_itinerary_tool` 生成并写入结构化行程；"
+                    "当前状态尚无有效 itinerary，本轮不要调用 "
+                    "`summarize_budget_tool` 或 `generate_order_tool`。",
+                )
+        if blocked_report_tools:
+            if middleware_forced_tool in blocked_report_tools:
+                middleware_forced_tool = None
+            if intent_preferred_tool in blocked_report_tools:
+                intent_preferred_tool = None
+
+        completed_nonfinal_report_steps = []
+        if (
+            "generate_itinerary_tool" in latest_tool_result_names
+            and _state_value_ready(state_dict.get("itinerary"))
+        ):
+            completed_nonfinal_report_steps.append("generate_itinerary_tool")
+        if (
+            "summarize_budget_tool" in latest_tool_result_names
+            and _state_value_ready(state_dict.get("budget"))
+        ):
+            completed_nonfinal_report_steps.append("summarize_budget_tool")
+        if completed_nonfinal_report_steps and not explicit_report_delivery_requested:
+            override_kwargs["tools"] = []
+            available_tool_names = set()
+            middleware_forced_tool = None
+            intent_preferred_tool = None
+            _append_system_instructions(
+                override_kwargs,
+                "本轮已经完成用户明确要求的单个报告阶段："
+                f"{', '.join(completed_nonfinal_report_steps)}。"
+                "请只返回该工具结果的简短确认，不要在同一用户轮次继续生成下一阶段；"
+                "等待用户下一条预算或最终报告请求。",
+            )
+
+        forced_tool = None
+        if middleware_forced_tool:
+            forced_tool = middleware_forced_tool
+        elif travel_intent.name in {"final_report", "export_report"} and intent_preferred_tool:
+            forced_tool = intent_preferred_tool
+        else:
+            forced_tool = (
+                "select_destination_tool"
+                if confirmed_destination
+                else _forced_tool_choice(current_step, latest_human_text, request)
+            )
+            if forced_tool is None:
+                forced_tool = intent_preferred_tool
+        if forced_tool and forced_tool not in available_tool_names:
+            forced_tool = None
+        if forced_tool and forced_tool in recent_tool_names:
+            forced_transition_outcome = recent_transition_outcomes.get(forced_tool)
+            retry_after_recovery = bool(
+                forced_tool in APPLIED_ONCE_STATE_TRANSITION_TOOLS
+                and forced_transition_outcome
+                and forced_transition_outcome.get("status") == "not_applied"
+                and forced_tool not in latest_tool_result_names
+            )
+            if not retry_after_recovery:
+                app_logger.info(
+                    f"跳过重复强制工具调用: {forced_tool} 已在本轮执行"
+                )
+                forced_tool = None
+        deterministic_report_tool = None
+        if forced_tool:
+            if forced_tool in FORCE_NARROW_TOOL_NAMES and len(cross_step_tool_names) < 2:
+                forced_tools = _keep_tools_by_name(override_kwargs["tools"], {forced_tool})
+                if forced_tools:
+                    override_kwargs["tools"] = forced_tools
+                    available_tool_names = _tool_names(override_kwargs["tools"])
+                    app_logger.info(
+                        "强制工具场景：本轮工具列表已收窄，避免并行重复调用: "
+                        f"{forced_tool}"
+                    )
+            tool_instruction = (
+                _destination_selection_instruction(confirmed_destination)
+                if forced_tool == "select_destination_tool" and confirmed_destination
+                else
+                _destination_query_instruction()
+                if forced_tool == "query_destination_info"
+                else
+                _record_requirement_instruction()
+                if forced_tool == "record_requirement_tool"
+                else _tool_choice_instruction(forced_tool)
+            )
+            if forced_tool == "query_destination_info":
+                _append_system_instructions(override_kwargs, tool_instruction)
+            if compatibility.supports_forced_tool_choice:
+                override_kwargs["tool_choice"] = forced_tool
+                app_logger.info(f"本轮强制优先调用工具: {forced_tool}")
+            elif forced_tool in DETERMINISTIC_NO_ARG_REPORT_TOOLS:
+                deterministic_report_tool = forced_tool
+                app_logger.info(
+                    "模型不支持强制 tool_choice，改为确定性调用无参数报告工具: "
+                    f"{forced_tool}"
+                )
+            else:
+                if forced_tool != "query_destination_info":
+                    _append_system_instructions(override_kwargs, tool_instruction)
+                app_logger.info(f"模型不支持强制 tool_choice，改为提示词引导: {forced_tool}")
+
+        state["observability_context"] = build_observability_context(
+            turn_id=state.get("turn_id"),
+            current_step=current_step,
+            planning_mode=planning_mode.mode,
+            planning_mode_source=planning_mode.source,
+            planning_mode_confirmed=planning_mode.confirmed,
+            available_tool_count=len(override_kwargs["tools"]),
+        )
+        app_logger.info(
+            "观测上下文已更新: "
+            f"turn_id={state.get('turn_id')}, step={current_step}, "
+            f"planning_mode={planning_mode.mode}, tools={len(override_kwargs['tools'])}"
+        )
+
+        if deterministic_report_tool:
+            return _deterministic_report_tool_response(deterministic_report_tool)
+
+        _append_system_instructions(
+            override_kwargs,
+            "【动态交通事实逐句输出硬校验（最高优先级）】"
+            "在输出每一句前，检查是否同时出现“车次/航班/班次/高铁/火车/机票”之一，"
+            "以及“已确认/有票/余票/已出票/可订/准点”之一。"
+            "只要同时出现，同一句必须明确包含“待二次核验”“未确认”或“以官方为准”等核验限定；"
+            "即使已有工具证据，也统一采用这一保守口径。"
+            "如果无法在同一句加入核验限定，必须删除整个动态断言。"
+            "不得把限定词放到下一句、段末或统一的待核验章节，也不能用“确认后说明”代替同句限定。",
+        )
+
+        modified_request = request.override(**override_kwargs)
+        app_logger.info(f"已注入步骤配置，工具数量: {len(override_kwargs['tools'])}")
+        return await handler(modified_request)
+
+
+async def create_step_config_middleware() -> StepConfigMiddleware:
+    """
+    工厂函数：创建步骤配置中间件。
+    """
+    from app.agents.handoffs.step_config import get_step_config
+
+    step_config = await get_step_config()
+    return StepConfigMiddleware(step_config)

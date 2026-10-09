@@ -1,0 +1,193 @@
+# Demo Script
+
+这份脚本用于项目展示现场按时间顺序讲解。推荐总时长 20 到 35 分钟；如果时间短，只讲路径一和核心架构；如果有真实环境，再走 acceptance-smoke 和前端报告。
+
+## 开场 2 分钟
+
+说法：
+
+> 我演示的是一个旅行社智能顾问 Agent，不是普通 RAG 问答。主 Agent 通过阶段状态、目的地 Router 和嵌套交通 Coordinator 编排能力，用 MCP 接外部工具，最后输出结构化 `report_data`。当前只有审批治理骨架，还没有 LangGraph `interrupt/resume` 闭环。
+
+马上打开：
+
+- `docs/前端与演示/project-demo-pack.md`
+- `docs/项目总览/project-capability-map.md`
+- `app/core/state.py`
+- `app/agents/handoffs/step_config.py`
+- `app/tools/state_transition.py`
+
+讲清楚边界：
+
+- 不接真实支付。
+- 不承诺真实库存或锁价。
+- 外部查询失败必须待核验。
+- 没有真实环境时不宣称 acceptance-smoke 通过。
+- 审批记录只表示治理状态，不会暂停并在批准后自动恢复 Agent。
+
+## 路径一：本地纯讲解路径
+
+适用时间：5 到 10 分钟。
+
+依赖：不需要真实密钥，不需要后端启动。
+
+命令：
+
+```powershell
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+chcp 65001 | Out-Null
+.\.venv\Scripts\python scripts\build_project_demo_pack.py --output .runtime\project-demo-pack
+.\.venv\Scripts\python -m pytest tests\test_project_demo_pack.py -q
+.\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-smoke --dry-run
+```
+
+讲解顺序：
+
+1. 打开 `.runtime\project-demo-pack\manifest.json`。
+2. 指出 `reads_env_files=false`、`copies_runtime_snapshots=false`、三条 `demo_paths`。
+3. 打开 `redaction-check.txt`，说明演示包只保存脱敏材料。
+4. 打开 `docs/项目总览/project-capability-map.md` 和 `docs/RAG与知识库/rag-demo-evaluation-guide.md`，用表格回答“为什么不是普通 RAG”。
+5. 打开 `scripts\run_evaluation_scenarios.py --acceptance-smoke --dry-run` 输出，说明真实链路入口存在，但 dry-run 不调用后端。
+
+推荐说法：
+
+> 本地路径证明的是工程结构和复跑入口，不证明真实外部服务可用。它适合没有密钥的项目展示环境：我可以展示状态机、工具白名单、报告契约、验收场景和安全生成目录。
+
+如果命令失败：
+
+- 如果 `.venv` 不存在，说明当前机器没有安装项目依赖；可改用 `uv run --frozen python -m pytest tests\test_project_demo_pack.py -q`。
+- 如果 dry-run 因依赖缺失失败，只展示 `docs/项目总览/project-capability-map.md` 和代码定位，不把它说成验收通过。
+
+## 路径二：acceptance-smoke 真实链路
+
+适用时间：8 到 15 分钟。
+
+依赖：
+
+- `.env` 已配置真实 LLM 和外部 API。
+- PostgreSQL 和 Redis 可用。
+- 后端从当前工作树启动。
+
+命令：
+
+```powershell
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+chcp 65001 | Out-Null
+.\.venv\Scripts\python main.py
+```
+
+另一个终端：
+
+```powershell
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+chcp 65001 | Out-Null
+.\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-smoke --preflight-only --json --no-summary
+.\.venv\Scripts\python scripts\run_evaluation_scenarios.py --acceptance-smoke --base-url http://127.0.0.1:8000 --json --summary-dir .runtime\acceptance-smoke
+```
+
+讲解顺序：
+
+1. 先讲 preflight：真实依赖不足时应该 blocked，不能假通过。
+2. 再讲 smoke 场景：当前最小场景覆盖旅行社报价解释。
+3. 打开生成的摘要路径，但只展示脱敏摘要，不复制 `.runtime` 原始内容到提交。
+4. 指出质量门禁维度：报告质量、RAG 质量、工具质量、运行预算、预算置信度、内部证据和工具审计。
+
+推荐说法：
+
+> acceptance-smoke 的目标不是跑很多场景，而是证明目标版本在一次真实运行中能闭环到 `report_data`。如果环境不满足，它必须明确 blocked；即使通过，也只证明该场景与门禁，不证明工具轨迹最优、供应商长期稳定或生产可用。
+
+如果命令返回 degraded：
+
+- 说明核心链路可运行，但部分 MCP、运行预算 warning 或可选依赖有风险。
+- 现场可以继续讲降级原因，但不要把 degraded 说成 passed。
+
+如果命令返回 blocked：
+
+- 展示 `missing_required` 或 preflight 失败项。
+- 说明本项目把环境缺失当作验收不可判定，而不是业务通过。
+
+## 路径三：前端旅程工作台与报告可视化
+
+适用时间：5 到 10 分钟。
+
+依赖：后端已启动。旅程工作台只需要生成 `journey_plan.v1`；最终报告演示还需要至少有一次对话能生成最终 `report_data`。
+
+命令：
+
+```powershell
+node scripts\verify_frontend_report_renderer.js
+node scripts\verify_frontend_visual_journey_browser.js
+```
+
+现场操作：
+
+1. 打开 `frontend\zhixing.html`。
+2. 登录或注册测试用户。
+3. 创建会话。
+4. 先输入：“我想去西藏，下周三，7天，经典线吧。”
+5. 展示圆周旅迹级旅程工作台：
+   - `planning_trace`：公开攻略搜索、地点收集、天气核验、路线计算和每日编排。
+   - `journey_plan.v1`：分日路线、地图、日期 Tab、POI hover 名称、路线说明和待核验项；普通用户视图不再弹出旧版底部 POI 详情卡。
+   - 地图高德优先，缺少 `AMAP_WEB_JS_KEY` 时降级到 Leaflet/ OSM。
+   - 地图支持总览/单日切换、多日彩色路线、路线标签密度控制、推荐点开关、点击数字标记回跳当天地点、点击推荐点加入或替换当天行程。
+6. 再继续输入省心方案需求，例如：“接着帮我把交通、酒店、预算也补齐，最后生成报告。”
+7. 等待最终报告。
+8. 展示报告卡片：
+   - 规划模式。
+   - 每日行程。
+   - 地图路线。
+   - 预算置信度。
+   - 待核验清单。
+   - 不支持承诺。
+   - 导出按钮。
+
+推荐说法：
+
+> 前端不是对助手自然语言做脆弱正则解析。正式报告消费 `report_data`，报告前的可视化路线消费 `journey_plan.v1` 和 `planning_trace`。用户先看到地图化旅程水准，后面再继续接交通、酒店、预算和导出。
+
+当前边界：
+
+- 第一阶段只对齐“地图化分日旅程 + 可审计规划过程 + 后续报告衔接”。多人协作、打卡社区、完整攻略导入和分享页属于后续产品模块。
+- 动态天气、门票、预约、交通时间、价格都保留待核验边界，不把草案当成锁价或履约承诺。
+
+如果前端没有最终报告：
+
+- 回到后端聊天链路，确认 SSE 里是否出现 `report_data` 事件。
+- 打开 `app/api/v1/chat.py`，说明保存助手消息时会把 `report_data` 写入 `extra_info`。
+- 不要手写一个假报告冒充真实链路结果。
+
+## 代码走读路线
+
+按这个顺序打开文件：
+
+1. `app/main.py`：应用入口和生命周期。
+2. `app/api/v1/chat.py`：流式聊天和 `report_data` 事件。
+3. `app/core/state.py`：`TravelState`。
+4. `app/agents/handoffs/travel_agent.py`：主控 Agent 创建。
+5. `app/agents/handoffs/step_config.py`：阶段 prompt 和工具配置。
+6. `app/core/middleware.py`：动态注入 prompt、工具、记忆和意图。
+7. `app/tools/state_transition.py`：状态迁移工具。
+8. `app/tools/hotel_query.py`、`app/tools/transport_query.py`：真实查询和兜底。
+9. `app/reports/builder.py`：最终报告契约。
+10. `app/evaluation/acceptance_gate.py`：验收门禁。
+
+## 常见追问速答
+
+| 追问 | 30 秒回答 |
+|---|---|
+| Agent 和 workflow 怎么取舍？ | 旅行规划有明确阶段，所以用 `TravelState`、中间件和迁移工具控制逻辑阶段；每个阶段内部保留 Agent 推理和工具选择弹性。主业务不是手写八节点 `StateGraph`，目的地 Router 才是显式状态图。 |
+| 为什么要 `report_data`？ | 自然语言不可稳定评估和渲染；`report_data` 是后端、评估、前端导出的共同契约。 |
+| 工具失败会不会影响体验？ | 会。指定失败场景允许在明确预算内降级并进入待核验；普通场景或高失败/兜底比例必须阻断，不能靠“诚实兜底”掩盖工具链不可用。 |
+| HITL 做完了吗？ | 没有。当前有审批策略、持久化记录和事件审计，但没有 `interrupt/resume`、审批结果回写 checkpoint 和原工具调用恢复。 |
+| 怎么防止泄露密钥？ | `.env` 不提交，`.runtime` 原始产物不提交，生成演示包会扫描常见手机号、邮箱、JWT、Bearer token 和赋值型密钥。 |
+| RAG 怎么体现？ | 展示 `rag-demo-evaluation-guide.md` 和 `rag-retrieval-evaluation.md`，说明评测看产品样板、类别和依据召回；现场输入“想去新疆”这类弱匹配需求，看是否给成熟路线候选和自由行替代。 |
+| CI/CD 怎么讲？ | 默认 CI 跑本地回归和前端检查；真实 smoke 由手动 workflow_dispatch 触发，并使用 GitHub Secrets。 |
+| 目前最大短板是什么？ | 当前评估集仍小且缺线上人工标注闭环，审批没有接成真正 HITL，记忆和证据注入还需更强的不可信内容隔离，后端聊天入口和前端主文件也仍偏大；真实供应链与生产级观测更没有完成。 |
+
+## 结束 1 分钟
+
+收束说法：
+
+> 这个项目的亮点不是“模型会写旅游攻略”，而是把旅行社顾问流程工程化：阶段状态、工具边界、证据来源、结构化交付、前端消费、运行观测和验收门禁都在同一条链路里。它也明确承认当前不能做真实支付、锁价和履约，这些边界是 Agent 工程里非常关键的一部分。

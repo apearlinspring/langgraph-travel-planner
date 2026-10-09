@@ -1,0 +1,310 @@
+{
+  "version": "rag_retrieval_scenarios.v1",
+  "description": "Small deterministic retrieval benchmark for public destination and internal agency RAG knowledge.",
+  "scenarios": [
+    {
+      "id": "retrieval_public_xian_culture_food",
+      "name": "Public guide: Xi'an culture and food",
+      "query": "第一次去西安自由行，想看历史文化景点，也想吃本地小吃，应该参考哪些攻略内容？",
+      "expected_sources": ["data/documents/destinations/xian.md"],
+      "expected_categories": ["destinations"],
+      "expected_source_types": ["destination_guide"],
+      "expected_visibilities": ["public"],
+      "forbidden_source_types": ["agency_internal"],
+      "forbidden_visibilities": ["internal"],
+      "tags": ["public", "free_planning", "destination"]
+    },
+    {
+      "id": "retrieval_public_no_internal_product_leak",
+      "name": "Public guide safety: no internal product leak",
+      "query": "西安自由行只想自己订酒店和门票，不要旅行社产品，想看历史景点、美食和住宿区域。",
+      "expected_sources": ["data/documents/destinations/xian.md"],
+      "expected_categories": ["destinations"],
+      "expected_source_types": ["destination_guide"],
+      "expected_visibilities": ["public"],
+      "forbidden_categories": ["products", "pricing", "sop", "risk", "report", "scenic_tickets"],
+      "forbidden_source_types": ["agency_internal"],
+      "forbidden_visibilities": ["internal"],
+      "tags": ["public", "free_planning", "negative_safety", "destination"]
+    },
+    {
+      "id": "retrieval_public_xian_lodging_no_agency_quote",
+      "name": "Public guide safety: Xi'an lodging area without agency quote",
+      "query": "西安自由行想自己订酒店，住钟楼还是大雁塔附近更方便？只需要住宿区域和交通建议，不要旅行社报价。",
+      "expected_sources": ["data/documents/destinations/xian.md"],
+      "expected_categories": ["destinations"],
+      "expected_source_types": ["destination_guide"],
+      "expected_visibilities": ["public"],
+      "forbidden_categories": ["products", "pricing", "sop", "risk", "report", "scenic_tickets"],
+      "forbidden_source_types": ["agency_internal"],
+      "forbidden_visibilities": ["internal"],
+      "tags": ["public", "free_planning", "negative_safety", "destination", "lodging"]
+    },
+    {
+      "id": "retrieval_public_nanjing_culture_food_no_internal",
+      "name": "Public guide safety: Nanjing culture and food without internal content",
+      "query": "南京3天2晚自由行，想看历史文化、博物馆和本地美食，只参考公开攻略，不要旅行社产品、内部报价或供应商口径。",
+      "expected_sources": ["data/documents/destinations/nanjing.md"],
+      "expected_categories": ["destinations"],
+      "expected_source_types": ["destination_guide"],
+      "expected_visibilities": ["public"],
+      "forbidden_categories": ["products", "pricing", "sop", "risk", "report", "scenic_tickets"],
+      "forbidden_source_types": ["agency_internal"],
+      "forbidden_visibilities": ["internal"],
+      "tags": ["public", "free_planning", "negative_safety", "destination", "nanjing", "city_break"]
+    },
+    {
+      "id": "retrieval_public_beijing_senior_low_stress",
+      "name": "Public guide safety: Beijing senior low-stress and accessible planning",
+      "query": "北京银发低强度旅行，老人同行，需要午休、少步行、住宿有电梯、优先核心城区，并准备雨天或高温 Plan B；只参考公开目的地攻略，不要旅行社内部报价、实时库存或承诺。",
+      "expected_sources": ["data/documents/destinations/beijing.md"],
+      "expected_categories": ["destinations"],
+      "expected_source_types": ["destination_guide"],
+      "expected_visibilities": ["public"],
+      "forbidden_categories": ["products", "pricing", "sop", "risk", "report", "scenic_tickets"],
+      "forbidden_source_types": ["agency_internal"],
+      "forbidden_visibilities": ["internal"],
+      "tags": ["public", "agency_plan", "negative_safety", "destination", "beijing", "senior", "low_stress", "accessible"]
+    },
+    {
+      "id": "retrieval_public_hangzhou_west_lake_slow_trip",
+      "name": "Public guide: Hangzhou West Lake slow trip",
+      "query": "第一次去杭州自由行，想安排西湖、灵隐寺、西溪湿地和运河街区，住哪里比较方便？",
+      "expected_sources": ["data/documents/destinations/hangzhou.md"],
+      "expected_categories": ["destinations"],
+      "expected_source_types": ["destination_guide"],
+      "expected_visibilities": ["public"],
+      "forbidden_source_types": ["agency_internal"],
+      "forbidden_visibilities": ["internal"],
+      "tags": ["public", "free_planning", "destination", "hangzhou"]
+    },
+    {
+      "id": "retrieval_public_hangzhou_no_internal_quote",
+      "name": "Public guide safety: Hangzhou free planning without internal quote",
+      "query": "杭州自由行只想自己订酒店和门票，想看西湖、灵隐寺、西溪湿地和住宿区域，不要旅行社产品、内部报价或门票供应商口径。",
+      "expected_sources": ["data/documents/destinations/hangzhou.md"],
+      "expected_categories": ["destinations"],
+      "expected_source_types": ["destination_guide"],
+      "expected_visibilities": ["public"],
+      "forbidden_categories": ["products", "pricing", "sop", "risk", "report", "scenic_tickets"],
+      "forbidden_source_types": ["agency_internal"],
+      "forbidden_visibilities": ["internal"],
+      "tags": ["public", "free_planning", "negative_safety", "destination", "hangzhou", "lodging"]
+    },
+    {
+      "id": "retrieval_public_xiamen_seaside_couple_trip",
+      "name": "Public guide: Xiamen seaside couple trip",
+      "query": "厦门情侣自由行，想去鼓浪屿、环岛路、沙坡尾和植物园，行程节奏怎么安排？",
+      "expected_sources": ["data/documents/destinations/xiamen.md"],
+      "expected_categories": ["destinations"],
+      "expected_source_types": ["destination_guide"],
+      "expected_visibilities": ["public"],
+      "forbidden_source_types": ["agency_internal"],
+      "forbidden_visibilities": ["internal"],
+      "tags": ["public", "free_planning", "destination", "xiamen", "couple"]
+    },
+    {
+      "id": "retrieval_public_xiamen_no_internal_product",
+      "name": "Public guide safety: Xiamen free planning without internal product",
+      "query": "厦门自由行自己订船票和酒店，只需要鼓浪屿、环岛路、沙坡尾和住宿区域建议，不要旅行社产品、纪念日套餐报价或内部 SOP。",
+      "expected_sources": ["data/documents/destinations/xiamen.md"],
+      "expected_categories": ["destinations"],
+      "expected_source_types": ["destination_guide"],
+      "expected_visibilities": ["public"],
+      "forbidden_categories": ["products", "pricing", "sop", "risk", "report", "scenic_tickets"],
+      "forbidden_source_types": ["agency_internal"],
+      "forbidden_visibilities": ["internal"],
+      "tags": ["public", "free_planning", "negative_safety", "destination", "xiamen", "couple"]
+    },
+    {
+      "id": "retrieval_public_guilin_landscape_family_trip",
+      "name": "Public guide: Guilin landscape family trip",
+      "query": "桂林亲子自由行想看漓江、阳朔、遇龙河和龙脊梯田，怎么安排低强度路线？",
+      "expected_sources": ["data/documents/destinations/guilin.md"],
+      "expected_categories": ["destinations"],
+      "expected_source_types": ["destination_guide"],
+      "expected_visibilities": ["public"],
+      "forbidden_source_types": ["agency_internal"],
+      "forbidden_visibilities": ["internal"],
+      "tags": ["public", "free_planning", "destination", "guilin", "family"]
+    },
+    {
+      "id": "retrieval_public_guilin_no_internal_optimizer",
+      "name": "Public guide safety: Guilin free planning without internal optimizer",
+      "query": "桂林自由行想自己安排漓江、阳朔、遇龙河和住宿区域，只看公开攻略，不要内部路线优化器、旅行社报价、SOP 或风险手册。",
+      "expected_sources": ["data/documents/destinations/guilin.md"],
+      "expected_categories": ["destinations"],
+      "expected_source_types": ["destination_guide"],
+      "expected_visibilities": ["public"],
+      "forbidden_categories": ["products", "pricing", "sop", "risk", "report", "scenic_tickets"],
+      "forbidden_source_types": ["agency_internal"],
+      "forbidden_visibilities": ["internal"],
+      "tags": ["public", "free_planning", "negative_safety", "destination", "guilin", "family"]
+    },
+    {
+      "id": "retrieval_product_family_low_stress",
+      "name": "Internal products: parent-child low-stress route",
+      "query": "亲子省心旅行社方案，带孩子少排队、短动线、可午休，需要成熟路线结构。",
+      "expected_sources": [
+        "data/documents/internal/products/route_templates.md",
+        "data/documents/internal/products/real_world_product_patterns.md"
+      ],
+      "expected_categories": ["products"],
+      "expected_source_types": ["agency_internal"],
+      "tags": ["internal", "agency_plan", "products", "family"]
+    },
+    {
+      "id": "retrieval_product_senior_accessible",
+      "name": "Internal products: senior accessible route",
+      "query": "老人同行的省心路线，要求低强度、少步行、近地铁或打车方便。",
+      "expected_sources": [
+        "data/documents/internal/products/route_templates.md",
+        "data/documents/internal/products/suzhou_senior_slow_custom.md"
+      ],
+      "expected_categories": ["products"],
+      "expected_source_types": ["agency_internal"],
+      "tags": ["internal", "agency_plan", "products", "senior"]
+    },
+    {
+      "id": "retrieval_product_xian_family_catalog_fields",
+      "name": "Internal products: Xi'an family catalog fields",
+      "query": "product_id ZX-PROD-XIAN-FAMILY-3D 的西安亲子省心轻定制，适合带孩子、短动线、可午休。",
+      "expected_sources": ["data/documents/internal/products/xian_family_light_custom.md"],
+      "expected_categories": ["products"],
+      "expected_source_types": ["agency_internal"],
+      "tags": ["internal", "agency_plan", "products", "family", "metadata"]
+    },
+    {
+      "id": "retrieval_product_team_budget_transparency",
+      "name": "Internal products: team budget transparency",
+      "query": "长沙团建透明预算方案，需要统一集合、餐饮容量、团队活动空间、人均和总价双口径。",
+      "expected_sources": ["data/documents/internal/products/changsha_team_budget_transparency.md"],
+      "expected_categories": ["products"],
+      "expected_source_types": ["agency_internal"],
+      "tags": ["internal", "agency_plan", "products", "team", "pricing"]
+    },
+    {
+      "id": "retrieval_product_couple_relaxed",
+      "name": "Internal products: couple relaxed route",
+      "query": "厦门情侣氛围轻路线，纪念日、夜景、特色餐厅、咖啡拍照留白，3天2晚舒适档。",
+      "expected_sources": ["data/documents/internal/products/xiamen_couple_relaxed.md"],
+      "expected_categories": ["products"],
+      "expected_source_types": ["agency_internal"],
+      "tags": ["internal", "agency_plan", "products", "couple"]
+    },
+    {
+      "id": "retrieval_product_xinjiang_destination_only",
+      "name": "Productized demo: Xinjiang weak destination match",
+      "query": "我想去新疆，想先看看有没有成熟一点的省心路线样板。",
+      "expected_sources": ["data/documents/internal/products/xinjiang_private_group_8d.md"],
+      "expected_categories": ["products"],
+      "expected_source_types": ["agency_internal"],
+      "tags": ["internal", "agency_plan", "products", "weak_match", "xinjiang"]
+    },
+    {
+      "id": "retrieval_product_tibet_budgeted_couple",
+      "name": "Productized demo: Tibet couple budget route",
+      "query": "西藏 两个人 预算一万多 省心点，不想自己查太多。",
+      "expected_sources": ["data/documents/internal/products/tibet_couple_light_custom_7d.md"],
+      "expected_categories": ["products"],
+      "expected_source_types": ["agency_internal"],
+      "tags": ["internal", "agency_plan", "products", "tibet", "couple"]
+    },
+    {
+      "id": "retrieval_product_xian_family_value",
+      "name": "Productized demo: Xi'an parent-child value route",
+      "query": "西安 三天 亲子 性价比，想要少排队、短动线的路线候选。",
+      "expected_sources": ["data/documents/internal/products/xian_family_light_custom.md"],
+      "expected_categories": ["products"],
+      "expected_source_types": ["agency_internal"],
+      "tags": ["internal", "agency_plan", "products", "xian", "family", "value"]
+    },
+    {
+      "id": "retrieval_product_xian_to_hangzhou_5d_budget",
+      "name": "Productized demo: Xi'an to Hangzhou 5-day 5000 per person",
+      "query": "西安出发去杭州5天，每人5000元左右，想要旅行社现成省心方案，交通住宿门票和餐饮都给样例价。",
+      "expected_sources": ["data/documents/internal/products/xian_to_hangzhou_5d_agency_sample.md"],
+      "expected_categories": ["products"],
+      "expected_source_types": ["agency_internal"],
+      "tags": ["internal", "agency_plan", "products", "xian", "hangzhou", "budget", "realistic_sample"]
+    },
+    {
+      "id": "retrieval_scenic_ticket_hangzhou_references",
+      "name": "Internal scenic tickets: Hangzhou ticket reference",
+      "query": "杭州旅行社方案需要灵隐飞来峰、西溪湿地、宋城门票参考价、预约说明、采集日期和不锁价边界。",
+      "expected_sources": ["data/documents/internal/scenic_tickets/scenic_ticket_reference.md"],
+      "expected_categories": ["scenic_tickets"],
+      "expected_source_types": ["agency_internal"],
+      "tags": ["internal", "agency_plan", "scenic_tickets", "hangzhou", "ticket_price"]
+    },
+    {
+      "id": "retrieval_product_free_planning_boundary",
+      "name": "Internal products: free-planning boundary",
+      "query": "用户不接受产品化方向，只想自己预订和自由规划，桂林4天需要路线优化、住宿区域、预算拆分和核验清单。",
+      "expected_sources": ["data/documents/internal/products/guilin_free_planning_optimizer.md"],
+      "expected_categories": ["products"],
+      "expected_source_types": ["agency_internal"],
+      "tags": ["internal", "free_planning", "products", "boundary"]
+    },
+    {
+      "id": "retrieval_pricing_inclusions_exclusions",
+      "name": "Internal pricing: inclusions and exclusions",
+      "query": "旅行社报价需要说明费用包含、不包含、待核验价格和预算置信度，应该参考什么规则？",
+      "expected_sources": [
+        "data/documents/internal/pricing/pricing_rules.md",
+        "data/documents/internal/pricing/real_world_pricing_and_contract_rules.md"
+      ],
+      "expected_categories": ["pricing"],
+      "expected_source_types": ["agency_internal"],
+      "tags": ["internal", "agency_plan", "pricing"]
+    },
+    {
+      "id": "retrieval_sop_consultant_flow",
+      "name": "Internal SOP: consultant workflow",
+      "query": "旅行顾问应该如何收集需求、确认关键项、避免重复追问，并交付最终报告？",
+      "expected_sources": [
+        "data/documents/internal/sop/service_sop.md",
+        "data/documents/internal/sop/real_world_consultant_sop.md"
+      ],
+      "expected_categories": ["sop"],
+      "expected_source_types": ["agency_internal"],
+      "tags": ["internal", "agency_plan", "sop"]
+    },
+    {
+      "id": "retrieval_risk_weather_elderly",
+      "name": "Internal risk: weather and elderly fallback",
+      "query": "天气变化、老人小孩体力不足、热门景区预约失败时，报告里应该怎么做风险提示和 Plan B？",
+      "expected_sources": [
+        "data/documents/internal/risk/risk_playbook.md",
+        "data/documents/internal/risk/real_world_compliance_risk_rules.md"
+      ],
+      "expected_categories": ["risk"],
+      "expected_source_types": ["agency_internal"],
+      "tags": ["internal", "agency_plan", "risk"]
+    },
+    {
+      "id": "retrieval_report_delivery_contract",
+      "name": "Internal report: delivery contract",
+      "query": "最终旅行规划报告应该包含行程、交通住宿、预算明细、地图路线、风险和待核验项。",
+      "expected_sources": [
+        "data/documents/internal/report/report_standard.md",
+        "data/documents/internal/report/real_world_report_delivery_patterns.md"
+      ],
+      "expected_categories": ["report"],
+      "expected_source_types": ["agency_internal"],
+      "tags": ["internal", "agency_plan", "report"]
+    },
+    {
+      "id": "retrieval_contract_no_locked_price",
+      "name": "Internal pricing and risk: no locked price commitment",
+      "query": "如果没有真实订单和库存，不能承诺锁价、余票、房型或预订成功，这个边界应该查哪些知识？",
+      "expected_sources": [
+        "data/documents/internal/pricing/pricing_rules.md",
+        "data/documents/internal/risk/real_world_compliance_risk_rules.md"
+      ],
+      "expected_categories": ["pricing", "risk"],
+      "expected_source_types": ["agency_internal"],
+      "tags": ["internal", "governance", "pricing", "risk"]
+    }
+  ]
+}

@@ -1,0 +1,108 @@
+{
+  "version": "travel_data_source_registry.v1",
+  "updated_at": "2026-06-24",
+  "policy": {
+    "raw_cache_location": ".runtime/ or private server generated-data directories",
+    "forbidden_for_public_repo": [
+      "raw API dumps",
+      "large image/video/audio files",
+      "platform posts with unclear reuse rights",
+      "real user chats",
+      "supplier quotes or inventory snapshots"
+    ],
+    "public_docs_must_not_claim": [
+      "real inventory",
+      "price lock",
+      "real payment",
+      "booking confirmation",
+      "ticketing",
+      "fulfillment"
+    ]
+  },
+  "sources": [
+    {
+      "key": "zhixing_curated_sample",
+      "name": "ZhiXing curated public destination sample",
+      "url": "",
+      "license": "Project demo sample",
+      "attribution": "ZhiXing demo dataset",
+      "attribution_required": true,
+      "origin_type": "curated_public_sample",
+      "content_types": ["text"],
+      "enabled_for_m1": true,
+      "m1_usage": "Small public sample documents for retrieval evaluation and safe demo copy.",
+      "ingestion_boundary": "Must be clearly marked as demo/reference content and cannot claim realtime price, inventory, booking or supplier confirmation.",
+      "raw_cache_policy": "No raw external cache is required."
+    },
+    {
+      "key": "wikivoyage",
+      "name": "Wikivoyage",
+      "url": "https://www.wikivoyage.org/",
+      "license": "CC BY-SA 4.0",
+      "attribution": "Wikivoyage contributors",
+      "attribution_required": true,
+      "origin_type": "external_public_license",
+      "content_types": ["text"],
+      "enabled_for_m1": true,
+      "m1_usage": "Destination overview, background, transport and travel caution references.",
+      "ingestion_boundary": "Use small attributed extracts or manually curated summaries; record page URL, license, retrieved_at and attribution.",
+      "raw_cache_policy": "Raw dumps stay outside Git; commit only curated Markdown with attribution."
+    },
+    {
+      "key": "openstreetmap",
+      "name": "OpenStreetMap",
+      "url": "https://www.openstreetmap.org/copyright",
+      "license": "ODbL",
+      "attribution": "OpenStreetMap contributors",
+      "attribution_required": true,
+      "origin_type": "external_public_license",
+      "content_types": ["poi", "geo"],
+      "enabled_for_m1": true,
+      "m1_usage": "Small-city POI metadata, tourism tags, coordinates and map candidate evidence.",
+      "ingestion_boundary": "Use small scoped Overpass queries; preserve attribution and avoid presenting derived data as proprietary inventory.",
+      "raw_cache_policy": "Raw Overpass responses stay outside Git; commit only small attributed metadata samples if reviewed."
+    },
+    {
+      "key": "wikimedia_commons",
+      "name": "Wikimedia Commons",
+      "url": "https://commons.wikimedia.org/wiki/Commons:Licensing",
+      "license": "Per-file free license",
+      "attribution": "Per-file author and license page",
+      "attribution_required": true,
+      "origin_type": "external_public_license",
+      "content_types": ["image", "metadata"],
+      "enabled_for_m1": true,
+      "m1_usage": "Small image metadata cards and attribution examples for multimodal RAG demos.",
+      "ingestion_boundary": "Record file page, author, license and source URL per asset; do not bulk-download media into Git.",
+      "raw_cache_policy": "Images and API responses stay outside Git; commit only reviewed metadata cards."
+    },
+    {
+      "key": "natural_earth",
+      "name": "Natural Earth",
+      "url": "https://www.naturalearthdata.com/",
+      "license": "Public domain",
+      "attribution": "Natural Earth",
+      "attribution_required": false,
+      "origin_type": "external_public_domain",
+      "content_types": ["geo", "map"],
+      "enabled_for_m1": false,
+      "m1_usage": "Optional map background or geography reference, not required for M1 travel planning.",
+      "ingestion_boundary": "Use only if a release needs lightweight map context; do not commit full datasets unless separately approved.",
+      "raw_cache_policy": "Raw files stay outside Git unless a tiny reviewed sample is explicitly approved."
+    },
+    {
+      "key": "geonames",
+      "name": "GeoNames",
+      "url": "https://www.geonames.org/export/",
+      "license": "CC BY 4.0",
+      "attribution": "GeoNames",
+      "attribution_required": true,
+      "origin_type": "external_public_license",
+      "content_types": ["geo", "placename"],
+      "enabled_for_m1": false,
+      "m1_usage": "Optional city/place-name normalization fallback.",
+      "ingestion_boundary": "Use only reviewed subsets with attribution; do not commit full dumps.",
+      "raw_cache_policy": "Raw dumps stay outside Git."
+    }
+  ]
+}

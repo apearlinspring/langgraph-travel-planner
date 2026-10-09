@@ -1,0 +1,78 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# IDE and local tooling
+.idea/
+.codex/
+.tools/
+
+# Local runtime state
+logs/
+backups/
+**/backups/
+.runtime/
+.tmp/
+.fastmcp/
+.uv-cache/
+.uv-wheel-cache/
+.uv-python/
+.uv-tools/
+node_modules/
+
+# Generated data
+data/vectorstore/
+**/data/vectorstore/
+data/vectorstore_internal/
+**/data/vectorstore_internal/
+data/.rag-vectorstore-builds/
+**/data/.rag-vectorstore-builds/
+data/.rag-vectorstore-backups/
+**/data/.rag-vectorstore-backups/
+data/.rag-vectorstore-faileds/
+**/data/.rag-vectorstore-faileds/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Local scratch files
+test1.py
+test2.py
+tree.txt
+
+# Local UI/e2e review artifacts
+tmp-playwright-review/
+tmp-frontend-review-*.png
+playwright-report/
+test-results/
+after-login*.png
+home.png
+mobile-home.png
+
+# Local-only presentation/interview preparation artifacts
+docs/前端与演示/ZhiXing_AI_Agent_Interview_Deck.pptx
+docs/前端与演示/ZhiXing_AI_Agent_Project_Deck.pptx
+docs/前端与演示/ZhiXing_AI_Agent_Technical_Deck.pptx
+docs/前端与演示/ZhiXing_AI_Agent_Technical_Deck_Speaker_Guide.md
+
+# Local-only collaboration notes and historical evidence
+docs/历史轮次/
+docs/问题记录/
+docs/项目总览/new-session-knowledge-base.md
+docs/项目总览/project-doc-notes.md

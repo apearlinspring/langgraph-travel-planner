@@ -1,0 +1,133 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - "codex/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12"
+  APP_ENV: test
+  DASHSCOPE_API_KEY: test-key-dashscope
+  LANGSMITH_API_KEY: test-key-langsmith
+  LANGSMITH_TRACING: "false"
+  POSTGRES_HOST: localhost
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: test_db
+  POSTGRES_USER: test_user
+  POSTGRES_PASSWORD: test_password
+  JWT_SECRET_KEY: dev-only-ci-jwt-secret-change-me
+
+jobs:
+  ci:
+    name: Static Checks And Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set Up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Set Up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install Python Dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+
+      - name: Install Frontend Dependencies
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Compile Python Sources
+        run: python -m compileall app tests scripts
+
+      - name: Validate Internal RAG Knowledge
+        run: python scripts/validate_rag_knowledge.py
+
+      - name: Collect Pytest Suite
+        run: python -m pytest --collect-only -q
+
+      - name: Validate Workflow Contracts
+        run: python -m pytest tests/test_ci_workflows.py -q
+
+      - name: Run Default Pytest Regression
+        run: python -m pytest -q
+
+      - name: Verify Frontend Report Renderer
+        run: node scripts/verify_frontend_report_renderer.js
+
+      - name: Verify Frontend Browser Regression
+        env:
+          ZHIXING_FRONTEND_BROWSER_STRICT: "1"
+        run: npm run verify:frontend-browser
+
+      - name: Check Development Runtime Readiness
+        run: python scripts/check_runtime_readiness.py --target development --json
+
+  postgres-integration:
+    name: PostgreSQL Transaction Integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: zhixing_ci
+          POSTGRES_USER: zhixing_ci
+          POSTGRES_PASSWORD: ci-only-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U zhixing_ci -d zhixing_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    env:
+      ZHIXING_DISABLE_DOTENV: "1"
+      ZHIXING_TEST_POSTGRES_DSN: postgresql://zhixing_ci:ci-only-password@127.0.0.1:5432/zhixing_ci
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set Up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install Python Dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+
+      - name: Run PostgreSQL Transaction Integration
+        run: |
+          test -n "$ZHIXING_TEST_POSTGRES_DSN"
+          python -m pytest --run-integration -q \
+            tests/test_agency_transaction_postgres_integration.py \
+            tests/test_agency_customer_lifecycle_postgres_integration.py \
+            tests/test_agency_customer_claim_postgres_integration.py \
+            tests/test_agency_branch_permissions_postgres_integration.py \
+            tests/test_agency_cancellation_postgres_integration.py \
+            tests/test_agency_branch_transfer_closure_postgres_integration.py

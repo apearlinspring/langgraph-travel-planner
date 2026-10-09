@@ -1,0 +1,1471 @@
+"""Acceptance quality gate aggregation for first-stage project verification."""
+from __future__ import annotations
+
+import json
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Iterable
+
+from app.evaluation.preflight import ACCEPTANCE_STATUSES
+from app.evaluation.scenarios import ACCEPTANCE_CORE_TAG, EvaluationScenario
+from app.evaluation.scoring import (
+    as_dict as _as_dict,
+    as_float as _as_number,
+    as_int as _as_int,
+    as_list as _as_list,
+    has_text as _has_text,
+)
+from app.utils.security import redact_sensitive_text
+
+
+ACCEPTANCE_GATE_VERSION = "acceptance_quality_gate.v1"
+ACCEPTANCE_SUMMARY_VERSION = "acceptance_run_summary.v1"
+
+
+@dataclass(frozen=True)
+class AcceptanceThresholds:
+    """Thresholds used by the auditable first-stage acceptance quality gate."""
+
+    min_agent_score: float = 82.0
+    min_report_score: float = 80.0
+    min_rag_score: float = 80.0
+    min_tool_score: float = 80.0
+    min_runtime_score: float = 80.0
+    min_agent_metrics_score: float = 80.0
+    max_unsupported_claim_rate: float = 0.0
+    min_budget_confidence_score: float = 100.0
+    min_tool_audit_score: float = 100.0
+    min_internal_evidence_categories: int = 3
+    require_runtime_budget_pass: bool = True
+    require_internal_evidence_for_agency: bool = True
+    require_tool_audit_surface: bool = True
+    require_turn_observability: bool = True
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+DEFAULT_ACCEPTANCE_THRESHOLDS = AcceptanceThresholds()
+
+
+DIMENSION_LABELS = {
+    "agent_quality": "Agent aggregate quality",
+    "report_quality": "Report quality",
+    "rag_quality": "RAG evidence quality",
+    "tool_quality": "Tool governance quality",
+    "runtime_quality": "Runtime metrics quality",
+    "agent_industrial_metrics": "Agent industrial metrics",
+    "runtime_budget": "Runtime budget gate",
+    "runtime_observability": "Production observability surface",
+    "budget_confidence": "Budget confidence contract",
+    "internal_evidence": "Internal evidence references",
+    "tool_audit": "Tool audit surface",
+    "evidence_closure": "Acceptance evidence closure",
+    "live_run": "Live scenario execution",
+    "preflight": "Preflight environment check",
+    "environment_dependencies": "Environment dependencies",
+    "llm_judge": "LLM judge supplement",
+}
+
+
+DIMENSION_SUGGESTIONS = {
+    "agent_quality": (
+        "Check the per-dimension scores first; the aggregate gate usually fails "
+        "because one report, RAG, tool, or runtime dimension is already failing."
+    ),
+    "report_quality": (
+        "Inspect report_data structure, itinerary/map parity, budget items, risks, "
+        "and app/reports contract rendering."
+    ),
+    "rag_quality": (
+        "Inspect agency_context.evidence and evidence_bundle coverage; agency-plan "
+        "scenarios should cite product, SOP, pricing, and risk evidence."
+    ),
+    "tool_quality": (
+        "Inspect SSE tool_call events, forbidden tools, duplicate high-cost calls, "
+        "and fallback pending checks."
+    ),
+    "runtime_quality": (
+        "Inspect total elapsed time, first-token latency, error events, tool-call "
+        "count, and estimated token pressure."
+    ),
+    "agent_industrial_metrics": (
+        "Inspect intent accuracy, required tool recall, stage transition order, "
+        "and unsupported dynamic claims in quality_summary.agent_metrics."
+    ),
+    "runtime_budget": (
+        "Inspect runtime_budget violations; slow or repeated external tools usually "
+        "need either a code fix or a scenario-specific budget override."
+    ),
+    "runtime_observability": (
+        "Inspect SSE turn_observability events and app/core/observability.py; every "
+        "live turn should expose a safe turn-level metrics summary."
+    ),
+    "budget_confidence": (
+        "Inspect budget_confidence; it must expose a level, confirmed or estimated "
+        "items, and verification items."
+    ),
+    "internal_evidence": (
+        "Inspect internal evidence category coverage; agency-plan reports need at "
+        "least three agency evidence categories."
+    ),
+    "tool_audit": (
+        "Inspect tool_audit_summary; it must expose used sources, pending checks, "
+        "and unsupported actions."
+    ),
+    "evidence_closure": (
+        "Inspect the saved snapshot and evidence_closure checks; a completed live "
+        "scenario must retain report, budget, risk, verification, and required agency evidence."
+    ),
+    "live_run": (
+        "Inspect the saved snapshot, backend logs, SSE stream events, and the final "
+        "state-transition turn that should produce report_data."
+    ),
+    "preflight": (
+        "Inspect missing required environment variables, backend health, and scenario "
+        "requirements before running live acceptance."
+    ),
+    "environment_dependencies": (
+        "Inspect the preflight readiness checks, required environment variable names, "
+        "backend health endpoints, and declared scenario dependency requirements."
+    ),
+    "llm_judge": (
+        "Inspect the redacted judge result as qualitative feedback only; deterministic "
+        "acceptance dimensions remain the source of truth for pass/fail."
+    ),
+}
+
+
+def acceptance_thresholds_from_dict(
+    payload: dict[str, Any] | None,
+    *,
+    base: AcceptanceThresholds | None = None,
+) -> AcceptanceThresholds:
+    """Build thresholds from optional CLI or test overrides."""
+
+    thresholds = base or DEFAULT_ACCEPTANCE_THRESHOLDS
+    if payload is None:
+        return thresholds
+    if not isinstance(payload, dict):
+        raise TypeError("acceptance thresholds payload must be a dictionary")
+
+    allowed_fields = set(AcceptanceThresholds.__dataclass_fields__)
+    unknown_fields = sorted(set(payload) - allowed_fields)
+    if unknown_fields:
+        raise ValueError(f"Unknown acceptance threshold fields: {', '.join(unknown_fields)}")
+
+    values = thresholds.to_dict()
+    for key, value in payload.items():
+        if key == "min_internal_evidence_categories":
+            if not isinstance(value, int) or value < 0:
+                raise ValueError(f"Acceptance threshold field {key!r} must be a non-negative integer")
+            values[key] = value
+        elif key == "max_unsupported_claim_rate":
+            if not isinstance(value, (int, float)) or not 0 <= float(value) <= 1:
+                raise ValueError(f"Acceptance threshold field {key!r} must be between 0 and 1")
+            values[key] = float(value)
+        elif key.startswith("require_"):
+            if not isinstance(value, bool):
+                raise ValueError(f"Acceptance threshold field {key!r} must be a boolean")
+            values[key] = value
+        else:
+            if not isinstance(value, (int, float)) or not 0 <= float(value) <= 100:
+                raise ValueError(f"Acceptance threshold field {key!r} must be between 0 and 100")
+            values[key] = float(value)
+    return AcceptanceThresholds(**values)
+
+
+def _redact_acceptance_artifact(value: Any, *, max_depth: int = 12) -> Any:
+    """Redact sensitive string values without hiding non-secret token metrics."""
+
+    if max_depth < 0:
+        return "[REDACTED]"
+    if isinstance(value, dict):
+        return {
+            key: _redact_acceptance_artifact(item, max_depth=max_depth - 1)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [
+            _redact_acceptance_artifact(item, max_depth=max_depth - 1)
+            for item in value
+        ]
+    if isinstance(value, tuple):
+        return tuple(
+            _redact_acceptance_artifact(item, max_depth=max_depth - 1)
+            for item in value
+        )
+    if isinstance(value, str):
+        return redact_sensitive_text(value)
+    return value
+
+
+def _score_bool(parts: Iterable[bool]) -> float:
+    checks = list(parts)
+    if not checks:
+        return 0.0
+    return round(sum(1 for item in checks if item) / len(checks) * 100, 2)
+
+
+def _result_findings(result: dict[str, Any]) -> list[str]:
+    summary_items = (
+        []
+        if result.get("passed") is True
+        else [str(item) for item in _as_list(result.get("summary")) if str(item).strip()]
+    )
+    criteria_findings = [
+        f"{criterion.get('name')}: {finding}"
+        for criterion in _as_list(result.get("criteria"))
+        if isinstance(criterion, dict)
+        for finding in _as_list(criterion.get("findings"))
+    ]
+    return [*summary_items, *criteria_findings][:10]
+
+
+def _agent_metrics_blocking_findings(result: dict[str, Any]) -> list[str]:
+    expectations = _as_dict(result.get("expectations"))
+    stage_strict = bool(_as_dict(expectations.get("stage")).get("strict", False))
+    summary_items = (
+        []
+        if result.get("passed") is True
+        else [str(item) for item in _as_list(result.get("summary")) if str(item).strip()]
+    )
+    criteria_findings = []
+    for criterion in _as_list(result.get("criteria")):
+        if not isinstance(criterion, dict):
+            continue
+        name = str(criterion.get("name") or "")
+        if name == "stage_transition_accuracy" and not stage_strict:
+            continue
+        criteria_findings.extend(
+            f"{name}: {finding}"
+            for finding in _as_list(criterion.get("findings"))
+        )
+    return [*summary_items, *criteria_findings][:10]
+
+
+def _dimension_result(
+    *,
+    key: str,
+    score: float | None,
+    threshold: float | None,
+    passed: bool,
+    status: str | None = None,
+    findings: list[str] | None = None,
+) -> dict[str, Any]:
+    resolved_status = status or ("passed" if passed else "failed")
+    if resolved_status not in ACCEPTANCE_STATUSES:
+        raise ValueError(f"Unknown acceptance status: {resolved_status}")
+    return {
+        "key": key,
+        "label": DIMENSION_LABELS.get(key, key),
+        "status": resolved_status,
+        "score": score,
+        "threshold": threshold,
+        "passed": passed,
+        "findings": findings or [],
+        "suggestion": DIMENSION_SUGGESTIONS.get(key, "Inspect this dimension's detailed result."),
+    }
+
+
+def _scored_quality_dimension(
+    key: str,
+    result: dict[str, Any],
+    threshold: float,
+) -> dict[str, Any]:
+    score = result.get("normalized_score")
+    numeric_score = float(score) if isinstance(score, (int, float)) else None
+    findings = _result_findings(result)
+    passed = (
+        bool(result.get("passed"))
+        and numeric_score is not None
+        and numeric_score >= threshold
+        and not findings
+    )
+    if numeric_score is not None and numeric_score < threshold:
+        findings = [
+            f"{DIMENSION_LABELS[key]} score {numeric_score} is below threshold {threshold}",
+            *findings,
+        ]
+    if not result:
+        findings = [f"{DIMENSION_LABELS[key]} result is missing"]
+    return _dimension_result(
+        key=key,
+        score=numeric_score,
+        threshold=threshold,
+        passed=passed,
+        findings=findings[:10],
+    )
+
+
+def _budget_confidence_dimension(
+    report_data: dict[str, Any] | None,
+    thresholds: AcceptanceThresholds,
+) -> dict[str, Any]:
+    budget_confidence = _as_dict(_as_dict(report_data).get("budget_confidence"))
+    has_level = _has_text(budget_confidence.get("level"))
+    has_status_items = bool(
+        _as_list(budget_confidence.get("confirmed_items"))
+        or _as_list(budget_confidence.get("estimated_items"))
+    )
+    has_verification = bool(_as_list(budget_confidence.get("verification_items")))
+    checks = [has_level, has_status_items, has_verification]
+    score = _score_bool(checks)
+    findings: list[str] = []
+    if not has_level:
+        findings.append("budget_confidence.level is missing")
+    if not has_status_items:
+        findings.append("budget_confidence needs confirmed_items or estimated_items")
+    if not has_verification:
+        findings.append("budget_confidence.verification_items is missing")
+    return _dimension_result(
+        key="budget_confidence",
+        score=score,
+        threshold=thresholds.min_budget_confidence_score,
+        passed=score >= thresholds.min_budget_confidence_score and not findings,
+        findings=findings,
+    )
+
+
+def _internal_evidence_categories(report_data: dict[str, Any] | None) -> set[str]:
+    report = _as_dict(report_data)
+    agency_context = _as_dict(report.get("agency_context"))
+    categories: set[str] = set()
+    for item in _as_list(agency_context.get("evidence")):
+        evidence = _as_dict(item)
+        if evidence.get("source_type") == "agency_internal" and _has_text(evidence.get("category")):
+            categories.add(str(evidence["category"]).strip())
+
+    for category, value in _as_dict(agency_context.get("categories")).items():
+        if _has_text(category) and value:
+            categories.add(str(category).strip())
+
+    bundle_categories = _as_dict(_as_dict(report.get("evidence_bundle")).get("agency_categories"))
+    for category, value in bundle_categories.items():
+        if _has_text(category) and isinstance(value, (int, float)) and value > 0:
+            categories.add(str(category).strip())
+    return categories
+
+
+def _internal_evidence_dimension(
+    scenario: EvaluationScenario,
+    report_data: dict[str, Any] | None,
+    thresholds: AcceptanceThresholds,
+) -> dict[str, Any]:
+    if scenario.expected_mode != "agency_plan" or not thresholds.require_internal_evidence_for_agency:
+        return _dimension_result(
+            key="internal_evidence",
+            score=100.0,
+            threshold=None,
+            passed=True,
+            findings=[],
+        )
+
+    categories = _internal_evidence_categories(report_data)
+    required = thresholds.min_internal_evidence_categories
+    score = 100.0 if required == 0 else round(min(len(categories) / required, 1.0) * 100, 2)
+    findings = []
+    if len(categories) < required:
+        findings.append(
+            "Internal evidence category coverage "
+            f"{len(categories)} is below required {required}; covered={sorted(categories)}"
+        )
+    return _dimension_result(
+        key="internal_evidence",
+        score=score,
+        threshold=100.0,
+        passed=len(categories) >= required,
+        findings=findings,
+    )
+
+
+def _tool_audit_dimension(
+    report_data: dict[str, Any] | None,
+    thresholds: AcceptanceThresholds,
+) -> dict[str, Any]:
+    if not thresholds.require_tool_audit_surface:
+        return _dimension_result(
+            key="tool_audit",
+            score=100.0,
+            threshold=None,
+            passed=True,
+            findings=[],
+        )
+
+    tool_audit = _as_dict(_as_dict(report_data).get("tool_audit_summary"))
+    has_used_sources = bool(_as_list(tool_audit.get("used_sources")))
+    has_pending_checks = bool(_as_list(tool_audit.get("pending_checks")))
+    has_unsupported_actions = bool(_as_list(tool_audit.get("unsupported_actions")))
+    checks = [has_used_sources, has_pending_checks, has_unsupported_actions]
+    score = _score_bool(checks)
+    findings: list[str] = []
+    if not has_used_sources:
+        findings.append("tool_audit_summary.used_sources is missing")
+    if not has_pending_checks:
+        findings.append("tool_audit_summary.pending_checks is missing")
+    if not has_unsupported_actions:
+        findings.append("tool_audit_summary.unsupported_actions is missing")
+    return _dimension_result(
+        key="tool_audit",
+        score=score,
+        threshold=thresholds.min_tool_audit_score,
+        passed=score >= thresholds.min_tool_audit_score and not findings,
+        findings=findings,
+    )
+
+
+def _agent_industrial_metrics_dimension(
+    quality_summary: dict[str, Any],
+    thresholds: AcceptanceThresholds,
+) -> dict[str, Any]:
+    result = _as_dict(quality_summary.get("agent_metrics"))
+    score = result.get("normalized_score")
+    numeric_score = float(score) if isinstance(score, (int, float)) else None
+    unsupported_claims = _as_dict(result.get("unsupported_claims"))
+    claim_rate = _as_number(unsupported_claims.get("unsupported_claim_rate"))
+    unsupported_count = _as_int(unsupported_claims.get("unsupported_claim_count")) or 0
+    findings = _agent_metrics_blocking_findings(result)
+    if not result:
+        findings.append("quality_summary.agent_metrics result is missing")
+    if numeric_score is None:
+        findings.append("agent_metrics.normalized_score is missing")
+    elif numeric_score < thresholds.min_agent_metrics_score:
+        findings.insert(
+            0,
+            (
+                "Agent industrial metrics score "
+                f"{numeric_score} is below threshold {thresholds.min_agent_metrics_score}"
+            ),
+        )
+    if claim_rate is None:
+        findings.append("agent_metrics.unsupported_claims.unsupported_claim_rate is missing")
+    elif claim_rate > thresholds.max_unsupported_claim_rate:
+        findings.insert(
+            0,
+            (
+                "Unsupported dynamic claim rate "
+                f"{claim_rate} is above threshold {thresholds.max_unsupported_claim_rate}"
+            ),
+        )
+    if unsupported_count > 0:
+        findings.append(f"Unsupported dynamic claim count is {unsupported_count}")
+    passed = (
+        bool(result.get("passed"))
+        and numeric_score is not None
+        and numeric_score >= thresholds.min_agent_metrics_score
+        and claim_rate is not None
+        and claim_rate <= thresholds.max_unsupported_claim_rate
+        and not findings
+    )
+    return _dimension_result(
+        key="agent_industrial_metrics",
+        score=numeric_score,
+        threshold=thresholds.min_agent_metrics_score,
+        passed=passed,
+        findings=findings[:10],
+    )
+
+
+def _llm_judge_supplement_dimension(
+    result: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if not result:
+        return _dimension_result(
+            key="llm_judge",
+            score=None,
+            threshold=None,
+            passed=False,
+            status="skipped",
+            findings=["LLM judge was not requested for this run."],
+        )
+
+    score = result.get("normalized_score")
+    numeric_score = float(score) if isinstance(score, (int, float)) else None
+    status = str(result.get("status") or ("passed" if result.get("passed") else "failed"))
+    if status not in ACCEPTANCE_STATUSES:
+        status = "failed"
+    findings = [
+        str(item)
+        for item in [
+            *_as_list(result.get("findings")),
+            *_as_list(result.get("concerns")),
+        ]
+        if str(item).strip()
+    ][:10]
+    return _dimension_result(
+        key="llm_judge",
+        score=numeric_score,
+        threshold=(
+            float(result["threshold"])
+            if isinstance(result.get("threshold"), (int, float))
+            else None
+        ),
+        passed=bool(result.get("passed")) and status == "passed",
+        status=status,
+        findings=findings,
+    )
+
+
+def _runtime_budget_dimension(
+    quality_summary: dict[str, Any],
+    thresholds: AcceptanceThresholds,
+) -> dict[str, Any]:
+    runtime_quality = _as_dict(quality_summary.get("runtime_quality"))
+    budget_gate = _as_dict(runtime_quality.get("budget_gate"))
+    passed = bool(budget_gate.get("passed")) or not thresholds.require_runtime_budget_pass
+    violations = [
+        str(item)
+        for item in _as_list(budget_gate.get("violations"))
+        if str(item).strip()
+    ]
+    warnings = [
+        str(item)
+        for item in _as_list(budget_gate.get("warnings"))
+        if str(item).strip()
+    ]
+    findings = [
+        *violations,
+        *warnings,
+    ]
+    if thresholds.require_runtime_budget_pass and not budget_gate:
+        findings.insert(0, "runtime_quality.budget_gate is missing")
+    status = "passed"
+    if not passed:
+        status = "failed"
+    return _dimension_result(
+        key="runtime_budget",
+        score=100.0 if passed else 0.0,
+        threshold=100.0 if thresholds.require_runtime_budget_pass else None,
+        passed=passed,
+        status=status,
+        findings=findings[:10],
+    )
+
+
+def _runtime_observability_dimension(
+    quality_summary: dict[str, Any],
+    thresholds: AcceptanceThresholds,
+) -> dict[str, Any]:
+    if not thresholds.require_turn_observability:
+        return _dimension_result(
+            key="runtime_observability",
+            score=100.0,
+            threshold=None,
+            passed=True,
+            findings=[],
+        )
+
+    runtime_metrics = _as_dict(quality_summary.get("runtime_metrics"))
+    event_count = runtime_metrics.get("turn_observability_event_count")
+    count = int(event_count) if isinstance(event_count, int) else 0
+    findings = []
+    if count < 1:
+        findings.append("runtime_metrics.turn_observability_event_count is missing or zero")
+    return _dimension_result(
+        key="runtime_observability",
+        score=100.0 if count >= 1 else 0.0,
+        threshold=100.0,
+        passed=count >= 1,
+        findings=findings,
+    )
+
+
+def _agent_quality_dimension(
+    scenario: EvaluationScenario,
+    quality_summary: dict[str, Any],
+    thresholds: AcceptanceThresholds,
+) -> dict[str, Any]:
+    aggregate = _as_dict(quality_summary.get("aggregate"))
+    score = aggregate.get("normalized_score")
+    numeric_score = float(score) if isinstance(score, (int, float)) else None
+    threshold = max(thresholds.min_agent_score, scenario.min_score)
+    findings: list[str] = []
+    if numeric_score is None:
+        findings.append("aggregate.normalized_score is missing")
+    elif numeric_score < threshold:
+        findings.append(f"Aggregate score {numeric_score} is below threshold {threshold}")
+    if not bool(aggregate.get("passed")):
+        findings.append("aggregate.passed is false")
+    return _dimension_result(
+        key="agent_quality",
+        score=numeric_score,
+        threshold=threshold,
+        passed=not findings,
+        findings=findings,
+    )
+
+
+def _failure_records(
+    *,
+    scenario: EvaluationScenario,
+    dimensions: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    failures = []
+    for key, dimension in dimensions.items():
+        if dimension["passed"]:
+            continue
+        failures.append(
+            {
+                "scenario_id": scenario.id,
+                "scenario_name": scenario.name,
+                "dimension": key,
+                "dimension_label": dimension["label"],
+                "status": dimension.get("status", "failed"),
+                "score": dimension["score"],
+                "threshold": dimension["threshold"],
+                "findings": dimension["findings"] or [f"{dimension['label']} failed"],
+                "suggestion": dimension["suggestion"],
+            }
+        )
+    return failures
+
+
+def _degradation_records(
+    *,
+    scenario: EvaluationScenario,
+    dimensions: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    degradations = []
+    for key, dimension in dimensions.items():
+        if dimension.get("status") != "degraded":
+            continue
+        degradations.append(
+            {
+                "scenario_id": scenario.id,
+                "scenario_name": scenario.name,
+                "dimension": key,
+                "dimension_label": dimension["label"],
+                "status": "degraded",
+                "score": dimension["score"],
+                "threshold": dimension["threshold"],
+                "findings": dimension["findings"] or [f"{dimension['label']} degraded"],
+                "suggestion": dimension["suggestion"],
+            }
+        )
+    return degradations
+
+
+def build_acceptance_gate_result(
+    *,
+    scenario: EvaluationScenario,
+    quality_summary: dict[str, Any],
+    report_data: dict[str, Any] | None,
+    snapshot_path: str | None = None,
+    thresholds: AcceptanceThresholds | None = None,
+    llm_judge_evaluation: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build one auditable acceptance gate result for a completed scenario."""
+
+    gate_thresholds = thresholds or DEFAULT_ACCEPTANCE_THRESHOLDS
+    if not isinstance(quality_summary, dict):
+        raise TypeError("quality_summary must be a dictionary")
+
+    dimensions = {
+        "agent_quality": _agent_quality_dimension(scenario, quality_summary, gate_thresholds),
+        "report_quality": _scored_quality_dimension(
+            "report_quality",
+            _as_dict(quality_summary.get("report_quality")),
+            gate_thresholds.min_report_score,
+        ),
+        "rag_quality": _scored_quality_dimension(
+            "rag_quality",
+            _as_dict(quality_summary.get("rag_quality")),
+            gate_thresholds.min_rag_score,
+        ),
+        "tool_quality": _scored_quality_dimension(
+            "tool_quality",
+            _as_dict(quality_summary.get("tool_quality")),
+            gate_thresholds.min_tool_score,
+        ),
+        "runtime_quality": _scored_quality_dimension(
+            "runtime_quality",
+            _as_dict(quality_summary.get("runtime_quality")),
+            gate_thresholds.min_runtime_score,
+        ),
+        "agent_industrial_metrics": _agent_industrial_metrics_dimension(
+            quality_summary,
+            gate_thresholds,
+        ),
+        "runtime_budget": _runtime_budget_dimension(quality_summary, gate_thresholds),
+        "runtime_observability": _runtime_observability_dimension(
+            quality_summary,
+            gate_thresholds,
+        ),
+        "budget_confidence": _budget_confidence_dimension(report_data, gate_thresholds),
+        "internal_evidence": _internal_evidence_dimension(scenario, report_data, gate_thresholds),
+        "tool_audit": _tool_audit_dimension(report_data, gate_thresholds),
+    }
+    failures = _failure_records(scenario=scenario, dimensions=dimensions)
+    degradations = _degradation_records(scenario=scenario, dimensions=dimensions)
+    status = "failed" if failures else "degraded" if degradations else "passed"
+    supplemental_dimensions = {
+        "llm_judge": _llm_judge_supplement_dimension(llm_judge_evaluation),
+    }
+    return {
+        "version": ACCEPTANCE_GATE_VERSION,
+        "scenario_id": scenario.id,
+        "scenario_name": scenario.name,
+        "scenario_category": scenario.category,
+        "expected_mode": scenario.expected_mode,
+        "status": status,
+        "passed": status == "passed",
+        "snapshot_path": snapshot_path,
+        "thresholds": gate_thresholds.to_dict(),
+        "dimensions": dimensions,
+        "supplemental_dimensions": supplemental_dimensions,
+        "failures": failures,
+        "degradations": degradations,
+    }
+
+
+def build_error_acceptance_gate_result(
+    *,
+    scenario: EvaluationScenario,
+    error: str,
+    snapshot_path: str | None = None,
+    thresholds: AcceptanceThresholds | None = None,
+    status: str = "failed",
+    llm_judge_evaluation: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build an acceptance result for a scenario that failed before scoring."""
+
+    if status not in {"failed", "blocked", "skipped"}:
+        raise ValueError("Error acceptance gate status must be failed, blocked, or skipped")
+    gate_thresholds = thresholds or DEFAULT_ACCEPTANCE_THRESHOLDS
+    dimension = _dimension_result(
+        key="live_run",
+        score=0.0,
+        threshold=100.0,
+        passed=False,
+        status=status,
+        findings=[error],
+    )
+    dimensions = {"live_run": dimension}
+    return {
+        "version": ACCEPTANCE_GATE_VERSION,
+        "scenario_id": scenario.id,
+        "scenario_name": scenario.name,
+        "scenario_category": scenario.category,
+        "expected_mode": scenario.expected_mode,
+        "status": status,
+        "passed": False,
+        "snapshot_path": snapshot_path,
+        "thresholds": gate_thresholds.to_dict(),
+        "dimensions": dimensions,
+        "supplemental_dimensions": {
+            "llm_judge": _llm_judge_supplement_dimension(llm_judge_evaluation),
+        },
+        "failures": _failure_records(scenario=scenario, dimensions=dimensions),
+        "degradations": [],
+    }
+
+
+def build_skipped_acceptance_gate_result(
+    *,
+    scenario: EvaluationScenario,
+    reason: str,
+    thresholds: AcceptanceThresholds | None = None,
+) -> dict[str, Any]:
+    """Build an acceptance result for a scenario skipped by preflight."""
+
+    return build_error_acceptance_gate_result(
+        scenario=scenario,
+        error=reason,
+        snapshot_path=None,
+        thresholds=thresholds,
+        status="skipped",
+    )
+
+
+def _preflight_records(
+    preflight: dict[str, Any] | None,
+    *,
+    statuses: set[str],
+) -> list[dict[str, Any]]:
+    records = []
+    for check in _as_list(_as_dict(preflight).get("checks")):
+        if not isinstance(check, dict) or check.get("status") not in statuses:
+            continue
+        status = str(check.get("status") or "failed")
+        records.append(
+            {
+                "scenario_id": "__preflight__",
+                "scenario_name": "Preflight environment",
+                "dimension": "environment_dependencies",
+                "dimension_label": DIMENSION_LABELS["environment_dependencies"],
+                "status": status,
+                "score": 0.0 if status in {"blocked", "skipped"} else None,
+                "threshold": 100.0 if status in {"blocked", "skipped"} else None,
+                "findings": [
+                    f"{check.get('label') or check.get('key')}: {finding}"
+                    for finding in _as_list(check.get("findings"))
+                ]
+                or [f"{check.get('label') or check.get('key')} is {status}"],
+                "suggestion": check.get("suggestion")
+                or DIMENSION_SUGGESTIONS["environment_dependencies"],
+                "env_vars": _as_list(check.get("env_vars")),
+            }
+        )
+    return records
+
+
+def _safe_tool_counts(value: Any) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for tool, count in _as_dict(value).items():
+        if not isinstance(tool, str) or not tool.strip():
+            continue
+        numeric_count = _as_int(count)
+        if numeric_count is None or numeric_count < 0:
+            continue
+        counts[tool.strip()] = numeric_count
+    return counts
+
+
+def _result_runtime_metrics(result: dict[str, Any]) -> dict[str, Any]:
+    return _as_dict(result.get("runtime_metrics"))
+
+
+def _normalized_result_status(value: Any) -> str | None:
+    status = str(value or "").strip().lower()
+    return status if status in ACCEPTANCE_STATUSES else None
+
+
+def _effective_result_status(result: dict[str, Any]) -> str:
+    """Resolve one result status without trusting any single pass surface."""
+
+    gate = _as_dict(result.get("acceptance_gate"))
+    closure = _as_dict(result.get("evidence_closure"))
+    raw_result_status = str(result.get("status") or "").strip().lower()
+    raw_gate_status = str(gate.get("status") or "").strip().lower()
+    result_status = _normalized_result_status(raw_result_status)
+    gate_status = _normalized_result_status(raw_gate_status)
+
+    if raw_result_status and result_status is None:
+        return "failed"
+    if not gate or gate_status is None:
+        return "failed"
+    if "blocked" in {result_status, gate_status}:
+        return "blocked"
+    if "failed" in {result_status, gate_status}:
+        return "failed"
+    if "degraded" in {result_status, gate_status}:
+        return "degraded"
+    if "skipped" in {result_status, gate_status}:
+        return "skipped"
+
+    return (
+        "passed"
+        if result.get("passed") is True
+        and gate.get("passed") is True
+        and result_status in {None, "passed"}
+        and gate_status == "passed"
+        and closure.get("passed") is True
+        else "failed"
+    )
+
+
+def _run_contract_failure(
+    result: dict[str, Any],
+    *,
+    dimension: str,
+    findings: list[str],
+) -> dict[str, Any]:
+    return {
+        "scenario_id": str(result.get("scenario_id") or "-"),
+        "scenario_name": str(result.get("scenario_name") or result.get("scenario_id") or "-"),
+        "dimension": dimension,
+        "dimension_label": DIMENSION_LABELS[dimension],
+        "status": "failed",
+        "score": 0.0,
+        "threshold": 100.0,
+        "findings": findings,
+        "suggestion": DIMENSION_SUGGESTIONS[dimension],
+    }
+
+
+def _result_contract_failures(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Fail closed when result, gate, and evidence-closure surfaces disagree."""
+
+    failures: list[dict[str, Any]] = []
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        gate = _as_dict(result.get("acceptance_gate"))
+        closure = _as_dict(result.get("evidence_closure"))
+        raw_result_status = str(result.get("status") or "").strip().lower()
+        raw_gate_status = str(gate.get("status") or "").strip().lower()
+        result_status = _normalized_result_status(raw_result_status)
+        gate_status = _normalized_result_status(raw_gate_status)
+
+        live_findings: list[str] = []
+        if not gate:
+            live_findings.append("result.acceptance_gate is missing")
+        elif gate_status is None:
+            live_findings.append("result.acceptance_gate.status is missing or invalid")
+        elif gate.get("passed") is not (gate_status == "passed"):
+            live_findings.append("result.acceptance_gate passed/status fields are inconsistent")
+        if raw_result_status and result_status is None:
+            live_findings.append("result.status is invalid")
+        if result_status == "passed" and result.get("passed") is not True:
+            live_findings.append("result.status is passed but result.passed is not true")
+        if result.get("passed") is True and result_status not in {None, "passed"}:
+            live_findings.append("result.passed is true but result.status is not passed")
+        if gate_status == "passed" and result.get("passed") is not True:
+            live_findings.append("acceptance_gate passed but the effective scenario result did not pass")
+        if live_findings:
+            failures.append(
+                _run_contract_failure(
+                    result,
+                    dimension="live_run",
+                    findings=live_findings,
+                )
+            )
+
+        pass_claimed = (
+            result.get("passed") is True
+            or result_status == "passed"
+            or gate.get("passed") is True
+            or gate_status == "passed"
+        )
+        if not pass_claimed:
+            continue
+        if not closure:
+            closure_findings = ["result.evidence_closure is missing for a completed scenario"]
+        elif closure.get("passed") is not True:
+            missing = [str(item) for item in _as_list(closure.get("missing")) if str(item)]
+            closure_findings = [
+                "result.evidence_closure did not pass"
+                + (f"; missing={', '.join(missing)}" if missing else "")
+            ]
+        else:
+            closure_findings = []
+        if closure_findings:
+            failures.append(
+                _run_contract_failure(
+                    result,
+                    dimension="evidence_closure",
+                    findings=closure_findings,
+                )
+            )
+    return failures
+
+
+def _acceptance_runtime_totals(results: list[dict[str, Any]]) -> dict[str, Any]:
+    total_elapsed = 0.0
+    elapsed_count = 0
+    total_tool_calls = 0
+    total_tool_failures = 0
+    total_fallbacks = 0
+    total_input_tokens = 0
+    total_output_tokens = 0
+    total_tokens = 0
+    token_count = 0
+    tool_counts: dict[str, int] = {}
+
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        metrics = _result_runtime_metrics(result)
+        elapsed = _as_number(metrics.get("total_elapsed_seconds"))
+        if elapsed is None:
+            elapsed = _as_number(result.get("elapsed_seconds"))
+        if elapsed is not None:
+            total_elapsed += elapsed
+            elapsed_count += 1
+
+        tool_call_count = _as_int(metrics.get("tool_call_count"))
+        if tool_call_count is not None:
+            total_tool_calls += tool_call_count
+        else:
+            total_tool_calls += sum(_safe_tool_counts(result.get("tool_counts")).values())
+
+        total_tool_failures += _as_int(metrics.get("tool_failure_count")) or 0
+        total_fallbacks += _as_int(metrics.get("fallback_count")) or 0
+
+        input_tokens = _as_int(metrics.get("estimated_input_tokens"))
+        output_tokens = _as_int(metrics.get("estimated_output_tokens"))
+        estimated_tokens = _as_int(metrics.get("estimated_total_tokens"))
+        if input_tokens is not None:
+            total_input_tokens += input_tokens
+        if output_tokens is not None:
+            total_output_tokens += output_tokens
+        if estimated_tokens is not None:
+            total_tokens += estimated_tokens
+            token_count += 1
+
+        for tool, count in _safe_tool_counts(result.get("tool_counts")).items():
+            tool_counts[tool] = tool_counts.get(tool, 0) + count
+
+    return {
+        "elapsed_seconds": round(total_elapsed, 3),
+        "average_elapsed_seconds": round(total_elapsed / elapsed_count, 3) if elapsed_count else None,
+        "tool_call_count": total_tool_calls,
+        "tool_failure_count": total_tool_failures,
+        "tool_failure_ratio": (
+            round(total_tool_failures / total_tool_calls, 4)
+            if total_tool_calls
+            else (1.0 if total_tool_failures else 0.0)
+        ),
+        "fallback_count": total_fallbacks,
+        "estimated_input_tokens": total_input_tokens,
+        "estimated_output_tokens": total_output_tokens,
+        "estimated_total_tokens": total_tokens,
+        "average_estimated_total_tokens": round(total_tokens / token_count, 2) if token_count else None,
+        "tool_counts": dict(sorted(tool_counts.items(), key=lambda item: (-item[1], item[0]))),
+    }
+
+
+def _acceptance_evidence_totals(results: list[dict[str, Any]]) -> dict[str, Any]:
+    closures = []
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        closure = _as_dict(result.get("evidence_closure"))
+        if closure:
+            closures.append(closure)
+    check_keys = [
+        "snapshot",
+        "report_data",
+        "budget",
+        "budget_confidence",
+        "risk",
+        "verification_items",
+        "agency_business_evidence",
+    ]
+    counts = {
+        key: sum(1 for closure in closures if _as_dict(closure.get("checks")).get(key) is True)
+        for key in check_keys
+    }
+    return {
+        "version": "acceptance_evidence_closure_summary.v1",
+        "result_count": len(closures),
+        "passed_count": sum(1 for closure in closures if closure.get("passed") is True),
+        "counts": counts,
+        "missing_by_scenario": {
+            str(closure.get("scenario_id")): _as_list(closure.get("missing"))
+            for closure in closures
+            if _as_list(closure.get("missing"))
+        },
+    }
+
+
+def _result_agent_metrics(result: dict[str, Any]) -> dict[str, Any]:
+    metrics = _as_dict(result.get("agent_metrics"))
+    if metrics:
+        return metrics
+    quality_summary = _as_dict(result.get("quality_summary"))
+    metrics = _as_dict(quality_summary.get("agent_metrics"))
+    if metrics:
+        return metrics
+    gate = _as_dict(result.get("acceptance_gate"))
+    dimension = _as_dict(_as_dict(gate.get("dimensions")).get("agent_industrial_metrics"))
+    if dimension:
+        return {
+            "passed": dimension.get("passed") is True,
+            "normalized_score": dimension.get("score"),
+            "metric_values": {},
+            "unsupported_claims": {
+                "dynamic_claim_count": 0,
+                "unsupported_claim_count": 0,
+                "unsupported_claim_rate": 0.0,
+            },
+        }
+    return {}
+
+
+def _average_metric(values: list[float]) -> float | None:
+    return round(sum(values) / len(values), 4) if values else None
+
+
+def _acceptance_agent_metric_totals(results: list[dict[str, Any]]) -> dict[str, Any]:
+    metric_records = [
+        _result_agent_metrics(result)
+        for result in results
+        if isinstance(result, dict) and _result_agent_metrics(result)
+    ]
+    metric_values = [_as_dict(record.get("metric_values")) for record in metric_records]
+
+    def collect(key: str) -> list[float]:
+        values: list[float] = []
+        for value in metric_values:
+            number = _as_number(value.get(key))
+            if number is not None:
+                values.append(number)
+        return values
+
+    dynamic_claim_count = 0
+    unsupported_claim_count = 0
+    unsupported_by_scenario: dict[str, int] = {}
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        metrics = _result_agent_metrics(result)
+        claims = _as_dict(metrics.get("unsupported_claims"))
+        dynamic_claim_count += _as_int(claims.get("dynamic_claim_count")) or 0
+        unsupported = _as_int(claims.get("unsupported_claim_count")) or 0
+        unsupported_claim_count += unsupported
+        if unsupported:
+            unsupported_by_scenario[str(result.get("scenario_id") or "-")] = unsupported
+
+    return {
+        "version": "agent_industrial_metrics_summary.v1",
+        "result_count": len(metric_records),
+        "passed_count": sum(1 for record in metric_records if record.get("passed") is True),
+        "average_score": _average_metric(
+            [
+                float(record["normalized_score"])
+                for record in metric_records
+                if isinstance(record.get("normalized_score"), (int, float))
+            ]
+        ),
+        "averages": {
+            "intent_accuracy": _average_metric(collect("intent_accuracy")),
+            "tool_call_precision": _average_metric(collect("tool_call_precision")),
+            "tool_call_recall": _average_metric(collect("tool_call_recall")),
+            "stage_transition_accuracy": _average_metric(collect("stage_transition_accuracy")),
+            "unsupported_claim_rate": _average_metric(collect("unsupported_claim_rate")),
+        },
+        "dynamic_claim_count": dynamic_claim_count,
+        "unsupported_claim_count": unsupported_claim_count,
+        "unsupported_claim_rate": (
+            round(unsupported_claim_count / dynamic_claim_count, 4)
+            if dynamic_claim_count
+            else 0.0
+        ),
+        "unsupported_by_scenario": unsupported_by_scenario,
+    }
+
+
+def build_acceptance_run_summary(
+    *,
+    results: list[dict[str, Any]],
+    scenarios: list[EvaluationScenario],
+    base_url: str,
+    output_dir: Path,
+    thresholds: AcceptanceThresholds | None = None,
+    preflight: dict[str, Any] | None = None,
+    created_at: datetime | None = None,
+) -> dict[str, Any]:
+    """Build the JSON-serializable run-level acceptance summary."""
+
+    gate_thresholds = thresholds or DEFAULT_ACCEPTANCE_THRESHOLDS
+    created = created_at or datetime.now(timezone.utc)
+    scenario_ids = [scenario.id for scenario in scenarios]
+    completed_ids = [str(result.get("scenario_id")) for result in results]
+    missing_ids = [scenario_id for scenario_id in scenario_ids if scenario_id not in set(completed_ids)]
+    gates = [_as_dict(result.get("acceptance_gate")) for result in results]
+    failures = [
+        failure
+        for gate in gates
+        for failure in _as_list(gate.get("failures"))
+        if isinstance(failure, dict)
+    ]
+    degradations = [
+        degradation
+        for gate in gates
+        for degradation in _as_list(gate.get("degradations"))
+        if isinstance(degradation, dict)
+    ]
+    failures.extend(
+        _preflight_records(preflight, statuses={"blocked", "skipped"})
+    )
+    degradations.extend(
+        _preflight_records(preflight, statuses={"degraded"})
+    )
+    if missing_ids:
+        failures.append(
+            {
+                "scenario_id": "__run__",
+                "scenario_name": "Incomplete run",
+                "dimension": "live_run",
+                "dimension_label": DIMENSION_LABELS["live_run"],
+                "score": 0.0,
+                "threshold": 100.0,
+                "findings": [
+                    "The run stopped before these selected scenarios completed: "
+                    + ", ".join(missing_ids)
+                ],
+                "suggestion": DIMENSION_SUGGESTIONS["live_run"],
+            }
+        )
+
+    effective_statuses = [_effective_result_status(result) for result in results]
+    status_counts = {
+        status: sum(1 for result_status in effective_statuses if result_status == status)
+        for status in sorted(ACCEPTANCE_STATUSES)
+    }
+    llm_judge_status_counts = {
+        status: sum(
+            1
+            for gate in gates
+            if _as_dict(_as_dict(gate.get("supplemental_dimensions")).get("llm_judge")).get("status") == status
+        )
+        for status in sorted(ACCEPTANCE_STATUSES)
+    }
+    passed_count = status_counts.get("passed", 0)
+    scores = [
+        float(_as_dict(gate.get("dimensions")).get("agent_quality", {}).get("score"))
+        for gate in gates
+        if isinstance(_as_dict(gate.get("dimensions")).get("agent_quality", {}).get("score"), (int, float))
+    ]
+    runtime_totals = _acceptance_runtime_totals(results)
+    evidence_totals = _acceptance_evidence_totals(results)
+    agent_metrics_totals = _acceptance_agent_metric_totals(results)
+    preflight_status = _as_dict(preflight).get("status")
+    failures.extend(_result_contract_failures(results))
+    if preflight_status == "blocked":
+        run_status = "blocked"
+    elif "blocked" in effective_statuses:
+        run_status = "blocked"
+    elif preflight_status == "degraded" and effective_statuses and all(
+        status == "skipped" for status in effective_statuses
+    ):
+        run_status = "degraded"
+    elif effective_statuses and all(status == "skipped" for status in effective_statuses):
+        run_status = "skipped"
+    elif preflight_status == "skipped" or (not scenarios and not results):
+        run_status = "skipped"
+    elif failures or "failed" in effective_statuses or len(results) != len(scenarios) or not results:
+        run_status = "failed"
+    elif preflight_status == "degraded" or "degraded" in effective_statuses:
+        run_status = "degraded"
+    elif effective_statuses and all(status == "passed" for status in effective_statuses):
+        run_status = "passed"
+    else:
+        run_status = "failed"
+
+    summary = {
+        "version": ACCEPTANCE_SUMMARY_VERSION,
+        "created_at": created.isoformat(),
+        "base_url": base_url,
+        "output_dir": str(output_dir),
+        "core_tag": ACCEPTANCE_CORE_TAG,
+        "status": run_status,
+        "thresholds": gate_thresholds.to_dict(),
+        "preflight": preflight,
+        "selected_scenarios": [scenario.to_dict() for scenario in scenarios],
+        "result_count": len(results),
+        "selected_count": len(scenarios),
+        "status_counts": status_counts,
+        "llm_judge_status_counts": llm_judge_status_counts,
+        "passed_count": passed_count,
+        "failed_count": status_counts.get("failed", 0) + len(missing_ids),
+        "blocked_count": status_counts.get("blocked", 0),
+        "degraded_count": status_counts.get("degraded", 0),
+        "skipped_count": status_counts.get("skipped", 0),
+        "passed": run_status == "passed",
+        "average_agent_score": round(sum(scores) / len(scores), 2) if scores else None,
+        "runtime_totals": runtime_totals,
+        "agent_metrics_totals": agent_metrics_totals,
+        "evidence_closure": evidence_totals,
+        "tool_counts": runtime_totals["tool_counts"],
+        "results": results,
+        "failures": failures,
+        "degradations": degradations,
+    }
+    return _redact_acceptance_artifact(summary)
+
+
+def render_acceptance_markdown(summary: dict[str, Any]) -> str:
+    """Render a human-readable Markdown acceptance summary."""
+
+    summary = _redact_acceptance_artifact(summary)
+    status = str(summary.get("status") or ("passed" if summary.get("passed") else "failed"))
+    status_label = {
+        "passed": "passed（通过）",
+        "failed": "failed（失败）",
+        "degraded": "degraded（降级）",
+        "blocked": "blocked（环境阻塞）",
+        "skipped": "skipped（跳过）",
+    }.get(status, status)
+    runtime_totals = _as_dict(summary.get("runtime_totals"))
+    tool_failure_ratio = _as_number(runtime_totals.get("tool_failure_ratio"))
+    tool_failure_ratio_label = (
+        f"{round(tool_failure_ratio * 100, 1)}%"
+        if tool_failure_ratio is not None
+        else "-"
+    )
+    lines = [
+        "# 第一阶段验收质量门禁",
+        "",
+        f"- 结论: {status_label}",
+        f"- 场景: {summary.get('passed_count')} / {summary.get('selected_count')} 通过",
+        f"- 状态统计: {summary.get('status_counts')}",
+        f"- LLM-as-Judge（大模型评审）补充统计: {summary.get('llm_judge_status_counts')}",
+        f"- 平均 Agent（智能体）综合分: {summary.get('average_agent_score')}",
+        f"- 总耗时: {runtime_totals.get('elapsed_seconds')} 秒",
+        f"- 工具调用: {runtime_totals.get('tool_call_count')} 次",
+        f"- 工具失败: {runtime_totals.get('tool_failure_count')} 次",
+        f"- 工具失败率: {tool_failure_ratio_label}",
+        f"- fallback（兜底）: {runtime_totals.get('fallback_count')} 次",
+        f"- 估算 token（文本令牌）: {runtime_totals.get('estimated_total_tokens')}",
+        f"- 工业指标平均分: {_as_dict(summary.get('agent_metrics_totals')).get('average_score')}",
+        f"- 无依据断言率: {_as_dict(summary.get('agent_metrics_totals')).get('unsupported_claim_rate')}",
+        f"- 证据闭环: {_as_dict(_as_dict(summary.get('evidence_closure')).get('counts'))}",
+        f"- 生成时间: {summary.get('created_at')}",
+        f"- 后端地址: {summary.get('base_url')}",
+        "",
+        "## 门禁阈值",
+    ]
+    run_context = _as_dict(summary.get("run_context"))
+    if run_context:
+        partial = "是" if run_context.get("partial") else "否"
+        lines.extend(
+            [
+                "",
+                "## 运行上下文",
+                f"- partial summary（部分摘要）: {partial}",
+                f"- 部分原因: {run_context.get('partial_reason') or '-'}",
+                f"- 已完成场景: {', '.join(str(item) for item in _as_list(run_context.get('completed_scenario_ids'))) or '-'}",
+                f"- 待运行场景: {', '.join(str(item) for item in _as_list(run_context.get('pending_scenario_ids'))) or '-'}",
+                f"- 失败分类: {_as_dict(run_context.get('failure_classification_counts'))}",
+            ]
+        )
+    thresholds = _as_dict(summary.get("thresholds"))
+    lines.extend(
+        [
+            f"- 报告质量: >= {thresholds.get('min_report_score')}",
+            f"- RAG（检索增强生成）质量: >= {thresholds.get('min_rag_score')}",
+            f"- 工具治理质量: >= {thresholds.get('min_tool_score')}",
+            f"- 运行时质量: >= {thresholds.get('min_runtime_score')}",
+            f"- 工业指标: >= {thresholds.get('min_agent_metrics_score')}",
+            f"- 无依据断言率: <= {thresholds.get('max_unsupported_claim_rate')}",
+            f"- 生产观测摘要: {'required（必需）' if thresholds.get('require_turn_observability') else 'optional（可选）'}",
+            f"- 预算置信度契约: >= {thresholds.get('min_budget_confidence_score')}",
+            f"- 旅行社内部证据类别: >= {thresholds.get('min_internal_evidence_categories')}",
+        ]
+    )
+    preflight = _as_dict(summary.get("preflight"))
+    if preflight:
+        lines.extend(["", "## Preflight（预检）"])
+        lines.append(f"- 状态: {preflight.get('status')}")
+        lines.append(f"- `.env` 存在: {preflight.get('dotenv_present')}")
+        skipped_metrics = _as_list(preflight.get("skipped_metrics"))
+        if skipped_metrics:
+            lines.append("- 指标不可判定: " + ", ".join(str(item) for item in skipped_metrics))
+        lines.extend(["", "| 检查项 | 状态 | 环境变量 | 发现 |", "|---|---:|---|---|"])
+        for check in _as_list(preflight.get("checks")):
+            if not isinstance(check, dict):
+                continue
+            lines.append(
+                "| "
+                f"{check.get('label')} | {check.get('status')} | "
+                f"{', '.join(str(item) for item in _as_list(check.get('env_vars'))) or '-'} | "
+                f"{'; '.join(str(item) for item in _as_list(check.get('findings'))) or '-'} |"
+            )
+    lines.extend(
+        [
+            "",
+            "## 场景结果",
+            "",
+            "| 场景 | 状态 | Agent 分 | 报告 | RAG | 工具 | 运行时 | 工业指标 | LLM 评审 | 快照 |",
+            "|---|---:|---:|---:|---:|---:|---:|---:|---:|---|",
+        ]
+    )
+    for result in _as_list(summary.get("results")):
+        if not isinstance(result, dict):
+            continue
+        gate = _as_dict(result.get("acceptance_gate"))
+        dimensions = _as_dict(gate.get("dimensions"))
+        supplements = _as_dict(gate.get("supplemental_dimensions"))
+
+        def score(key: str) -> Any:
+            return _as_dict(dimensions.get(key)).get("score", "-")
+
+        result_status = gate.get("status") or ("passed" if gate.get("passed") else "failed")
+        snapshot = result.get("snapshot_path") or gate.get("snapshot_path") or "-"
+        llm_judge = _as_dict(supplements.get("llm_judge"))
+        llm_judge_text = llm_judge.get("score", "-")
+        if llm_judge.get("status"):
+            llm_judge_text = f"{llm_judge_text} ({llm_judge.get('status')})"
+        lines.append(
+            "| "
+            f"{result.get('scenario_id')} | {result_status} | {score('agent_quality')} | "
+            f"{score('report_quality')} | {score('rag_quality')} | {score('tool_quality')} | "
+            f"{score('runtime_quality')} | {score('agent_industrial_metrics')} | "
+            f"{llm_judge_text} | {snapshot} |"
+        )
+
+    agent_metrics = _as_dict(summary.get("agent_metrics_totals"))
+    if agent_metrics:
+        averages = _as_dict(agent_metrics.get("averages"))
+        lines.extend(
+            [
+                "",
+                "## Agent 工业指标",
+                f"- 可判定结果: {agent_metrics.get('passed_count')} / {agent_metrics.get('result_count')} 通过",
+                f"- 平均分: {agent_metrics.get('average_score')}",
+                f"- intent accuracy（意图准确率）: {averages.get('intent_accuracy')}",
+                f"- tool call precision（工具调用精确率）: {averages.get('tool_call_precision')}",
+                f"- tool call recall（工具调用召回率）: {averages.get('tool_call_recall')}",
+                f"- stage transition accuracy（阶段迁移准确率）: {averages.get('stage_transition_accuracy')}",
+                f"- unsupported claim rate（无依据断言率）: {agent_metrics.get('unsupported_claim_rate')}",
+            ]
+        )
+
+    llm_judge_rows: list[str] = []
+    for result in _as_list(summary.get("results")):
+        if not isinstance(result, dict):
+            continue
+        gate = _as_dict(result.get("acceptance_gate"))
+        llm_judge = _as_dict(_as_dict(gate.get("supplemental_dimensions")).get("llm_judge"))
+        if not llm_judge:
+            continue
+        findings = "; ".join(str(item) for item in _as_list(llm_judge.get("findings"))[:3]) or "-"
+        llm_judge_rows.append(
+            f"- {result.get('scenario_id')}: {llm_judge.get('status')} "
+            f"score={llm_judge.get('score')} findings={findings}"
+        )
+    if llm_judge_rows:
+        lines.extend(["", "## LLM-as-Judge（大模型评审）补充"])
+        lines.extend(llm_judge_rows)
+
+    lines.extend(["", "## 失败排查"])
+    failures = _as_list(summary.get("failures"))
+    if not failures:
+        lines.append("- 未发现失败维度。")
+    for failure in failures:
+        if not isinstance(failure, dict):
+            continue
+        findings = "; ".join(str(item) for item in _as_list(failure.get("findings"))[:3])
+        lines.append(
+            "- "
+            f"{failure.get('scenario_id')} / {failure.get('dimension_label')}: {findings} "
+            f"建议: {failure.get('suggestion')}"
+        )
+    degradations = _as_list(summary.get("degradations"))
+    if degradations:
+        lines.extend(["", "## 降级提示"])
+    for degradation in degradations:
+        if not isinstance(degradation, dict):
+            continue
+        findings = "; ".join(str(item) for item in _as_list(degradation.get("findings"))[:3])
+        lines.append(
+            "- "
+            f"{degradation.get('scenario_id')} / {degradation.get('dimension_label')}: {findings} "
+            f"建议: {degradation.get('suggestion')}"
+        )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def write_acceptance_summary_files(
+    summary: dict[str, Any],
+    output_dir: Path,
+    *,
+    prefix: str = "acceptance-summary",
+    created_at: datetime | None = None,
+) -> dict[str, str]:
+    """Write JSON and Markdown summary artifacts and return their paths."""
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    summary = _redact_acceptance_artifact(summary)
+    created = created_at or datetime.now(timezone.utc)
+    timestamp = created.strftime("%Y%m%d-%H%M%S")
+    safe_prefix = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "-" for ch in prefix)
+    json_path = output_dir / f"{timestamp}-{safe_prefix}.json"
+    markdown_path = output_dir / f"{timestamp}-{safe_prefix}.md"
+    json_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    markdown_path.write_text(render_acceptance_markdown(summary), encoding="utf-8")
+    return {"json": str(json_path), "markdown": str(markdown_path)}

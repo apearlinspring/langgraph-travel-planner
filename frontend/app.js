@@ -1,0 +1,6954 @@
+﻿// === 逻辑代码保持不变，仅适配样式类名 ===
+
+      let state = {
+        token: "",
+        user: null,
+        currentConversationId: null,
+        conversations: [],
+        isLoading: false,
+        isAuthLoading: false,
+        serviceStatus: "checking",
+        lastHealthCheckAt: 0,
+        readiness: {
+          status: "checking",
+          payload: null,
+          checkedAt: 0,
+        },
+        governance: {
+          approvalFilter: "all",
+          approvals: [],
+          approvalEvents: [],
+          selectedApprovalId: null,
+          isApprovalLoading: false,
+          toolAuditEvents: [],
+          turnObservability: null,
+          progressSnapshot: null,
+        },
+        plannerCollapsed: localStorage.getItem("zhixing-planner-collapsed") === "1",
+        mobileChatFocus: false,
+        editingConversationId: null,
+        renamingConversationId: null,
+      };
+      const sessionApi = window.ZhiXingSessionApi;
+      const conversationApi = window.ZhiXingConversationApi;
+      const guideImportApi = window.ZhiXingGuideImportApi;
+      const governanceApi = window.ZhiXingGovernanceApi;
+      const journeyApi = window.ZhiXingJourneyApi;
+      const journeyEditorFactory = window.ZhiXingJourneyEditor;
+      const guideImportFactory = window.ZhiXingGuideImport;
+      const journeyOverlayFactory = window.ZhiXingJourneyOverlay;
+      const mapControlsFactory = window.ZhiXingMapControls;
+      const journeyMapHydrationFactory = window.ZhiXingJourneyMapHydration;
+      const journeyPreviewFactory = window.ZhiXingJourneyPreview;
+      const visualJourneyEditorFactory = window.ZhiXingVisualJourneyEditor;
+      const assistantRendererFactory = window.ZhiXingAssistantRenderer;
+      const reportDataViewModelFactory = window.ZhiXingReportDataViewModel;
+      const reportDataPanelsFactory = window.ZhiXingReportDataPanels;
+      const reportDataItineraryFactory = window.ZhiXingReportDataItinerary;
+      const reportTextStructuredFactory = window.ZhiXingReportTextStructured;
+      const reportBudgetFactory = window.ZhiXingReportBudget;
+      const reportExportFactory = window.ZhiXingReportExport;
+      const reportRendererFactory = window.ZhiXingReportRenderer;
+      const reportActionsFactory = window.ZhiXingReportActions;
+      const draftStorageFactory = window.ZhiXingDraftStorage;
+      const runtimeStatusFactory = window.ZhiXingRuntimeStatus;
+      const chatStreamFactory = window.ZhiXingChatStream;
+      const chatRunnerFactory = window.ZhiXingChatRunner;
+      const chatMessagesFactory = window.ZhiXingChatMessages;
+      const plannerControlsFactory = window.ZhiXingPlannerControls;
+      if (!guideImportApi) {
+        throw new Error("ZhiXingGuideImportApi is not loaded.");
+      }
+      let toastTimer = null;
+      const composerDraftKey = "zhixing-composer-draft";
+      const plannerDraftKey = "zhixing-planner-draft";
+      const plannerCollapseKey = "zhixing-planner-collapsed";
+      const draftStorage = draftStorageFactory?.createDraftStorage?.({
+        getScope: () => state.user?.id || state.user?.username || "guest",
+      });
+      if (!draftStorage) {
+        throw new Error("ZhiXingDraftStorage is not loaded.");
+      }
+      const {
+        readDraftStorage,
+        writeDraftStorage,
+        clearDraftStorage,
+        flushAllDraftStorageWrites,
+      } = draftStorage;
+      const runtimeStatus = runtimeStatusFactory?.createRuntimeStatus?.({
+        document,
+      });
+      if (!runtimeStatus) {
+        throw new Error("ZhiXingRuntimeStatus is not loaded.");
+      }
+      const {
+        setRuntimeStatus,
+        updateEndpointTone,
+        setServiceBanner,
+        setAuthServiceHint,
+        setAuthFeedback,
+        setFieldError,
+        clearAuthErrors,
+      } = runtimeStatus;
+      const chatStream = chatStreamFactory?.createChatStream?.();
+      if (!chatStream) {
+        throw new Error("ZhiXingChatStream is not loaded.");
+      }
+      const {
+        createAssistantThinkingFilter,
+        processSseBuffer,
+        buildStreamingFallbackMessage,
+      } = chatStream;
+      let assistantRenderer = assistantRendererFactory?.createAssistantRenderer?.({
+        formatInlineText: (...args) => formatInlineText(...args),
+        splitTableCells: (...args) => splitTableCells(...args),
+        isMarkdownTable: (...args) => isMarkdownTable(...args),
+        getMarkdownTableSpan: (...args) => getMarkdownTableSpan(...args),
+      });
+      if (!assistantRenderer) {
+        throw new Error("ZhiXingAssistantRenderer is not loaded.");
+      }
+      const getAssistantRenderer = () => {
+        if (!assistantRenderer) {
+          throw new Error("ZhiXingAssistantRenderer is not initialized.");
+        }
+        return assistantRenderer;
+      };
+      const renderAssistantLines = (...args) =>
+        getAssistantRenderer().renderAssistantLines(...args);
+      const renderAssistantFallback = (...args) =>
+        getAssistantRenderer().renderAssistantFallback(...args);
+      let chatRunner = null;
+      const sendMessage = (...args) => {
+        if (!chatRunner) {
+          throw new Error("ZhiXingChatRunner is not initialized.");
+        }
+        return chatRunner.sendMessage(...args);
+      };
+      const plannerControls = plannerControlsFactory?.createPlannerControls?.({
+        document,
+        state,
+        localStorage,
+        composerDraftKey,
+        plannerDraftKey,
+        plannerCollapseKey,
+        readDraftStorage,
+        writeDraftStorage,
+        clearDraftStorage,
+        setRuntimeStatus,
+        escapeHtml,
+        escapeAttribute,
+      });
+      if (!plannerControls) {
+        throw new Error("ZhiXingPlannerControls is not loaded.");
+      }
+      const {
+        persistComposerDraft,
+        persistPlannerDraft,
+        restoreDrafts,
+        resetComposerDraft,
+        applyPlannerPanelState,
+        togglePlannerPanel,
+        getWelcomeMarkup,
+        updatePlannerSummary,
+        updatePlannerAssistStrip,
+        appendToComposer,
+        applySuggestion,
+        appendPlannerStyle,
+        fillPlannerTemplate,
+        readPlannerFields,
+        composePlannerDraft,
+        resetPlannerDraft,
+        resetConversationDrafts,
+      } = plannerControls;
+      const chatMessages = chatMessagesFactory?.createChatMessages?.({
+        document,
+        Date,
+        Math,
+        requestAnimationFrame: (...args) => window.requestAnimationFrame(...args),
+        cancelAnimationFrame: (...args) => window.cancelAnimationFrame(...args),
+        hydrateGovernanceFromMessages: (...args) =>
+          hydrateGovernanceFromMessages(...args),
+        getWelcomeMarkup,
+        buildMessageMarkup: (...args) => buildMessageMarkup(...args),
+        renderMessageText: (...args) => renderMessageText(...args),
+        scheduleJourneyMapHydration: (...args) => scheduleJourneyMapHydration(...args),
+        collapsePlannerPanelForVisualJourney: (...args) =>
+          collapsePlannerPanelForVisualJourney(...args),
+      });
+      if (!chatMessages) {
+        throw new Error("ZhiXingChatMessages is not loaded.");
+      }
+      const {
+        renderMessages,
+        clearChatMessages,
+        addMessage,
+        updateMessage,
+        convertLoadingToAssistant,
+        addLoading,
+        updateLoadingCopy,
+        removeMessage,
+      } = chatMessages;
+      Object.assign(window, {
+        renderMessages,
+        clearChatMessages,
+        addMessage,
+        updateMessage,
+        convertLoadingToAssistant,
+        addLoading,
+        updateLoadingCopy,
+        removeMessage,
+      });
+      let journeyPreview = null;
+      const getJourneyPreview = () => {
+        if (!journeyPreview) {
+          throw new Error("ZhiXingJourneyPreview is not initialized.");
+        }
+        return journeyPreview;
+      };
+      const renderJourneyPreview = (...args) =>
+        getJourneyPreview().renderJourneyPreview(...args);
+      const buildJourneyPreviewState = (...args) =>
+        getJourneyPreview().buildJourneyPreviewState(...args);
+      const shouldRenderJourneyPreviewBlock = (...args) =>
+        getJourneyPreview().shouldRenderJourneyPreviewBlock(...args);
+      let visualJourneyEditor = null;
+      const getVisualJourneyEditor = () => {
+        if (!visualJourneyEditor) {
+          throw new Error("ZhiXingVisualJourneyEditor is not initialized.");
+        }
+        return visualJourneyEditor;
+      };
+      const renderVisualJourneyStats = (...args) =>
+        getVisualJourneyEditor().renderVisualJourneyStats(...args);
+      const renderVisualJourneyDayEditor = (...args) =>
+        getVisualJourneyEditor().renderVisualJourneyDayEditor(...args);
+      const getVisualRouteSegmentView = (...args) =>
+        getVisualJourneyEditor().getVisualRouteSegmentView(...args);
+      const normalizeVisualRouteVerificationStatus = (...args) =>
+        getVisualJourneyEditor().normalizeVisualRouteVerificationStatus(...args);
+      let reportDataViewModel = null;
+      const getReportDataViewModel = () => {
+        if (!reportDataViewModel) {
+          throw new Error("ZhiXingReportDataViewModel is not initialized.");
+        }
+        return reportDataViewModel;
+      };
+      const isStructuredTravelReportData = (...args) =>
+        getReportDataViewModel().isStructuredTravelReportData(...args);
+      const formatReportDataMoney = (...args) =>
+        getReportDataViewModel().formatReportDataMoney(...args);
+      const normalizeReportDataList = (...args) =>
+        getReportDataViewModel().normalizeReportDataList(...args);
+      const normalizeReportBudgetItems = (...args) =>
+        getReportDataViewModel().normalizeReportBudgetItems(...args);
+      const parseReportDataExpectedDays = (...args) =>
+        getReportDataViewModel().parseReportDataExpectedDays(...args);
+      const getReportPlanningModeMeta = (...args) =>
+        getReportDataViewModel().getReportPlanningModeMeta(...args);
+      const buildReportDataViewModel = (...args) =>
+        getReportDataViewModel().buildReportDataViewModel(...args);
+      let reportDataPanels = null;
+      const getReportDataPanels = () => {
+        if (!reportDataPanels) {
+          throw new Error("ZhiXingReportDataPanels is not initialized.");
+        }
+        return reportDataPanels;
+      };
+      const renderReportDataBudgetItems = (...args) =>
+        getReportDataPanels().renderReportDataBudgetItems(...args);
+      const renderReportDataBudgetConfidence = (...args) =>
+        getReportDataPanels().renderReportDataBudgetConfidence(...args);
+      const renderReportDataHandoffPanel = (...args) =>
+        getReportDataPanels().renderReportDataHandoffPanel(...args);
+      const renderReportDataGovernancePanel = (...args) =>
+        getReportDataPanels().renderReportDataGovernancePanel(...args);
+      let reportDataItinerary = null;
+      const getReportDataItinerary = () => {
+        if (!reportDataItinerary) {
+          throw new Error("ZhiXingReportDataItinerary is not initialized.");
+        }
+        return reportDataItinerary;
+      };
+      const renderReportDailyNotReadyState = (...args) =>
+        getReportDataItinerary().renderReportDailyNotReadyState(...args);
+      const renderReportDataDailyItinerary = (...args) =>
+        getReportDataItinerary().renderReportDataDailyItinerary(...args);
+      let reportTextStructured = null;
+      const getReportTextStructured = () => {
+        if (!reportTextStructured) {
+          throw new Error("ZhiXingReportTextStructured is not initialized.");
+        }
+        return reportTextStructured;
+      };
+      const renderStructuredTravelPlan = (...args) =>
+        getReportTextStructured().renderStructuredTravelPlan(...args);
+
+      const getDefaultApiBase = () =>
+        window.location.protocol === "file:"
+          ? "http://localhost:8000"
+          : ["localhost", "127.0.0.1"].includes(window.location.hostname) &&
+              window.location.port !== "8000"
+            ? "http://127.0.0.1:8000"
+          : window.location.origin;
+
+      const getApiBase = () =>
+        document.getElementById("apiBase").value || getDefaultApiBase();
+      const buildApiRequestOptions = (options = {}) =>
+        sessionApi.buildApiRequestOptions(state.token, options);
+
+      async function restoreSessionFromCookie() {
+        const result = await sessionApi.restoreSessionFromCookie({
+          apiBase: getApiBase(),
+          stateToken: state.token,
+        });
+        if (result.ok) {
+          state.user = result.user;
+          return true;
+        }
+        if (result.error) {
+          console.warn("Session restore failed", result.error);
+        }
+        state.token = "";
+        state.user = null;
+        return false;
+      }
+
+      const shouldShowApiConfig = () =>
+        window.location.protocol === "file:" ||
+        ["localhost", "127.0.0.1"].includes(window.location.hostname);
+
+      const getCurrentConversation = () =>
+        state.conversations.find((conv) => conv.id === state.currentConversationId);
+
+      const isMobileViewport = () => window.innerWidth <= 900;
+      const journeyMapInstances = new WeakMap();
+      const JOURNEY_MAP_DEGRADE_AFTER_MS = 180000;
+      const DEFAULT_CONVERSATION_TITLE = "新行程";
+      const journeyMapHydration =
+        journeyMapHydrationFactory?.createJourneyMapHydration?.({
+          document,
+          hydrateJourneyMap: (...args) => hydrateJourneyMap(...args),
+          requestAnimationFrame: (...args) => window.requestAnimationFrame(...args),
+          WeakSet,
+        });
+      if (!journeyMapHydration) {
+        throw new Error("ZhiXingJourneyMapHydration is not loaded.");
+      }
+      const { scheduleJourneyMapHydration } = journeyMapHydration;
+      const journeyTextUtils = window.ZhiXingJourneyTextUtils?.createJourneyTextUtils?.({
+        sanitizeConversationTitleSegment,
+        isDefaultConversationTitle,
+      });
+      if (!journeyTextUtils) {
+        throw new Error("ZhiXingJourneyTextUtils is not loaded.");
+      }
+      const {
+        extractJourneyCityPairFromConversationTitle,
+        parseJourneyChineseDayNumber,
+        normalizeJourneyDayHeading,
+        parseJourneyDayNumber,
+        extractJourneyCityPair,
+        extractJourneyPrimaryOrigin,
+        extractJourneyPrimaryDestination,
+      } = journeyTextUtils;
+      reportDataViewModel =
+        reportDataViewModelFactory?.createReportDataViewModel?.({
+          parseJourneyChineseDayNumber,
+        });
+      if (!reportDataViewModel) {
+        throw new Error("ZhiXingReportDataViewModel is not loaded.");
+      }
+      const journeyMapData = window.ZhiXingJourneyMapData?.createJourneyMapData?.({
+        parseJourneyDayNumber,
+        cleanJourneyLocationValue,
+      });
+      if (!journeyMapData) {
+        throw new Error("ZhiXingJourneyMapData is not loaded.");
+      }
+      const {
+        serializeMapPayload,
+        parseMapPayload,
+        getJourneyPlanDayNumber,
+        mergeJourneyDayPlanSources,
+        mergeMapPayloadWithDayPlans,
+        parseJourneyStopMeta,
+        cloneJourneyDayPlans,
+        normalizeJourneyDayPlanStops,
+      } = journeyMapData;
+      const journeyMapView = window.ZhiXingJourneyMapView?.createJourneyMapView?.({
+        escapeHtml,
+      });
+      if (!journeyMapView) {
+        throw new Error("ZhiXingJourneyMapView is not loaded.");
+      }
+      const {
+        buildJourneyMapIcon,
+        buildJourneyDayMapIcon,
+        getJourneyDayColor,
+        isJourneyRecommendationPoint,
+        getJourneyRecommendationMarkers,
+        getJourneySegmentLabelViewOpacity,
+        getJourneySegmentLabelParts,
+        getJourneySegmentLabelTone,
+        getJourneySegmentLabelOffset,
+        getJourneyMidpoint,
+        getJourneyPointTooltip,
+        getJourneySegmentRoutePoints,
+        getJourneyDayBadgeLabel,
+      } = journeyMapView;
+      const journeyMapFocus = window.ZhiXingJourneyMapFocus?.createJourneyMapFocus?.({
+        setJourneyMapDaySelection: (...args) => setJourneyMapDaySelection(...args),
+        hideJourneyPoiSheet: (...args) => hideJourneyPoiSheet(...args),
+      });
+      if (!journeyMapFocus) {
+        throw new Error("ZhiXingJourneyMapFocus is not loaded.");
+      }
+      const {
+        buildBoundsFromPoints,
+        moveJourneyMapToBounds,
+        buildAmapBoundsFromLayers,
+        buildAmapBoundsFromPoints,
+        fitJourneyMapState,
+        focusJourneyMapTarget,
+        activateJourneyHighlightCard,
+        activateJourneyBottomStop,
+        focusJourneyDayStop,
+      } = journeyMapFocus;
+      const journeyMapShell = window.ZhiXingJourneyMapShell?.createJourneyMapShell?.({
+        getJourneyMapEntry: (node) => journeyMapInstances.get(node) || null,
+      });
+      if (!journeyMapShell) {
+        throw new Error("ZhiXingJourneyMapShell is not loaded.");
+      }
+      const {
+        syncJourneyMapToggleLabels,
+        getVisualJourneyMapEntry,
+        getJourneyMapShellFromControl,
+      } = journeyMapShell;
+      const journeyPoiUtils = window.ZhiXingJourneyPoiUtils?.createJourneyPoiUtils?.({
+        parseMapPayload,
+        normalizeJourneyMatchText,
+      });
+      if (!journeyPoiUtils) {
+        throw new Error("ZhiXingJourneyPoiUtils is not loaded.");
+      }
+      const {
+        getPoiVerificationText,
+        getPoiVerificationTone,
+        normalizeJourneyPoiAsStop,
+        getVisualPoiInitial,
+        getVisualPoiVerificationBadge,
+        getJourneyReplacementCandidates,
+        getJourneyPendingPoiCandidates,
+        resolveJourneyRecommendationPoi,
+        getJourneyRecommendationTargetDay,
+      } = journeyPoiUtils;
+      const journeyPoiRenderer = window.ZhiXingJourneyPoiRenderer?.createJourneyPoiRenderer?.({
+        escapeHtml,
+        getVisualPoiInitial,
+        getVisualPoiVerificationBadge,
+      });
+      if (!journeyPoiRenderer) {
+        throw new Error("ZhiXingJourneyPoiRenderer is not loaded.");
+      }
+      const {
+        renderVisualPoiMedia,
+        renderVisualPoiDetails,
+      } = journeyPoiRenderer;
+      visualJourneyEditor =
+        visualJourneyEditorFactory?.createVisualJourneyEditor?.({
+          escapeHtml: (...args) => escapeHtml(...args),
+          cleanJourneyLocationValue: (...args) => cleanJourneyLocationValue(...args),
+          normalizeJourneyPoiAsStop: (...args) => normalizeJourneyPoiAsStop(...args),
+        });
+      if (!visualJourneyEditor) {
+        throw new Error("ZhiXingVisualJourneyEditor is not loaded.");
+      }
+      journeyPreview = journeyPreviewFactory?.createJourneyPreview?.({
+        escapeHtml: (...args) => escapeHtml(...args),
+        summarizeJourneyTransportMetric: (...args) =>
+          summarizeJourneyTransportMetric(...args),
+        summarizeJourneyStayMetric: (...args) => summarizeJourneyStayMetric(...args),
+        isLowValueJourneyMetric: (...args) => isLowValueJourneyMetric(...args),
+        cleanJourneyLocationValue: (...args) => cleanJourneyLocationValue(...args),
+        truncateJourneyNote: (...args) => truncateJourneyNote(...args),
+        renderJourneyAtlas: (...args) => renderJourneyAtlas(...args),
+        extractJourneyCityPairFromConversationTitle,
+        getCurrentConversationTitle: () => getCurrentConversation()?.title || "",
+        extractJourneyCityPair,
+        extractJourneyPrimaryOrigin,
+        extractJourneyPrimaryDestination,
+        splitJourneyFragments: (...args) => splitJourneyFragments(...args),
+        extractJourneyHighlights: (...args) => extractJourneyHighlights(...args),
+        buildJourneyHighlightCards: (...args) => buildJourneyHighlightCards(...args),
+        extractJourneyRhythm: (...args) => extractJourneyRhythm(...args),
+        extractJourneyDayPlans: (...args) => extractJourneyDayPlans(...args),
+        hasJourneyClarificationSignal: (...args) =>
+          hasJourneyClarificationSignal(...args),
+        hasJourneyPlanSignal: (...args) => hasJourneyPlanSignal(...args),
+      });
+      if (!journeyPreview) {
+        throw new Error("ZhiXingJourneyPreview is not loaded.");
+      }
+      const journeyEditor = journeyEditorFactory?.createJourneyEditor?.({
+        parseJourneyStopMeta: (...args) => parseJourneyStopMeta(...args),
+        getJourneyMapShellFromControl: (...args) => getJourneyMapShellFromControl(...args),
+        cloneJourneyDayPlans: (...args) => cloneJourneyDayPlans(...args),
+        normalizeJourneyDayPlanStops: (...args) => normalizeJourneyDayPlanStops(...args),
+        updateVisualJourneyPoiCards: (...args) => updateVisualJourneyPoiCards(...args),
+        refreshJourneyMapAfterEdit: (...args) => refreshJourneyMapAfterEdit(...args),
+        saveEditedJourneyDraft: (...args) => saveEditedJourneyDraft(...args),
+        showToast: (...args) => showToast(...args),
+        getVisualJourneyMapEntry: (...args) => getVisualJourneyMapEntry(...args),
+        setJourneyMapDaySelection: (...args) => setJourneyMapDaySelection(...args),
+        focusJourneyDayStop: (...args) => focusJourneyDayStop(...args),
+        getJourneyReplacementCandidates: (...args) => getJourneyReplacementCandidates(...args),
+        getJourneyPendingPoiCandidates: (...args) => getJourneyPendingPoiCandidates(...args),
+        normalizeJourneyPoiAsStop: (...args) => normalizeJourneyPoiAsStop(...args),
+      });
+      const guideImport = guideImportFactory?.createGuideImport?.({
+        getPlannerFields: () => readPlannerFields(),
+        appendToComposer: (...args) => appendToComposer(...args),
+        updatePlannerSummary: (...args) => updatePlannerSummary(...args),
+        setRuntimeStatus: (...args) => setRuntimeStatus(...args),
+        showToast: (...args) => showToast(...args),
+        fetchGuideUrl: (url) =>
+          guideImportApi.fetchGuideUrl({
+            apiBase: getApiBase(),
+            stateToken: state.token,
+            url,
+          }),
+        sendMessage: (...args) => sendMessage(...args),
+      });
+      const reportExport = reportExportFactory?.createReportExport?.({
+        getCurrentConversationTitle: () => getCurrentConversation()?.title || "",
+        escapeHtml: (...args) => escapeHtml(...args),
+      });
+      const reportActions = reportActionsFactory?.createReportActions?.({
+        appendToComposer: (...args) => appendToComposer(...args),
+        setRuntimeStatus: (...args) => setRuntimeStatus(...args),
+        showToast: (...args) => showToast(...args),
+        exportTravelReport: (...args) => reportExport?.exportTravelReport?.(...args),
+        focusJourneyMapTarget: (...args) => focusJourneyMapTarget(...args),
+        getJourneyMapEntry: (node) => journeyMapInstances.get(node) || null,
+        setJourneyMapDaySelection: (...args) => setJourneyMapDaySelection(...args),
+      });
+      const reportBudget = reportBudgetFactory?.createReportBudget?.({
+        normalizeSectionTitle: (...args) => normalizeSectionTitle(...args),
+        getMarkdownTableSpan: (...args) => getMarkdownTableSpan(...args),
+        splitTableCells: (...args) => splitTableCells(...args),
+        isMeaningfulBudgetAmount: (...args) => isMeaningfulBudgetAmount(...args),
+        renderAssistantLines: (...args) => renderAssistantLines(...args),
+        formatInlineText: (...args) => formatInlineText(...args),
+        escapeHtml: (...args) => escapeHtml(...args),
+      });
+      reportTextStructured =
+        reportTextStructuredFactory?.createReportTextStructured?.({
+          escapeHtml: (...args) => escapeHtml(...args),
+          expandStructuredTravelBlocks: (...args) =>
+            expandStructuredTravelBlocks(...args),
+          isEmbeddedSectionHeading: (...args) => isEmbeddedSectionHeading(...args),
+          getTravelSectionMeta: (...args) => getTravelSectionMeta(...args),
+          inferSectionMetaFromBody: (...args) => inferSectionMetaFromBody(...args),
+          normalizeSectionTitle: (...args) => normalizeSectionTitle(...args),
+          renderAssistantLines: (...args) => renderAssistantLines(...args),
+          dedupeTravelReportSections: (...args) => dedupeTravelReportSections(...args),
+          buildJourneyPreviewState: (...args) => buildJourneyPreviewState(...args),
+          shouldRenderJourneyPreviewBlock: (...args) =>
+            shouldRenderJourneyPreviewBlock(...args),
+          filterReportSummaryLines: (...args) => filterReportSummaryLines(...args),
+          renderJourneyPreview: (...args) => renderJourneyPreview(...args),
+          resolveTravelCardMapFocus: (...args) => resolveTravelCardMapFocus(...args),
+          reportBudget,
+        });
+      if (!reportTextStructured) {
+        throw new Error("ZhiXingReportTextStructured is not loaded.");
+      }
+      reportDataPanels = reportDataPanelsFactory?.createReportDataPanels?.({
+        escapeHtml: (...args) => escapeHtml(...args),
+        normalizeReportDataList: (...args) => normalizeReportDataList(...args),
+        renderReportDataList: (...args) => renderReportDataList(...args),
+        normalizeReportBudgetItems: (...args) => normalizeReportBudgetItems(...args),
+        formatReportDataMoney: (...args) => formatReportDataMoney(...args),
+        getStatusLabel: (...args) => getStatusLabel(...args),
+        escapeAttribute: (...args) => escapeAttribute(...args),
+      });
+      if (!reportDataPanels) {
+        throw new Error("ZhiXingReportDataPanels is not loaded.");
+      }
+      reportDataItinerary = reportDataItineraryFactory?.createReportDataItinerary?.({
+        escapeHtml: (...args) => escapeHtml(...args),
+        cleanJourneyLocationValue: (...args) => cleanJourneyLocationValue(...args),
+        renderReportDataList: (...args) => renderReportDataList(...args),
+        normalizeRouteMapDayPoints: (...args) => normalizeRouteMapDayPoints(...args),
+        normalizeReportRouteSegmentsForDay: (...args) =>
+          normalizeReportRouteSegmentsForDay(...args),
+        getVisualRouteSegmentView: (...args) => getVisualRouteSegmentView(...args),
+      });
+      if (!reportDataItinerary) {
+        throw new Error("ZhiXingReportDataItinerary is not loaded.");
+      }
+      const reportRenderer = reportRendererFactory?.createReportRenderer?.({
+        escapeHtml: (...args) => escapeHtml(...args),
+        normalizeReportDataList: (...args) => normalizeReportDataList(...args),
+        renderTravelReportNextAction: (...args) => renderTravelReportNextAction(...args),
+        isStructuredTravelReportData: (...args) => isStructuredTravelReportData(...args),
+        buildReportDataViewModel: (...args) => buildReportDataViewModel(...args),
+        parseReportDataExpectedDays: (...args) => parseReportDataExpectedDays(...args),
+        formatReportDataMoney: (...args) => formatReportDataMoney(...args),
+        buildReportDataJourneyPreviewState: (...args) =>
+          buildReportDataJourneyPreviewState(...args),
+        renderJourneyPreview: (...args) => renderJourneyPreview(...args),
+        renderReportDataList: (...args) => renderReportDataList(...args),
+        renderReportDataDailyItinerary: (...args) => renderReportDataDailyItinerary(...args),
+        renderReportDataBudgetItems: (...args) => renderReportDataBudgetItems(...args),
+        renderReportDataBudgetConfidence: (...args) =>
+          renderReportDataBudgetConfidence(...args),
+        renderReportDataHandoffPanel: (...args) => renderReportDataHandoffPanel(...args),
+        renderReportDataGovernancePanel: (...args) =>
+          renderReportDataGovernancePanel(...args),
+        extractReportDayGroups: (...args) => extractReportDayGroups(...args),
+        parseJourneyDayNumber: (...args) => parseJourneyDayNumber(...args),
+        renderReportDailyNotReadyState: (...args) => renderReportDailyNotReadyState(...args),
+        renderAssistantLines: (...args) => renderAssistantLines(...args),
+        formatInlineText: (...args) => formatInlineText(...args),
+        renderReportBudgetBreakdown: (...args) => renderReportBudgetBreakdown(...args),
+        expandStructuredTravelBlocks: (...args) => expandStructuredTravelBlocks(...args),
+        hasTravelReportSignal: (...args) => hasTravelReportSignal(...args),
+        extractTravelReportSections: (...args) => extractTravelReportSections(...args),
+        extractJourneyCityPair: (...args) => extractJourneyCityPair(...args),
+        extractJourneyCityPairFromConversationTitle: (...args) =>
+          extractJourneyCityPairFromConversationTitle(...args),
+        getCurrentConversationTitle: () => getCurrentConversation()?.title || "",
+        extractReportExpectedDayCount: (...args) => extractReportExpectedDayCount(...args),
+        filterReportSummaryLines: (...args) => filterReportSummaryLines(...args),
+        buildJourneyPreviewState: (...args) => buildJourneyPreviewState(...args),
+        dedupeTravelReportSections: (...args) => dedupeTravelReportSections(...args),
+        mergeTravelReportDailySections: (...args) => mergeTravelReportDailySections(...args),
+        shouldRenderJourneyPreviewBlock: (...args) => shouldRenderJourneyPreviewBlock(...args),
+        inferTextTravelReportMode: (...args) => inferTextTravelReportMode(...args),
+        getReportPlanningModeMeta: (...args) => getReportPlanningModeMeta(...args),
+        reportBudget,
+      });
+      const journeyOverlayActions = journeyOverlayFactory?.createJourneyOverlayActions?.({
+        parseMapPayload: (...args) => parseMapPayload(...args),
+        mergeJourneyDayPlanSources: (...args) => mergeJourneyDayPlanSources(...args),
+        mergeMapPayloadWithDayPlans: (...args) => mergeMapPayloadWithDayPlans(...args),
+        serializeMapPayload: (...args) => serializeMapPayload(...args),
+        hydrateJourneyMap: (...args) => hydrateJourneyMap(...args),
+        getJourneyMapEntry: (node) => journeyMapInstances.get(node) || null,
+        escapeHtml: (...args) => escapeHtml(...args),
+        cloneJourneyDayPlans: (...args) => cloneJourneyDayPlans(...args),
+        normalizeJourneyDayPlanStops: (...args) => normalizeJourneyDayPlanStops(...args),
+        getJourneyReplacementCandidates: (...args) =>
+          getJourneyReplacementCandidates(...args),
+        normalizeJourneyPoiAsStop: (...args) => normalizeJourneyPoiAsStop(...args),
+        updateVisualJourneyPoiCards: (...args) => updateVisualJourneyPoiCards(...args),
+        refreshJourneyMapAfterEdit: (...args) => refreshJourneyMapAfterEdit(...args),
+        saveEditedJourneyDraft: (...args) => saveEditedJourneyDraft(...args),
+        showToast: (...args) => showToast(...args),
+        focusJourneyDayStop: (...args) => focusJourneyDayStop(...args),
+        parseJourneyStopMeta: (...args) => parseJourneyStopMeta(...args),
+        appendToComposer: (...args) => appendToComposer(...args),
+        setRuntimeStatus: (...args) => setRuntimeStatus(...args),
+      });
+      const mapControls = mapControlsFactory?.createMapControls?.({
+        getJourneyMapEntry: (node) => journeyMapInstances.get(node) || null,
+        syncJourneyMapToggleLabels: (...args) => syncJourneyMapToggleLabels(...args),
+        fitJourneyMapState: (...args) => fitJourneyMapState(...args),
+        toggleJourneyRecommendations: (...args) => toggleJourneyRecommendations(...args),
+        applyJourneyDayView: (...args) => applyJourneyDayView(...args),
+        setJourneyMapStyle: (...args) => setJourneyMapStyle(...args),
+        focusJourneyMapTarget: (...args) => focusJourneyMapTarget(...args),
+        setJourneyMapDaySelection: (...args) => setJourneyMapDaySelection(...args),
+        setJourneyMapDayMode: (...args) => setJourneyMapDayMode(...args),
+        activateJourneyBottomStop: (...args) => activateJourneyBottomStop(...args),
+        focusJourneyDayStop: (...args) => focusJourneyDayStop(...args),
+        openJourneyMapModalFromButton: (...args) =>
+          journeyOverlayActions?.openJourneyMapModalFromButton?.(...args),
+      });
+
+      function getAmapPosition(point) {
+        return [Number(point.lng), Number(point.lat)];
+      }
+
+      function shouldUseAmapJourneyMap(preview, mapConfig) {
+        const webKey = String(mapConfig?.amap_web_js_key || "").trim();
+        if (!webKey) return false;
+        return (
+          preview?.provider === "amap-js" ||
+          mapConfig?.preferred_provider === "amap-js"
+        );
+      }
+
+      function normalizeJourneyMatchText(text = "") {
+        return String(text || "")
+          .toLowerCase()
+          .replace(/[^\p{L}\p{N}]+/gu, "")
+          .trim();
+      }
+
+      function resolveJourneyPlanHighlightIndexes(plan, highlightPoints = []) {
+        if (!plan || !Array.isArray(highlightPoints) || !highlightPoints.length) return [];
+        const tokens = [...(plan.highlights || []), ...(plan.waypoints || [])]
+          .map((item) => normalizeJourneyMatchText(item))
+          .filter(Boolean);
+        if (!tokens.length) return [];
+
+        const matched = [];
+        highlightPoints.forEach((point, index) => {
+          const haystacks = [point?.name, point?.address, point?.label]
+            .map((item) => normalizeJourneyMatchText(item))
+            .filter(Boolean);
+          const hit = tokens.some((token) =>
+            haystacks.some(
+              (field) => field === token || field.includes(token) || token.includes(field)
+            )
+          );
+          if (hit) matched.push(index);
+        });
+        return [...new Set(matched)];
+      }
+
+      function hideJourneyPoiSheet(shell) {
+        const sheet = shell?.querySelector(".journey-poi-bottom-sheet");
+        if (!sheet) return;
+        sheet.hidden = true;
+        sheet.classList.remove("show");
+      }
+
+      function resetJourneyPoiSheetActions(sheet) {
+        const replaceButton = sheet?.querySelector("[data-poi-sheet-action='replace'], [data-poi-sheet-action='add-recommendation']");
+        const verifyButton = sheet?.querySelector("[data-poi-sheet-action='verify']");
+        const keepButton = sheet?.querySelector("[data-poi-sheet-action='keep'], [data-poi-sheet-action='replace-recommendation']");
+        if (replaceButton) {
+          replaceButton.dataset.poiSheetAction = "replace";
+          replaceButton.dataset.replacementPoiId = "";
+          replaceButton.textContent = "替换这个点";
+        }
+        if (verifyButton) {
+          verifyButton.dataset.poiSheetAction = "verify";
+          verifyButton.textContent = "核验门票交通";
+        }
+        if (keepButton) {
+          keepButton.dataset.poiSheetAction = "keep";
+          keepButton.textContent = "保留继续规划";
+        }
+      }
+
+      function showJourneyPoiSheet(entry, dayKey = "all", stopIndex = 0) {
+        const sheet = entry?.shell?.querySelector(".journey-poi-bottom-sheet");
+        if (!sheet) return;
+        resetJourneyPoiSheetActions(sheet);
+        sheet.dataset.poiMode = "stop";
+        delete sheet.dataset.recommendationPoi;
+        delete sheet.dataset.recommendationDayKey;
+        const dayPlan = entry.dayPlans?.find((day) => day.key === dayKey);
+        const stop = dayPlan?.stops?.[stopIndex];
+        const point = entry.dayLayers?.find((layer) => layer.key === dayKey)?.points?.[stopIndex];
+        if (!stop && !point) return;
+
+        const title = stop?.name || point?.name || "地点详情";
+        const meta = [
+          dayPlan?.label,
+          stop?.type_label || stop?.type,
+          stop?.time_range,
+        ].filter(Boolean);
+        const durationText = stop?.duration_minutes
+          ? `建议停留 ${stop.duration_minutes} 分钟`
+          : "停留时间待核验";
+        const addressText = stop?.address || point?.address || stop?.map_query || "";
+        const verificationText = getPoiVerificationText(stop, point);
+        const typeText = stop?.amap_type || stop?.type_label || stop?.type || "";
+        const proofItems = [
+          { label: verificationText, tone: getPoiVerificationTone(verificationText) },
+          { label: addressText, tone: "" },
+          { label: typeText, tone: "" },
+          ...(Array.isArray(stop?.tags)
+            ? stop.tags.slice(0, 2).map((tag) => ({ label: tag, tone: "" }))
+            : []),
+        ].filter(Boolean);
+        sheet.dataset.poiTitle = title;
+        sheet.dataset.poiDayLabel = dayPlan?.label || "";
+        sheet.dataset.poiDayKey = dayKey;
+        sheet.dataset.poiStopIndex = String(stopIndex);
+        const workbench = sheet.closest(".visual-journey-workbench");
+        const replacement = getJourneyReplacementCandidates(
+          workbench,
+          entry.dayPlans || [],
+          dayKey,
+          stopIndex
+        )[0];
+        const replaceButton = sheet.querySelector("[data-poi-sheet-action='replace']");
+        if (replaceButton) {
+          replaceButton.dataset.replacementPoiId = replacement?.id || "";
+          replaceButton.textContent = replacement?.name
+            ? `替换为${replacement.name}`
+            : "寻找替换点";
+        }
+        const media = sheet.querySelector(".journey-poi-bottom-media");
+        const imageUrl = String(stop?.image_url || "").trim();
+        if (media) {
+          media.classList.toggle("has-image", /^https?:\/\//i.test(imageUrl));
+          media.style.backgroundImage = /^https?:\/\//i.test(imageUrl)
+            ? `url("${imageUrl.replace(/"/g, "%22")}")`
+            : "";
+          media.querySelector("span")?.replaceChildren(
+            document.createTextNode(getVisualPoiInitial(title))
+          );
+        }
+        sheet.querySelector("[data-poi-sheet-title]")?.replaceChildren(
+          document.createTextNode(title)
+        );
+        sheet.querySelector("[data-poi-sheet-meta]")?.replaceChildren(
+          document.createTextNode(meta.join(" · ") || "地点信息待核验")
+        );
+        sheet.querySelector("[data-poi-sheet-desc]")?.replaceChildren(
+          document.createTextNode(stop?.description || point?.address || "地点介绍待补充。")
+        );
+        sheet.querySelector("[data-poi-sheet-duration]")?.replaceChildren(
+          document.createTextNode(durationText)
+        );
+        sheet.querySelector("[data-poi-sheet-cost]")?.replaceChildren(
+          document.createTextNode(stop?.estimated_cost || "费用待核验")
+        );
+        sheet.querySelector("[data-poi-sheet-note]")?.replaceChildren(
+          document.createTextNode(
+            stop?.verification_note ||
+              stop?.reservation_note ||
+              "开放、预约、票价和道路情况出发前二次核验。"
+          )
+        );
+        const proof = sheet.querySelector("[data-poi-sheet-proof]");
+        if (proof) {
+          proof.innerHTML = proofItems
+            .slice(0, 5)
+            .filter((item) => item.label)
+            .map(
+              (item) =>
+                `<span class="${escapeHtml(item.tone || "")}">${escapeHtml(
+                  item.label
+                )}</span>`
+            )
+            .join("");
+        }
+        sheet.hidden = false;
+        requestAnimationFrame(() => sheet.classList.add("show"));
+      }
+
+      function showJourneyRecommendationSheet(entry, point = {}) {
+        const sheet = entry?.shell?.querySelector(".journey-poi-bottom-sheet");
+        if (!sheet) return;
+        resetJourneyPoiSheetActions(sheet);
+        const workbench = sheet.closest(".visual-journey-workbench");
+        const candidate = resolveJourneyRecommendationPoi(workbench, point);
+        const targetDay = getJourneyRecommendationTargetDay(entry);
+        if (!candidate || !targetDay) return;
+
+        const title = candidate.name || point.name || "推荐点";
+        const targetLabel = targetDay.label || targetDay.title || "当天";
+        const addressText = candidate.address || point.address || candidate.map_query || "";
+        const verificationText = getPoiVerificationText(candidate, point);
+        const proofItems = [
+          { label: "地图推荐点", tone: "ready" },
+          { label: verificationText, tone: getPoiVerificationTone(verificationText) },
+          { label: addressText, tone: "" },
+          { label: candidate.type_label || candidate.type || "", tone: "" },
+          ...(Array.isArray(candidate.tags)
+            ? candidate.tags.slice(0, 2).map((tag) => ({ label: tag, tone: "" }))
+            : []),
+        ].filter(Boolean);
+
+        sheet.dataset.poiMode = "recommendation";
+        sheet.dataset.poiTitle = title;
+        sheet.dataset.poiDayLabel = targetLabel;
+        sheet.dataset.poiDayKey = "";
+        sheet.dataset.poiStopIndex = "-1";
+        sheet.dataset.recommendationDayKey = targetDay.key || "";
+        sheet.dataset.recommendationPoi = serializeMapPayload(candidate);
+
+        const addButton = sheet.querySelector("[data-poi-sheet-action='replace']");
+        if (addButton) {
+          addButton.dataset.poiSheetAction = "add-recommendation";
+          addButton.textContent = `加入${targetLabel}`;
+        }
+        const replaceButton = sheet.querySelector("[data-poi-sheet-action='keep']");
+        if (replaceButton) {
+          replaceButton.dataset.poiSheetAction = "replace-recommendation";
+          replaceButton.textContent = "替换当天首点";
+        }
+
+        const media = sheet.querySelector(".journey-poi-bottom-media");
+        const imageUrl = String(candidate.image_url || "").trim();
+        if (media) {
+          media.classList.toggle("has-image", /^https?:\/\//i.test(imageUrl));
+          media.style.backgroundImage = /^https?:\/\//i.test(imageUrl)
+            ? `url("${imageUrl.replace(/"/g, "%22")}")`
+            : "";
+          media.querySelector("span")?.replaceChildren(
+            document.createTextNode(getVisualPoiInitial(title))
+          );
+        }
+        sheet.querySelector("[data-poi-sheet-title]")?.replaceChildren(
+          document.createTextNode(title)
+        );
+        sheet.querySelector("[data-poi-sheet-meta]")?.replaceChildren(
+          document.createTextNode([targetLabel, candidate.type_label || candidate.type, candidate.time_range].filter(Boolean).join(" · ") || "推荐点待核验")
+        );
+        sheet.querySelector("[data-poi-sheet-desc]")?.replaceChildren(
+          document.createTextNode(candidate.description || point.address || "推荐点详情待补充。")
+        );
+        sheet.querySelector("[data-poi-sheet-duration]")?.replaceChildren(
+          document.createTextNode(
+            candidate.duration_minutes
+              ? `建议停留 ${candidate.duration_minutes} 分钟`
+              : "停留时间待核验"
+          )
+        );
+        sheet.querySelector("[data-poi-sheet-cost]")?.replaceChildren(
+          document.createTextNode(candidate.estimated_cost || "费用待核验")
+        );
+        sheet.querySelector("[data-poi-sheet-note]")?.replaceChildren(
+          document.createTextNode(
+            candidate.verification_note ||
+              candidate.reservation_note ||
+              "开放、预约、票价和道路情况出发前二次核验。"
+          )
+        );
+        const proof = sheet.querySelector("[data-poi-sheet-proof]");
+        if (proof) {
+          proof.innerHTML = proofItems
+            .slice(0, 5)
+            .filter((item) => item.label)
+            .map(
+              (item) =>
+                `<span class="${escapeHtml(item.tone || "")}">${escapeHtml(item.label)}</span>`
+            )
+            .join("");
+        }
+        sheet.hidden = false;
+        requestAnimationFrame(() => sheet.classList.add("show"));
+      }
+
+      function renderJourneyDayInsight(entry) {
+        if (!entry?.shell) return;
+        const activeDayKey = entry.activeDayKey || "all";
+        const activeMode = entry.dayDisplayMode || "solo";
+        const insightTitle = entry.shell.querySelector(".journey-map-day-insight-title");
+        const insightCopy = entry.shell.querySelector(".journey-map-day-insight-copy");
+        const insightList = entry.shell.querySelector(".journey-map-day-insight-points");
+        if (!insightTitle || !insightCopy || !insightList) return;
+
+        if (activeDayKey === "all") {
+          const overviewRoute = entry.routeStops
+            .map((item) => item.value)
+            .filter((item) => item && !/待/.test(item))
+            .join(" → ");
+          insightTitle.textContent = "当前查看总览路线";
+          insightCopy.textContent =
+            overviewRoute ||
+            "补齐具体地点后会显示更完整的分日路线。";
+          insightList.innerHTML = entry.routeStops
+            .map(
+              (stop) => `
+                <li>
+                  <span>${escapeHtml(stop.label)}</span>
+                  <strong>${escapeHtml(stop.value)}</strong>
+                </li>
+              `
+            )
+            .join("");
+          return;
+        }
+
+        const selectedLayer = entry.dayLayers.find((layer) => layer.key === activeDayKey);
+        const selectedPlan =
+          entry.dayPlans.find((day) => day.key === activeDayKey) ||
+          entry.dayPlans.find((day) => day.label === selectedLayer?.label);
+        const selectedLabel = selectedLayer?.label || selectedPlan?.label || "当日";
+        const waypoints = selectedPlan?.waypoints?.length
+          ? selectedPlan.waypoints
+          : selectedLayer?.points?.map((point) => point.name || point.address || point.label) || [];
+        const highlights = selectedPlan?.highlights?.length ? selectedPlan.highlights : [];
+        const matchedHighlightIndexes = resolveJourneyPlanHighlightIndexes(
+          selectedPlan,
+          entry.highlightPoints
+        );
+
+        insightTitle.textContent = `${selectedLabel} · ${
+          activeMode === "solo" ? "单独显示" : "突出显示"
+        }`;
+        insightCopy.textContent =
+          selectedPlan?.note ||
+          `${selectedLabel}的路线节点已经高亮出来了，你可以继续看当天怎么走、住哪里、看什么。`;
+        insightList.innerHTML = [
+          ...waypoints.slice(0, 5).map(
+            (point, index) => `
+              <li>
+                <button
+                  class="journey-map-stage-stop journey-map-stage-stop--inline"
+                  type="button"
+                  data-map-day-stop="${escapeHtml(activeDayKey)}:${index}"
+                >
+                  <span>${index + 1 < 10 ? `0${index + 1}` : index + 1}</span>
+                  <strong>${escapeHtml(point)}</strong>
+                  <small>${escapeHtml(selectedLabel)}</small>
+                </button>
+              </li>
+            `
+          ),
+          ...highlights.slice(0, 2).map(
+            (item, index) => `
+              <li class="highlight">
+                <span>景</span>
+                <strong>${escapeHtml(item)}</strong>
+              </li>
+            `
+          ),
+        ].join("");
+        insightList.querySelectorAll("li.highlight").forEach((item, index) => {
+          const highlightText = item.querySelector("strong")?.textContent?.trim();
+          if (!highlightText) return;
+          item.innerHTML = `
+            <button
+              class="journey-map-stage-stop journey-map-stage-stop--inline"
+              type="button"
+              data-map-focus="highlight:${matchedHighlightIndexes[index] ?? 0}"
+            >
+              <span>景</span>
+              <strong>${escapeHtml(highlightText)}</strong>
+              <small>${escapeHtml(selectedLayer?.label || "沿途看点")}</small>
+            </button>
+          `;
+        });
+      }
+
+      function setJourneyMapStyle(entry, style = "standard") {
+        if (!entry?.map) return;
+        if (entry.engine === "amap") {
+          const amapStyles = {
+            standard: "amap://styles/normal",
+            terrain: "amap://styles/fresh",
+            calm: "amap://styles/whitesmoke",
+          };
+          entry.map.setMapStyle?.(amapStyles[style] || amapStyles.standard);
+          entry.activeLayerKey = style;
+          return;
+        }
+        if (!entry.baseLayers) return;
+        const nextLayer = entry.baseLayers[style] || entry.baseLayers.standard;
+        if (!nextLayer || entry.activeLayerKey === style) return;
+        Object.values(entry.baseLayers).forEach((layer) => {
+          if (entry.map.hasLayer(layer)) {
+            entry.map.removeLayer(layer);
+          }
+        });
+        nextLayer.addTo(entry.map);
+        entry.activeLayerKey = style;
+      }
+
+      function setJourneyLayerOpacity(layer, opacity) {
+        if (!layer) return;
+        if (typeof layer.setOpacity === "function") {
+          layer.setOpacity(opacity);
+          return;
+        }
+        if (typeof layer.setOptions === "function") {
+          layer.setOptions({
+            opacity,
+            strokeOpacity: opacity,
+            fillOpacity: Math.max(Math.min(opacity, 1), 0) * 0.45,
+          });
+          return;
+        }
+        if (typeof layer.setStyle === "function") {
+          layer.setStyle({
+            opacity,
+            fillOpacity: Math.max(Math.min(opacity, 1), 0) * 0.45,
+          });
+        }
+      }
+
+      function getJourneyLayerElement(layer) {
+        return (
+          layer?.getElement?.() ||
+          layer?._icon ||
+          layer?._path ||
+          layer?._element ||
+          null
+        );
+      }
+
+      function setJourneyLayerZIndex(layer, zIndex = 0) {
+        if (!layer || !Number.isFinite(Number(zIndex))) return;
+        const normalizedZIndex = Number(zIndex);
+        if (typeof layer.setZIndex === "function") {
+          layer.setZIndex(normalizedZIndex);
+        }
+        if (typeof layer.setZIndexOffset === "function") {
+          layer.setZIndexOffset(normalizedZIndex);
+        }
+        if (normalizedZIndex >= 700 && typeof layer.bringToFront === "function") {
+          layer.bringToFront();
+        } else if (normalizedZIndex <= 380 && typeof layer.bringToBack === "function") {
+          layer.bringToBack();
+        }
+        const element = getJourneyLayerElement(layer);
+        if (element?.style) {
+          element.style.zIndex = String(normalizedZIndex);
+        }
+      }
+
+      function setJourneyLayerVisualState(
+        layer,
+        role = "route",
+        state = "overview",
+        zIndex = 0
+      ) {
+        if (!layer) return;
+        setJourneyLayerZIndex(layer, zIndex);
+        const element = getJourneyLayerElement(layer);
+        if (!element?.classList) return;
+        element.classList.add(`journey-map-layer--${role}`);
+        ["overview", "foreground", "background", "hidden"].forEach((item) => {
+          element.classList.toggle(`journey-map-layer--${item}`, item === state);
+        });
+      }
+
+      function updateJourneyDayButtons(shell, activeDay = "all", activeMode = "fade") {
+        shell?.querySelectorAll(".journey-map-day-btn").forEach((btn) => {
+          const isActive = (btn.dataset.mapDay || "all") === activeDay;
+          btn.classList.toggle("active", isActive);
+          btn.setAttribute("aria-pressed", String(isActive));
+        });
+        shell?.querySelectorAll(".journey-map-day-mode-btn").forEach((btn) => {
+          const isActive = (btn.dataset.mapDayMode || "solo") === activeMode;
+          btn.classList.toggle("active", isActive);
+          btn.setAttribute("aria-pressed", String(isActive));
+        });
+      }
+
+      function applyJourneyDayView(entry) {
+        if (!entry) return;
+        const activeDayKey = entry.activeDayKey || "all";
+        const activeMode = entry.dayDisplayMode || "solo";
+        const isOverview = activeDayKey === "all";
+        const isCompactMapDensity = applyJourneyMapDensityState(entry);
+        const mapNode =
+          entry.mapNode || entry.shell?.querySelector?.(".journey-live-map") || null;
+        mapNode?.classList?.toggle("journey-live-map--day-focused", !isOverview);
+        entry.shell?.classList?.toggle("journey-map-shell--day-focused", !isOverview);
+        let compactOverviewLabelCount = 0;
+        const dayLayers = Array.isArray(entry.dayLayers) ? entry.dayLayers : [];
+        const selectedPlan = entry.dayPlans?.find((day) => day.key === activeDayKey);
+        const selectedHighlightIndexes = new Set(
+          resolveJourneyPlanHighlightIndexes(selectedPlan, entry.highlightPoints)
+        );
+
+        dayLayers.forEach((layer, layerIndex) => {
+          const isSelected = layer.key === activeDayKey;
+          const layerState = isOverview
+            ? "overview"
+            : isSelected
+              ? "foreground"
+              : activeMode === "solo"
+                ? "hidden"
+                : "background";
+          const layerZ = isOverview
+            ? {
+                route: 430 + layerIndex,
+                marker: 540 + layerIndex,
+                badge: 560 + layerIndex,
+                label: 570 + layerIndex,
+              }
+            : isSelected
+              ? {
+                  route: 720,
+                  marker: 790,
+                  badge: 780,
+                  label: 800,
+                }
+              : {
+                  route: 320 + layerIndex,
+                  marker: 350 + layerIndex,
+                  badge: 360 + layerIndex,
+                  label: 310 + layerIndex,
+                };
+          const opacity = isOverview
+            ? 0.92
+            : activeMode === "solo"
+              ? (isSelected ? 0.96 : 0)
+              : (isSelected ? 0.98 : 0.18);
+          layer.markers.forEach((marker, markerIndex) => {
+            setJourneyLayerOpacity(marker, opacity);
+            setJourneyLayerVisualState(
+              marker,
+              "day-marker",
+              layerState,
+              layerZ.marker + markerIndex
+            );
+          });
+          (layer.segmentLabels || []).forEach((label, labelIndex) => {
+            let labelOpacity = getJourneySegmentLabelViewOpacity({
+              isOverview,
+              isSelected,
+              activeMode,
+              labelIndex,
+            });
+            if (isOverview && isCompactMapDensity && labelOpacity > 0.5) {
+              labelOpacity = compactOverviewLabelCount < 2 ? labelOpacity : 0;
+              compactOverviewLabelCount += 1;
+            }
+            if (
+              !isOverview &&
+              isCompactMapDensity &&
+              isSelected &&
+              labelOpacity > 0.5 &&
+              labelIndex > 0
+            ) {
+              labelOpacity = 0;
+            }
+            setJourneyLayerOpacity(label, labelOpacity);
+            setJourneyLayerVisualState(
+              label,
+              "segment-label",
+              layerState,
+              layerZ.label + labelIndex
+            );
+          });
+          setJourneyLayerOpacity(layer.dayBadge, opacity);
+          setJourneyLayerVisualState(layer.dayBadge, "day-badge", layerState, layerZ.badge);
+          setJourneyLayerOpacity(layer.polyline, opacity);
+          setJourneyLayerVisualState(layer.polyline, "day-route", layerState, layerZ.route);
+          if (typeof layer.polyline?.setStyle === "function") {
+            layer.polyline.setStyle({
+              weight: isOverview ? 6 : isSelected ? 9 : 3,
+            });
+          }
+        });
+
+        const baseOpacity = isOverview ? 1 : activeMode === "solo" ? 0 : 0.32;
+        entry.markers.forEach((marker, markerIndex) => {
+          setJourneyLayerOpacity(marker, baseOpacity);
+          setJourneyLayerVisualState(
+            marker,
+            "overview-marker",
+            isOverview ? "overview" : activeMode === "solo" ? "hidden" : "background",
+            isOverview ? 500 + markerIndex : 300 + markerIndex
+          );
+        });
+        if (entry.routeLine?.setStyle) {
+          entry.routeLine.setStyle({
+            opacity: baseOpacity,
+            weight: isOverview ? 6 : 4,
+          });
+        }
+        setJourneyLayerVisualState(
+          entry.routeLine,
+          "overview-route",
+          isOverview ? "overview" : activeMode === "solo" ? "hidden" : "background",
+          isOverview ? 420 : 280
+        );
+        getJourneyRecommendationMarkers(entry).forEach((marker, index) => {
+          const opacity = isOverview
+            ? 0.95
+            : selectedHighlightIndexes.size
+              ? selectedHighlightIndexes.has(index)
+                ? 0.98
+                : activeMode === "solo"
+                  ? 0.08
+                  : 0.22
+              : activeMode === "solo"
+                ? 0.18
+                : 0.38;
+          setJourneyLayerOpacity(marker, opacity);
+          setJourneyLayerVisualState(
+            marker,
+            "recommendation-marker",
+            opacity > 0.7 ? "foreground" : opacity <= 0.1 ? "hidden" : "background",
+            opacity > 0.7 ? 760 + index : 390 + index
+          );
+        });
+        if (entry.recommendationsVisible === false) {
+          getJourneyRecommendationMarkers(entry).forEach((marker) =>
+            setJourneyLayerOpacity(marker, 0)
+          );
+        }
+
+        const selectedLayer = dayLayers.find((layer) => layer.key === activeDayKey);
+        if (entry.shell) {
+          entry.shell.dataset.activeDay = activeDayKey;
+          entry.shell.dataset.dayMode = activeMode;
+        }
+        const metaValue = entry.shell?.querySelector(".journey-live-map-meta-value");
+        if (metaValue) {
+          metaValue.textContent = isOverview
+            ? `已定位 ${entry.points.length} 个路线地点`
+            : selectedLayer
+              ? `${selectedLayer.label || selectedPlan?.label || "当日"}已切换为${
+                  activeMode === "solo" ? "单日路线" : "重点路线"
+                }`
+              : `${selectedPlan?.label || "当日"}路线待核验`;
+        }
+        renderJourneyDayInsight(entry);
+        updateJourneyDayButtons(entry.shell, activeDayKey, activeMode);
+        syncJourneyRecommendationButtons(entry);
+      }
+
+      function syncJourneyRecommendationButtons(entry) {
+        const visible = entry?.recommendationsVisible !== false;
+        const count = getJourneyRecommendationMarkers(entry).length;
+        entry?.shell
+          ?.querySelectorAll('[data-map-action="recommendations"]')
+          .forEach((button) => {
+            button.classList.toggle("active", visible);
+            button.setAttribute("aria-pressed", String(visible));
+            button.textContent = visible ? "隐藏推荐点" : count ? `推荐点 ${count}` : "推荐点";
+          });
+      }
+
+      function setJourneyMapDaySelection(entry, dayKey = "all") {
+        if (!entry) return;
+        const hasLayer = entry.dayLayers?.some((layer) => layer.key === dayKey);
+        const hasPlan = entry.dayPlans?.some((day) => day.key === dayKey);
+        if (dayKey !== "all" && !hasLayer && !hasPlan) {
+          return;
+        }
+        entry.activeDayKey = dayKey || "all";
+        applyJourneyDayView(entry);
+        if (dayKey === "all") {
+          entry.shell
+            ?.querySelectorAll(".journey-map-stage-stop.active, [data-journey-day-card].active")
+            .forEach((item) => item.classList.remove("active"));
+          fitJourneyMapState(entry, "all");
+          return;
+        }
+        const selectedLayer = entry.dayLayers?.find((layer) => layer.key === dayKey);
+        activateJourneyBottomStop(entry.shell, dayKey, 0, {
+          expandDrawer: false,
+          scroll: false,
+        });
+        if (selectedLayer?.bounds?.isValid()) {
+          moveJourneyMapToBounds(entry.map, selectedLayer.bounds, {
+            padding: [30, 30],
+            animate: true,
+          });
+          if (!isJourneyMapCompactDensity(entry)) {
+            selectedLayer.markers?.[0]?.openPopup?.();
+          }
+        }
+      }
+
+      function setJourneyMapDayMode(entry, mode = "fade") {
+        if (!entry) return;
+          entry.dayDisplayMode = mode === "fade" ? "fade" : "solo";
+        applyJourneyDayView(entry);
+      }
+
+      function toggleJourneyRecommendations(entry) {
+        if (!entry) return;
+        entry.recommendationsVisible = entry.recommendationsVisible === false;
+        applyJourneyDayView(entry);
+      }
+
+      function registerJourneyMapEntry(node, entry) {
+        entry.mapNode = node;
+        applyJourneyMapDensityState(entry);
+        const shell = entry.shell;
+        const availableDayKeys = new Set(
+          [
+            ...(entry.dayLayers || []).map((layer) => layer.key),
+            ...(entry.dayPlans || []).map((day) => day.key),
+          ].filter(Boolean)
+        );
+        shell?.querySelectorAll(".journey-map-day-btn").forEach((button) => {
+          const key = button.dataset.mapDay || "all";
+          const enabled = key === "all" || availableDayKeys.has(key);
+          button.disabled = !enabled;
+          button.classList.toggle("disabled", !enabled);
+          button.hidden = false;
+        });
+        const dayModes = shell?.querySelector(".journey-map-floating-modes");
+        if (dayModes) {
+          dayModes.hidden = availableDayKeys.size <= 1;
+        }
+        const enabledFocusTargets = new Set([
+          ...Object.keys(entry.pointsByKind || {}),
+          ...(entry.recommendationPoints?.length ? ["highlights"] : []),
+          ...(entry.routePoints?.length >= 2 ? ["route"] : []),
+        ]);
+        shell?.querySelectorAll(".journey-map-focus-btn").forEach((button) => {
+          const focusTarget = button.dataset.mapFocus || "";
+          const enabled =
+            !focusTarget ||
+            enabledFocusTargets.has(focusTarget) ||
+            /^highlight:\d+$/.test(focusTarget);
+          button.disabled = !enabled;
+          button.classList.toggle("disabled", !enabled);
+          button.hidden = !enabled;
+        });
+        shell?.querySelectorAll(".journey-map-action-btn").forEach((button) => {
+          const action = button.dataset.mapAction || "";
+          const enabled =
+            action === "expand" ||
+            action === "toggle-tools" ||
+            action === "toggle-sidebar" ||
+            action === "toggle-day-routes" ||
+            (action === "recommendations" && entry.recommendationPoints?.length > 0) ||
+            (action === "route" && entry.routePoints?.length >= 2) ||
+            (action === "highlights" && entry.recommendationPoints?.length > 0);
+          button.disabled = !enabled;
+          button.classList.toggle("disabled", !enabled);
+          button.hidden = !enabled;
+        });
+        syncJourneyMapToggleLabels(shell);
+        journeyMapInstances.set(node, entry);
+        node
+          .closest(".journey-live-map-shell")
+          ?.querySelector(".journey-live-map-meta-value")
+          ?.replaceChildren(
+            document.createTextNode(
+              entry.engine === "amap"
+                ? `高德地图已定位 ${entry.points.length} 个地点`
+                : `已定位 ${entry.points.length} 个路线地点`
+            )
+          );
+        applyJourneyDayView(entry);
+        node.dataset.mapReady = "1";
+        node.dataset.mapProvider = entry.engine || "leaflet";
+        setTimeout(() => {
+          if (typeof entry.map?.invalidateSize === "function") {
+            entry.map.invalidateSize();
+          } else {
+            entry.map?.resize?.();
+          }
+        }, 80);
+      }
+
+      function isJourneyMapCompactDensityTarget(mapNode, shell) {
+        const mapWidth =
+          Number(mapNode?.clientWidth) ||
+          Number(shell?.getBoundingClientRect?.().width) ||
+          Number(window.innerWidth);
+        return mapWidth <= 520 || window.matchMedia?.("(max-width: 520px)")?.matches === true;
+      }
+
+      function isJourneyMapCompactDensity(entry = {}) {
+        const mapNode = entry.mapNode || entry.shell?.querySelector?.(".journey-live-map");
+        return isJourneyMapCompactDensityTarget(mapNode, entry.shell);
+      }
+
+      function applyJourneyMapDensityState(entry = {}) {
+        const compact = isJourneyMapCompactDensity(entry);
+        entry.isCompactMapDensity = compact;
+        entry.mapNode?.classList?.toggle("journey-live-map--compact-density", compact);
+        entry.shell?.classList?.toggle("journey-map-shell--compact-density", compact);
+        return compact;
+      }
+
+      function buildAmapMarkerContent(kind = "highlight", text = "●", color = "") {
+        const node = document.createElement("div");
+        node.className = `journey-live-marker amap-journey-marker kind-${kind}`;
+        node.innerHTML = `<span>${escapeHtml(text)}</span>`;
+        if (color) {
+          node.style.borderColor = color;
+          node.style.color = color;
+        }
+        return node;
+      }
+
+      function wrapAmapLayer(overlay, options = {}) {
+        const { contentNode = null, infoWindow = null, map = null, point = null } = options;
+        return {
+          __journeyMapEngine: "amap",
+          overlay,
+          setOpacity(opacity) {
+            if (typeof overlay?.setOpacity === "function") {
+              overlay.setOpacity(opacity);
+            }
+            if (contentNode?.style) {
+              contentNode.style.opacity = String(opacity);
+            }
+            if (typeof overlay?.setOptions === "function") {
+              overlay.setOptions({
+                strokeOpacity: opacity,
+                fillOpacity: Math.max(Math.min(opacity, 1), 0) * 0.45,
+              });
+            }
+          },
+          setStyle(style = {}) {
+            if (typeof overlay?.setOptions !== "function") return;
+            overlay.setOptions({
+              strokeOpacity: style.opacity,
+              fillOpacity:
+                typeof style.fillOpacity === "number" ? style.fillOpacity : undefined,
+              strokeWeight: style.weight,
+              strokeColor: style.color,
+            });
+          },
+          setZIndex(zIndex = 0) {
+            const normalizedZIndex = Number(zIndex);
+            if (!Number.isFinite(normalizedZIndex)) return;
+            overlay?.setzIndex?.(normalizedZIndex);
+            overlay?.setZIndex?.(normalizedZIndex);
+            overlay?.setOptions?.({ zIndex: normalizedZIndex });
+            if (contentNode?.style) {
+              contentNode.style.zIndex = String(normalizedZIndex);
+            }
+          },
+          getElement() {
+            return contentNode || null;
+          },
+          openPopup() {
+            if (infoWindow && map && point) {
+              infoWindow.open(map, getAmapPosition(point));
+            }
+          },
+        };
+      }
+
+      function createAmapJourneyMarker(AMap, map, point, options = {}) {
+        const kind = options.kind || point.kind || "highlight";
+        const tooltipText = getJourneyPointTooltip(point, options.label || point.label);
+        const contentNode = buildAmapMarkerContent(
+          kind,
+          options.text || (kind === "highlight" ? "★" : "●"),
+          options.color || ""
+        );
+        contentNode.title = tooltipText;
+        if (options.dayKey) {
+          contentNode.dataset.mapDayStop = `${options.dayKey}:${options.stopIndex || 0}`;
+        }
+        const marker = new AMap.Marker({
+          position: getAmapPosition(point),
+          content: contentNode,
+          offset: new AMap.Pixel(-11, -11),
+          zIndex: options.zIndex || 100,
+          title: tooltipText,
+        });
+        marker.setTitle?.(tooltipText);
+        marker.setMap(map);
+        const infoWindow = new AMap.InfoWindow({
+          offset: new AMap.Pixel(0, -18),
+          content: `
+            <div class="amap-journey-popup">
+              <strong>${escapeHtml(point.name || point.label || options.label || "地点")}</strong>
+              <span>${escapeHtml(point.address || point.label || "")}</span>
+            </div>
+          `,
+        });
+        marker.on?.("click", () => {
+          infoWindow.open(map, marker.getPosition());
+          options.onClick?.();
+        });
+        return wrapAmapLayer(marker, { contentNode, infoWindow, map, point });
+      }
+
+      function createAmapJourneyPolyline(AMap, map, points, options = {}) {
+        const path = (points || [])
+          .map((point) => getAmapPosition(point))
+          .filter(([lng, lat]) => Number.isFinite(lng) && Number.isFinite(lat));
+        if (path.length < 2) return null;
+        const polyline = new AMap.Polyline({
+          path,
+          strokeColor: options.color || "#0f766e",
+          strokeWeight: options.weight || 7,
+          strokeOpacity: options.opacity ?? 0.98,
+          strokeStyle: options.dashed ? "dashed" : "solid",
+          lineJoin: "round",
+          lineCap: "round",
+          zIndex: options.zIndex || 80,
+        });
+        polyline.setMap(map);
+        return wrapAmapLayer(polyline);
+      }
+
+      function createAmapJourneySegmentLabel(
+        AMap,
+        map,
+        left,
+        right,
+        segment,
+        color,
+        segmentIndex = 0,
+        day = {},
+        dayIndex = 0
+      ) {
+        const labelParts = getJourneySegmentLabelParts(segment, day, dayIndex);
+        const midpoint = getJourneyMidpoint(left, right);
+        if (!labelParts || !midpoint) return null;
+        const tone = getJourneySegmentLabelTone(segment);
+        const offset = getJourneySegmentLabelOffset(segmentIndex, dayIndex);
+        const contentNode = document.createElement("div");
+        contentNode.className = `amap-journey-segment-label ${tone}`;
+        contentNode.innerHTML = `<strong>${escapeHtml(labelParts.day)}</strong><span>${escapeHtml(labelParts.metric)}</span>`;
+        contentNode.title =
+          segment?.verification_note ||
+          (tone === "verified" ? "高德路线已核验" : "距离/时长待二次核验");
+        contentNode.style.borderColor = color;
+        const marker = new AMap.Marker({
+          position: [midpoint.lng, midpoint.lat],
+          content: contentNode,
+          offset: new AMap.Pixel(-58 + offset.x, offset.y),
+          zIndex: 160,
+        });
+        marker.setMap(map);
+        return wrapAmapLayer(marker, { contentNode });
+      }
+
+      function createAmapJourneyDayBadge(AMap, map, point, day, color, index = 0) {
+        if (!point) return null;
+        const contentNode = document.createElement("div");
+        contentNode.className = "amap-journey-day-badge";
+        contentNode.style.borderColor = color;
+        contentNode.innerHTML = `
+          <strong>${escapeHtml(getJourneyDayBadgeLabel(day, index))}</strong>
+          <span>${escapeHtml((day.points || []).length ? `${(day.points || []).length}站` : "路线")}</span>
+        `;
+        const badgeOffsets = [
+          [-18, -58],
+          [16, -70],
+          [-66, -42],
+          [24, -34],
+          [-54, -72],
+        ];
+        const [offsetX, offsetY] = badgeOffsets[Math.abs(Number(index) || 0) % badgeOffsets.length];
+        const marker = new AMap.Marker({
+          position: getAmapPosition(point),
+          content: contentNode,
+          offset: new AMap.Pixel(offsetX, offsetY),
+          zIndex: 170,
+        });
+        marker.setMap(map);
+        return wrapAmapLayer(marker, { contentNode });
+      }
+
+      async function renderAmapJourneyMap(node, payload, preview, mapConfig) {
+        const AMap = await journeyApi.loadAmapJourneyMapAssets(
+          mapConfig?.amap_web_js_key
+        );
+        if (!AMap) throw new Error("amap-sdk-unavailable");
+        const points = Array.isArray(preview?.points) ? preview.points : [];
+        if (!points.length) throw new Error("map-preview-empty");
+
+        node.innerHTML = "";
+        node.classList.add("journey-live-map--amap");
+        const shell = node.closest(".journey-live-map-shell");
+        const compactMapDensity = isJourneyMapCompactDensityTarget(node, shell);
+        node.classList.toggle("journey-live-map--compact-density", compactMapDensity);
+        shell?.classList?.toggle("journey-map-shell--compact-density", compactMapDensity);
+        const map = new AMap.Map(node, {
+          zoom: 8,
+          viewMode: "2D",
+          resizeEnable: true,
+          mapStyle: "amap://styles/normal",
+        });
+        map.invalidateSize = () => map.resize?.();
+        map.flyTo = ([lat, lng], zoom = 11) => {
+          map.setZoomAndCenter(zoom, [lng, lat]);
+          return map;
+        };
+        if (AMap.Scale) map.addControl(new AMap.Scale());
+        if (AMap.ToolBar) {
+          map.addControl(
+            new AMap.ToolBar({
+              position: { right: "12px", top: "12px" },
+            })
+          );
+        }
+
+        const orderedKinds = ["origin", "destination", "stay"];
+        const routePoints = points
+          .filter((point) => orderedKinds.includes(point.kind))
+          .sort((a, b) => orderedKinds.indexOf(a.kind) - orderedKinds.indexOf(b.kind));
+        const highlightPoints = points.filter((point) => point.kind === "highlight");
+        const recommendationPoints = points.filter(isJourneyRecommendationPoint);
+        const pointsByKind = Object.fromEntries(
+          routePoints.map((point) => [point.kind, point])
+        );
+        const markersByKind = {};
+        let entry = null;
+
+        const markers = points.map((point) => {
+          const highlightIndex =
+            point.kind === "highlight" ? markersByKind.highlight?.length || 0 : 0;
+          const marker = createAmapJourneyMarker(AMap, map, point, {
+            kind: point.kind,
+            text: point.kind === "highlight" ? "★" : point.kind === "recommendation" ? "+" : "●",
+            onClick:
+              point.kind === "recommendation"
+                ? () => hideJourneyPoiSheet(shell)
+                : point.kind === "highlight"
+                ? () => {
+                    activateJourneyHighlightCard(shell, highlightIndex);
+                  }
+                : null,
+          });
+          if (!markersByKind[point.kind]) markersByKind[point.kind] = [];
+          markersByKind[point.kind].push(marker);
+          return marker;
+        });
+
+        const routeLine =
+          routePoints.length >= 2
+            ? createAmapJourneyPolyline(AMap, map, routePoints, {
+                color: "#a16207",
+                weight: 7,
+                dashed: true,
+                zIndex: 70,
+              })
+            : null;
+
+        const dayLayers = (Array.isArray(preview?.days) ? preview.days : [])
+          .map((day, index) => {
+            const dayPoints = Array.isArray(day?.points) ? day.points : [];
+            if (!dayPoints.length) return null;
+            const color = getJourneyDayColor(index);
+            const dayMarkers = dayPoints.map((point, pointIndex) =>
+              createAmapJourneyMarker(AMap, map, point, {
+                kind: "day",
+                text: String(pointIndex + 1),
+                color,
+                zIndex: 130 + index,
+                label: day.label || `Day ${index + 1}`,
+                dayKey: day.key || `day-${index + 1}`,
+                stopIndex: pointIndex,
+                onClick: () => {
+                  if (entry) {
+                    focusJourneyDayStop(entry, day.key || `day-${index + 1}`, pointIndex);
+                  }
+                },
+              })
+            );
+            const dayRoutePoints = getJourneySegmentRoutePoints(dayPoints, day.segments);
+            const polyline = createAmapJourneyPolyline(AMap, map, dayRoutePoints, {
+              color,
+              weight: 8,
+              zIndex: 90 + index,
+            });
+            const dayBadge = createAmapJourneyDayBadge(
+              AMap,
+              map,
+              dayPoints[0],
+              day,
+              color,
+              index
+            );
+            const segmentLabels = (Array.isArray(day?.segments) ? day.segments : [])
+              .map((segment, segmentIndex) =>
+                createAmapJourneySegmentLabel(
+                  AMap,
+                  map,
+                  dayPoints[segmentIndex],
+                  dayPoints[segmentIndex + 1],
+                  segment,
+                  color,
+                  segmentIndex,
+                  day,
+                  index
+                )
+              )
+              .filter(Boolean);
+            return {
+              key: day.key || `day-${index + 1}`,
+              label: day.label || `Day ${index + 1}`,
+              points: dayPoints,
+              markers: dayMarkers,
+              dayBadge,
+              segmentLabels,
+              polyline,
+              bounds: buildAmapBoundsFromPoints(dayPoints),
+            };
+          })
+          .filter(Boolean);
+
+        const allBounds = buildAmapBoundsFromPoints([
+          ...points,
+          ...dayLayers.flatMap((layer) => layer.points || []),
+        ]);
+        const dayBounds = buildAmapBoundsFromPoints(
+          dayLayers.flatMap((layer) => layer.points || [])
+        );
+        const routeBounds = buildAmapBoundsFromPoints(routePoints);
+        const highlightBounds = buildAmapBoundsFromPoints([
+          ...highlightPoints,
+          ...recommendationPoints,
+        ]);
+        if (points.length === 1) {
+          map.setZoomAndCenter(11, getAmapPosition(points[0]));
+        } else {
+          fitJourneyMapState(
+            {
+              map,
+              allBounds: dayBounds?.isValid() ? dayBounds : allBounds,
+              routeBounds,
+              highlightBounds,
+            },
+            "all"
+          );
+        }
+
+        entry = {
+          engine: "amap",
+          map,
+          baseLayers: null,
+          activeLayerKey: "standard",
+          shell,
+          points,
+          pointsByKind,
+          markersByKind,
+          routePoints,
+          highlightPoints,
+          recommendationPoints,
+          markers,
+          routeLine,
+          dayLayers,
+          dayPlans: parseMapPayload(shell?.dataset.dayPlans || "") || [],
+          routeStops: parseMapPayload(shell?.dataset.routeStops || "") || [],
+          activeDayKey: "all",
+          dayDisplayMode: "solo",
+          recommendationsVisible: false,
+          allBounds: dayBounds?.isValid() ? dayBounds : allBounds,
+          routeBounds,
+          highlightBounds,
+        };
+        registerJourneyMapEntry(node, entry);
+      }
+
+      function mergeMapPreviewSegmentsIntoDayPlans(shell, previewDays = []) {
+        if (!shell || !Array.isArray(previewDays) || !previewDays.length) return [];
+        const dayPlans = parseMapPayload(shell.dataset.dayPlans || "") || [];
+        if (!dayPlans.length) return [];
+        const findPreviewDay = (day, index) =>
+          previewDays.find((item) => item?.key && item.key === day.key) ||
+          previewDays.find((item) => item?.label && item.label === day.label) ||
+          previewDays[index] ||
+          null;
+        let changed = false;
+        const mergedPlans = dayPlans.map((day, index) => {
+          const previewDay = findPreviewDay(day, index);
+          const previewSegments = Array.isArray(previewDay?.segments)
+            ? previewDay.segments
+            : [];
+          if (!previewSegments.length) return day;
+          changed = true;
+          const normalizedDay = normalizeJourneyDayPlanStops(day);
+          return {
+            ...normalizedDay,
+            segments: buildEditedJourneySegments(
+              normalizedDay.dayNumber || index + 1,
+              normalizedDay.stops || [],
+              previewSegments
+            ),
+          };
+        });
+        if (!changed) return dayPlans;
+        shell.dataset.dayPlans = serializeMapPayload(mergedPlans);
+        const mapNode = shell.querySelector(".journey-live-map[data-map-payload]");
+        const payload = parseMapPayload(mapNode?.dataset.mapPayload || "") || {};
+        if (mapNode && Array.isArray(payload.days)) {
+          payload.days = payload.days.map((day, index) => {
+            const merged = mergedPlans.find((item) => item.key && item.key === day.key) || mergedPlans[index];
+            return merged
+              ? {
+                  ...day,
+                  segments: merged.segments || [],
+                }
+              : day;
+          });
+          mapNode.dataset.mapPayload = serializeMapPayload(payload);
+        }
+        const workbench = shell.closest(".visual-journey-workbench");
+        if (workbench) {
+          refreshVisualJourneyDayEditor(workbench, mergedPlans);
+        }
+        return mergedPlans;
+      }
+
+      async function hydrateJourneyMap(node) {
+        if (!node || node.dataset.mapReady === "1" || node.dataset.mapReady === "loading") {
+          return;
+        }
+        const payload = parseMapPayload(node.dataset.mapPayload || "");
+        if (!payload) {
+          node.dataset.mapReady = "error";
+          node.innerHTML = '<div class="journey-live-map-state error">路线地图载入失败</div>';
+          return;
+        }
+
+        node.dataset.mapReady = "loading";
+        node.innerHTML = '<div class="journey-live-map-state loading">正在定位行程路线的关键地点…</div>';
+        const longMapTimer = setTimeout(() => {
+          if (node.dataset.mapReady === "loading") {
+            console.warn("Map preview still loading after 180s", {
+              hasPayload: Boolean(node.dataset.mapPayload),
+              payloadSize: (node.dataset.mapPayload || "").length,
+              routeTitle: node.closest(".journey-live-map-shell")?.dataset?.mapTitle || "",
+            });
+            node.dataset.mapReady = "error";
+            node.dataset.mapDegraded = "timeout";
+            node.innerHTML =
+              '<div class="journey-live-map-state error">路线地图定位超过 180 秒，已先保留文字路线。</div>';
+          }
+        }, JOURNEY_MAP_DEGRADE_AFTER_MS);
+
+        try {
+          const preview = await journeyApi.fetchJourneyMapPreview({
+            apiBase: getApiBase(),
+            stateToken: state.token,
+            payload,
+          });
+          if (node.dataset.mapDegraded === "timeout") {
+            return;
+          }
+          const points = Array.isArray(preview?.points) ? preview.points : [];
+          if (!points.length) {
+            throw new Error(preview?.message || "map-preview-empty");
+          }
+          const shell = node.closest(".journey-live-map-shell");
+          mergeMapPreviewSegmentsIntoDayPlans(
+            shell,
+            Array.isArray(preview?.days) ? preview.days : []
+          );
+
+          const mapConfig =
+            preview?.provider === "amap-js"
+              ? await journeyApi.fetchJourneyMapConfig({
+                  apiBase: getApiBase(),
+                  stateToken: state.token,
+                })
+              : journeyApi.getFallbackJourneyMapConfig();
+          if (shouldUseAmapJourneyMap(preview, mapConfig)) {
+            try {
+              await renderAmapJourneyMap(node, payload, preview, mapConfig);
+              return;
+            } catch (amapError) {
+              node.classList.remove("journey-live-map--amap");
+              console.warn("AMap journey map failed, falling back to Leaflet", amapError);
+            }
+          }
+
+          const L = await journeyApi.loadJourneyMapAssets();
+          node.innerHTML = "";
+          node.classList.remove("journey-live-map--amap");
+          const map = L.map(node, {
+            zoomControl: true,
+            scrollWheelZoom: false,
+            attributionControl: true,
+          });
+          const baseLayers = {
+            standard: L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+              maxZoom: 18,
+              attribution: "&copy; OpenStreetMap contributors",
+            }),
+            terrain: L.tileLayer("https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png", {
+              maxZoom: 17,
+              attribution: "Map data: &copy; OpenTopoMap contributors",
+            }),
+            calm: L.tileLayer(
+              "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
+              {
+                maxZoom: 19,
+                attribution: "&copy; CARTO & OpenStreetMap contributors",
+              }
+            ),
+          };
+          baseLayers.standard.addTo(map);
+
+          const orderedKinds = ["origin", "destination", "stay"];
+          const routePoints = points
+            .filter((point) => orderedKinds.includes(point.kind))
+            .sort((a, b) => orderedKinds.indexOf(a.kind) - orderedKinds.indexOf(b.kind));
+          const highlightPoints = points.filter((point) => point.kind === "highlight");
+          const recommendationPoints = points.filter(isJourneyRecommendationPoint);
+          const pointsByKind = Object.fromEntries(
+            routePoints.map((point) => [point.kind, point])
+          );
+          const markersByKind = {};
+          let entry = null;
+          const compactMapDensity = isJourneyMapCompactDensityTarget(node, shell);
+          node.classList.toggle("journey-live-map--compact-density", compactMapDensity);
+          shell?.classList?.toggle("journey-map-shell--compact-density", compactMapDensity);
+
+          const latLngs = [];
+          const markers = [];
+          points.forEach((point) => {
+            const marker = L.marker([point.lat, point.lng], {
+              icon: buildJourneyMapIcon(L, point.kind),
+            }).addTo(map);
+            marker.bindPopup(
+              `<strong>${escapeHtml(point.name || point.label)}</strong><br>${escapeHtml(
+                point.address || point.label || ""
+              )}`
+            );
+            marker.bindTooltip(escapeHtml(getJourneyPointTooltip(point, point.label)), {
+              direction: "top",
+              sticky: true,
+              opacity: 0.96,
+            });
+            if (point.kind === "highlight") {
+              const highlightIndex = markersByKind.highlight?.length || 0;
+              marker.on("click", () => {
+                activateJourneyHighlightCard(shell, highlightIndex);
+              });
+            } else if (point.kind === "recommendation") {
+              marker.on("click", () => hideJourneyPoiSheet(shell));
+            }
+            latLngs.push([point.lat, point.lng]);
+            markers.push(marker);
+            if (!markersByKind[point.kind]) markersByKind[point.kind] = [];
+            markersByKind[point.kind].push(marker);
+          });
+
+          let routeLine = null;
+          if (routePoints.length >= 2) {
+            const routeLatLngs = routePoints.map((point) => [point.lat, point.lng]);
+            routeLine = L.polyline(routeLatLngs, {
+              color: "#a16207",
+              weight: 6,
+              opacity: 0.95,
+              dashArray: "10 8",
+              className: "leaflet-journey-overview-route",
+            }).addTo(map);
+          }
+
+          const dayLayers = (Array.isArray(preview?.days) ? preview.days : [])
+            .map((day, index) => {
+              const dayPoints = Array.isArray(day?.points) ? day.points : [];
+              if (!dayPoints.length) return null;
+              const color = getJourneyDayColor(index);
+              const markers = dayPoints.map((point, pointIndex) => {
+                const dayKey = day.key || `day-${index + 1}`;
+                const marker = L.marker([point.lat, point.lng], {
+                  icon: buildJourneyDayMapIcon(
+                    L,
+                    String(pointIndex + 1),
+                    color,
+                    dayKey,
+                    pointIndex
+                  ),
+                }).addTo(map);
+                const markerElement = marker.getElement?.() || marker._icon || marker._element;
+                if (markerElement?.dataset) {
+                  markerElement.dataset.mapDayStop = `${dayKey}:${pointIndex}`;
+                }
+                marker.bindPopup(
+                  `<strong>${escapeHtml(day.label || `Day ${index + 1}`)}</strong><br>${escapeHtml(
+                    point.address || point.name
+                  )}`
+                );
+                marker.bindTooltip(escapeHtml(getJourneyPointTooltip(point, day.label || `Day ${index + 1}`)), {
+                  direction: "top",
+                  sticky: true,
+                  opacity: 0.96,
+                });
+                marker.on("click", () => {
+                  if (entry) {
+                    focusJourneyDayStop(entry, dayKey, pointIndex);
+                  }
+                });
+                return marker;
+              });
+              const dayLatLngs = getJourneySegmentRoutePoints(dayPoints, day.segments).map((point) => [
+                point.lat,
+                point.lng,
+              ]);
+              const polyline =
+                dayLatLngs.length >= 2
+                  ? L.polyline(dayLatLngs, {
+                      color,
+                      weight: 7,
+                      opacity: 1,
+                      className: "leaflet-journey-day-route",
+                    }).addTo(map)
+                  : null;
+              const firstPoint = dayPoints[0];
+              const dayBadge = firstPoint
+                ? L.marker([firstPoint.lat, firstPoint.lng], {
+                    icon: L.divIcon({
+                      className: "leaflet-journey-day-badge",
+                      html: `<span style="border-color:${escapeHtml(color)}"><strong>${escapeHtml(
+                        getJourneyDayBadgeLabel(day, index)
+                      )}</strong><small>${escapeHtml(dayPoints.length ? `${dayPoints.length}站` : "路线")}</small></span>`,
+                      iconSize: compactMapDensity ? [96, 36] : [118, 42],
+                      iconAnchor: [
+                        (compactMapDensity
+                          ? [12, -10, 54, -16, 42]
+                          : [18, -18, 66, -24, 54])[Math.abs(index) % 5],
+                        (compactMapDensity
+                          ? [44, 54, 36, 30, 58]
+                          : [52, 64, 42, 34, 70])[Math.abs(index) % 5],
+                      ],
+                    }),
+                    interactive: false,
+                  }).addTo(map)
+                : null;
+              const segmentLabels = (Array.isArray(day?.segments) ? day.segments : [])
+                .map((segment, segmentIndex) => {
+                  const midpoint = getJourneyMidpoint(
+                    dayPoints[segmentIndex],
+                    dayPoints[segmentIndex + 1]
+                  );
+                  const labelParts = getJourneySegmentLabelParts(segment, day, index);
+                  if (!midpoint || !labelParts) return null;
+                  const tone = getJourneySegmentLabelTone(segment);
+                  const offset = getJourneySegmentLabelOffset(segmentIndex, index);
+                  return L.marker([midpoint.lat, midpoint.lng], {
+                    icon: L.divIcon({
+                      className: "leaflet-journey-segment-label",
+                      html: `<span class="${escapeHtml(tone)}" style="border-color:${escapeHtml(color)}" title="${escapeHtml(
+                        segment?.verification_note ||
+                          (tone === "verified" ? "高德路线已核验" : "距离/时长待二次核验")
+                      )}"><strong>${escapeHtml(labelParts.day)}</strong><small>${escapeHtml(
+                        labelParts.metric
+                      )}</small></span>`,
+                      iconSize: compactMapDensity ? [148, 34] : [160, 40],
+                      iconAnchor: [
+                        (compactMapDensity ? 74 : 80) - offset.x,
+                        (compactMapDensity ? 17 : 20) - offset.y,
+                      ],
+                    }),
+                    interactive: false,
+                  }).addTo(map);
+                })
+                .filter(Boolean);
+              return {
+                key: day.key || `day-${index + 1}`,
+                label: day.label || `Day ${index + 1}`,
+                points: dayPoints,
+                markers,
+                dayBadge,
+                segmentLabels,
+                polyline,
+                bounds: buildBoundsFromPoints(L, dayPoints),
+              };
+            })
+            .filter(Boolean);
+
+          const allBounds = buildBoundsFromPoints(L, points);
+          const routeBounds = buildBoundsFromPoints(L, routePoints);
+          const highlightBounds = buildBoundsFromPoints(L, recommendationPoints);
+          const dayBounds = buildBoundsFromPoints(
+            L,
+            dayLayers.flatMap((layer) => layer.points || [])
+          );
+          if (latLngs.length === 1) {
+            map.setView(latLngs[0], 11);
+          } else {
+            fitJourneyMapState(
+              {
+                map,
+                allBounds: dayBounds?.isValid() ? dayBounds : allBounds,
+                routeBounds,
+                highlightBounds,
+              },
+              "all"
+            );
+          }
+
+          entry = {
+            map,
+            baseLayers,
+            activeLayerKey: "standard",
+            shell,
+            points,
+            pointsByKind,
+            markersByKind,
+            routePoints,
+            highlightPoints,
+            recommendationPoints,
+            markers,
+            routeLine,
+            dayLayers,
+            dayPlans: parseMapPayload(shell?.dataset.dayPlans || "") || [],
+            routeStops: parseMapPayload(shell?.dataset.routeStops || "") || [],
+            activeDayKey: "all",
+            dayDisplayMode: "solo",
+            recommendationsVisible: false,
+            allBounds: dayBounds?.isValid() ? dayBounds : allBounds,
+            routeBounds,
+            highlightBounds,
+          };
+          registerJourneyMapEntry(node, entry);
+        } catch (error) {
+          node.dataset.mapReady = "error";
+          node.innerHTML =
+            `<div class="journey-live-map-state error">${escapeHtml(
+              error?.name === "AbortError"
+                ? "地图定位超过 12 秒，已先保留文字路线。"
+                : error?.message && !/^map-preview/.test(error.message)
+                  ? error.message
+                  : "暂时没能定位到路线地图，请先查看文字方案。"
+            )}</div>`;
+        } finally {
+          clearTimeout(longMapTimer);
+        }
+      }
+
+      function getJourneyDayRouteStatus(day = {}) {
+        const segments = Array.isArray(day.segments) ? day.segments : [];
+        if (!segments.length) {
+          return {
+            tone: "pending",
+            label: "路线参考",
+            detail: "路程时间行前确认",
+          };
+        }
+        const metricReadyCount = segments.filter((segment) => {
+          const metricText = [segment.distance_text, segment.duration_text]
+            .filter(Boolean)
+            .join(" ");
+          return metricText && !/待|needs|unknown/i.test(metricText);
+        }).length;
+        const verifiedCount = segments.filter(
+          (segment) => String(segment.confidence || "") === "amap_driving"
+        ).length;
+        const estimatedCount = segments.filter((segment) =>
+          /estimated|估算/i.test(
+            [segment.confidence, segment.source, segment.verification_note]
+              .filter(Boolean)
+              .join(" ")
+          )
+        ).length;
+        const missingCount = Math.max(segments.length - metricReadyCount, 0);
+        if (verifiedCount === segments.length) {
+          return {
+            tone: "ready",
+            label: "路线已核验",
+            detail: `${segments.length} 段路程已返回高德距离/时长`,
+          };
+        }
+        if (verifiedCount || estimatedCount || metricReadyCount) {
+          return {
+            tone: "pending",
+            label: verifiedCount ? "部分路线已回填" : "路线已估算",
+            detail: `${verifiedCount} 段已核验，${estimatedCount} 段参考估算，${missingCount} 段行前确认`,
+          };
+        }
+        return {
+          tone: "pending",
+          label: "路线参考",
+          detail: `${segments.length} 段路程时间行前确认`,
+        };
+      }
+
+      function getJourneyDayWeatherStatus(day = {}) {
+        const weather = day.weather && typeof day.weather === "object" ? day.weather : {};
+        const summary = String(weather.summary || "").trim();
+        const city = String(weather.city || day.city || "").trim();
+        if (!summary) {
+          return {
+            tone: "pending",
+            label: city ? `${city}天气提示` : "天气提示",
+            detail: "出发前确认",
+          };
+        }
+        return {
+          tone: /待|needs/i.test(String(weather.confidence || summary))
+            ? "pending"
+            : "ready",
+          label: city ? `${city}天气` : "天气",
+          detail: summary,
+        };
+      }
+
+      function renderJourneyDayStatusChips(day = {}) {
+        const routeStatus = getJourneyDayRouteStatus(day);
+        const weatherStatus = getJourneyDayWeatherStatus(day);
+        const poiCount = Array.isArray(day.pois)
+          ? day.pois.length
+          : Array.isArray(day.stops)
+          ? day.stops.length
+          : Array.isArray(day.waypoints)
+          ? day.waypoints.length
+          : 0;
+        return `
+          <span class="journey-day-status-chips">
+            <span class="journey-status-chip ready">
+              <i class="fa-solid fa-location-dot"></i> ${poiCount || 0} 个地点
+            </span>
+            <span class="journey-status-chip ${escapeHtml(routeStatus.tone)}">
+              <i class="fa-solid fa-route"></i> ${escapeHtml(routeStatus.label)}
+            </span>
+            <span class="journey-status-chip ${escapeHtml(weatherStatus.tone)}" title="${escapeHtml(
+              weatherStatus.detail
+            )}">
+              <i class="fa-solid fa-cloud-sun"></i> ${escapeHtml(weatherStatus.label)}
+            </span>
+          </span>
+        `;
+      }
+
+      function refreshVisualJourneyDayEditor(workbench, dayPlans = []) {
+        const panel = workbench?.querySelector("[data-visual-route-editor='true']");
+        if (!panel) return;
+        const planningPool = getJourneyPendingPoiCandidates?.(workbench, dayPlans) || [];
+        const wrapper = document.createElement("div");
+        wrapper.innerHTML = renderVisualJourneyDayEditor(dayPlans, planningPool);
+        const nextPanel = wrapper.firstElementChild;
+        if (nextPanel) panel.replaceWith(nextPanel);
+      }
+
+      function destroyJourneyMapEntry(node) {
+        const entry = node ? journeyMapInstances.get(node) : null;
+        try {
+          entry?.map?.destroy?.();
+          entry?.map?.remove?.();
+        } catch (error) {
+          // 地图实例销毁失败时继续重建，避免一次异常卡住编辑体验。
+        }
+        if (node) journeyMapInstances.delete(node);
+      }
+
+      function renderJourneySidebarDayRoutes(dayPlans = []) {
+        if (!Array.isArray(dayPlans) || !dayPlans.length) return "";
+        return `
+          <div class="journey-map-sidebar-card journey-map-sidebar-routes is-collapsed">
+            <div class="journey-map-sidebar-head">
+              <span>分日路线</span>
+              <button
+                class="journey-map-day-list-toggle journey-map-action-btn secondary"
+                type="button"
+                data-map-action="toggle-day-routes"
+                aria-expanded="false"
+                title="展开分日路线"
+              >
+                展开分日路线
+              </button>
+            </div>
+            <div class="journey-map-sidebar-day-list">
+              <article class="journey-map-sidebar-day-card overview">
+                <div class="journey-map-sidebar-day-head">
+                  <button
+                    class="journey-map-day-btn active"
+                    type="button"
+                    data-map-day="all"
+                    aria-pressed="true"
+                    title="查看全程路线总览"
+                  >
+                    <span>总览</span>
+                    <small>全程叠加路线</small>
+                  </button>
+                  <button
+                    class="journey-map-route-reference-btn journey-map-day-btn active"
+                    type="button"
+                    data-map-day="all"
+                    aria-pressed="true"
+                  >
+                    路线参考
+                  </button>
+                </div>
+              </article>
+              ${dayPlans
+                .map((day, dayIndex) => {
+                  const dayKey = day.key || `day-${dayIndex + 1}`;
+                  const places = [...(day.waypoints || []), ...(day.highlights || [])]
+                    .map((item) => cleanJourneyLocationValue(item))
+                    .filter(Boolean)
+                    .slice(0, 4);
+                  return `
+                    <article class="journey-map-sidebar-day-card" data-journey-day-card="${escapeHtml(dayKey)}">
+                      <div class="journey-map-sidebar-day-head">
+                        <button
+                          class="journey-map-day-btn"
+                          type="button"
+                          data-map-day="${escapeHtml(dayKey)}"
+                          aria-pressed="false"
+                          title="${escapeHtml(`${day.label || `Day ${dayIndex + 1}`}路线参考`)}"
+                        >
+                          <span>${escapeHtml(day.label || `Day ${dayIndex + 1}`)}</span>
+                          <small>${escapeHtml(day.title || day.note || "当天路线")}</small>
+                        </button>
+                        <button
+                          class="journey-map-route-reference-btn journey-map-day-btn"
+                          type="button"
+                          data-map-day="${escapeHtml(dayKey)}"
+                          aria-pressed="false"
+                        >
+                          路线参考
+                        </button>
+                      </div>
+                      ${
+                        places.length
+                          ? `<div class="journey-map-sidebar-place-chips">
+                              ${places
+                                .map(
+                                  (place, placeIndex) => `
+                                    <button
+                                      class="journey-map-sidebar-place-chip journey-map-stage-stop journey-map-stage-stop--inline"
+                                      type="button"
+                                      data-map-day-stop="${escapeHtml(dayKey)}:${placeIndex}"
+                                    >
+                                      <span>${placeIndex + 1}</span>
+                                      <strong>${escapeHtml(place)}</strong>
+                                    </button>
+                                  `
+                                )
+                                .join("")}
+                            </div>`
+                          : `<p class="journey-map-sidebar-muted">当天路线待补充具体地点。</p>`
+                      }
+                    </article>
+                  `;
+                })
+                .join("")}
+            </div>
+          </div>
+        `;
+      }
+
+      function refreshJourneyMapAfterEdit(shell, dayPlans) {
+        const mapNode = shell?.querySelector(".journey-live-map[data-map-payload]");
+        if (!shell || !mapNode) return;
+        const normalizedDayPlans = dayPlans.map((day) => {
+          const normalizedDay = normalizeJourneyDayPlanStops(day);
+          return {
+            ...normalizedDay,
+            segments: buildEditedJourneySegments(
+              normalizedDay.dayNumber || 1,
+              normalizedDay.stops || [],
+              normalizedDay.segments || []
+            ),
+          };
+        });
+        const payload = parseMapPayload(mapNode.dataset.mapPayload || "") || {};
+        payload.days = normalizedDayPlans.map((day) => ({
+          key: day.key,
+          label: day.label,
+          waypoints: day.waypoints,
+          stops: day.stops || [],
+          segments: buildEditedJourneySegments(
+            day.dayNumber || 1,
+            day.stops || [],
+            day.segments || []
+          ),
+        }));
+        shell.dataset.dayPlans = serializeMapPayload(normalizedDayPlans);
+        mapNode.dataset.mapPayload = serializeMapPayload(payload);
+        const sidebarDays = shell.querySelector(".journey-map-sidebar-day-list");
+        if (sidebarDays) {
+          const wrapper = document.createElement("div");
+          wrapper.innerHTML = renderJourneySidebarDayRoutes(normalizedDayPlans);
+          sidebarDays.innerHTML =
+            wrapper.querySelector(".journey-map-sidebar-day-list")?.innerHTML || "";
+        }
+        destroyJourneyMapEntry(mapNode);
+        mapNode.dataset.mapReady = "";
+        mapNode.innerHTML =
+          '<div class="journey-live-map-state loading">正在按新顺序刷新路线…</div>';
+        hideJourneyPoiSheet(shell);
+        hydrateJourneyMap(mapNode);
+      }
+
+      function updateVisualJourneyPoiCards(workbench, dayPlans) {
+        if (!workbench) return;
+        refreshVisualJourneyDayEditor(workbench, dayPlans);
+        const activeIds = new Set(
+          dayPlans.flatMap((day) => (day.stops || []).map((stop) => stop.id).filter(Boolean))
+        );
+        if (!activeIds.size) return;
+        workbench.querySelectorAll(".visual-poi-card[data-poi-id]").forEach((card) => {
+          const poiId = card.dataset.poiId || "";
+          const visible = !poiId || activeIds.has(poiId);
+          card.hidden = !visible;
+          const stopRef = dayPlans
+            .flatMap((day) =>
+              (day.stops || []).map((stop, index) => ({
+                dayKey: day.key,
+                index,
+                id: stop.id,
+              }))
+            )
+            .find((item) => item.id === poiId);
+          if (stopRef) {
+            card
+              .querySelectorAll("[data-map-day-stop]")
+              .forEach((button) => {
+                button.dataset.mapDayStop = `${stopRef.dayKey}:${stopRef.index}`;
+              });
+          }
+        });
+      }
+
+      function normalizeEditedJourneySegment(
+        dayNumber,
+        index,
+        left = {},
+        right = {},
+        previous = {}
+      ) {
+        const base = previous && typeof previous === "object" ? previous : {};
+        const verificationStatus = normalizeVisualRouteVerificationStatus(base);
+        return {
+          ...base,
+          id: `d${dayNumber}-s${index + 1}`,
+          day_number: dayNumber,
+          from_poi_id: left.id || "",
+          to_poi_id: right.id || "",
+          from_name: left.name || "",
+          to_name: right.name || "",
+          mode: base.mode || base.selected_mode || "taxi",
+          selected_mode: base.selected_mode || base.mode || "taxi",
+          locked_by_user: Boolean(base.locked_by_user),
+          alternatives: Array.isArray(base.alternatives) ? base.alternatives : [],
+          distance_text: base.distance_text || "待高德路线核验",
+          duration_text: base.duration_text || "待高德路线核验",
+          confidence: base.confidence || "needs_live_route",
+          source: base.source || "",
+          verification_status: verificationStatus,
+          verification_label:
+            base.verification_label ||
+            (verificationStatus === "verified"
+              ? "已核验"
+              : verificationStatus === "estimated"
+              ? "估算"
+              : "待高德路线核验"),
+          verification_note: base.verification_note || "交通方式为草案偏好，真实路线待核验。",
+        };
+      }
+
+      function buildEditedJourneySegments(dayNumber, pois = [], previousSegments = []) {
+        const segments = [];
+        for (let index = 0; index < Math.max(pois.length - 1, 0); index += 1) {
+          const left = pois[index];
+          const right = pois[index + 1];
+          const previous = Array.isArray(previousSegments) ? previousSegments[index] || {} : {};
+          const sameStops =
+            (!previous.from_poi_id || previous.from_poi_id === (left.id || "")) &&
+            (!previous.to_poi_id || previous.to_poi_id === (right.id || "")) &&
+            (!previous.from_name || previous.from_name === (left.name || "")) &&
+            (!previous.to_name || previous.to_name === (right.name || ""));
+          segments.push(
+            normalizeEditedJourneySegment(dayNumber, index, left, right, sameStops ? previous : {})
+          );
+        }
+        return segments;
+      }
+
+      function buildJourneyDataFromEditedPlans(workbench, dayPlans) {
+        const original = parseMapPayload(workbench?.dataset.journeyData || "") || {};
+        if (original.version !== "journey_plan.v1") return null;
+        const normalizedPlans = dayPlans.map((day) => {
+          const normalizedDay = normalizeJourneyDayPlanStops(day);
+          return {
+            ...normalizedDay,
+            segments: buildEditedJourneySegments(
+              normalizedDay.dayNumber || 1,
+              normalizedDay.stops || [],
+              normalizedDay.segments || []
+            ),
+          };
+        });
+        const days = (Array.isArray(original.days) ? original.days : []).map((day) => {
+          const planKey = `visual-day-${day.day_number || 1}`;
+          const plan = normalizedPlans.find((item) => item.key === planKey);
+          if (!plan) return day;
+          const pois = (plan.stops || []).map((stop, index) => ({
+            ...normalizeJourneyPoiAsStop(stop, { city: day.city || "" }),
+            id: stop.id || `d${day.day_number || 1}-p${index + 1}`,
+            day_number: day.day_number || plan.dayNumber || 1,
+            order: index + 1,
+            suggested_time: stop.time_range || stop.suggested_time || "",
+            locked: Boolean(stop.locked),
+          }));
+          return {
+            ...day,
+            summary: pois.map((poi) => poi.name).filter(Boolean).join(" · "),
+            pois,
+            segments: buildEditedJourneySegments(
+              day.day_number || plan.dayNumber || 1,
+              pois,
+              plan.segments || []
+            ),
+          };
+        });
+        const activePois = days.flatMap((day) => day.pois || []);
+        const activeIds = new Set(activePois.map((poi) => poi.id).filter(Boolean));
+        const originalPois = Array.isArray(original.pois) ? original.pois : [];
+        const originalAlternativePois = Array.isArray(original.alternative_pois)
+          ? original.alternative_pois
+          : [];
+        const inactiveOriginalPois = originalPois.filter(
+          (poi) => !poi.id || !activeIds.has(poi.id)
+        );
+        const inactiveAlternativePois = originalAlternativePois.filter(
+          (poi) => !poi.id || !activeIds.has(poi.id)
+        );
+        const pois = [...activePois, ...inactiveOriginalPois];
+        const segments = days.flatMap((day) => day.segments || []);
+        return {
+          ...original,
+          days,
+          pois,
+          alternative_pois: inactiveAlternativePois,
+          segments,
+          source_summary: {
+            ...(original.source_summary || {}),
+            edited_by_user: true,
+          },
+        };
+      }
+
+      async function saveEditedJourneyDraft(workbench, dayPlans) {
+        if (!state.user || !state.currentConversationId || !workbench) return;
+        const journeyData = buildJourneyDataFromEditedPlans(workbench, dayPlans);
+        if (!journeyData) return;
+        workbench.dataset.journeyData = serializeMapPayload(journeyData);
+        try {
+          const { response } = await journeyApi.saveJourneyDraft({
+            apiBase: getApiBase(),
+            stateToken: state.token,
+            conversationId: state.currentConversationId,
+            journeyData,
+          });
+          if (!response.ok) throw new Error(`journey-save-${response.status}`);
+          showToast("路线草案已保存");
+        } catch (error) {
+          console.error(error);
+          showToast("路线已本地更新，保存到会话失败", true);
+        }
+      }
+
+      function runWhenBrowserIdle(callback, timeout = 1200) {
+        if (typeof window.requestIdleCallback === "function") {
+          window.requestIdleCallback(callback, { timeout });
+          return;
+        }
+        window.setTimeout(callback, timeout);
+      }
+
+      function enableIntroSecondaryImages() {
+        document.body.classList.add("intro-secondary-images-ready");
+      }
+
+      function scheduleIntroSecondaryImages() {
+        const loadSecondaryImages = () =>
+          runWhenBrowserIdle(enableIntroSecondaryImages, 1600);
+        if (document.readyState === "complete") {
+          loadSecondaryImages();
+          return;
+        }
+        window.addEventListener("load", loadSecondaryImages, { once: true });
+      }
+
+      function enableAuthHeroImages() {
+        document.body.classList.add("auth-hero-images-ready");
+      }
+
+      function showIntroOverlay() {
+        const intro = document.getElementById("introOverlay");
+        if (!intro) return;
+        intro.classList.remove("hidden");
+        document.body.classList.add("intro-active");
+      }
+
+      function hideIntroOverlay() {
+        const intro = document.getElementById("introOverlay");
+        if (!intro) return;
+        intro.classList.add("hidden");
+        document.body.classList.remove("intro-active");
+      }
+
+      function enterAuthPortal() {
+        hideIntroOverlay();
+        showAuthOverlay();
+        requestAnimationFrame(() => {
+          document.getElementById("username")?.focus();
+        });
+      }
+
+      function handleIntroKeydown(event) {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          enterAuthPortal();
+        }
+      }
+
+      function setMobileChatFocus(enabled) {
+        const shouldFocus = Boolean(enabled && isMobileViewport() && state.user);
+        state.mobileChatFocus = shouldFocus;
+        document.body.classList.toggle("mobile-chat-focus", shouldFocus);
+      }
+
+      function exitMobileChatFocus() {
+        setMobileChatFocus(false);
+      }
+
+      function validateAuthForm(isRegister) {
+        clearAuthErrors();
+        const username = document.getElementById("username").value.trim();
+        const email = document.getElementById("email").value.trim();
+        const password = document.getElementById("password").value;
+        let firstInvalidField = null;
+
+        if (username.length < 2) {
+          setFieldError("username", "用户名至少需要 2 个字符。");
+          firstInvalidField ||= "username";
+        }
+
+        if (password.length < 6) {
+          setFieldError("password", "密码至少需要 6 位。");
+          firstInvalidField ||= "password";
+        }
+
+        if (isRegister) {
+          if (!email) {
+            setFieldError("email", "注册时需要填写邮箱。");
+            firstInvalidField ||= "email";
+          } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+            setFieldError("email", "邮箱格式看起来不正确，请再检查一下。");
+            firstInvalidField ||= "email";
+          }
+        }
+
+        if (firstInvalidField) {
+          document.getElementById(firstInvalidField)?.focus();
+          setAuthFeedback("请先补全表单信息，再继续操作。", "error");
+          return null;
+        }
+
+        return {
+          username,
+          email,
+          password,
+        };
+      }
+
+      function isServiceUsable() {
+        return state.serviceStatus === "ready" || state.serviceStatus === "degraded";
+      }
+
+      function getStatusLabel(status = "") {
+        const labels = {
+          ready: "就绪",
+          degraded: "降级可用",
+          not_ready: "未就绪",
+          checking: "检查中",
+          error: "连接失败",
+          idle: "待开始",
+          ok: "正常",
+          pending: "待确认",
+          approved: "已批准",
+          rejected: "已拒绝",
+          expired: "已过期",
+          failed: "失败",
+          none: "记录",
+          completed: "已完成",
+          running: "运行中",
+          success: "成功",
+          needs_verification: "需核验",
+          not_found: "未查到",
+          insufficient_parameters: "参数不足",
+          service_exception: "服务异常",
+          skipped: "已跳过",
+          pending_confirmation: "待确认",
+          requirement_collection: "需求收集",
+          destination_recommendation: "目的地推荐",
+          transport_planning: "交通规划",
+          accommodation_planning: "住宿规划",
+          food_planning: "餐饮规划",
+          itinerary_generation: "行程生成",
+          budget_summarization: "预算汇总",
+          order_generation: "报告生成",
+          intent_split: "意图分流",
+          agency_requirement: "基础需求",
+          agency_product_match: "匹配方案",
+          agency_plan_draft: "方案草案",
+          agency_feedback: "方案确认",
+          agency_report: "报告生成",
+          free_planning: "个性化旅游规划",
+          agency_plan: "省心方案",
+          unknown: "待确认",
+        };
+        return labels[status] || status || "待确认";
+      }
+
+      const governanceTools = window.ZhiXingGovernanceTools?.createGovernanceTools?.({
+        getStatusLabel,
+      });
+      if (!governanceTools) {
+        throw new Error("ZhiXingGovernanceTools is not loaded.");
+      }
+      const {
+        redactClientText,
+        normalizeToolAuditEvent,
+      } = governanceTools;
+      const governanceProgress = window.ZhiXingGovernanceProgress?.createGovernanceProgress?.({
+        parseJourneyChineseDayNumber,
+        extractJourneyCityPair,
+        getStatusLabel,
+        redactClientText,
+      });
+      if (!governanceProgress) {
+        throw new Error("ZhiXingGovernanceProgress is not loaded.");
+      }
+      const {
+        mergeGovernanceProgressSnapshots,
+        parseOptimisticTripFactsFromText,
+        progressSnapshotFromFastSplit,
+        progressSnapshotFromReportData,
+        progressSnapshotFromObservability,
+        normalizeTurnObservability,
+      } = governanceProgress;
+      const governanceRenderer = window.ZhiXingGovernanceRenderer?.createGovernanceRenderer?.({
+        escapeHtml,
+        redactClientText,
+        getStatusLabel,
+        formatEpochSeconds,
+      });
+      if (!governanceRenderer) {
+        throw new Error("ZhiXingGovernanceRenderer is not loaded.");
+      }
+      const {
+        renderReadinessServiceGrid,
+        renderToolAuditListHtml,
+        renderTurnObservabilityGridHtml,
+        renderApprovalListHtml,
+        renderApprovalEventList,
+      } = governanceRenderer;
+      chatRunner = chatRunnerFactory?.createChatRunner?.({
+        document,
+        state,
+        ensureServiceReady: (...args) => ensureServiceReady(...args),
+        createNewConversation: (...args) => createNewConversation(...args),
+        maybeAutoNameCurrentConversation: (...args) =>
+          maybeAutoNameCurrentConversation(...args),
+        setSendButtonLoading: (...args) => setSendButtonLoading(...args),
+        setRuntimeStatus: (...args) => setRuntimeStatus(...args),
+        addMessage: (...args) => addMessage(...args),
+        parseOptimisticTripFactsFromText,
+        getGovernanceProgressSnapshot: (...args) =>
+          getGovernanceProgressSnapshot(...args),
+        rememberProgressSnapshot: (...args) => rememberProgressSnapshot(...args),
+        progressSnapshotFromFastSplit,
+        renderReadinessPanel: (...args) => renderReadinessPanel(...args),
+        persistComposerDraft: (...args) => persistComposerDraft(...args),
+        addLoading: (...args) => addLoading(...args),
+        createAssistantThinkingFilter,
+        updateLoadingCopy: (...args) => updateLoadingCopy(...args),
+        conversationApi,
+        getApiBase: (...args) => getApiBase(...args),
+        processSseBuffer,
+        convertLoadingToAssistant: (...args) => convertLoadingToAssistant(...args),
+        updateMessage: (...args) => updateMessage(...args),
+        rememberToolAuditEvent: (...args) => rememberToolAuditEvent(...args),
+        rememberTurnObservability: (...args) => rememberTurnObservability(...args),
+        removeMessage: (...args) => removeMessage(...args),
+        buildStreamingFallbackMessage,
+        TextDecoder:
+          window.TextDecoder ||
+          (typeof TextDecoder !== "undefined" ? TextDecoder : null),
+        Date,
+        setTimeout: (...args) => window.setTimeout(...args),
+        clearTimeout: (...args) => window.clearTimeout(...args),
+        requestAnimationFrame: (...args) => window.requestAnimationFrame(...args),
+        cancelAnimationFrame: (...args) => window.cancelAnimationFrame(...args),
+      });
+      if (!chatRunner) {
+        throw new Error("ZhiXingChatRunner is not loaded.");
+      }
+
+      function getReadinessStatusCopy(status = "") {
+        if (status === "ready") return "对话、报告和行程进度都可演示。";
+        if (status === "degraded") return "核心规划可继续，部分外部查询可能需要稍后复查。";
+        if (status === "not_ready") return "关键能力尚未就绪，暂不开放登录、聊天或确认动作。";
+        if (status === "error") return "暂时无法连接服务，需要稍后重试。";
+        return "正在确认当前可用能力。";
+      }
+
+      function formatEpochSeconds(value) {
+        if (value === null || value === undefined || value === "") return "未设置";
+        const numeric = Number(value);
+        if (!Number.isFinite(numeric)) return String(value);
+        return formatClock(new Date(numeric * 1000));
+      }
+
+      function setPillStatus(el, status, fallbackText = "") {
+        if (!el) return;
+        el.textContent = fallbackText || getStatusLabel(status);
+        el.className = `governance-status-pill ${status || "idle"}`.trim();
+      }
+
+      const READINESS_ITEM_LABELS = {
+        checkpointer: "会话进度",
+        store: "长期偏好",
+        mcp: "外部查询",
+        session_lock: "会话保护",
+        approval_governance: "下单保护",
+        postgres: "业务数据",
+        redis: "会话保护",
+      };
+
+      function normalizeReadinessStatus(service = {}) {
+        const rawStatus = String(service.status || (service.ready ? "ready" : "checking"));
+        if (rawStatus === "healthy" || rawStatus === "ok") return "ready";
+        if (rawStatus === "unavailable" || rawStatus === "missing") return "not_ready";
+        if (rawStatus === "error") return "not_ready";
+        return rawStatus || "checking";
+      }
+
+      function combineReadinessStatuses(statuses = []) {
+        if (statuses.some((status) => status === "not_ready")) return "not_ready";
+        if (statuses.some((status) => status === "degraded")) return "degraded";
+        if (statuses.length && statuses.every((status) => status === "ready")) return "ready";
+        return "checking";
+      }
+
+      function formatReadinessName(name = "") {
+        return READINESS_ITEM_LABELS[name] || String(name || "待确认能力");
+      }
+
+      function summarizeReadinessServices(services = {}) {
+        const checkpointerStatus = normalizeReadinessStatus(services.checkpointer);
+        const storeStatus = normalizeReadinessStatus(services.store);
+        const mcpStatus = normalizeReadinessStatus(services.mcp);
+        const sessionLockStatus = normalizeReadinessStatus(services.session_lock);
+        const approvalStatus = normalizeReadinessStatus(services.approval_governance);
+        const coreStatus = combineReadinessStatuses([checkpointerStatus, storeStatus]);
+        const protectionStatus = combineReadinessStatuses([sessionLockStatus, approvalStatus]);
+        return [
+          {
+            key: "core",
+            label: "对话与报告",
+            status: coreStatus,
+            description: "对话续接、阶段进度、报告生成",
+          },
+          {
+            key: "memory",
+            label: "长期偏好",
+            status: storeStatus,
+            description: "用户偏好可用于后续建议",
+          },
+          {
+            key: "external",
+            label: "外部服务",
+            status: mcpStatus,
+            description: "天气、地图、交通、酒店等查询能力",
+          },
+          {
+            key: "human_boundary",
+            label: "下单保护",
+            status: protectionStatus,
+            description: "当前只记录边界，不会真实支付或下单",
+          },
+        ];
+      }
+
+      function readinessSummaryLines(data = {}, status = "") {
+        const services = data.services || {};
+        const items = summarizeReadinessServices(services);
+        const available = items
+          .filter((item) => item.status === "ready" || item.status === "degraded")
+          .map((item) => item.label);
+        const mcpStatus = normalizeReadinessStatus(services.mcp);
+        const approval = services.approval_governance || {};
+        const approvalReady = normalizeReadinessStatus(approval) === "ready";
+        const missing = Array.isArray(data.missing_required)
+          ? data.missing_required.map(formatReadinessName)
+          : [];
+        const degraded = Array.isArray(data.degraded_optional)
+          ? data.degraded_optional.map(formatReadinessName)
+          : [];
+        const attention = [
+          ...missing.map((item) => `${item}未就绪`),
+          ...degraded.map((item) => `${item}需复查`),
+          ...(data.startup_complete === false ? ["服务仍在启动中"] : []),
+        ];
+        const turn = state.governance?.turnObservability || {};
+        const progress = getGovernanceProgressSnapshot();
+        const planningModeValue =
+          progress.planning_mode ||
+          turn.planningMode ||
+          turn.planning_mode ||
+          "pending_confirmation";
+        const planningMode = getStatusLabel(planningModeValue);
+        const factItems = Array.isArray(progress.confirmed_facts)
+          ? progress.confirmed_facts
+              .map((item) => {
+                const label = item?.label || item?.key || "";
+                const value = item?.value;
+                if (!label || value === undefined || value === null || value === "") return "";
+                return `${label}：${value}`;
+              })
+              .filter(Boolean)
+          : [];
+        const preferenceItems = Array.isArray(progress.long_term_preferences)
+          ? progress.long_term_preferences
+              .map((item) => (typeof item === "string" ? item : item?.label || item?.value || ""))
+              .filter(Boolean)
+          : [];
+        const currentPreferenceItems = Array.isArray(progress.current_trip_preferences)
+          ? progress.current_trip_preferences
+              .map((item) => (typeof item === "string" ? item : item?.label || item?.value || ""))
+              .filter(Boolean)
+          : [];
+        const preferenceCopy = preferenceItems.length
+          ? `长期：${preferenceItems.slice(0, 4).join("、")}`
+          : currentPreferenceItems.length
+            ? `本次：${currentPreferenceItems.slice(0, 5).join("、")}`
+            : available.includes("长期偏好")
+              ? "本次偏好待继续沉淀"
+              : "登录后逐步沉淀";
+        return [
+          `<span>方案类型：${escapeHtml(planningMode)}</span>`,
+          `<span>已确认信息：${escapeHtml(
+            factItems.length
+              ? factItems.slice(0, 6).join("；")
+              : "待你补充出发地、时间、人数和预算"
+          )}</span>`,
+          `<span>偏好记录：${escapeHtml(preferenceCopy)}</span>`,
+          `<span>外部服务：${escapeHtml(
+            mcpStatus === "ready"
+              ? "天气、地图、交通、酒店等查询可用"
+              : mcpStatus === "degraded"
+                ? "部分查询能力不稳定，结果会提示核验"
+                : mcpStatus === "not_ready"
+                  ? "暂不可用，可先生成草案"
+                  : "正在检测"
+          )}</span>`,
+          `<span>重要提醒：${escapeHtml(
+            approvalReady
+              ? approval.persistent
+                ? "当前不会自动支付、发短信或下单"
+                : "当前不会自动支付、发短信或下单"
+              : "当前不会自动支付、发短信或下单"
+          )}</span>`,
+          `<span>待关注：${escapeHtml(attention.length ? attention.join("、") : "无")}</span>`,
+        ];
+      }
+
+      function readinessCurrentStageLabel() {
+        const turn = state.governance?.turnObservability || {};
+        const progress = getGovernanceProgressSnapshot();
+        const planningMode =
+          progress.planning_mode ||
+          turn.planningMode ||
+          turn.planning_mode ||
+          "pending_confirmation";
+        const agencyStep = progress.agency_step || turn.agency_step || "";
+        const step = turn.step || "requirement_collection";
+        if (planningMode === "pending_confirmation") {
+          return getStatusLabel("intent_split");
+        }
+        if (planningMode === "agency_plan") {
+          return getStatusLabel(agencyStep || step || "agency_requirement");
+        }
+        return (
+          state.governance?.turnObservability?.stepLabel ||
+          getStatusLabel(step)
+        );
+      }
+
+      function renderReadinessPanel(payload = null) {
+        const data = payload || state.readiness.payload || {};
+        const status = data.status || state.readiness.status || "checking";
+        const statusPill = document.getElementById("readinessStatusPill");
+        const title = document.getElementById("readinessTitle");
+        const summary = document.getElementById("readinessSummary");
+        const grid = document.getElementById("readinessServiceGrid");
+
+        setPillStatus(statusPill, status, getStatusLabel(status));
+
+        if (title) {
+          title.textContent = `当前阶段：${readinessCurrentStageLabel()}`;
+        }
+
+        if (summary) {
+          summary.innerHTML = readinessSummaryLines(data, status).join("");
+        }
+
+        if (grid) {
+          grid.innerHTML = renderReadinessServiceGrid(
+            summarizeReadinessServices(data.services || {})
+          );
+        }
+        syncGovernanceDebugVisibility();
+      }
+
+      function getCurrentUserRole() {
+        return (
+          state.user?.role ||
+          state.user?.preferences?.role ||
+          state.user?.profile?.role ||
+          "user"
+        );
+      }
+
+      function canShowAdvisorDebug() {
+        return ["advisor", "approver", "admin", "debug"].includes(getCurrentUserRole());
+      }
+
+      function syncGovernanceDebugVisibility() {
+        const details = document.getElementById("governanceDetails");
+        if (!details) return;
+        const visible = canShowAdvisorDebug();
+        details.hidden = !visible;
+        if (!visible) {
+          details.open = false;
+        }
+      }
+
+      function canRequestAllApprovals() {
+        return ["approver", "admin"].includes(getCurrentUserRole());
+      }
+
+      function syncAdminPortalVisibility() {
+        const link = document.getElementById("adminPortalLink");
+        if (!link) return;
+        link.hidden = !canRequestAllApprovals();
+      }
+
+      function rememberToolAuditEvent(event = {}) {
+        const normalized = normalizeToolAuditEvent(event);
+        const key = [
+          normalized.tool,
+          normalized.status,
+          normalized.evidenceType,
+          normalized.errorType,
+        ].join("|");
+        const existingIndex = state.governance.toolAuditEvents.findIndex(
+          (item) => [item.tool, item.status, item.evidenceType, item.errorType].join("|") === key
+        );
+        if (existingIndex >= 0) {
+          state.governance.toolAuditEvents[existingIndex] = normalized;
+        } else {
+          state.governance.toolAuditEvents.unshift(normalized);
+        }
+        state.governance.toolAuditEvents = state.governance.toolAuditEvents.slice(0, 20);
+        renderToolAuditList();
+      }
+
+      function getGovernanceProgressSnapshot() {
+        return (
+          state.governance?.progressSnapshot ||
+          state.governance?.turnObservability?.progressSnapshot ||
+          state.governance?.turnObservability?.progress_snapshot ||
+          {}
+        );
+      }
+
+      function rememberProgressSnapshot(snapshot = {}) {
+        if (!snapshot || typeof snapshot !== "object" || !Object.keys(snapshot).length) return;
+        state.governance.progressSnapshot = mergeGovernanceProgressSnapshots(
+          state.governance.progressSnapshot || {},
+          snapshot
+        );
+      }
+
+      function rememberTurnObservability(event = {}) {
+        if (!event || typeof event !== "object") return;
+        rememberProgressSnapshot(progressSnapshotFromObservability(event));
+        const mergedProgress = getGovernanceProgressSnapshot();
+        const normalized = normalizeTurnObservability(event, mergedProgress);
+        if (!normalized) return;
+        state.governance.turnObservability = normalized;
+        renderReadinessPanel();
+        renderTurnObservability();
+      }
+
+      function renderToolAuditList() {
+        const count = document.getElementById("toolAuditCount");
+        const list = document.getElementById("toolAuditList");
+        const events = state.governance.toolAuditEvents;
+        if (count) count.textContent = String(events.length);
+        if (!list) return;
+        list.innerHTML = renderToolAuditListHtml(events);
+      }
+
+      function renderTurnObservability() {
+        const grid = document.getElementById("turnObservabilityGrid");
+        const pill = document.getElementById("turnStatusPill");
+        const item = state.governance.turnObservability;
+        if (!grid) return;
+        if (!item) {
+          setPillStatus(pill, "idle", "待开始");
+          grid.innerHTML = renderTurnObservabilityGridHtml(null);
+          return;
+        }
+        setPillStatus(pill, item.degradationStatus, item.degradationLabel);
+        grid.innerHTML = renderTurnObservabilityGridHtml(item);
+      }
+
+      function renderApprovalList() {
+        const list = document.getElementById("approvalList");
+        if (!list) return;
+        const filter = state.governance.approvalFilter;
+        const approvals = state.governance.approvals.filter((approval) =>
+          filter === "pending" ? approval.status === "pending" : true
+        );
+        document.querySelectorAll(".approval-filter-btn").forEach((btn) => {
+          btn.classList.toggle("active", btn.dataset.approvalFilter === filter);
+        });
+
+        list.innerHTML = renderApprovalListHtml({
+          approvals,
+          filter,
+          selectedApprovalId: state.governance.selectedApprovalId,
+          userPresent: Boolean(state.user),
+          loading: state.governance.isApprovalLoading,
+        });
+      }
+
+      function renderApprovalEvents() {
+        const list = document.getElementById("approvalEventsList");
+        if (!list) return;
+        const events = state.governance.approvalEvents || [];
+        const rendered = renderApprovalEventList({
+          selectedApprovalId: state.governance.selectedApprovalId,
+          events,
+        });
+        list.className = rendered.className;
+        list.innerHTML = rendered.html;
+      }
+
+      async function loadApprovalEvents(approvalId) {
+        if (!approvalId || !state.user || !isServiceUsable()) {
+          state.governance.approvalEvents = [];
+          renderApprovalEvents();
+          return;
+        }
+        try {
+          const { response, data } = await governanceApi.fetchApprovalEvents({
+            apiBase: getApiBase(),
+            stateToken: state.token,
+            approvalId,
+          });
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          state.governance.approvalEvents = Array.isArray(data.events)
+            ? data.events
+            : [];
+        } catch (error) {
+          state.governance.approvalEvents = [];
+          showToast("人工确认事件同步失败", true);
+        }
+        renderApprovalEvents();
+      }
+
+      async function loadApprovals({ silent = true } = {}) {
+        if (!state.user || !isServiceUsable()) {
+          state.governance.approvals = [];
+          state.governance.approvalEvents = [];
+          renderApprovalList();
+          renderApprovalEvents();
+          return;
+        }
+        state.governance.isApprovalLoading = true;
+        syncUiAvailability();
+        renderApprovalList();
+        const params = new URLSearchParams();
+        try {
+          const { response, data } = await governanceApi.fetchApprovals({
+            apiBase: getApiBase(),
+            stateToken: state.token,
+            filter: state.governance.approvalFilter,
+            canRequestAll: canRequestAllApprovals(),
+          });
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          state.governance.approvals = Array.isArray(data.approvals)
+            ? data.approvals
+            : [];
+          if (
+            state.governance.selectedApprovalId &&
+            !state.governance.approvals.some(
+              (approval) => approval.approval_id === state.governance.selectedApprovalId
+            )
+          ) {
+            state.governance.selectedApprovalId = null;
+          }
+          state.governance.selectedApprovalId ||=
+            state.governance.approvals[0]?.approval_id || null;
+          if (!silent) showToast("进度台已刷新");
+        } catch (error) {
+          state.governance.approvals = [];
+          state.governance.selectedApprovalId = null;
+          if (!silent) showToast("人工确认记录同步失败", true);
+        } finally {
+          state.governance.isApprovalLoading = false;
+          syncUiAvailability();
+          renderApprovalList();
+          await loadApprovalEvents(state.governance.selectedApprovalId);
+        }
+      }
+
+      async function refreshGovernanceConsole(options = {}) {
+        const silent = Boolean(options?.silent);
+        await checkServiceHealth({ silent, reason: "governance-refresh" });
+        renderToolAuditList();
+        renderTurnObservability();
+        await loadApprovals({ silent });
+      }
+
+      async function setApprovalFilter(filter = "all") {
+        state.governance.approvalFilter = filter === "pending" ? "pending" : "all";
+        await loadApprovals({ silent: true });
+      }
+
+      async function selectApprovalRecord(approvalId) {
+        state.governance.selectedApprovalId = approvalId;
+        renderApprovalList();
+        await loadApprovalEvents(approvalId);
+      }
+
+      async function createDemoApproval() {
+        if (!(await ensureServiceReady("创建人工确认记录"))) return;
+        if (!state.user) {
+          showToast("请先登录后再创建人工确认记录。", true);
+          return;
+        }
+        state.governance.isApprovalLoading = true;
+        syncUiAvailability();
+        try {
+          const { response, data } = await governanceApi.createDemoApproval({
+            apiBase: getApiBase(),
+            stateToken: state.token,
+            conversationId: state.currentConversationId,
+          });
+          if (!response.ok) {
+            throw new Error(data?.detail?.message || `HTTP ${response.status}`);
+          }
+          state.governance.selectedApprovalId = data.approval_id;
+          showToast("人工确认演示记录已创建，不会触发真实支付或下单。");
+          await loadApprovals({ silent: true });
+        } catch (error) {
+          showToast("演示记录创建失败，请确认人工确认记录服务可用。", true);
+        } finally {
+          state.governance.isApprovalLoading = false;
+          syncUiAvailability();
+        }
+      }
+
+      async function decideApproval(approvalId, decision, event) {
+        event?.stopPropagation();
+        if (!(await ensureServiceReady("处理人工确认"))) return;
+        if (!approvalId || !["approve", "reject", "expire"].includes(decision)) return;
+        const decisionPath =
+          decision === "approve" ? "approve" : decision === "reject" ? "reject" : "expire";
+        const decisionCopy = {
+          approve: "人工批准：确认当前仍不触发真实支付或预订。",
+          reject: "人工拒绝：真实供应链未接入。",
+          expire: "",
+        };
+        try {
+          const { response, data } = await governanceApi.submitApprovalDecision({
+            apiBase: getApiBase(),
+            stateToken: state.token,
+            approvalId,
+            decisionPath,
+            reason: decision === "expire" ? "" : decisionCopy[decision],
+          });
+          if (!response.ok) {
+            const message =
+              data?.detail?.message ||
+              data?.detail ||
+              "当前账号没有处理权限，或人工确认记录状态已变化。";
+            throw new Error(redactClientText(message));
+          }
+          state.governance.selectedApprovalId = data.approval_id || approvalId;
+          showToast(`人工确认记录已${decision === "approve" ? "批准" : decision === "reject" ? "拒绝" : "过期"}`);
+          await loadApprovals({ silent: true });
+        } catch (error) {
+          showToast(error.message || "人工确认处理失败", true);
+        }
+      }
+
+      function syncUiAvailability() {
+        const healthy = isServiceUsable();
+        const input = document.getElementById("chatInput");
+        const sendBtn = document.getElementById("sendBtn");
+        const authBtn = document.getElementById("authBtn");
+        const newChatBtn = document.getElementById("newChatBtn");
+        const retryBtn = document.getElementById("retryHealthBtn");
+        const governanceRefreshBtn = document.getElementById("governanceRefreshBtn");
+        const createDemoApprovalBtn = document.getElementById("createDemoApprovalBtn");
+        const inputWrapper = document.querySelector(".chat-input-wrapper");
+
+        if (input) {
+          input.disabled = !healthy || state.isLoading;
+        }
+        if (inputWrapper) {
+          inputWrapper.classList.toggle(
+            "disabled",
+            !healthy || state.isLoading
+          );
+        }
+        if (sendBtn) {
+          sendBtn.disabled = !healthy || state.isLoading;
+        }
+        if (newChatBtn) {
+          newChatBtn.disabled = !healthy;
+        }
+        if (authBtn) {
+          authBtn.disabled = state.isAuthLoading || !healthy;
+        }
+        if (retryBtn) {
+          retryBtn.disabled = state.serviceStatus === "checking";
+        }
+        if (governanceRefreshBtn) {
+          governanceRefreshBtn.disabled = state.serviceStatus === "checking";
+        }
+        if (createDemoApprovalBtn) {
+          createDemoApprovalBtn.disabled =
+            !healthy || !state.user || state.governance.isApprovalLoading;
+        }
+        document.querySelectorAll("[data-planner-control='true']").forEach((el) => {
+          el.disabled = !healthy;
+        });
+        syncAdminPortalVisibility();
+        updateEndpointUI();
+      }
+
+      async function checkServiceHealth({
+        silent = false,
+        reason = "startup",
+      } = {}) {
+        if (state.serviceStatus === "checking") {
+          syncUiAvailability();
+        }
+
+        if (!silent) {
+          setRuntimeStatus("正在连接服务", "loading");
+          updateEndpointTone("warning");
+          setAuthServiceHint("正在检查服务状态，确认就绪后即可登录或注册。", "loading");
+          setServiceBanner({
+            visible: true,
+            tone: "loading",
+            title: "正在检查服务状态",
+            text:
+              reason === "startup"
+                ? "页面正在确认后端和工具链是否就绪，请稍候。"
+                : "正在重新连接服务，请稍候。",
+            meta: "正在检测中",
+          });
+        }
+
+        state.serviceStatus = "checking";
+        syncUiAvailability();
+
+        try {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 8000);
+          const { response, data } = await governanceApi.fetchReadiness({
+            apiBase: getApiBase(),
+            signal: controller.signal,
+          });
+          clearTimeout(timeoutId);
+          if (!data?.status) {
+            throw new Error(`HTTP ${response.status}`);
+          }
+
+          state.readiness = {
+            status: data.status,
+            payload: data,
+            checkedAt: Date.now(),
+          };
+          renderReadinessPanel(data);
+
+          if (data.status === "ready" && data.startup_complete) {
+            state.serviceStatus = "ready";
+            state.lastHealthCheckAt = Date.now();
+          setRuntimeStatus(state.user ? "已连接" : "服务就绪", "online");
+            updateEndpointTone("idle");
+            setAuthServiceHint(
+              "服务已就绪，可以登录、创建会话并开始规划行程。",
+              "online"
+            );
+            setServiceBanner({
+              visible: false,
+              tone: "success",
+              title: "",
+              text: "",
+              meta: "",
+            });
+            syncUiAvailability();
+            return true;
+          }
+
+          if (data.status === "degraded" && data.startup_complete) {
+            state.serviceStatus = "degraded";
+            state.lastHealthCheckAt = Date.now();
+          setRuntimeStatus(state.user ? "已连接 · 降级" : "服务降级可用", "online");
+            updateEndpointTone("warning");
+            setAuthServiceHint(
+              "核心服务可用，但部分外部能力降级；聊天、人工确认和报告边界仍可继续查看。",
+              "online"
+            );
+            setServiceBanner({
+              visible: true,
+              tone: "loading",
+              title: "服务降级可用",
+              text: getReadinessStatusCopy("degraded"),
+              meta: `检查时间：${formatClock(new Date())}`,
+            });
+            syncUiAvailability();
+            return true;
+          }
+
+          state.serviceStatus = "not_ready";
+          state.lastHealthCheckAt = Date.now();
+          setRuntimeStatus("服务未就绪", "error");
+          updateEndpointTone("error");
+          setAuthServiceHint(
+            "后端关键能力尚未就绪，暂时不能登录、聊天或处理人工确认。",
+            "error"
+          );
+          setServiceBanner({
+            visible: true,
+            tone: "error",
+            title: "服务尚未就绪",
+            text: getReadinessStatusCopy("not_ready"),
+            meta: `检查时间：${formatClock(new Date())}`,
+          });
+          syncUiAvailability();
+          return false;
+        } catch (error) {
+          state.serviceStatus = "error";
+          state.readiness = {
+            status: "error",
+            payload: null,
+            checkedAt: Date.now(),
+          };
+          renderReadinessPanel({ status: "error", services: {} });
+          setRuntimeStatus("服务暂不可用", "error");
+          updateEndpointTone("error");
+          setAuthServiceHint(
+            "当前无法连接后端服务，请稍后重试或点击“重新检查”。",
+            "error"
+          );
+          setServiceBanner({
+            visible: true,
+            tone: "error",
+            title: "服务连接出现波动",
+            text:
+              "当前无法确认后端是否就绪。你可以稍后重试，或点击右侧按钮重新检查。",
+            meta:
+              state.lastHealthCheckAt > 0
+                ? `上次成功检查：${formatClock(
+                    new Date(state.lastHealthCheckAt)
+                  )}`
+                : "尚未完成首次健康检查",
+          });
+          syncUiAvailability();
+          if (!silent) {
+            showToast("服务暂时不可用，请稍后重试。", true);
+          }
+          return false;
+        }
+      }
+
+      async function ensureServiceReady(actionLabel = "继续操作") {
+        if (isServiceUsable()) return true;
+        const ok = await checkServiceHealth({ silent: false, reason: actionLabel });
+        if (!ok) {
+          showToast(`服务尚未就绪，暂时无法${actionLabel}。`, true);
+        }
+        return ok;
+      }
+
+      async function retryHealthCheck() {
+        await checkServiceHealth({ silent: false, reason: "manual-retry" });
+      }
+
+      function updateSessionOverview() {
+        const current = getCurrentConversation();
+        const conversationCountChip = document.getElementById(
+          "conversationCountChip"
+        );
+        const activeConversationChip = document.getElementById(
+          "activeConversationChip"
+        );
+        const chatTitle = document.getElementById("chatTitle");
+        const chatSubtitle = document.getElementById("chatSubtitle");
+        const tripOverview = document.getElementById("tripOverview");
+        const total = state.conversations.length;
+
+        if (conversationCountChip) {
+          conversationCountChip.innerHTML = `<i class="fa-regular fa-folder-open"></i> ${total} 个行程`;
+        }
+
+        if (activeConversationChip) {
+          activeConversationChip.innerHTML = current
+            ? `<i class="fa-solid fa-location-arrow"></i> ${escapeHtml(
+                current.title || "当前会话"
+              )}`
+            : '<i class="fa-regular fa-compass"></i> 未选择行程';
+        }
+
+        if (chatTitle) {
+          chatTitle.classList.toggle("renameable", Boolean(current));
+          chatTitle.title = current ? "双击可修改行程名称" : "行程助手";
+        }
+
+        if (chatSubtitle) {
+          chatSubtitle.textContent = current
+            ? `当前会话最近更新于 ${formatConversationStamp(
+                current.updated_at || current.created_at
+              )}`
+            : "把出发地、时间、人数和预算告诉我，我会按步骤整理成一份旅游规划报告。";
+        }
+
+        if (tripOverview) {
+          tripOverview.innerHTML = current
+            ? `
+                <span class="overview-chip primary">
+                  <i class="fa-solid fa-route"></i> ${escapeHtml(
+                    current.title || "新行程"
+                  )}
+                </span>
+                <span class="overview-chip">
+                  <i class="fa-regular fa-clock"></i> ${formatRelativeTime(
+                    current.updated_at || current.created_at
+                  )}
+                </span>
+              `
+            : `
+                <span class="overview-chip primary">
+                  <i class="fa-solid fa-route"></i> 未选择行程
+                </span>
+                <span class="overview-chip">
+                  <i class="fa-regular fa-pen-to-square"></i> 随时可以开始
+                </span>
+              `;
+        }
+      }
+
+      function updateEndpointUI() {
+        const endpoint = getApiBase();
+        const endpointHint = document.getElementById("endpointHint");
+        const composerHint = document.getElementById("composerHint");
+        const apiConfig = document.querySelector(".api-config");
+
+        if (apiConfig) {
+          apiConfig.classList.toggle("hidden", !shouldShowApiConfig());
+        }
+
+        if (endpointHint) {
+          const hostLabel =
+            window.location.protocol === "file:"
+              ? "本地调试模式"
+              : "当前站点";
+          endpointHint.innerHTML = `<i class="fa-solid fa-globe"></i> ${hostLabel}: ${escapeHtml(
+            endpoint
+          )}`;
+        }
+
+        if (composerHint) {
+          if (state.serviceStatus === "error") {
+            composerHint.textContent =
+              "服务暂不可用，建议先点击“重新检查”确认后再继续操作";
+          } else if (state.serviceStatus === "not_ready") {
+            composerHint.textContent =
+              "服务尚未就绪，请等待后端核心依赖完成初始化";
+          } else if (state.serviceStatus === "degraded") {
+            composerHint.textContent =
+              "部分能力降级，可继续使用核心规划并留意右侧进度提示";
+          } else if (state.serviceStatus === "checking") {
+            composerHint.textContent =
+              "正在检测服务状态，确认就绪后会自动开放发送和新建会话";
+          } else {
+            composerHint.textContent = shouldShowApiConfig()
+              ? `当前接口地址：${endpoint}`
+              : "部署环境已自动使用当前域名，无需手动配置接口地址";
+          }
+        }
+      }
+
+      function setSendButtonLoading(isLoading) {
+        const sendBtn = document.getElementById("sendBtn");
+        if (!sendBtn) return;
+        sendBtn.classList.toggle("loading", isLoading);
+        sendBtn.innerHTML = isLoading
+          ? '<i class="fa-solid fa-spinner"></i>'
+          : '<i class="fa-regular fa-paper-plane"></i>';
+        syncUiAvailability();
+      }
+
+      function isDefaultConversationTitle(title = "") {
+        const normalized = (title || "").trim();
+        return !normalized || normalized === DEFAULT_CONVERSATION_TITLE;
+      }
+
+      async function updateConversationTitle(id, title, options = {}) {
+        const nextTitle = (title || "").trim();
+        if (!id || !nextTitle) return false;
+        const { response, data } = await conversationApi.updateConversation({
+          apiBase: getApiBase(),
+          stateToken: state.token,
+          id,
+          payload: { title: nextTitle },
+        });
+        if (!response.ok) {
+          throw new Error(`conversation-title-${response.status}`);
+        }
+        const current = state.conversations.find((conv) => conv.id === id);
+        if (current) current.title = data.title || nextTitle;
+        if (state.editingConversationId === id) {
+          state.editingConversationId = null;
+        }
+        if (state.currentConversationId === id) {
+          const chatTitle = document.getElementById("chatTitle");
+          if (chatTitle) {
+            chatTitle.classList.remove("editing");
+            chatTitle.textContent = data.title || nextTitle;
+          }
+        }
+        renderConversationsList();
+        updateSessionOverview();
+        if (!options?.silent) {
+          showToast("行程名称已更新");
+        }
+        return true;
+      }
+
+      function sanitizeConversationTitleSegment(value = "") {
+        return String(value || "")
+          .replace(
+            /^(?:\u4ece|\u53bb|\u5230|\u5f80|\u60f3\u53bb|\u51c6\u5907\u53bb|\u8ba1\u5212\u53bb)\s*/u,
+            ""
+          )
+          .replace(
+            /\s*(?:\u51fa\u53d1|\u6e38\u73a9|\u65c5\u884c|\u65c5\u6e38|\u770b\u770b|\u901b\u901b|\u4f4f\u51e0\u665a|\u73a9\u51e0\u5929|\u73a9\u51e0\u591c)\s*$/u,
+            ""
+          )
+          .replace(/[\uFF0C\u3002\uFF1B\u3001,.!?]+/gu, " ")
+          .replace(/\s+/g, " ")
+          .trim();
+      }
+
+      function extractTitleDays(text = "") {
+        const normalized = String(text || "").replace(/\s+/g, "");
+        const match = normalized.match(
+          /(\d+\u5929\d+[\u665a\u591c]|\u4e00\u5929\u4e00\u591c|\u4e24\u5929\u4e00\u591c|\u4e09\u5929\u4e24\u591c|\u56db\u5929\u4e09\u591c|\u4e94\u5929\u56db\u591c|\u516d\u5929\u4e94\u591c|\u4e03\u5929\u516d\u591c)/u
+        );
+        return match ? match[1] : "";
+      }
+
+      function generateConversationTitle(text = "") {
+        const normalized = String(text || "").replace(/\s+/g, " ").trim();
+        if (!normalized) return DEFAULT_CONVERSATION_TITLE;
+
+        const routeMatch = normalized.match(
+          /\u4ece\s*([^\s\uFF0C\u3002\uFF1B\u3001,]{1,12})\s*(?:\u51fa\u53d1)?\s*(?:\u53bb|\u5230)\s*([^\s\uFF0C\u3002\uFF1B\u3001,]{1,12})/u
+        );
+        const destinationMatch = normalized.match(
+          /(?:\u53bb|\u5230)\s*([^\s\uFF0C\u3002\uFF1B\u3001,]{1,12})(?:\u65c5\u6e38|\u65c5\u884c|\u6e38\u73a9|\u73a9|\u901b|\u770b\u770b)?/u
+        );
+        const dayText = extractTitleDays(normalized);
+        const styleTag = /\u60c5\u4fa3/u.test(normalized)
+          ? "\u60c5\u4fa3"
+          : /\u4eb2\u5b50/u.test(normalized)
+          ? "\u4eb2\u5b50"
+          : /\u7f8e\u98df/u.test(normalized)
+          ? "\u7f8e\u98df"
+          : /\u4eba\u6587/u.test(normalized)
+          ? "\u4eba\u6587"
+          : "";
+
+        if (routeMatch?.[1] && routeMatch?.[2]) {
+          const origin = sanitizeConversationTitleSegment(routeMatch[1]);
+          const destination = sanitizeConversationTitleSegment(routeMatch[2]);
+          return [`${origin} → ${destination}`, dayText, styleTag]
+            .filter(Boolean)
+            .join(" · ")
+            .slice(0, 24);
+        }
+
+        if (destinationMatch?.[1]) {
+          const destination = sanitizeConversationTitleSegment(destinationMatch[1]);
+          return [destination, dayText, styleTag]
+            .filter(Boolean)
+            .join(" · ")
+            .slice(0, 24);
+        }
+
+        const summary = normalized
+          .replace(
+            /^(?:\u6211\u60f3|\u5e2e\u6211|\u8bf7\u5e2e\u6211|\u9ebb\u70e6\u5e2e\u6211|\u60f3\u8981|\u8ba1\u5212|\u51c6\u5907)\s*/u,
+            ""
+          )
+          .split(/[\u3002\uFF01\uFF1F.!?]/u)[0]
+          .trim()
+          .slice(0, 24);
+        return summary || DEFAULT_CONVERSATION_TITLE;
+      }
+
+      async function maybeAutoNameCurrentConversation(text = "") {
+        const conversationId = state.currentConversationId;
+        if (!conversationId) return;
+        const current = getCurrentConversation();
+        if (current && !isDefaultConversationTitle(current.title)) return;
+        const nextTitle = generateConversationTitle(text);
+        if (!nextTitle || isDefaultConversationTitle(nextTitle)) return;
+        try {
+          await updateConversationTitle(conversationId, nextTitle, { silent: true });
+        } catch (error) {
+          console.error(error);
+        }
+      }
+
+      function formatClock(value = new Date()) {
+        const date = value instanceof Date ? value : new Date(value);
+        const hh = String(date.getHours()).padStart(2, "0");
+        const mm = String(date.getMinutes()).padStart(2, "0");
+        return `${hh}:${mm}`;
+      }
+
+      function formatInlineText(text) {
+        return escapeHtml(text)
+          .replace(/`([^`]+)`/g, '<span class="inline-code">$1</span>')
+          .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+      }
+
+      function sanitizeAssistantOutputText(text = "") {
+        const visibleText = stripAssistantThinkingBlocks(text);
+        const hiddenLinePatterns = [
+          /^(requirement_collection|destination_selection|transport_planning|accommodation_planning|order_generation|report_generation)$/i,
+          /^(收集需求|需求收集|当前阶段|当前步骤|阶段切换|状态更新|流程推进)$/u,
+          /^(进入|切换到).{0,18}阶段$/u,
+          /^(tool_call|工具调用|调用工具)[:：]?\s*/i,
+          /^(理解|收到|明白|好的)$/u,
+        ];
+        return visibleText
+          .split("\n")
+          .filter((line) => {
+            const trimmed = line.trim();
+            if (!trimmed) return true;
+            if (/^-{1,3}$/.test(trimmed) || /^---+$/.test(trimmed)) return false;
+            return !hiddenLinePatterns.some((pattern) => pattern.test(trimmed));
+          })
+          .join("\n")
+          .replace(/\n{3,}/g, "\n\n")
+          .trim();
+      }
+
+      function stripAssistantThinkingBlocks(text = "") {
+        const thinkingFilter = createAssistantThinkingFilter();
+        return thinkingFilter.feed(text) + thinkingFilter.finish();
+      }
+
+      function normalizeCollapsedMarkdownTables(text = "") {
+        return String(text || "")
+          .replace(
+            /(\|[^\n|]+(?:\|[^\n|]+)+\|)\s+(\|:?-{3,}:?(?:\|:?-{3,}:?)+\|)/g,
+            "$1\n$2"
+          )
+          .replace(/\s+(\|\s*(?:D\d+|Day\s*\d+|\d+)\s*\|)/gu, "\n$1");
+      }
+
+      function splitAssistantBlocks(text) {
+        return normalizeCollapsedMarkdownTables(sanitizeAssistantOutputText(text))
+          .replace(/\r\n/g, "\n")
+          .split(/\n{2,}/)
+          .map((block) => block.trim())
+          .filter(Boolean);
+      }
+
+      function normalizeSectionTitle(title = "") {
+        return title
+          .replace(/^#{1,3}\s+/, "")
+          .replace(/^\*\*(.+?)\*\*$/, "$1")
+          .replace(/^【(.+?)】$/, "$1")
+          .replace(/^[\u{1F300}-\u{1FAFF}\u2600-\u27BF]+\s*/u, "")
+          .replace(/[：:]\s*$/, "")
+          .trim();
+      }
+
+      function isReportSummaryMarkerOnly(line = "") {
+        const normalized = normalizeSectionTitle(line)
+          .replace(/^[-*•]\s*/, "")
+          .trim();
+        return /^(?:每日安排|每日行程|分日安排|分日行程)$/u.test(normalized);
+      }
+
+      function filterReportSummaryLines(lines = []) {
+        return lines.filter((line) => !isReportSummaryMarkerOnly(line));
+      }
+
+      function isEmbeddedSectionHeading(line = "") {
+        const normalized = normalizeSectionTitle(
+          line
+            .replace(/^[-*•]\s*/, "")
+            .replace(/（.*$/, "")
+            .replace(/\(.*$/, "")
+            .trim()
+        );
+        if (!normalized || normalized.length > 26) return false;
+        return /^(预算|交通|住宿|住宿推荐|住哪里|玩法建议|玩法|行程安排|每日安排|目的地|提醒|下一步)/.test(
+          normalized
+        );
+      }
+
+      function looksLikeDecisionPrompt(text = "") {
+        return /想跟你确认|确认一下|请确认|你觉得|要不要|是否|还是你想|可以直接告诉我|你更想|更合适吗|看看其他备选|哪个方向/u.test(
+          text
+        );
+      }
+
+      function inferSectionMetaFromBody(lines = []) {
+        const bodyText = lines.join(" ");
+        if (looksLikeDecisionPrompt(bodyText)) {
+          return { tone: "next", icon: "fa-circle-question" };
+        }
+        if (/高铁|火车|自驾|大巴|公交|航班|车程|打车|高速|车站|出发|到达/.test(bodyText)) {
+          return { tone: "transport", icon: "fa-train-subway" };
+        }
+        if (/住宿|酒店|民宿|温泉|私汤|住在|客栈|房型|每晚/.test(bodyText)) {
+          return { tone: "stay", icon: "fa-bed" };
+        }
+        if (/预算|费用|花费|价格|每人|总共/.test(bodyText)) {
+          return { tone: "budget", icon: "fa-wallet" };
+        }
+        if (/玩法|景点|适合|行程|打卡|游览|放松|亲水|徒步|温泉|眉县|太白山/.test(bodyText)) {
+          return { tone: "overview", icon: "fa-map-location-dot" };
+        }
+        return null;
+      }
+
+      function expandStructuredTravelBlocks(blocks = []) {
+        const expanded = [];
+        blocks.forEach((block) => {
+          const normalizedBlock = block
+            .replace(
+              /([^\n])\s+((?:[\u{1F300}-\u{1FAFF}\u2600-\u27BF]\uFE0F?\s*)?\*\*[^*\n]{2,18}\*\*[：:])/gu,
+              "$1\n$2"
+            )
+            .replace(
+              /([^\n])\s+((?:[\u{1F300}-\u{1FAFF}\u2600-\u27BF]\uFE0F?\s*)?(交通建议|住宿选址|行程基调|住宿推荐|交通方案|玩法建议|行程安排|预算建议)[：:])/gu,
+              "$1\n$2"
+            );
+          const lines = normalizedBlock
+            .split("\n")
+            .map((line) => line.trim())
+            .filter(Boolean);
+          if (!lines.length) return;
+
+          let current = [];
+          lines.forEach((line, index) => {
+            const shouldStartNew =
+              index > 0 &&
+              isEmbeddedSectionHeading(line) &&
+              current.length > 0;
+            if (shouldStartNew) {
+              expanded.push(current.join("\n"));
+              current = [line];
+              return;
+            }
+            current.push(line);
+          });
+          if (current.length) {
+            expanded.push(current.join("\n"));
+          }
+        });
+        return expanded;
+      }
+
+      function getTravelSectionMeta(title) {
+        const normalized = normalizeSectionTitle(title).toLowerCase();
+        const contains = (...keywords) =>
+          keywords.some((keyword) => normalized.includes(keyword));
+
+        if (looksLikeDecisionPrompt(normalized)) {
+          return { tone: "next", icon: "fa-circle-question" };
+        }
+        if (contains("下一步", "接下来", "行动", "后续", "请评价")) {
+          return { tone: "next", icon: "fa-arrow-right" };
+        }
+        if (contains("费用说明", "费用边界", "预算", "费用", "花费", "价格", "成本")) {
+          return { tone: "budget", icon: "fa-wallet" };
+        }
+        if (contains("涵盖服务", "服务边界", "接送", "预约", "应急", "人工确认")) {
+          return { tone: "service", icon: "fa-handshake-angle" };
+        }
+        if (
+          contains(
+            "概览",
+            "总览",
+            "方案",
+            "推荐理由",
+            "行程安排",
+            "每日安排",
+            "一句话定位",
+            "为什么适合你",
+            "适合你"
+          )
+        ) {
+          return { tone: "overview", icon: "fa-map-location-dot" };
+        }
+        if (contains("目的地", "城市", "景点", "路线")) {
+          return { tone: "overview", icon: "fa-location-dot" };
+        }
+        if (contains("交通", "航班", "火车", "高铁", "大交通", "出发")) {
+          return { tone: "transport", icon: "fa-train-subway" };
+        }
+        if (contains("住宿", "酒店", "民宿", "住哪里")) {
+          return { tone: "stay", icon: "fa-bed" };
+        }
+        if (contains("美食", "餐饮", "吃")) {
+          return { tone: "food", icon: "fa-utensils" };
+        }
+        if (contains("提醒", "注意", "避坑", "贴士", "须知")) {
+          return { tone: "warning", icon: "fa-triangle-exclamation" };
+        }
+        return null;
+      }
+
+      function cleanJourneyLocationValue(value = "") {
+        return value
+          .replace(/^[-*#\s]+/, "")
+          .replace(/[📍✅⚠️✨🌤️]/g, "")
+          .replace(/^(?:上午|中午|午餐|下午|傍晚|晚上|晚餐|早餐|早上|全天)[：:\s-]*/u, "")
+          .replace(/^(需求很完整|信息基本齐了|现在先把|我已经按你的要求查到|我先帮你梳理确认一下)[！!：:\s]*/g, "")
+          .replace(/\s*[·•｜|].*$/, "")
+          .replace(/(一句话定位|为什么适合你|适合你|两个小提醒|小提醒|提醒|建议)$/g, "")
+          .replace(/\s+/g, " ")
+          .trim();
+      }
+
+      function isJourneyNoiseLocation(value = "") {
+        const normalized = cleanJourneyLocationValue(value);
+        if (!normalized) return true;
+        if (normalized.length > 28) return true;
+        return /^(?:路线参考|当前查看|总览|默认|若满意|如果满意|请评价|请评估|下一步|需要你确认|值停留|地图定位|住宿周边|关键节点|自然醒|自由返程|从容返程|返回|返程|专车接站|办理入住|稍作休整|待核验|费用待核验|停留时间待核验|杭州玩\d+天|西安到杭州玩\d+天)$/u.test(
+          normalized
+        );
+      }
+
+      function splitTableCells(line) {
+        return line
+          .trim()
+          .replace(/^\|/, "")
+          .replace(/\|$/, "")
+          .split("|")
+          .map((cell) => cell.trim());
+      }
+
+      function isMarkdownTable(lines) {
+        if (lines.length < 2) return false;
+        if (!lines[0].includes("|") || !lines[1].includes("|")) return false;
+        const dividerCells = splitTableCells(lines[1]);
+        return (
+          dividerCells.length > 0 &&
+          dividerCells.every((cell) => /^:?-{3,}:?$/.test(cell.replace(/\s+/g, "")))
+        );
+      }
+
+      function getMarkdownTableSpan(lines, startIndex = 0) {
+        const rest = lines.slice(startIndex);
+        if (!isMarkdownTable(rest)) return 0;
+        let endIndex = startIndex + 2;
+        while (endIndex < lines.length && lines[endIndex].includes("|")) {
+          endIndex += 1;
+        }
+        return endIndex - startIndex;
+      }
+
+      function truncateJourneyNote(text = "", fallback = "等待你继续补充细节") {
+        const normalized = text.replace(/\s+/g, " ").trim();
+        if (!normalized) return fallback;
+        return normalized.length > 42 ? `${normalized.slice(0, 42)}…` : normalized;
+      }
+
+      function splitJourneyFragments(text = "") {
+        return text
+          .replace(/\s+/g, " ")
+          .split(/[。！？；\n]/)
+          .map((part) => part.trim())
+          .filter((part) => part.length >= 4 && part.length <= 36);
+      }
+
+      function extractJourneyHighlights(sections) {
+        const highlightKeywords = [
+          "山",
+          "海",
+          "湖",
+          "江",
+          "河",
+          "岛",
+          "古镇",
+          "老街",
+          "夜市",
+          "温泉",
+          "寺",
+          "博物馆",
+          "公园",
+          "书店",
+          "营地",
+          "民宿",
+          "美食",
+          "小吃",
+          "日落",
+          "咖啡",
+          "亲水",
+          "徒步",
+          "骑行",
+          "露营",
+        ];
+        const pool = sections
+          .filter((section) => ["overview", "stay", "next"].includes(section.tone))
+          .flatMap((section) => splitJourneyFragments(section.rawLines.join(" ")));
+
+        const scored = pool
+          .map((fragment) => ({
+            fragment,
+            score: highlightKeywords.reduce(
+              (count, keyword) => count + (fragment.includes(keyword) ? 1 : 0),
+              0
+            ),
+          }))
+          .sort((a, b) => b.score - a.score || a.fragment.length - b.fragment.length);
+
+        const picked = [];
+        scored.forEach(({ fragment }) => {
+          const normalized = fragment.replace(/[：:]/g, " ").trim();
+          if (
+            !normalized ||
+            isJourneyNoiseLocation(normalized) ||
+            picked.some((item) => item.includes(normalized) || normalized.includes(item))
+          ) {
+            return;
+          }
+          picked.push(normalized);
+        });
+
+        return picked.slice(0, 4);
+      }
+
+      function inferHighlightTheme(text = "") {
+        if (/温泉|亲水|湖|江|河|海/.test(text)) return "亲水放松";
+        if (/古镇|老街|博物馆|寺|书店/.test(text)) return "人文慢游";
+        if (/山|徒步|骑行|营地|露营/.test(text)) return "户外探索";
+        if (/美食|小吃|夜市|咖啡/.test(text)) return "在地风味";
+        return "值得停留";
+      }
+
+      function buildJourneyHighlightCards(highlights = []) {
+        return highlights.map((text, index) => {
+          const normalized = text.replace(/\s+/g, " ").trim();
+          const title = normalized.length > 14 ? `${normalized.slice(0, 14)}…` : normalized;
+          const note =
+            normalized.length > 36
+              ? `${normalized.slice(0, 36)}…`
+              : normalized || "适合继续展开玩法、停留时长和拍照点。";
+          return {
+            index,
+            title,
+            note,
+            theme: inferHighlightTheme(normalized),
+          };
+        });
+      }
+
+      function getKnownCityNearbyPlaces(destination = "") {
+        const city = cleanJourneyLocationValue(destination);
+        const presets = [
+          {
+            test: /南京|金陵/u,
+            places: [
+              ["主要景点", "夫子庙秦淮风光带", "fa-landmark"],
+              ["热闹商业街", "新街口商圈", "fa-store"],
+              ["美食小吃", "老门东美食街", "fa-bowl-food"],
+            ],
+          },
+          {
+            test: /成都|蓉城/u,
+            places: [
+              ["主要景点", "武侯祠", "fa-landmark"],
+              ["热闹商业街", "春熙路", "fa-store"],
+              ["美食小吃", "宽窄巷子", "fa-bowl-food"],
+            ],
+          },
+          {
+            test: /西安|长安/u,
+            places: [
+              ["主要景点", "西安城墙", "fa-landmark"],
+              ["热闹商业街", "钟楼商圈", "fa-store"],
+              ["美食小吃", "回民街", "fa-bowl-food"],
+            ],
+          },
+          {
+            test: /北京/u,
+            places: [
+              ["主要景点", "故宫博物院", "fa-landmark"],
+              ["热闹商业街", "王府井", "fa-store"],
+              ["美食小吃", "簋街", "fa-bowl-food"],
+            ],
+          },
+          {
+            test: /上海/u,
+            places: [
+              ["主要景点", "外滩", "fa-landmark"],
+              ["热闹商业街", "南京东路步行街", "fa-store"],
+              ["美食小吃", "云南南路美食街", "fa-bowl-food"],
+            ],
+          },
+          {
+            test: /杭州/u,
+            places: [
+              ["主要景点", "西湖", "fa-landmark"],
+              ["热闹商业街", "湖滨银泰", "fa-store"],
+              ["美食小吃", "河坊街", "fa-bowl-food"],
+            ],
+          },
+          {
+            test: /长沙/u,
+            places: [
+              ["主要景点", "橘子洲", "fa-landmark"],
+              ["热闹商业街", "五一广场", "fa-store"],
+              ["美食小吃", "坡子街", "fa-bowl-food"],
+            ],
+          },
+        ];
+        return presets.find((preset) => preset.test.test(city))?.places || [];
+      }
+
+      function buildStayNearbyHighlights(previewState = {}) {
+        const destination = cleanJourneyLocationValue(
+          previewState.cityPair?.destination || previewState.destinationSection?.title || ""
+        );
+        const presetPlaces = getKnownCityNearbyPlaces(destination);
+        if (presetPlaces.length) {
+          return presetPlaces.map(([label, name, icon]) => ({
+            label,
+            name,
+            icon,
+            query: destination && !name.includes(destination) ? `${destination} ${name}` : name,
+          }));
+        }
+        const picked = [];
+        const push = (label, pattern, icon, fallback) => {
+          const hit = (previewState.highlights || []).find((item) => pattern.test(item));
+          const name = cleanJourneyLocationValue(hit || fallback || "");
+          if (!name) return;
+          picked.push({
+            label,
+            name,
+            icon,
+            query: destination && !name.includes(destination) ? `${destination} ${name}` : name,
+          });
+        };
+        push("主要景点", /景区|景点|公园|博物馆|寺|山|湖|江|河|古镇/u, "fa-landmark", `${destination} 主要景点`);
+        push("热闹商业街", /商圈|步行街|夜市|老街|街区|广场/u, "fa-store", `${destination} 商业街`);
+        push("美食小吃", /美食|小吃|餐|夜市|咖啡|甜品/u, "fa-bowl-food", `${destination} 小吃街`);
+        return picked.filter((item) => item.name && !/待确认|待补充/.test(item.name));
+      }
+
+      function extractJourneyRhythm(summaryBlocks, sections) {
+        const rhythmLines = [];
+        const directRhythmLines = [...summaryBlocks.flat(), ...sections.flatMap((section) => section.rawLines)]
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .filter((line) =>
+            /day\s*\d+|第.天|上午|中午|下午|傍晚|晚上|早上|行程|安排/i.test(line)
+          );
+
+        directRhythmLines.forEach((line) => {
+          const normalized = line.replace(/^[-*•]\s*/, "").trim();
+          if (
+            normalized &&
+            !rhythmLines.some((item) => item.includes(normalized) || normalized.includes(item))
+          ) {
+            rhythmLines.push(normalized);
+          }
+        });
+
+        if (rhythmLines.length >= 3) {
+          return rhythmLines.slice(0, 3);
+        }
+
+        const overviewSection =
+          sections.find((section) => section.title.includes("行程") || section.title.includes("安排")) ||
+          sections.find((section) => section.tone === "overview");
+        const fallbackFragments = splitJourneyFragments(
+          overviewSection?.rawLines?.join(" ") || summaryBlocks.flat().join(" ")
+        );
+
+        fallbackFragments.forEach((fragment) => {
+          if (
+            fragment &&
+            !rhythmLines.some((item) => item.includes(fragment) || fragment.includes(item))
+          ) {
+            rhythmLines.push(fragment);
+          }
+        });
+
+        return rhythmLines.slice(0, 3);
+      }
+
+      function hasJourneyClarificationSignal(text = "") {
+        return /确认一下|想跟你确认|哪个更合适|还是.*预算|想先了解|更精准|会影响|待补充|待确认|请先帮我判断|请先确认|方便|是否完整|告诉我|大概想什么时候|从哪个城市出发|继续补充/.test(
+          text
+        );
+      }
+
+      function hasJourneyPlanSignal(text = "", sections = [], highlights = [], rhythm = []) {
+        if (sections.some((section) => ["stay", "warning", "next", "food"].includes(section.tone))) {
+          return true;
+        }
+        if (highlights.length >= 2 || rhythm.length >= 2) {
+          return true;
+        }
+        return /推荐|路线|行程|安排|玩法|景点|入住|住宿|酒店|民宿|车次|航班|美食|看点|打卡|游览/.test(
+          text
+        );
+      }
+
+      function splitJourneyWaypoints(text = "") {
+        const cleaned = (text || "")
+          .replace(/^#{1,3}\s+/, "")
+          .replace(/^.*?[|｜]/, "")
+          .replace(/^\s*(?:day)\s*\d+\s*/i, "")
+          .replace(/^\s*第\s*[一二三四五六七八九十\d]+\s*天\s*/, "")
+          .replace(/（[^）]*）|\([^)]*\)/g, " ")
+          .replace(/\s+/g, " ")
+          .trim();
+
+        return cleaned
+          .split(/(?:→|->|—|–|·|\/|、|,|，|\s{2,})+/)
+          .map((item) => item.trim())
+          .map((item) => item.replace(/^[|｜:：-]+|[|｜:：-]+$/g, "").trim())
+          .filter(Boolean)
+          .filter((item) => !isJourneyNoiseLocation(item))
+          .filter((item, index, list) => list.indexOf(item) === index)
+          .slice(0, 6);
+      }
+
+      function extractJourneyDayWaypointsFromLines(lines = []) {
+        const candidates = [];
+        const pushCandidate = (value = "") => {
+          const cleaned = cleanJourneyLocationValue(value)
+            .replace(/（[^）]*）|\([^)]*\)/g, " ")
+            .replace(/^(?:推荐|建议|可选|可去|前往|游览|参观|观看)\s*/u, "")
+            .replace(/\s+/g, " ")
+            .trim();
+          if (!cleaned || isJourneyNoiseLocation(cleaned)) return;
+          if (/^(?:上午|中午|下午|晚上|午餐|晚餐|早餐|全天)$/u.test(cleaned)) return;
+          if (!candidates.includes(cleaned)) candidates.push(cleaned);
+        };
+
+        lines.slice(1).forEach((rawLine) => {
+          const normalized = normalizeJourneyDayHeading(rawLine)
+            .replace(/^[-*•]\s*/, "")
+            .trim();
+          if (!normalized || /(?:请评价|若满意|如果满意|下一步|生成报告|调整方向)/u.test(normalized)) {
+            return;
+          }
+          const afterTime = normalized.replace(
+            /^(?:上午|中午|午餐|下午|傍晚|晚上|晚餐|早餐|早上|全天)[：:\s-]*/u,
+            ""
+          );
+          const mainText = afterTime.split(/[。；;，,]/u)[0] || afterTime;
+          mainText
+            .split(/(?:→|->|\+|＋|、|\/|及|和|至|到)+/u)
+            .map((item) => item.trim())
+            .forEach(pushCandidate);
+        });
+
+        return candidates.slice(0, 6);
+      }
+
+      function extractJourneyDayPlansFromLines(lines = []) {
+        const plans = [];
+        let current = null;
+        const flush = () => {
+          if (!current?.dayNumber) return;
+          const routeSeed =
+            current.rawLines.find((line) => /(?:→|->|—|－|至|到)/.test(line)) || current.title;
+          const bodyWaypoints = extractJourneyDayWaypointsFromLines(current.rawLines);
+          const titleWaypoints = splitJourneyWaypoints(routeSeed);
+          const waypoints = bodyWaypoints.length >= 2 ? bodyWaypoints : titleWaypoints;
+          const note = truncateJourneyNote(
+            current.rawLines.slice(1).join(" "),
+            "这一天的节奏会在后续继续细化。"
+          );
+          plans.push({
+            key: `day-${current.dayNumber}`,
+            dayNumber: current.dayNumber,
+            label: `Day ${current.dayNumber}`,
+            title: current.title,
+            waypoints,
+            highlights: extractJourneyHighlights([
+              {
+                title: current.title,
+                rawLines: current.rawLines,
+              },
+            ]).slice(0, 3),
+            note,
+          });
+          current = null;
+        };
+
+        lines.forEach((rawLine) => {
+          const line = (rawLine || "").trim();
+          if (!line || /^[-*]{3,}$/.test(line)) return;
+          const dayNumber = parseJourneyDayNumber(line);
+          if (dayNumber) {
+            flush();
+            current = {
+              dayNumber,
+              title: line,
+              rawLines: [line],
+            };
+            return;
+          }
+          if (current) {
+            current.rawLines.push(line);
+          }
+        });
+
+        flush();
+        return plans;
+      }
+
+      function extractJourneyDayPlans(sections = [], summaryBlocks = []) {
+        const sectionPlans = sections
+          .map((section) => {
+            const dayNumber = parseJourneyDayNumber(
+              section.title || section.rawLines?.[0] || ""
+            );
+            if (!dayNumber) return null;
+            const routeTitle = section.title || section.rawLines?.[0] || "";
+            const bodyWaypoints = extractJourneyDayWaypointsFromLines([
+              routeTitle,
+              ...(section.rawLines || []),
+            ]);
+            const waypoints =
+              bodyWaypoints.length >= 2 ? bodyWaypoints : splitJourneyWaypoints(routeTitle);
+            return {
+              key: `day-${dayNumber}`,
+              dayNumber,
+              label: `Day ${dayNumber}`,
+              title: routeTitle,
+              waypoints,
+              highlights: extractJourneyHighlights([section]).slice(0, 3),
+              note: truncateJourneyNote(
+                (section.rawLines || []).slice(1).join(" "),
+                "\u8fd9\u4e00\u5929\u7684\u8282\u594f\u4f1a\u5728\u540e\u7eed\u7ee7\u7eed\u7ec6\u5316\u3002"
+              ),
+            };
+          })
+          .filter(Boolean)
+          .sort((left, right) => left.dayNumber - right.dayNumber);
+        const lineFallbackPlans = extractJourneyDayPlansFromLines([
+          ...summaryBlocks.flat(),
+          ...sections.flatMap((section) => [section.title, ...(section.rawLines || [])]),
+        ]);
+        const mergedPlans = new Map();
+        [...lineFallbackPlans, ...sectionPlans].forEach((plan) => {
+          const existing = mergedPlans.get(plan.dayNumber);
+          if (!existing) {
+            mergedPlans.set(plan.dayNumber, plan);
+            return;
+          }
+          mergedPlans.set(plan.dayNumber, {
+            ...existing,
+            ...plan,
+            waypoints:
+              plan.waypoints?.length && !plan.waypoints.every((item) => /^\*{0,2}day/i.test(item))
+                ? plan.waypoints
+                : existing.waypoints,
+            highlights: plan.highlights?.length ? plan.highlights : existing.highlights,
+            note: plan.note?.length ? plan.note : existing.note,
+          });
+        });
+        return Array.from(mergedPlans.values())
+          .sort((left, right) => left.dayNumber - right.dayNumber)
+          .slice(0, 7);
+      }
+
+      function resolveTravelCardMapFocus(section, previewState) {
+        if (!previewState?.shouldRender) {
+          return "";
+        }
+        if (parseJourneyDayNumber(section.title || "")) {
+          return "";
+        }
+        if (section.tone === "stay" && !/待补充|待确认/.test(section.title)) {
+          return "stay";
+        }
+        if (section.tone === "food") {
+          return previewState.highlightCards.length ? "highlights" : "";
+        }
+        if (section.tone === "overview") {
+          return "destination";
+        }
+        return "";
+      }
+
+      function isJourneyPlaceholderValue(value = "") {
+        const normalized = (value || "").trim();
+        return (
+          !normalized ||
+          /待确认|待继续|待补充|待比较|待定|后面继续补/.test(normalized) ||
+          isJourneyNoiseLocation(normalized)
+        );
+      }
+
+      function isLowValueJourneyMetric(value = "") {
+        const normalized = String(value || "").trim();
+        return (
+          !normalized ||
+          /待继续|待补充|待比较|待定|后面会继续|后面继续|待核验/.test(
+            normalized
+          )
+        );
+      }
+
+      function getJourneySectionText(section = {}) {
+        return [
+          section?.title || "",
+          ...(Array.isArray(section?.rawLines) ? section.rawLines : []),
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .replace(/\s+/g, " ")
+          .trim();
+      }
+
+      function summarizeJourneyTransportMetric(section = {}, cityPair = {}) {
+        const title = cleanJourneyLocationValue(section?.title || "");
+        if (title && !/服务边界|涵盖服务|交通住宿|待/.test(title)) {
+          return truncateJourneyNote(title, "交通待核验", 30);
+        }
+        const text = getJourneySectionText(section);
+        const match = text.match(
+          /(?:大交通|交通|高铁|航班|接送|专车|网约车|地铁)[：:\s-]*([^。；\n]{4,60})/u
+        );
+        if (match?.[1]) {
+          return truncateJourneyNote(match[1], "交通待核验", 34);
+        }
+        if (cityPair?.origin && cityPair?.destination) {
+          return "";
+        }
+        return "";
+      }
+
+      function extractJourneyExampleHotel(text = "") {
+        const normalized = String(text || "").replace(/\s+/g, " ");
+        const explicitMatch = normalized.match(
+          /(?:示例酒店|酒店示例|住宿示例|候选酒店)[：:\s-]*([^。；，,\n]{4,36}(?:酒店|饭店|宾馆|度假村))/u
+        );
+        if (explicitMatch?.[1]) return explicitMatch[1].trim();
+        const hotelMatch = normalized.match(
+          /([\u4e00-\u9fa5A-Za-z0-9·\- ]{2,32}(?:酒店|饭店|宾馆|度假村))/u
+        );
+        return hotelMatch?.[1]?.trim() || "";
+      }
+
+      function summarizeJourneyStayMetric(section = {}, combinedText = "") {
+        const sectionText = getJourneySectionText(section);
+        const hotelName = extractJourneyExampleHotel(`${sectionText} ${combinedText}`);
+        if (hotelName) {
+          return truncateJourneyNote(hotelName, "住宿示例待核验", 30);
+        }
+        const title = cleanJourneyLocationValue(section?.title || "");
+        if (title && !/住宿口径|交通住宿|服务边界|待/.test(title)) {
+          return truncateJourneyNote(title, "住宿待核验", 30);
+        }
+        const areaMatch = sectionText.match(
+          /(?:住宿|酒店|商圈|区域|落脚)[：:\s-]*([^。；\n]{4,60})/u
+        );
+        if (areaMatch?.[1]) {
+          return truncateJourneyNote(areaMatch[1], "住宿区域待核验", 34);
+        }
+        return "";
+      }
+
+      function formatJourneyDayNightLabel(dayCount = 0, text = "") {
+        const normalized = String(text || "");
+        const dayNightMatch = normalized.match(
+          /(\d+\s*天\s*\d+\s*[晚夜]|[一二三四五六七八九十]\s*天\s*[一二三四五六七八九十]\s*[晚夜])/u
+        );
+        if (dayNightMatch?.[1]) {
+          return dayNightMatch[1].replace(/\s+/g, "");
+        }
+        if (dayCount > 1) return `${dayCount}天${Math.max(dayCount - 1, 1)}晚`;
+        if (dayCount === 1) return "1天";
+        return "先显示总览";
+      }
+
+      function buildJourneyAtlasTitle(previewState, previewStops = []) {
+        const origin = cleanJourneyLocationValue(
+          previewState?.cityPair?.origin || previewStops[0]?.value || ""
+        );
+        const destination = cleanJourneyLocationValue(
+          previewState?.cityPair?.destination || previewStops[1]?.value || ""
+        );
+        if (!isJourneyPlaceholderValue(origin) && !isJourneyPlaceholderValue(destination)) {
+          return `${origin} → ${destination}`;
+        }
+        if (!isJourneyPlaceholderValue(destination)) {
+          return destination;
+        }
+        return "行程路线";
+      }
+
+      function renderJourneyAtlas(previewState, previewStops, previewMetrics) {
+        const { cityPair, highlights, highlightCards, dayPlans } = previewState;
+        const stayNearbyHighlights = buildStayNearbyHighlights(previewState);
+        const mapHighlightQueries = [
+          ...stayNearbyHighlights.map((item) => item.query),
+          ...highlights,
+        ]
+          .map((item) => cleanJourneyLocationValue(item || ""))
+          .filter(Boolean)
+          .filter((item) => !isJourneyNoiseLocation(item))
+          .filter((item, index, list) => list.indexOf(item) === index)
+          .slice(0, 6);
+        const routeStops = [
+          { ...previewStops[0], target: "origin" },
+          { ...previewStops[1], target: "destination" },
+          { ...previewStops[2], target: "route" },
+          { ...previewStops[3], target: "stay" },
+        ].map((item) => ({
+          ...item,
+          value: cleanJourneyLocationValue(item.value || ""),
+          disabled: isJourneyPlaceholderValue(cleanJourneyLocationValue(item.value || "")),
+        }));
+        const validRouteStops = routeStops.filter((item) => !item.disabled);
+        const atlasTitle = buildJourneyAtlasTitle(previewState, previewStops);
+        const hasDayView = dayPlans.length >= 1;
+        const hasLiveMapPayload =
+          hasDayView ||
+          mapHighlightQueries.length >= 2 ||
+          (previewState.recommendations || []).some(
+            (item) => item && Number.isFinite(Number(item.lng)) && Number.isFinite(Number(item.lat))
+          );
+        const mapPayload = serializeMapPayload({
+          origin: cityPair?.origin || routeStops[0]?.value || "",
+          destination: cityPair?.destination || routeStops[1]?.value || "",
+          stay: routeStops[3]?.disabled ? "" : routeStops[3]?.value || "",
+          highlights: mapHighlightQueries,
+          recommendations: previewState.recommendations || [],
+          days: dayPlans.map((day) => ({
+            key: day.key,
+            label: day.label,
+            day_number: day.dayNumber,
+            title: day.title,
+            route_note: day.note,
+            waypoints: day.waypoints,
+            stops: day.stops || [],
+            segments: day.segments || [],
+          })),
+        });
+        const isImmersive = previewState.mapExperience === "immersive";
+        return `
+          <section class="journey-map-studio${
+            isImmersive ? " journey-map-studio--immersive" : ""
+          }">
+            <div
+              class="journey-live-map-shell journey-live-map-shell--studio${
+                isImmersive ? " journey-live-map-shell--immersive" : ""
+              } journey-map-tools-collapsed journey-map-sidebar-collapsed${
+                hasDayView ? "" : " journey-live-map-shell--overview-only"
+              }"
+              data-map-title="${escapeHtml(atlasTitle)}"
+              data-day-plans="${serializeMapPayload(dayPlans)}"
+              data-route-stops="${serializeMapPayload(validRouteStops)}"
+            >
+              <div class="journey-live-map-head">
+                <div class="journey-live-map-head-copy">
+                  <span class="journey-map-shell-kicker">
+                    <i class="fa-solid fa-route"></i> 路线地图
+                  </span>
+                  <strong>${escapeHtml(atlasTitle)}</strong>
+                  <span>${
+                    hasDayView
+                      ? "地图默认显示全程叠加总览；展开路线说明后，可切换查看某一天的路线参考。"
+                      : "当前显示路线总览。"
+                  }</span>
+                </div>
+              </div>
+              <div class="journey-live-map-shell-body journey-live-map-shell-body--studio">
+                <div class="journey-map-stage">
+                  <div class="journey-map-title-pill">
+                    <strong>${escapeHtml(atlasTitle)}</strong>
+                    <span>${escapeHtml(
+                      hasDayView ? `${dayPlans.length} 天路线` : "路线总览"
+                    )}</span>
+                  </div>
+                  <div class="journey-map-floating-panel">
+                    <div class="journey-map-floating-actions journey-map-floating-summary">
+                      <button class="journey-map-action-btn secondary" type="button" data-map-action="toggle-tools" aria-expanded="false" title="展开地图工具">地图工具</button>
+                      <button class="journey-map-action-btn secondary" type="button" data-map-action="expand" title="全屏查看地图">全屏</button>
+                    </div>
+                    ${
+                      hasDayView
+                        ? ""
+                        : ""
+                    }
+                    <div class="journey-map-floating-actions">
+                      <button class="journey-map-action-btn active" type="button" data-map-action="route" aria-pressed="true" title="聚焦路线主线">路线</button>
+                      <button class="journey-map-action-btn" type="button" data-map-action="highlights" aria-pressed="false" title="聚焦沿途景点">景点</button>
+                      <button class="journey-map-action-btn" type="button" data-map-action="recommendations" aria-pressed="false" title="显示或隐藏地图推荐点">推荐点</button>
+                    </div>
+                    <div class="journey-map-floating-actions journey-live-map-styles">
+                      <button class="journey-map-style-btn active" type="button" data-map-style="standard" aria-pressed="true" title="标准底图">标准</button>
+                      <button class="journey-map-style-btn" type="button" data-map-style="terrain" aria-pressed="false" title="更强调地形层次">地形</button>
+                      <button class="journey-map-style-btn" type="button" data-map-style="calm" aria-pressed="false" title="更轻的清爽底图">清爽</button>
+                    </div>
+                  </div>
+                  ${
+                    hasLiveMapPayload
+                      ? `
+                  <div class="journey-live-map" data-map-payload="${mapPayload}">
+                    <div class="journey-live-map-state loading">正在准备地图…</div>
+                  </div>`
+                      : `
+                  <div class="journey-live-map journey-live-map--static">
+                    <div class="journey-live-map-state">行程路线会在每日安排明确后显示地图。</div>
+                  </div>`
+                  }
+                  <div class="journey-live-map-footer">
+                    <div class="journey-live-map-meta">
+                      <span class="journey-live-map-meta-label">路线状态</span>
+                      <span class="journey-live-map-meta-value">${
+                        hasLiveMapPayload ? "定位路线中" : "待补充具体点位"
+                      }</span>
+                    </div>
+                    <div class="journey-map-focus-rail">
+                      ${validRouteStops
+                        .map(
+                          (stop) => `
+                            <button class="journey-map-focus-btn" type="button" data-map-focus="${escapeHtml(
+                              stop.target
+                            )}">
+                              ${escapeHtml(stop.label)}
+                            </button>
+                          `
+                        )
+                        .join("")}
+                      ${
+                        highlightCards.length
+                          ? '<button class="journey-map-focus-btn" type="button" data-map-focus="highlights">聚焦看点</button>'
+                          : ""
+                      }
+                    </div>
+                  </div>
+                  <div class="journey-poi-bottom-sheet" hidden>
+                    <span class="journey-poi-bottom-handle"></span>
+                    <button
+                      class="journey-poi-bottom-close"
+                      type="button"
+                      data-poi-sheet-close="true"
+                      title="收起地点详情"
+                    >
+                      ×
+                    </button>
+                    <figure class="journey-poi-bottom-media">
+                      <span>点</span>
+                    </figure>
+                    <div class="journey-poi-bottom-content">
+                      <small data-poi-sheet-meta>地点信息待核验</small>
+                      <strong data-poi-sheet-title>地点详情</strong>
+                      <p data-poi-sheet-desc>地点介绍待补充。</p>
+                      <div class="journey-poi-bottom-meta">
+                        <span data-poi-sheet-duration>停留时间待核验</span>
+                        <span data-poi-sheet-cost>费用待核验</span>
+                      </div>
+                      <div class="journey-poi-bottom-proof" data-poi-sheet-proof></div>
+                      <em data-poi-sheet-note>开放、预约、票价和道路情况出发前二次核验。</em>
+                      <div class="journey-poi-bottom-actions">
+                        <button type="button" data-poi-sheet-action="replace">替换这个点</button>
+                        <button type="button" data-poi-sheet-action="verify">核验门票交通</button>
+                        <button type="button" data-poi-sheet-action="keep">保留继续规划</button>
+                      </div>
+                    </div>
+                  </div>
+                  <button class="journey-map-sidebar-open journey-map-action-btn secondary" type="button" data-map-action="toggle-sidebar" aria-expanded="false" title="展开路线说明">展开路线说明</button>
+                </div>
+                <aside class="journey-map-sidebar">
+                  <div class="journey-map-sidebar-toolbar">
+                    <span>路线说明</span>
+                    <button class="journey-map-sidebar-toggle journey-map-action-btn secondary" type="button" data-map-action="toggle-sidebar" aria-expanded="true" title="收起路线说明">收起路线说明</button>
+                  </div>
+                  ${
+                    hasDayView
+                      ? renderJourneySidebarDayRoutes(dayPlans)
+                      : `
+                          <div class="journey-map-sidebar-card compact">
+                            <div class="journey-map-sidebar-head">
+                              <span>路线说明</span>
+                              <strong>暂无分日路线</strong>
+                            </div>
+                            <p class="journey-map-day-insight-copy">
+                              具体地点补齐后会显示分日路线。
+                            </p>
+                          </div>
+                        `
+                  }
+                </aside>
+              </div>
+            </div>
+          </section>
+        `;
+      }
+
+      function hasTravelReportSignal(text = "") {
+        const normalized = String(text || "").replace(/\s+/g, " ").trim();
+        if (!normalized) return false;
+        const hasFinalSignal =
+          /(?:最终|完整|成品|报告|个性化旅游规划|旅行方案报告|规划完成)/u.test(
+            normalized
+          );
+        const sectionHits = [
+          /(?:行程概览|旅行计划|方案概览|总览)/u,
+          /(?:预算明细|费用明细|预算匹配|总预算|人均)/u,
+          /(?:每日行程|分日行程|Day\s*\d+|第\s*[一二三四五六七八九十\d]+\s*天)/iu,
+          /(?:景点地图|路线地图|地图|路线预览)/u,
+          /(?:天气|风险|注意事项|关键假设|贴士)/u,
+        ].filter((pattern) => pattern.test(normalized)).length;
+        return hasFinalSignal && sectionHits >= 2;
+      }
+
+      function inferTextTravelReportMode(text = "") {
+        const normalized = String(text || "").replace(/\s+/g, " ").trim();
+        const agencyScore = [
+          /省心方案/u,
+          /旅行社/u,
+          /成熟路线/u,
+          /产品口径/u,
+          /涵盖服务/u,
+          /服务边界/u,
+          /费用说明/u,
+          /待核验/u,
+        ].filter((pattern) => pattern.test(normalized)).length;
+        const freeScore = [
+          /个性化旅游规划/u,
+          /自由行/u,
+          /自己订/u,
+          /自助/u,
+          /专属旅程/u,
+        ].filter((pattern) => pattern.test(normalized)).length;
+        return agencyScore > freeScore ? "agency_plan" : "free_planning";
+      }
+
+      function getReportSectionMeta(title = "", bodyLines = []) {
+        const normalized = normalizeSectionTitle(title);
+        const bodyText = bodyLines.join(" ");
+        const contains = (...keywords) =>
+          keywords.some(
+            (keyword) => normalized.includes(keyword) || bodyText.includes(keyword)
+          );
+
+        if (looksLikeDecisionPrompt(`${normalized} ${bodyText}`)) {
+          return { tone: "next", icon: "fa-circle-question", label: "需要你确认" };
+        }
+        if (contains("下一步", "接下来", "用户下一步", "请评价")) {
+          return { tone: "next", icon: "fa-circle-question", label: "需要你确认" };
+        }
+        if (contains("交付", "核验清单")) {
+          return { tone: "handoff", icon: "fa-list-check", label: "交付清单" };
+        }
+        if (
+          contains("置信度", "待核验", "可追溯", "兜底估算") &&
+          !contains("费用说明", "费用边界", "预算拆分", "预算明细", "人均", "总计")
+        ) {
+          return { tone: "budget-confidence", icon: "fa-clipboard-check", label: "预算核验" };
+        }
+        if (contains("预算", "费用", "花费", "明细", "人均", "总计")) {
+          return { tone: "budget", icon: "fa-wallet", label: "费用说明" };
+        }
+        if (contains("涵盖服务", "服务边界", "接送", "预约", "应急", "人工确认")) {
+          return { tone: "service", icon: "fa-handshake-angle", label: "涵盖服务" };
+        }
+        if (contains("概览", "总览", "旅行计划", "方案", "行程摘要")) {
+          return { tone: "overview", icon: "fa-passport", label: "行程概览" };
+        }
+        if (contains("每日", "分日", "Day", "第", "日程")) {
+          return { tone: "daily", icon: "fa-calendar-days", label: "每日行程" };
+        }
+        if (contains("地图", "路线", "景点")) {
+          return { tone: "map", icon: "fa-map-location-dot", label: "路线地图" };
+        }
+        if (contains("交通", "航班", "火车", "高铁", "自驾")) {
+          return { tone: "transport", icon: "fa-train-subway", label: "交通住宿" };
+        }
+        if (contains("住宿", "酒店", "民宿", "落脚")) {
+          return { tone: "stay", icon: "fa-bed", label: "交通住宿" };
+        }
+        if (contains("天气", "风险", "提醒", "注意", "假设", "预约")) {
+          return { tone: "warning", icon: "fa-cloud-sun", label: "天气风险" };
+        }
+        if (contains("美食", "餐饮", "吃")) {
+          return { tone: "food", icon: "fa-utensils", label: "美食体验" };
+        }
+        return getTravelSectionMeta(normalized);
+      }
+
+      function normalizeReportDedupeText(value = "") {
+        return String(value || "")
+          .replace(/<[^>]+>/g, " ")
+          .replace(/[【】\[\]\s*_#|:-]+/g, "")
+          .trim()
+          .toLowerCase();
+      }
+
+      function isReportNextActionLine(line = "") {
+        const normalized = String(line || "")
+          .replace(/^[-*•]\s*/, "")
+          .trim();
+        if (!normalized) return false;
+        return /(?:下一步|接下来|请你?评价|请您评价|需要你确认|满意|想调整|想改哪里|如果满意|如果想调整|如果要调整)/u.test(
+          normalized
+        );
+      }
+
+      function splitReportSectionNextActionLines(lines = []) {
+        const firstNextIndex = lines.findIndex((line) => isReportNextActionLine(line));
+        if (firstNextIndex < 0) {
+          return { mainLines: lines, nextLines: [] };
+        }
+        return {
+          mainLines: lines.slice(0, firstNextIndex).filter(Boolean),
+          nextLines: lines.slice(firstNextIndex).filter(Boolean),
+        };
+      }
+
+      function dedupeTravelReportSections(sections = []) {
+        const seen = new Set();
+        const deduped = [];
+        sections.forEach((section) => {
+          if (!section || typeof section !== "object") return;
+          const tone = section.reportTone || section.tone || "";
+          const title = normalizeReportDedupeText(section.title || section.reportLabel || "");
+          const body = normalizeReportDedupeText((section.rawLines || []).join(" "));
+          const isBudget = tone === "budget" || /预算|费用|budget/u.test(title);
+          const key =
+            isBudget && /预算拆分|预算明细|费用拆分|费用明细/u.test(title)
+              ? `budget:${title}`
+              : isBudget
+                ? `budget:${body || title}`
+                : `${tone}:${title}:${body}`;
+          if (key && seen.has(key)) return;
+          seen.add(key);
+          deduped.push(section);
+        });
+        return deduped;
+      }
+
+      function extractTravelReportSections(blocks = []) {
+        const summaryBlocks = [];
+        const sections = [];
+
+        blocks.forEach((block) => {
+          const lines = block
+            .split("\n")
+            .map((line) => line.trim())
+            .filter(Boolean);
+          if (!lines.length) return;
+
+          const firstLine = lines[0];
+          const headingCandidate = normalizeSectionTitle(firstLine);
+          const inlineMatch = headingCandidate.match(/^([^：:]{2,18})[：:]\s*(.+)$/);
+          const sectionTitle = inlineMatch ? inlineMatch[1] : headingCandidate;
+          const bodyLines = [
+            ...(inlineMatch?.[2] ? [inlineMatch[2].trim()] : []),
+            ...lines.slice(1),
+          ].filter(Boolean);
+          const preliminaryMeta = getReportSectionMeta(sectionTitle, bodyLines);
+          const isHeading =
+            /^#{1,3}\s+/.test(firstLine) ||
+            /^\*\*.+\*\*$/.test(firstLine) ||
+            Boolean(inlineMatch) ||
+            isEmbeddedSectionHeading(firstLine) ||
+            (Boolean(preliminaryMeta) &&
+              (/[：:]$/.test(firstLine) || headingCandidate.length <= 18));
+          const meta = isHeading ? preliminaryMeta : null;
+
+          if (!meta || !bodyLines.length) {
+            const firstDayIndex = lines.findIndex((line) => parseJourneyDayNumber(line));
+            if (firstDayIndex >= 0) {
+              const introLines = lines
+                .slice(0, firstDayIndex)
+                .filter((line) => !looksLikeDecisionPrompt(line))
+                .filter((line) => !isReportNextActionLine(line))
+                .filter((line) => !isReportSummaryMarkerOnly(line));
+              if (introLines.length) {
+                summaryBlocks.push(introLines);
+              }
+              const dayLines = lines
+                .slice(firstDayIndex)
+                .filter((line) => !isReportNextActionLine(line));
+              sections.push({
+                tone: "overview",
+                reportTone: "daily",
+                reportLabel: "每日行程",
+                title: "每日安排",
+                rawLines: dayLines,
+                bodyHtml: reportRenderer?.renderReportSectionBody?.("daily", dayLines),
+              });
+              return;
+            }
+            const { mainLines: summaryCandidateLines, nextLines } =
+              splitReportSectionNextActionLines(lines);
+            if (nextLines.length) {
+              sections.push({
+                tone: "next",
+                reportTone: "next",
+                reportLabel: "需要你确认",
+                title: "下一步",
+                rawLines: nextLines,
+                bodyHtml: reportRenderer?.renderReportSectionBody?.("next", nextLines),
+              });
+            }
+            const cleanSummaryLines = filterReportSummaryLines(
+              summaryCandidateLines.length ? summaryCandidateLines : lines
+            );
+            if (cleanSummaryLines.length) {
+              summaryBlocks.push(cleanSummaryLines);
+            }
+            return;
+          }
+
+          const travelMeta =
+            meta.tone === "daily" || meta.tone === "map"
+              ? { tone: "overview", icon: meta.icon }
+              : { tone: meta.tone, icon: meta.icon };
+          const { mainLines, nextLines } =
+            meta.tone === "next"
+              ? { mainLines: [], nextLines: bodyLines }
+              : splitReportSectionNextActionLines(bodyLines);
+          if (mainLines.length) {
+            sections.push({
+              ...travelMeta,
+              reportTone: meta.tone,
+              reportLabel: meta.label || normalizeSectionTitle(sectionTitle),
+              title: normalizeSectionTitle(sectionTitle),
+              rawLines: mainLines,
+              bodyHtml: reportRenderer?.renderReportSectionBody?.(meta.tone, mainLines),
+            });
+          }
+          if (nextLines.length) {
+            sections.push({
+              tone: "next",
+              reportTone: "next",
+              reportLabel: "需要你确认",
+              title: "下一步",
+              rawLines: nextLines,
+              bodyHtml: reportRenderer?.renderReportSectionBody?.("next", nextLines),
+            });
+          }
+          if (mainLines.length || nextLines.length) {
+            return;
+          }
+          sections.push({
+            ...travelMeta,
+            reportTone: meta.tone,
+            reportLabel: meta.label || normalizeSectionTitle(sectionTitle),
+            title: normalizeSectionTitle(sectionTitle),
+            rawLines: bodyLines,
+            bodyHtml: reportRenderer?.renderReportSectionBody?.(meta.tone, bodyLines),
+          });
+        });
+
+        return { summaryBlocks, sections: dedupeTravelReportSections(sections) };
+      }
+
+      function mergeTravelReportDailySections(sections = []) {
+        const dailySections = sections.filter((section) => section.reportTone === "daily");
+        if (dailySections.length <= 1) return sections;
+        const firstDaily = dailySections[0];
+        const seen = new Set();
+        const mergedLines = [];
+        dailySections.forEach((section) => {
+          (section.rawLines || []).forEach((line) => {
+            const normalized = String(line || "").trim();
+            if (!normalized || seen.has(normalized)) return;
+            seen.add(normalized);
+            mergedLines.push(normalized);
+          });
+        });
+        const mergedDaily = {
+          ...firstDaily,
+          title: "每日安排",
+          reportLabel: "每日行程",
+          rawLines: mergedLines,
+          bodyHtml: reportRenderer?.renderReportSectionBody?.("daily", mergedLines),
+        };
+        let inserted = false;
+        return sections
+          .flatMap((section) => {
+            if (section.reportTone !== "daily") return [section];
+            if (inserted) return [];
+            inserted = true;
+            return [mergedDaily];
+          });
+      }
+
+      function renderTravelReportNextAction(sections = []) {
+        const nextSections = sections.filter(
+          (section) => (section.reportTone || section.tone) === "next"
+        );
+        if (!nextSections.length) return "";
+        const seen = new Set();
+        const lines = [];
+        nextSections.forEach((section) => {
+          (section.rawLines || []).forEach((line) => {
+            const normalized = String(line || "")
+              .trim()
+              .replace(/^[-*•]\s*/, "")
+              .trim();
+            if (
+              !normalized ||
+              /^下一步[:：]?$/.test(normalized) ||
+              seen.has(normalized)
+            ) {
+              return;
+            }
+            seen.add(normalized);
+            lines.push(normalized);
+          });
+        });
+        if (!lines.length) return "";
+        return `
+          <section class="travel-report-next-action">
+            <div class="travel-report-next-action-head">
+              <span><i class="fa-solid fa-circle-check"></i></span>
+              <div>
+                <small>需要你确认</small>
+                <h4>下一步</h4>
+              </div>
+            </div>
+            <div class="travel-report-next-action-body">
+              <ul>
+                ${lines
+                  .map((line) => `<li>${formatInlineText(line)}</li>`)
+                  .join("")}
+              </ul>
+            </div>
+          </section>
+        `;
+      }
+
+      function extractReportExpectedDayCount(text = "") {
+        const normalized = String(text || "").replace(/\s+/g, " ").trim();
+        const digitMatch = normalized.match(/(\d+)\s*天/u);
+        if (digitMatch) return Number(digitMatch[1]);
+        const chineseMatch = normalized.match(/([一二三四五六七八九十])\s*天/u);
+        return chineseMatch ? parseJourneyChineseDayNumber(chineseMatch[1]) : 0;
+      }
+
+      function extractReportDayGroups(lines = []) {
+        const groups = [];
+        let current = null;
+
+        lines.forEach((line) => {
+          const normalized = normalizeJourneyDayHeading(line);
+          const dayMatch = normalized.match(
+            /^(Day\s*\d+|第\s*[一二三四五六七八九十\d]+\s*天)[：:\s-]*(.*)$/iu
+          );
+          if (dayMatch) {
+            current = {
+              label: dayMatch[1],
+              title: dayMatch[2] || "当天安排",
+              lines: [],
+            };
+            groups.push(current);
+            return;
+          }
+          if (current) {
+            current.lines.push(normalized);
+          }
+        });
+
+        return groups;
+      }
+
+      function normalizeReportAmount(value = "") {
+        const normalized = String(value || "").replace(/\s+/g, "");
+        if (!normalized) return "";
+        return normalized.startsWith("¥") ? normalized : normalized.replace(/^￥/, "¥");
+      }
+
+      function isMeaningfulBudgetAmount(value = "") {
+        return /[元¥￥]/u.test(String(value || ""));
+      }
+
+      function getBudgetItemMeta(label = "") {
+        if (/交通|车票|机票|高铁|火车|航班|打车/u.test(label)) {
+          return {
+            icon: "fa-train-subway",
+            note: "往返大交通、市内换乘或临时打车，出发前还要核验实时票价与余票。",
+          };
+        }
+        if (/住宿|酒店|民宿|客栈|房/u.test(label)) {
+          return {
+            icon: "fa-bed",
+            note: "按晚数、房间数和住宿档位估算，最终以可订房源价格为准。",
+          };
+        }
+        if (/餐|美食|吃|饮/u.test(label)) {
+          return {
+            icon: "fa-utensils",
+            note: "覆盖正餐、特色小吃和咖啡甜品，保留一点弹性更舒服。",
+          };
+        }
+        if (/景点|门票|体验|项目|游船|展馆/u.test(label)) {
+          return {
+            icon: "fa-ticket",
+            note: "含门票、预约项目和体验活动，热门项目建议提前确认。",
+          };
+        }
+        if (/服务|预留|机动|缓冲/u.test(label)) {
+          return {
+            icon: "fa-shield-heart",
+            note: "覆盖市内交通、寄存、临时休息和价格波动缓冲。",
+          };
+        }
+        if (/人均/u.test(label)) {
+          return {
+            icon: "fa-user-group",
+            note: "按当前人数均摊后的参考值，方便判断预算压力。",
+            featured: true,
+          };
+        }
+        if (/总计|合计|总预算|总额|预算/u.test(label)) {
+          return {
+            icon: "fa-calculator",
+            note: "当前方案的总预算估算，后续改交通或住宿会同步变化。",
+            featured: true,
+          };
+        }
+        return {
+          icon: "fa-wallet",
+          note: "机动费用、寄存、临时休息和其他小额弹性支出。",
+        };
+      }
+
+      function extractReportBudgetItems(lines = [], combinedText = "") {
+        const source = [lines.join(" "), combinedText].filter(Boolean).join(" ");
+        const normalized = source.replace(/\s+/g, " ");
+        const pattern =
+          /(交通|大交通|市内交通|住宿|酒店|民宿|餐饮|美食|吃饭|景点体验|景点|门票|体验|服务\/预留|服务|预留|其他|机动|总计|合计|总预算|预算|人均)[：:\s|，,、]*([¥￥]?\s*\d[\d,.]*(?:\s*(?:-|~|—|–|至|到)\s*\d[\d,.]*)?\s*元?(?:\/人|每人)?)/gu;
+        const picked = [];
+        const seen = new Set();
+        let match;
+        while ((match = pattern.exec(normalized))) {
+          const label = match[1].replace(/预算$/, "总计");
+          if (!isMeaningfulBudgetAmount(match[2])) continue;
+          const amount = normalizeReportAmount(match[2]);
+          const key = `${label}-${amount}`;
+          if (!amount || seen.has(key)) continue;
+          seen.add(key);
+          picked.push({
+            label,
+            amount,
+            ...getBudgetItemMeta(label),
+          });
+        }
+        return picked.slice(0, 8);
+      }
+
+      function renderReportBudgetBreakdown(lines = [], combinedText = "") {
+        const items = extractReportBudgetItems(lines, combinedText);
+        if (!items.length) {
+          return `${renderAssistantLines(lines)}
+            <div class="travel-report-budget-gap">
+              预算仍缺少交通、住宿、门票、餐饮等分项拆分，生成正式报告前需要继续补齐依据。
+            </div>`;
+        }
+
+        return `
+          <div class="travel-report-budget-grid">
+            ${items
+              .map(
+                (item) => `
+                  <article class="travel-report-budget-item ${
+                    item.featured ? "featured" : ""
+                  }">
+                    <div class="travel-report-budget-icon">
+                      <i class="fa-solid ${item.icon}"></i>
+                    </div>
+                    <div>
+                      <span>${escapeHtml(item.label)}</span>
+                      <strong>${escapeHtml(item.amount)}</strong>
+                      <p>${escapeHtml(item.note)}</p>
+                    </div>
+                  </article>
+                `
+              )
+              .join("")}
+          </div>
+          ${
+            items.length < 3
+              ? `<div class="travel-report-budget-gap">当前只识别到总价或少量预算项，还需要继续补齐交通、住宿、门票、餐饮和机动费用依据。</div>`
+              : ""
+          }
+        `;
+      }
+
+      function getReportRouteWaypoints(day = {}, fallback = {}) {
+        const waypoints = Array.isArray(day.waypoints) ? day.waypoints : [];
+        const cleaned = waypoints
+          .map((item) => cleanJourneyLocationValue(item))
+          .filter(Boolean)
+          .filter((item, index, list) => list.indexOf(item) === index);
+        if (cleaned.length >= 2) return cleaned.slice(0, 6);
+        return [
+          fallback.origin,
+          ...(cleaned.length ? cleaned : []),
+          fallback.destination,
+        ]
+          .map((item) => cleanJourneyLocationValue(item || ""))
+          .filter(Boolean)
+          .filter((item, index, list) => list.indexOf(item) === index)
+          .slice(0, 6);
+      }
+
+      function renderReportRouteSketch(waypoints = [], label = "当天路线") {
+        const points = [
+          [18, 72],
+          [34, 42],
+          [50, 58],
+          [66, 30],
+          [82, 46],
+          [88, 22],
+        ];
+        const picked = waypoints.slice(0, points.length);
+        if (!picked.length) {
+          return `
+            <div class="travel-report-route-sketch empty">
+              <div class="travel-report-route-empty">这一天的路线点还没被识别出来，后续补齐完整日程后会形成静态路线图。</div>
+            </div>
+          `;
+        }
+        const svgPoints = picked
+          .map((_, index) => `${points[index][0]},${points[index][1]}`)
+          .join(" ");
+        return `
+          <div class="travel-report-route-sketch" aria-label="${escapeHtml(label)}">
+            <svg viewBox="0 0 100 82" preserveAspectRatio="none" aria-hidden="true">
+              <polyline points="${svgPoints}" fill="none" stroke="#24a6a1" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+            ${picked
+              .map((point, index) => {
+                const [x, y] = points[index];
+                return `
+                  <div class="travel-report-route-node" style="--x:${x}%; --y:${y}%;">
+                    <span>${index + 1}</span>
+                    <strong>${escapeHtml(point)}</strong>
+                  </div>
+                `;
+              })
+              .join("")}
+          </div>
+        `;
+      }
+
+      function getReportDataFromOptions(options = {}) {
+        return (
+          options.reportData ||
+          options.extraInfo?.report_data ||
+          options.extra_info?.report_data ||
+          null
+        );
+      }
+
+      function getJourneyDataFromOptions(options = {}) {
+        return (
+          options.journeyData ||
+          options.extraInfo?.journey_data ||
+          options.extra_info?.journey_data ||
+          null
+        );
+      }
+
+      function getPlanningTraceFromOptions(options = {}) {
+        const trace =
+          options.planningTrace ||
+          options.extraInfo?.planning_trace ||
+          options.extra_info?.planning_trace ||
+          [];
+        return Array.isArray(trace) ? trace : [];
+      }
+
+      function isVisualJourneyData(journeyData) {
+        return (
+          journeyData &&
+          typeof journeyData === "object" &&
+          journeyData.version === "journey_plan.v1" &&
+          Array.isArray(journeyData.days)
+        );
+      }
+
+      function collapsePlannerPanelForVisualJourney(options = {}) {
+        if (state.plannerCollapsed) return;
+        const journeyData = getJourneyDataFromOptions(options);
+        if (!isVisualJourneyData(journeyData)) return;
+        state.plannerCollapsed = true;
+        applyPlannerPanelState();
+      }
+
+      function renderReportDataList(items = [], emptyText = "待补充") {
+        const list = (Array.isArray(items) ? items : [])
+          .map((item) => String(item || "").trim())
+          .filter(Boolean);
+        if (!list.length) return `<p>${escapeHtml(emptyText)}</p>`;
+        return `<ul>${list.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`;
+      }
+
+      function routePointName(point = "") {
+        if (point && typeof point === "object") {
+          return String(point.name || point.label || point.title || "").trim();
+        }
+        return String(point || "").trim();
+      }
+
+      function normalizeRouteMapDayPoints(routeMapDay = {}, route = {}) {
+        const typedPoints = Array.isArray(routeMapDay.points) ? routeMapDay.points : [];
+        if (typedPoints.length) {
+          return typedPoints
+            .map((point) => ({
+              name: routePointName(point),
+              typeLabel: point.type_label || point.type || "路线点",
+              description: point.description || point.note || "",
+            }))
+            .filter((point) => point.name);
+        }
+        return normalizeReportDataList(routeMapDay.route_points || route.route_points || []).map(
+          (name) => ({
+            name,
+            typeLabel: "路线点",
+            description: "当天路线节点，后续可继续细化停留时间。",
+          })
+        );
+      }
+
+      function normalizeReportRouteSegmentsForDay(
+        routeMapDay = {},
+        route = {},
+        itineraryDay = {},
+        routePointNames = []
+      ) {
+        const rawSegments = Array.isArray(routeMapDay.segments)
+          ? routeMapDay.segments
+          : Array.isArray(route.segments)
+          ? route.segments
+          : Array.isArray(itineraryDay.route?.segments)
+          ? itineraryDay.route.segments
+          : Array.isArray(itineraryDay.segments)
+          ? itineraryDay.segments
+          : [];
+        return rawSegments
+          .map((segment, index) => ({
+            ...(segment && typeof segment === "object" ? segment : {}),
+            from_name: segment?.from_name || routePointNames[index] || "上一站",
+            to_name: segment?.to_name || routePointNames[index + 1] || "下一站",
+          }))
+          .filter((segment) => segment.from_name || segment.to_name);
+      }
+
+      function getReportDataDayNumber(day = {}, fallback = 0) {
+        const explicit = Number(day?.day_number || day?.day || 0);
+        if (explicit > 0) return explicit;
+        const parsed = parseJourneyDayNumber(
+          [day?.title, day?.summary, day?.label].filter(Boolean).join(" ")
+        );
+        return parsed || fallback || 0;
+      }
+
+      function normalizeReportRoutePointNames(values = []) {
+        const names = [];
+        const pushName = (value) => {
+          if (value === null || value === undefined) return;
+          if (Array.isArray(value)) {
+            value.forEach(pushName);
+            return;
+          }
+          if (typeof value === "object") {
+            [
+              value.name,
+              value.label,
+              value.title,
+              value.location,
+              value.place,
+              value.poi,
+              value.spot,
+              value.scenic_spot,
+              value.destination,
+              value.area,
+              value.address,
+              value.summary,
+              value.description,
+              value.content,
+              value.note,
+              value.activity,
+            ].forEach(pushName);
+            if (value.route && typeof value.route === "object") pushName(value.route);
+            if (Array.isArray(value.pois)) pushName(value.pois);
+            if (Array.isArray(value.waypoints)) pushName(value.waypoints);
+            if (Array.isArray(value.stops)) pushName(value.stops);
+            if (Array.isArray(value.activities)) pushName(value.activities);
+            if (Array.isArray(value.items)) pushName(value.items);
+            if (Array.isArray(value.time_blocks)) pushName(value.time_blocks);
+            if (Array.isArray(value.timeline)) pushName(value.timeline);
+            if (Array.isArray(value.schedule)) pushName(value.schedule);
+            if (Array.isArray(value.route_points)) pushName(value.route_points);
+            if (Array.isArray(value.points)) pushName(value.points);
+            return;
+          }
+          const raw = String(value || "").trim();
+          if (!raw) return;
+          const split = splitJourneyWaypoints(raw);
+          const candidates = split.length ? split : [raw];
+          candidates.forEach((candidate) => {
+            const cleaned = cleanJourneyLocationValue(candidate)
+              .replace(/^(?:推荐|建议|可选|可去|前往|游览|参观|观看)\s*/u, "")
+              .replace(/\s+/g, " ")
+              .trim();
+            if (!cleaned || isJourneyNoiseLocation(cleaned)) return;
+            if (!names.includes(cleaned)) names.push(cleaned);
+          });
+        };
+        values.forEach(pushName);
+        return names.slice(0, 8);
+      }
+
+      function extractReportItineraryDayRoutePoints(day = {}) {
+        if (!day || typeof day !== "object") return [];
+        return normalizeReportRoutePointNames([
+          day.pois,
+          day.waypoints,
+          day.stops,
+          day.route_points,
+          day.points,
+          day.route?.route_points,
+          day.route?.points,
+          day.route?.waypoints,
+          day.route?.stops,
+          day.route?.summary,
+          day.time_blocks,
+          day.timeline,
+          day.schedule,
+          day.activities,
+          day.items,
+          day.meals,
+          day.accommodation,
+          day.transport_note,
+          day.route_note,
+          day.summary,
+          day.content,
+          day.note,
+          day.title,
+        ]);
+      }
+
+      function buildReportDataJourneyDayPlans(reportData = {}) {
+        const routes = Array.isArray(reportData.map_routes) ? reportData.map_routes : [];
+        const routeMapDays = Array.isArray(reportData.route_map?.days)
+          ? reportData.route_map.days
+          : [];
+        const itineraryDays = Array.isArray(reportData.itinerary)
+          ? reportData.itinerary.filter((day) => !day?.missing)
+          : [];
+        const routeByDay = new Map(
+          routes.map((route, index) => [getReportDataDayNumber(route, index + 1), route])
+        );
+        const routeMapByDay = new Map(
+          routeMapDays.map((day, index) => [getReportDataDayNumber(day, index + 1), day])
+        );
+        const itineraryByDay = new Map(
+          itineraryDays.map((day, index) => [getReportDataDayNumber(day, index + 1), day])
+        );
+        const expectedDays = parseReportDataExpectedDays(reportData);
+        const maxDay = Math.max(
+          expectedDays,
+          ...routeByDay.keys(),
+          ...routeMapByDay.keys(),
+          ...itineraryByDay.keys(),
+          0
+        );
+        if (!maxDay) return [];
+
+        const dayPlans = [];
+        for (let dayNumber = 1; dayNumber <= maxDay; dayNumber += 1) {
+          const routeDay = routeMapByDay.get(dayNumber) || {};
+          const matchedRoute = routeByDay.get(dayNumber) || {};
+          const itineraryDay = itineraryByDay.get(dayNumber) || {};
+          const routePointNames = normalizeRouteMapDayPoints(routeDay, matchedRoute)
+            .map((point) => point.name)
+            .filter(Boolean);
+          const routePointObjects = normalizeRouteMapDayPoints(routeDay, matchedRoute);
+          const itineraryPointNames = extractReportItineraryDayRoutePoints(itineraryDay);
+          const waypoints = normalizeReportRoutePointNames([
+            routePointNames,
+            itineraryPointNames,
+          ]).filter((item) => !isJourneyNoiseLocation(item));
+          const title =
+            routeDay.title ||
+            routeDay.summary ||
+            matchedRoute.summary ||
+            itineraryDay.title ||
+            `Day ${dayNumber}`;
+          const note =
+            routeDay.route_note ||
+            routeDay.summary ||
+            matchedRoute.route_note ||
+            matchedRoute.summary ||
+            itineraryDay.route_note ||
+            (waypoints.length ? waypoints.join(" → ") : "当天路线待补充具体地点。");
+          const stops = routePointObjects.map((point, pointIndex) => ({
+            id: `report-day-${dayNumber}-p${pointIndex + 1}`,
+            name: point.name,
+            type_label: point.typeLabel || "路线点",
+            description: point.description || "",
+            verification_status: point.verification_status || "",
+            verification_note: point.description || "",
+          }));
+          const segments = normalizeReportRouteSegmentsForDay(
+            routeDay,
+            matchedRoute,
+            itineraryDay,
+            routePointObjects.map((point) => point.name).filter(Boolean)
+          );
+          dayPlans.push({
+            key: `report-day-${dayNumber}`,
+            dayNumber,
+            label: `Day ${dayNumber}`,
+            title,
+            waypoints,
+            stops,
+            segments,
+            highlights: waypoints.slice(0, 3),
+            note,
+            routeStatus: getJourneyDayRouteStatus({ segments }),
+          });
+        }
+        return dayPlans;
+      }
+
+      function buildReportDataJourneyPreviewState(reportData = {}) {
+        const overview = reportData.overview || {};
+        const routeLabel = overview.route_label || "路线总览";
+        const dayPlans = buildReportDataJourneyDayPlans(reportData).sort(
+          (left, right) => left.dayNumber - right.dayNumber
+        );
+        const allWaypoints = dayPlans
+          .flatMap((day) => day.waypoints || [])
+          .filter((item, index, list) => item && list.indexOf(item) === index);
+        if (!allWaypoints.length) return { shouldRender: false };
+
+        const cityPair =
+          extractJourneyCityPair(routeLabel) ||
+          (allWaypoints.length >= 2
+            ? {
+                origin: allWaypoints[0],
+                destination: allWaypoints[allWaypoints.length - 1],
+              }
+            : { origin: "", destination: allWaypoints[0] || routeLabel });
+        return {
+          combinedText: [
+            routeLabel,
+            reportData.transport?.summary,
+            reportData.accommodation?.summary,
+            allWaypoints.join(" "),
+          ]
+            .filter(Boolean)
+            .join(" "),
+          cityPair,
+          destinationSection: {
+            tone: "overview",
+            title: routeLabel,
+            rawLines: [
+              overview.duration ? `行程天数：${overview.duration}` : "",
+              overview.people ? `出行人数：${overview.people}` : "",
+              ...(overview.travel_styles || []),
+            ].filter(Boolean),
+          },
+          transportSection: {
+            tone: "transport",
+            title: reportData.transport?.summary || "交通待核验",
+            rawLines: [reportData.transport?.summary || ""].filter(Boolean),
+          },
+          staySection: {
+            tone: "stay",
+            title: reportData.accommodation?.summary || "住宿待核验",
+            rawLines: [reportData.accommodation?.summary || ""].filter(Boolean),
+          },
+          budgetSection: {
+            tone: "budget",
+            title: formatReportDataMoney(reportData.budget?.total) || "预算待核验",
+            rawLines: [],
+          },
+          highlights: allWaypoints.slice(1, 5),
+          highlightCards: buildJourneyHighlightCards(allWaypoints.slice(1, 5)),
+          rhythm: dayPlans.map((day) => day.note).slice(0, 3),
+          dayPlans,
+          shouldRender: true,
+        };
+      }
+
+      function buildReportDefaultWarningSection(combinedText = "") {
+        const hasWeatherHint = /雨|雪|热|冷|高温|台风|天气|温差|端午|暑期|节假日/u.test(
+          combinedText
+        );
+        const lines = [
+          hasWeatherHint
+            ? "出发前 24-48 小时重新核验天气、景点开放状态和预约名额，遇到高温、降雨或节假日客流时优先执行室内/低强度备选。"
+            : "出发前 24-48 小时重新核验天气、交通票价、酒店入住政策和景点预约名额。",
+          "每天保留 1-2 小时机动时间，热门餐厅、博物馆、夜游和演出类项目尽量提前预约。",
+          "预算里的交通、住宿和门票价格会随日期波动，正式下单前需要再做一次实时确认。",
+        ];
+        return {
+          tone: "warning",
+          reportTone: "warning",
+          icon: "fa-cloud-sun",
+          reportLabel: "天气风险",
+          title: "天气与风险提醒",
+          rawLines: lines,
+        };
+      }
+
+      function buildVisualJourneyPreviewState(journeyData = {}) {
+        if (!isVisualJourneyData(journeyData)) return { shouldRender: false };
+        const overview = journeyData.overview || {};
+        const days = Array.isArray(journeyData.days) ? journeyData.days : [];
+        const allPois = Array.isArray(journeyData.pois) ? journeyData.pois : [];
+        const alternativePois = Array.isArray(journeyData.alternative_pois)
+          ? journeyData.alternative_pois
+          : [];
+        const dayPlans = days
+          .map((day, index) => {
+            const pois = Array.isArray(day.pois) ? day.pois : [];
+            const waypoints = pois
+              .map((poi) => cleanJourneyLocationValue(poi.name || ""))
+              .filter(Boolean);
+            if (!waypoints.length) return null;
+            return {
+              key: `visual-day-${day.day_number || index + 1}`,
+              dayNumber: day.day_number || index + 1,
+              label: day.date
+                ? `${String(day.date).slice(5)} ${day.weekday || ""}`.trim()
+                : `Day ${day.day_number || index + 1}`,
+              title: day.title || `Day ${day.day_number || index + 1}`,
+              waypoints,
+              stops: pois.map((poi) => ({
+                id: poi.id || "",
+                name: poi.name || "",
+                city: poi.city || "",
+                type: poi.type || "attraction",
+                type_label: poi.type_label || poi.type || "地点",
+                time_range: poi.suggested_time || "",
+                description: poi.description || "",
+                duration_minutes: poi.duration_minutes || "",
+                estimated_cost: poi.estimated_cost || "",
+                reservation_note: poi.reservation_note || "",
+                verification_status: poi.verification_status || "",
+                verification_note: poi.verification_note || "",
+                locked: Boolean(poi.locked),
+                map_verified: Boolean(poi.map_verified),
+                coordinate_estimated: Boolean(poi.coordinate_estimated),
+                address: poi.address || "",
+                amap_type: poi.amap_type || "",
+                amap_source_name: poi.amap_source_name || "",
+                tags: Array.isArray(poi.tags) ? poi.tags : [],
+                image_url: poi.image_url || "",
+                map_query: poi.map_query || "",
+                lng: typeof poi.lng === "number" ? poi.lng : null,
+                lat: typeof poi.lat === "number" ? poi.lat : null,
+              })),
+              highlights: waypoints.slice(0, 3),
+              note: day.summary || waypoints.join(" → "),
+              city: day.city || "",
+              weather: day.weather || null,
+              segments: Array.isArray(day.segments) ? day.segments : [],
+              routeStatus: getJourneyDayRouteStatus(day),
+              weatherStatus: getJourneyDayWeatherStatus(day),
+            };
+          })
+          .filter(Boolean);
+        if (!dayPlans.length) return { shouldRender: false };
+        const destination = overview.destination || dayPlans[0]?.waypoints?.[0] || "";
+        const recommendations = alternativePois
+          .map((poi) => normalizeJourneyPoiAsStop(poi, { city: destination }))
+          .filter((poi) => cleanJourneyLocationValue(poi.name || ""))
+          .slice(0, 8);
+        const origin = overview.route_label?.includes("进")
+          ? overview.route_label.split("进")[0]
+          : "";
+        return {
+          combinedText: [
+            overview.title,
+            overview.summary,
+            allPois.map((poi) => poi.name).join(" "),
+            recommendations.map((poi) => poi.name).join(" "),
+          ]
+            .filter(Boolean)
+            .join(" "),
+          cityPair: {
+            origin: origin || dayPlans[0]?.waypoints?.[0] || "",
+            destination,
+          },
+          destinationSection: {
+            tone: "overview",
+            title: overview.title || `${destination}旅程草案`,
+            rawLines: [
+              overview.summary,
+              overview.date_range ? `日期：${overview.date_range}` : "",
+              overview.route_label ? `路线：${overview.route_label}` : "",
+            ].filter(Boolean),
+          },
+          transportSection: {
+            tone: "transport",
+            title: "交通待后续核验",
+            rawLines: ["大交通、城际交通和实时路况会在后续继续核验。"],
+          },
+          staySection: {
+            tone: "stay",
+            title: "住宿待后续核验",
+            rawLines: ["住宿区域和真实酒店候选会在旅程草案确认后继续补齐。"],
+          },
+          budgetSection: {
+            tone: "budget",
+            title: "预算待核验",
+            rawLines: [],
+          },
+          highlights: allPois.map((poi) => poi.name).filter(Boolean).slice(0, 6),
+          highlightCards: buildJourneyHighlightCards(
+            allPois.map((poi) => poi.name).filter(Boolean).slice(0, 6)
+          ),
+          recommendations,
+          rhythm: days.map((day) => day.summary || day.title || "").filter(Boolean).slice(0, 3),
+          dayPlans,
+          mapExperience: "immersive",
+          shouldRender: true,
+        };
+      }
+
+      function renderPlanningTrace(trace = []) {
+        const items = (Array.isArray(trace) ? trace : []).filter(Boolean);
+        if (!items.length || !canShowAdvisorDebug()) return "";
+        return `
+          <details class="planning-trace-panel" open>
+            <summary>
+              <span>规划过程</span>
+              <strong>${items.length} 步完成</strong>
+            </summary>
+            <div class="planning-trace-list">
+              ${items
+                .map((item) => {
+                  const status = item.status || "completed";
+                  return `
+                    <div class="planning-trace-item ${escapeHtml(status)}">
+                      <span class="planning-trace-icon">${
+                        status === "completed" ? "✓" : "·"
+                      }</span>
+                      <div>
+                        <strong>${escapeHtml(item.title || item.phase || "规划步骤")}</strong>
+                        <p>${escapeHtml(item.detail || "")}</p>
+                        <small>${[
+                          item.city,
+                          item.date_range,
+                          item.count ? `${item.count} 项` : "",
+                        ]
+                          .filter(Boolean)
+                          .map(escapeHtml)
+                          .join(" · ")}</small>
+                      </div>
+                    </div>
+                  `;
+                })
+                .join("")}
+            </div>
+          </details>
+        `;
+      }
+
+      function renderVisualJourneyWorkbench(journeyData, options = {}) {
+        if (!isVisualJourneyData(journeyData)) return "";
+        const overview = journeyData.overview || {};
+        const days = Array.isArray(journeyData.days) ? journeyData.days : [];
+        const pois = Array.isArray(journeyData.pois) ? journeyData.pois : [];
+        const previewState = buildVisualJourneyPreviewState(journeyData);
+        const atlas = previewState.shouldRender ? renderJourneyPreview(previewState) : "";
+        return `
+          <section
+            class="visual-journey-workbench"
+            data-journey-data="${serializeMapPayload(journeyData)}"
+          >
+            <div class="visual-journey-head">
+              <div>
+                <span>可视化旅程草案</span>
+                <strong>${escapeHtml(overview.title || "经典路线")}</strong>
+                <p>${escapeHtml(overview.summary || "先生成地图路线，再继续核验交通、酒店和预算。")}</p>
+              </div>
+              <div class="visual-journey-badges">
+                <span>${escapeHtml(overview.date_range || "日期待确认")}</span>
+                <span>${escapeHtml(String(overview.duration_days || days.length || "多"))} 天</span>
+                <span>${escapeHtml(overview.route_label || "路线待核验")}</span>
+              </div>
+            </div>
+            ${renderVisualJourneyStats(journeyData)}
+            ${renderPlanningTrace(getPlanningTraceFromOptions(options))}
+            ${atlas}
+            ${renderVisualJourneyDayEditor(previewState.dayPlans, previewState.recommendations)}
+            <div class="visual-day-strip">
+              ${days
+                .map(
+                  (day) => `
+                    <article>
+                      <button
+                        class="visual-day-focus-btn"
+                        type="button"
+                        data-map-day-focus="visual-day-${escapeHtml(String(day.day_number || 1))}"
+                      >
+                      <span>${escapeHtml(day.date ? String(day.date).slice(5) : `Day ${day.day_number}`)}</span>
+                      <strong>${escapeHtml(day.title || day.summary || "当天安排")}</strong>
+                      <p>${escapeHtml(day.summary || "")}</p>
+                      ${renderJourneyDayStatusChips(day)}
+                      </button>
+                    </article>
+                  `
+                )
+                .join("")}
+            </div>
+            ${renderVisualPoiDetails(pois)}
+            <div class="visual-journey-pending">
+              ${(journeyData.pending_checks || [])
+                .map((item) => `<span>${escapeHtml(item)}</span>`)
+                .join("")}
+            </div>
+          </section>
+        `;
+      }
+
+      function renderAssistantText(text, options = {}) {
+        const structuredReport = reportRenderer?.renderTravelReportFromData?.(
+          getReportDataFromOptions(options),
+          options
+        );
+        if (structuredReport) return structuredReport;
+
+        const journeyData = getJourneyDataFromOptions(options);
+        if (isVisualJourneyData(journeyData)) {
+          return renderVisualJourneyWorkbench(journeyData, options);
+        }
+
+        if (!text) return "";
+        const blocks = splitAssistantBlocks(text);
+        return (
+          reportRenderer?.renderTravelReport?.(blocks, options) ||
+          renderStructuredTravelPlan(blocks, options) ||
+          renderAssistantFallback(blocks)
+        );
+      }
+
+      function renderMessageText(role, text, options = {}) {
+        if (role === "assistant") {
+          return renderAssistantText(text, options);
+        }
+        return escapeHtml(text);
+      }
+
+      function buildMessageMarkup(role, text, timestamp = new Date(), options = {}) {
+        return `
+                <div class="message-avatar"><i class="fa-solid ${
+                  role === "user" ? "fa-user" : "fa-compass"
+                }"></i></div>
+                <div class="message-content">
+                    <div class="message-text">${renderMessageText(
+                      role,
+                      text,
+                      options
+                    )}</div>
+                    <div class="message-time">${formatClock(timestamp)}</div>
+                </div>
+            `;
+      }
+
+      function bindStaticActionEvents() {
+        const introOverlay = document.getElementById("introOverlay");
+        introOverlay?.addEventListener("click", enterAuthPortal);
+        introOverlay?.addEventListener("keydown", handleIntroKeydown);
+        document.querySelectorAll(".auth-tab[data-tab]").forEach((tab) => {
+          tab.addEventListener("click", () => switchAuthTab(tab.dataset.tab));
+        });
+        document.getElementById("authForm")?.addEventListener("submit", handleAuth);
+        document
+          .getElementById("newChatBtn")
+          ?.addEventListener("click", createNewConversation);
+        document.getElementById("logoutBtn")?.addEventListener("click", logout);
+        document
+          .getElementById("mobileChatBackBtn")
+          ?.addEventListener("click", exitMobileChatFocus);
+        document
+          .getElementById("retryHealthBtn")
+          ?.addEventListener("click", retryHealthCheck);
+        document
+          .getElementById("plannerToggleBtn")
+          ?.addEventListener("click", () => togglePlannerPanel());
+        document
+          .getElementById("resetPlannerDraftBtn")
+          ?.addEventListener("click", () => resetPlannerDraft());
+        guideImport?.bindGuideImportEvents?.();
+        document
+          .getElementById("chatInput")
+          ?.addEventListener("keydown", handleInputKeydown);
+        document.getElementById("sendBtn")?.addEventListener("click", sendMessage);
+        document
+          .getElementById("governanceRefreshBtn")
+          ?.addEventListener("click", refreshGovernanceConsole);
+        document
+          .getElementById("createDemoApprovalBtn")
+          ?.addEventListener("click", createDemoApproval);
+      }
+
+      function getClosestActionTarget(event, selector) {
+        return event.target?.closest?.(selector) || null;
+      }
+
+      function handleDelegatedActionClick(event) {
+        const approvalDecision = getClosestActionTarget(
+          event,
+          "[data-approval-decision-id][data-approval-decision]"
+        );
+        if (approvalDecision) {
+          decideApproval(
+            approvalDecision.dataset.approvalDecisionId,
+            approvalDecision.dataset.approvalDecision,
+            event
+          );
+          return true;
+        }
+
+        const approvalCard = getClosestActionTarget(event, "[data-approval-select-id]");
+        if (approvalCard) {
+          selectApprovalRecord(approvalCard.dataset.approvalSelectId);
+          return true;
+        }
+
+        const saveConversation = getClosestActionTarget(
+          event,
+          "[data-conversation-save-id]"
+        );
+        if (saveConversation) {
+          submitConversationRename(event, saveConversation.dataset.conversationSaveId);
+          return true;
+        }
+
+        if (getClosestActionTarget(event, "[data-conversation-cancel]")) {
+          cancelConversationRename(event);
+          return true;
+        }
+
+        const editConversation = getClosestActionTarget(
+          event,
+          "[data-conversation-edit-id]"
+        );
+        if (editConversation) {
+          renameConversation(event, editConversation.dataset.conversationEditId);
+          return true;
+        }
+
+        const deleteConversationBtn = getClosestActionTarget(
+          event,
+          "[data-conversation-delete-id]"
+        );
+        if (deleteConversationBtn) {
+          deleteConversation(event, deleteConversationBtn.dataset.conversationDeleteId);
+          return true;
+        }
+
+        if (getClosestActionTarget(event, ".conversation-title-edit-form")) {
+          event.stopPropagation();
+          return true;
+        }
+
+        if (getClosestActionTarget(event, "[data-create-conversation]")) {
+          createNewConversation();
+          return true;
+        }
+
+        const conversationItem = getClosestActionTarget(
+          event,
+          "[data-conversation-switch-id]"
+        );
+        if (conversationItem) {
+          switchConversation(conversationItem.dataset.conversationSwitchId);
+          return true;
+        }
+
+        const suggestion = getClosestActionTarget(event, "[data-suggestion-text]");
+        if (suggestion) {
+          applySuggestion(suggestion.dataset.suggestionText || "");
+          return true;
+        }
+
+        const plannerStyle = getClosestActionTarget(event, "[data-planner-style]");
+        if (plannerStyle) {
+          appendPlannerStyle(plannerStyle.dataset.plannerStyle || "");
+          return true;
+        }
+
+        const plannerDraft = getClosestActionTarget(
+          event,
+          "[data-compose-planner-draft]"
+        );
+        if (plannerDraft) {
+          composePlannerDraft(plannerDraft.dataset.composePlannerDraft);
+          return true;
+        }
+
+        const plannerTemplate = getClosestActionTarget(
+          event,
+          "[data-fill-planner-template]"
+        );
+        if (plannerTemplate) {
+          fillPlannerTemplate(plannerTemplate.dataset.fillPlannerTemplate);
+          return true;
+        }
+
+        const approvalFilter = getClosestActionTarget(event, "[data-approval-filter]");
+        if (approvalFilter) {
+          setApprovalFilter(approvalFilter.dataset.approvalFilter || "all");
+          return true;
+        }
+
+        return false;
+      }
+
+      function handleDelegatedActionSubmit(event) {
+        const renameForm = getClosestActionTarget(
+          event,
+          "[data-conversation-rename-form-id]"
+        );
+        if (!renameForm) return false;
+        submitConversationRename(event, renameForm.dataset.conversationRenameFormId);
+        return true;
+      }
+
+      function handleDelegatedActionKeydown(event) {
+        const renameInput = getClosestActionTarget(
+          event,
+          "[data-conversation-rename-input-id]"
+        );
+        if (!renameInput) return false;
+        handleConversationRenameKeydown(
+          event,
+          renameInput.dataset.conversationRenameInputId
+        );
+        return true;
+      }
+
+      function handleDelegatedActionDblClick(event) {
+        const renameTitle = getClosestActionTarget(
+          event,
+          "[data-conversation-rename-title-id]"
+        );
+        if (!renameTitle) return false;
+        beginConversationRename(event, renameTitle.dataset.conversationRenameTitleId);
+        return true;
+      }
+
+      document.addEventListener("DOMContentLoaded", async () => {
+        const apiBaseInput = document.getElementById("apiBase");
+        apiBaseInput.value = getDefaultApiBase();
+        apiBaseInput.addEventListener("input", updateEndpointUI);
+        bindStaticActionEvents();
+        scheduleIntroSecondaryImages();
+        window.addEventListener("resize", () => {
+          if (!isMobileViewport()) {
+            setMobileChatFocus(false);
+          } else if (state.currentConversationId && state.mobileChatFocus) {
+            setMobileChatFocus(true);
+          }
+        });
+        window.addEventListener("online", () =>
+          checkServiceHealth({ silent: true, reason: "browser-online" })
+        );
+        document.addEventListener("click", (event) => {
+          if (reportActions?.handleReportClick?.(event)) {
+            return;
+          }
+
+          if (mapControls?.handleMapClick?.(event)) {
+            return;
+          }
+
+          if (journeyEditor?.handleWorkbenchClick?.(event)) {
+            return;
+          }
+
+          if (journeyOverlayActions?.handleOverlayClick?.(event)) {
+            return;
+          }
+
+          if (handleDelegatedActionClick(event)) {
+            return;
+          }
+        });
+        document.addEventListener("keydown", (event) => {
+          if (handleDelegatedActionKeydown(event)) {
+            return;
+          }
+
+          if (event.key === "Escape") {
+            journeyOverlayActions?.closeJourneyMapModal?.();
+          }
+        });
+        document.addEventListener("submit", (event) => {
+          handleDelegatedActionSubmit(event);
+        });
+        document.addEventListener("dblclick", (event) => {
+          handleDelegatedActionDblClick(event);
+        });
+        document.addEventListener("visibilitychange", () => {
+          if (
+            document.visibilityState === "visible" &&
+            Date.now() - state.lastHealthCheckAt > 60000
+          ) {
+            checkServiceHealth({ silent: true, reason: "tab-visible" });
+          }
+        });
+        syncUiAvailability();
+        updateEndpointUI();
+        renderReadinessPanel();
+        renderApprovalList();
+        renderApprovalEvents();
+        renderToolAuditList();
+        renderTurnObservability();
+        applyPlannerPanelState();
+        await checkServiceHealth({ silent: false, reason: "startup" });
+        const restoredSession = await restoreSessionFromCookie();
+        if (state.user && restoredSession) {
+          hideIntroOverlay();
+          hideAuthOverlay();
+          updateUserInfo();
+          setRuntimeStatus("正在同步会话", "loading");
+          await loadConversations();
+          await loadApprovals({ silent: true });
+        } else {
+          showIntroOverlay();
+          hideAuthOverlay();
+          if (isServiceUsable()) {
+            setRuntimeStatus("等待登录", "idle");
+          }
+          setMobileChatFocus(false);
+          updateSessionOverview();
+          setAuthFeedback(
+            "如果你是第一次来，可以先注册；如果之前用过，直接登录即可继续会话，最后我会帮你整理成旅游规划报告。",
+            "info"
+          );
+        }
+        autoResizeTextarea();
+        restoreDrafts();
+        updatePlannerAssistStrip();
+        ["username", "email", "password"].forEach((field) => {
+          const input = document.getElementById(field);
+          input?.addEventListener("input", () => {
+            setFieldError(field, "");
+            if (document.getElementById("authFeedback")?.classList.contains("error")) {
+              setAuthFeedback("", "info");
+            }
+          });
+        });
+        document
+          .getElementById("chatInput")
+          ?.addEventListener("input", persistComposerDraft);
+        window.addEventListener("pagehide", flushAllDraftStorageWrites);
+        document
+          .getElementById("chatTitle")
+          ?.addEventListener("dblclick", () => renameCurrentConversation());
+        [
+          "plannerOrigin",
+          "plannerDestination",
+          "plannerDate",
+          "plannerDays",
+          "plannerTravelers",
+          "plannerBudget",
+          "plannerTransport",
+          "plannerStay",
+          "plannerStyle",
+        ].forEach((field) => {
+          document
+            .getElementById(field)
+            ?.addEventListener("input", persistPlannerDraft);
+        });
+      });
+
+      function switchAuthTab(tab) {
+        const tabs = document.querySelectorAll(".auth-tab");
+        const emailField = document.getElementById("emailField");
+        const emailInput = document.getElementById("email");
+        const authBtn = document.getElementById("authBtn");
+        const authFormMeta = document.getElementById("authFormMeta");
+
+        tabs.forEach((t) => t.classList.remove("active"));
+        document.querySelector(`[data-tab="${tab}"]`).classList.add("active");
+        clearAuthErrors();
+
+        if (tab === "register") {
+          emailField.classList.add("show");
+          emailInput.required = true;
+          authBtn.textContent = "注册通行证";
+          if (authFormMeta) {
+            authFormMeta.textContent =
+              "注册后会自动登录，并立即为你同步空白会话列表。";
+          }
+          setAuthFeedback(
+            "建议使用常用邮箱注册，后续排查问题和找回账号会更方便。",
+            "info"
+          );
+        } else {
+          emailField.classList.remove("show");
+          emailInput.required = false;
+          authBtn.textContent = "开启旅程";
+          if (authFormMeta) {
+            authFormMeta.textContent =
+              "登录后可以继续之前的行程记录，也可以新建一段旅程。";
+          }
+          setAuthFeedback(
+            "如果你之前已经创建过账号，直接输入用户名和密码即可继续会话。",
+            "info"
+          );
+        }
+      }
+
+      async function handleAuth(e) {
+        e.preventDefault();
+        const isRegister =
+          document.querySelector(".auth-tab.active").dataset.tab === "register";
+        const formData = validateAuthForm(isRegister);
+        if (!formData) return;
+        if (!(await ensureServiceReady("登录或注册"))) return;
+        const { username, email, password } = formData;
+        const btn = document.getElementById("authBtn");
+
+        state.isAuthLoading = true;
+        syncUiAvailability();
+        setAuthFeedback(
+          isRegister ? "正在创建账号并同步会话…" : "正在验证身份并拉取会话…",
+          "info"
+        );
+        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 验证中...';
+
+        try {
+          let response;
+          const endpoint = isRegister
+            ? "/api/v1/users/register"
+            : "/api/v1/users/login";
+          const body = isRegister
+            ? { username, email, password }
+            : { username, password };
+
+          ({ response, data } = await sessionApi.submitAuthForm({
+            apiBase: getApiBase(),
+            endpoint,
+            body,
+            stateToken: state.token,
+          }));
+
+          if (response.ok) {
+            state.token = data.access_token || "";
+            state.user = data.user;
+            setAuthFeedback(
+              isRegister
+                ? "账号创建成功，正在进入你的旅行工作台。"
+                : "登录成功，正在恢复你的会话列表。",
+              "success"
+            );
+            showToast(isRegister ? "欢迎加入知行！" : "欢迎回来！");
+            hideIntroOverlay();
+            hideAuthOverlay();
+            updateUserInfo();
+            state.currentConversationId = null;
+            state.conversations = [];
+            resetConversationDrafts({ silent: true });
+            renderConversationsList();
+            setRuntimeStatus("正在同步会话", "loading");
+            await loadConversations();
+            await loadApprovals({ silent: true });
+          } else {
+            setRuntimeStatus("登录失败", "error");
+            setAuthFeedback(data.detail || "认证失败，请检查用户名和密码。", "error");
+            showToast(data.detail || "操作失败", true);
+          }
+        } catch (error) {
+          setRuntimeStatus("连接异常", "error");
+          setAuthFeedback("网络连接出现波动，请稍后重试。", "error");
+          showToast("网络连接异常", true);
+        } finally {
+          state.isAuthLoading = false;
+          btn.innerHTML = isRegister ? "注册通行证" : "开启旅程";
+          syncUiAvailability();
+        }
+      }
+
+      function hideAuthOverlay() {
+        document.getElementById("authOverlay").classList.add("hidden");
+      }
+      function showAuthOverlay() {
+        enableAuthHeroImages();
+        document.getElementById("authOverlay").classList.remove("hidden");
+      }
+
+      function updateUserInfo() {
+        if (state.user) {
+          document.getElementById("userName").textContent =
+            state.user.username || "旅行者";
+          // 提取首字母
+          const name = state.user.username || state.user.email || "U";
+          document.getElementById("userAvatar").textContent =
+            name[0].toUpperCase();
+        }
+      }
+
+      function clearClientSession(options = {}) {
+        const showToastMessage =
+          typeof options === "boolean" ? options : options?.showToastMessage !== false;
+        resetConversationDrafts({ silent: true });
+        state.token = "";
+        state.user = null;
+        state.currentConversationId = null;
+        state.conversations = [];
+        state.governance.approvals = [];
+        state.governance.approvalEvents = [];
+        state.governance.selectedApprovalId = null;
+        state.governance.toolAuditEvents = [];
+        state.governance.turnObservability = null;
+        resetPlannerDraft({ silent: true });
+        showIntroOverlay();
+        hideAuthOverlay();
+        clearChatMessages();
+        document.getElementById("conversationsList").innerHTML = "";
+        document.getElementById("chatTitle").textContent = "行程助手";
+        document.getElementById("userName").textContent = "访客";
+        document.getElementById("userAvatar").textContent = "U";
+        setMobileChatFocus(false);
+        setRuntimeStatus("等待登录", "idle");
+        updateSessionOverview();
+        renderApprovalList();
+        renderApprovalEvents();
+        renderToolAuditList();
+        renderTurnObservability();
+        if (showToastMessage) {
+          showToast("已登出账号");
+        }
+      }
+
+      async function logout() {
+        try {
+          await sessionApi.remoteLogout({
+            apiBase: getApiBase(),
+            stateToken: state.token,
+          });
+        } catch (error) {
+          console.warn("Remote logout failed", error);
+        } finally {
+          clearClientSession({ showToastMessage: true });
+        }
+      }
+
+      async function loadConversations(options = {}) {
+        if (!(await ensureServiceReady("加载会话"))) return;
+        const preserveCurrentConversationId = Boolean(
+          options?.preserveCurrentConversationId
+        );
+        try {
+          const { response, data } = await conversationApi.fetchConversations({
+            apiBase: getApiBase(),
+            stateToken: state.token,
+          });
+          if (response.ok) {
+            state.conversations = Array.isArray(data)
+              ? data
+              : data.conversations || [];
+            if (
+              state.currentConversationId &&
+              !state.conversations.some(
+                (conv) => conv.id === state.currentConversationId
+              )
+            ) {
+              if (!preserveCurrentConversationId) {
+                state.currentConversationId = null;
+                restoreChatTitleLabel();
+                clearChatMessages();
+                setMobileChatFocus(false);
+              }
+            }
+            renderConversationsList();
+            setRuntimeStatus("已连接", "online");
+          } else if (response.status === 401) clearClientSession({ showToastMessage: false });
+        } catch (error) {
+          console.error(error);
+          renderConversationsList();
+          setRuntimeStatus("会话同步失败", "error");
+        }
+      }
+
+      function renderConversationsList() {
+        const container = document.getElementById("conversationsList");
+        updateSessionOverview();
+        if (state.conversations.length === 0) {
+          container.innerHTML = `
+            <div class="empty-conversations">
+              <i class="fa-regular fa-map" style="display:block; font-size:18px; margin-bottom:8px; color:var(--accent);"></i>
+              <span class="empty-conversations-title">还没有保存的行程</span>
+              <p class="empty-conversations-text">先创建一段新会话，后面每次回来都能从这里继续追问、补充交通和住宿细节。</p>
+              <button
+                class="empty-conversations-btn"
+                type="button"
+                data-create-conversation="true"
+              >
+                <i class="fa-solid fa-compass"></i>
+                立即创建第一段行程
+              </button>
+            </div>`;
+          return;
+        }
+        container.innerHTML = state.conversations
+          .map(
+            (conv) => `
+                <div class="conversation-item ${
+                  conv.id === state.currentConversationId ? "active" : ""
+                } ${conv.id === state.editingConversationId ? "editing" : ""}"
+                     data-conversation-switch-id="${escapeAttribute(conv.id)}">
+                    <div class="conversation-top">
+                      ${
+                        conv.id === state.editingConversationId
+                          ? `
+                              <form
+                                class="conversation-title conversation-title-edit-form"
+                                data-conversation-rename-form-id="${escapeAttribute(conv.id)}"
+                              >
+                                <i class="fa-solid fa-map-pin" style="font-size:10px; color:var(--accent)"></i>
+                                <input
+                                  id="conversationRenameInput-${escapeAttribute(conv.id)}"
+                                  class="conversation-title-input"
+                                  type="text"
+                                  value="${escapeAttribute(conv.title || DEFAULT_CONVERSATION_TITLE)}"
+                                  maxlength="40"
+                                  aria-label="编辑行程名称"
+                                  data-conversation-rename-input-id="${escapeAttribute(conv.id)}"
+                                />
+                              </form>
+                            `
+                          : `
+                              <div
+                                class="conversation-title"
+                                data-conversation-rename-title-id="${escapeAttribute(conv.id)}"
+                              >
+                                <i class="fa-solid fa-map-pin" style="font-size:10px; color:var(--accent)"></i>
+                                <span class="conversation-title-text">${escapeHtml(
+                                  conv.title || "未知行程"
+                                )}</span>
+                              </div>
+                            `
+                      }
+                      <div class="conversation-actions">
+                        ${
+                          conv.id === state.currentConversationId
+                            ? '<span class="conversation-badge">当前</span>'
+                            : ""
+                        }
+                        ${
+                          conv.id === state.editingConversationId
+                            ? `
+                                <button
+                                  class="conversation-save-btn"
+                                  type="button"
+                                  aria-label="保存行程名称"
+                                  data-conversation-save-id="${escapeAttribute(conv.id)}"
+                                >
+                                  <i class="fa-solid fa-check"></i>
+                                </button>
+                                <button
+                                  class="conversation-cancel-btn"
+                                  type="button"
+                                  aria-label="取消编辑"
+                                  data-conversation-cancel="true"
+                                >
+                                  <i class="fa-solid fa-xmark"></i>
+                                </button>
+                              `
+                            : `
+                                <button
+                                  class="conversation-edit-btn"
+                                  type="button"
+                                  aria-label="编辑这段行程名称"
+                                  data-conversation-edit-id="${escapeAttribute(conv.id)}"
+                                >
+                                  <i class="fa-regular fa-pen-to-square"></i>
+                                </button>
+                                <button
+                                  class="conversation-delete-btn"
+                                  type="button"
+                                  aria-label="删除这段行程"
+                                  data-conversation-delete-id="${escapeAttribute(conv.id)}"
+                                >
+                                  <i class="fa-regular fa-trash-can"></i>
+                                </button>
+                              `
+                        }
+                      </div>
+                    </div>
+                    <div class="conversation-time">
+                        <i class="fa-regular fa-clock" style="font-size:10px;"></i> ${formatConversationStamp(
+                          conv.updated_at || conv.created_at
+                        )}
+                    </div>
+                    <div class="conversation-subline">
+                        <div class="conversation-detail">
+                          ${
+                            conv.id === state.currentConversationId
+                              ? "当前正在查看这段行程，可继续追问细节。"
+                              : `最近活跃：${formatRelativeTime(
+                                  conv.updated_at || conv.created_at
+                                )}`
+                          }
+                        </div>
+                        <span class="conversation-status ${
+                          conv.id === state.currentConversationId ? "active" : ""
+                        }">${
+                          conv.id === state.currentConversationId
+                            ? "进行中"
+                            : "待继续"
+                        }</span>
+                    </div>
+                </div>
+            `
+          )
+          .join("");
+      }
+
+      async function deleteConversation(event, id) {
+        event?.stopPropagation();
+        const conv = state.conversations.find((item) => item.id === id);
+        const label = conv?.title || "这段行程";
+        if (!window.confirm(`确定删除“${label}”吗？删除后会从当前账号的列表中移除。`)) {
+          return;
+        }
+        if (!(await ensureServiceReady("删除行程"))) return;
+
+        try {
+          const { response } = await conversationApi.deleteConversation({
+            apiBase: getApiBase(),
+            stateToken: state.token,
+            id,
+          });
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+          }
+
+          const wasCurrent = state.currentConversationId === id;
+          state.conversations = state.conversations.filter((item) => item.id !== id);
+          if (wasCurrent) {
+            state.currentConversationId = null;
+            document.getElementById("chatTitle").textContent = "行程助手";
+            clearChatMessages();
+            resetConversationDrafts({ silent: true });
+            renderConversationsList();
+            setMobileChatFocus(false);
+          }
+          renderConversationsList();
+
+          if (wasCurrent && state.conversations.length) {
+            await switchConversation(state.conversations[0].id);
+          } else if (!state.conversations.length) {
+            setRuntimeStatus("可以开始新的行程", "online");
+          }
+
+          showToast("行程已删除");
+        } catch (error) {
+          console.error(error);
+          setRuntimeStatus("删除失败", "error");
+          showToast("删除失败，请稍后重试。", true);
+        }
+      }
+
+      function focusConversationRenameInput(id, preferHeader = false) {
+        requestAnimationFrame(() => {
+          const input =
+            (preferHeader && document.getElementById("chatTitleRenameInput")) ||
+            document.getElementById(`conversationRenameInput-${id}`) ||
+            document.getElementById("chatTitleRenameInput");
+          if (!input) return;
+          input.focus();
+          input.select();
+        });
+      }
+
+      function renderChatTitleRenameInput(id) {
+        const chatTitle = document.getElementById("chatTitle");
+        const conv = state.conversations.find((item) => item.id === id);
+        if (!chatTitle || !conv) return;
+        chatTitle.classList.add("editing");
+        chatTitle.innerHTML = `
+          <input
+            id="chatTitleRenameInput"
+            class="chat-title-input"
+            type="text"
+            value="${escapeAttribute(conv.title || DEFAULT_CONVERSATION_TITLE)}"
+            maxlength="40"
+            aria-label="编辑当前行程名称"
+            data-conversation-rename-input-id="${escapeAttribute(id)}"
+          />
+        `;
+      }
+
+      function restoreChatTitleLabel() {
+        const chatTitle = document.getElementById("chatTitle");
+        if (!chatTitle) return;
+        chatTitle.classList.remove("editing");
+        chatTitle.textContent =
+          getCurrentConversation()?.title || "行程助手";
+      }
+
+      function beginConversationRename(event, id, options = {}) {
+        event?.stopPropagation();
+        const conv = state.conversations.find((item) => item.id === id);
+        if (!conv) return;
+        state.editingConversationId = id;
+        renderConversationsList();
+        if (options.focusHeader || state.currentConversationId === id) {
+          renderChatTitleRenameInput(id);
+        }
+        focusConversationRenameInput(id, Boolean(options.focusHeader));
+      }
+
+      function cancelConversationRename(event) {
+        event?.preventDefault();
+        event?.stopPropagation();
+        state.editingConversationId = null;
+        renderConversationsList();
+        restoreChatTitleLabel();
+        updateSessionOverview();
+      }
+
+      function handleConversationRenameKeydown(event, id) {
+        event.stopPropagation();
+        if (event.key === "Enter") {
+          event.preventDefault();
+          submitConversationRename(event, id);
+        } else if (event.key === "Escape") {
+          event.preventDefault();
+          cancelConversationRename(event);
+        }
+      }
+
+      async function submitConversationRename(event, id) {
+        event?.preventDefault();
+        event?.stopPropagation();
+        if (state.renamingConversationId) return;
+        const conv = state.conversations.find((item) => item.id === id);
+        const currentTitle = conv?.title || DEFAULT_CONVERSATION_TITLE;
+        const input =
+          (event?.target?.matches?.(".conversation-title-input, .chat-title-input")
+            ? event.target
+            : null) ||
+          event?.target?.closest?.(".conversation-title-edit-form")?.querySelector?.(
+            ".conversation-title-input"
+          ) ||
+          document.getElementById(`conversationRenameInput-${id}`) ||
+          document.getElementById("chatTitleRenameInput");
+        const trimmed = input?.value?.trim() || "";
+        if (!trimmed || trimmed === currentTitle) {
+          cancelConversationRename(event);
+          return;
+        }
+        if (!(await ensureServiceReady("修改行程名称"))) return;
+        state.renamingConversationId = id;
+        document
+          .querySelectorAll(".conversation-save-btn, .conversation-cancel-btn, .conversation-title-input, .chat-title-input")
+          .forEach((el) => {
+            el.disabled = true;
+          });
+        try {
+          await updateConversationTitle(id, trimmed);
+          state.editingConversationId = null;
+        } catch (error) {
+          console.error(error);
+          showToast("修改名称失败，请稍后重试。", true);
+          focusConversationRenameInput(id);
+        } finally {
+          document
+            .querySelectorAll(".conversation-save-btn, .conversation-cancel-btn, .conversation-title-input, .chat-title-input")
+            .forEach((el) => {
+              el.disabled = false;
+            });
+          state.renamingConversationId = null;
+        }
+      }
+
+      async function renameConversation(event, id) {
+        beginConversationRename(event, id);
+      }
+
+      async function renameCurrentConversation() {
+        if (!state.currentConversationId) return;
+        beginConversationRename(null, state.currentConversationId, {
+          focusHeader: true,
+        });
+      }
+
+      async function createNewConversation() {
+        if (!(await ensureServiceReady("创建新行程"))) return;
+        try {
+          const { response, data } = await conversationApi.createConversation({
+            apiBase: getApiBase(),
+            stateToken: state.token,
+            title: "新行程",
+          });
+          if (response.ok) {
+            state.currentConversationId = data.id;
+            if (!state.conversations.some((item) => item.id === data.id)) {
+              state.conversations = [data, ...state.conversations];
+            }
+            setMobileChatFocus(true);
+            clearChatMessages();
+            resetConversationDrafts({ silent: true });
+            document.getElementById("chatTitle").textContent = "新行程";
+            setMobileChatFocus(true);
+            document.getElementById("chatTitle").textContent =
+              data.title || DEFAULT_CONVERSATION_TITLE;
+            renderConversationsList();
+            await loadConversations({ preserveCurrentConversationId: true });
+            await loadApprovals({ silent: true });
+            updateSessionOverview();
+            setRuntimeStatus("新会话已创建", "online");
+            showToast("新行程已创建");
+          }
+        } catch (error) {
+          setRuntimeStatus("创建会话失败", "error");
+          showToast("创建失败", true);
+        }
+      }
+
+      async function switchConversation(id) {
+        if (!(await ensureServiceReady("切换会话"))) return;
+        state.currentConversationId = id;
+        setMobileChatFocus(true);
+        renderConversationsList();
+        setRuntimeStatus("正在加载会话", "loading");
+
+        // 获取标题
+        try {
+          const { response: res, data } = await conversationApi.fetchConversationDetail({
+            apiBase: getApiBase(),
+            stateToken: state.token,
+            id,
+          });
+          if (res.ok) {
+            document.getElementById("chatTitle").textContent = data.title;
+            const current = state.conversations.find((conv) => conv.id === id);
+            if (current) current.title = data.title;
+            updateSessionOverview();
+          }
+        } catch (e) {}
+
+        // 获取历史
+        try {
+          const { response: res, data } = await conversationApi.fetchChatHistory({
+            apiBase: getApiBase(),
+            stateToken: state.token,
+            id,
+          });
+          if (res.ok) {
+            const msgs = Array.isArray(data) ? data : data.messages || [];
+            renderMessages(msgs);
+            setRuntimeStatus("历史会话已就绪", "online");
+          } else clearChatMessages();
+        } catch (e) {
+          clearChatMessages();
+          setRuntimeStatus("加载失败", "error");
+        }
+        await loadApprovals({ silent: true });
+      }
+
+      function hydrateGovernanceFromMessages(messages = []) {
+        state.governance.toolAuditEvents = [];
+        state.governance.turnObservability = null;
+        state.governance.progressSnapshot = null;
+        (Array.isArray(messages) ? messages : []).forEach((msg) => {
+          if (msg.role !== "assistant") return;
+          const extra = msg.extra_info || msg.extraInfo || {};
+          const auditEvents = Array.isArray(extra.tool_audit_events)
+            ? extra.tool_audit_events
+            : [];
+          auditEvents.forEach((event) => {
+            const normalized = normalizeToolAuditEvent(event);
+            state.governance.toolAuditEvents.unshift(normalized);
+          });
+          if (extra.fast_mode_split) {
+            rememberProgressSnapshot(progressSnapshotFromFastSplit(extra.fast_mode_split));
+          }
+          const reportData = extra.report_data || extra.reportData;
+          if (reportData) {
+            rememberProgressSnapshot(progressSnapshotFromReportData(reportData));
+          }
+          const observation = extra.observability?.metrics || extra.observability;
+          if (observation) {
+            rememberTurnObservability(observation);
+          }
+        });
+        state.governance.toolAuditEvents = state.governance.toolAuditEvents.slice(0, 20);
+        renderToolAuditList();
+        renderTurnObservability();
+      }
+
+      function handleInputKeydown(e) {
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          sendMessage();
+        }
+      }
+
+      function autoResizeTextarea() {
+        const el = document.getElementById("chatInput");
+        el.addEventListener("input", function () {
+          this.style.height = "auto";
+          this.style.height = Math.min(this.scrollHeight, 120) + "px";
+        });
+      }
+
+      function showToast(msg, isError = false) {
+        const t = document.getElementById("toast");
+        document.getElementById("toastMsg").textContent = msg;
+        t.className = `toast show ${isError ? "error" : ""}`;
+        if (toastTimer) clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => t.classList.remove("show"), 3000);
+      }
+
+      function formatTime(str) {
+        if (!str) return "";
+        const d = new Date(str);
+        return `${d.getMonth() + 1}月${d.getDate()}日`;
+      }
+
+      function formatConversationStamp(str) {
+        if (!str) return "";
+        const d = new Date(str);
+        const now = new Date();
+        const sameYear = d.getFullYear() === now.getFullYear();
+        const day = `${d.getMonth() + 1}月${d.getDate()}日`;
+        const hh = String(d.getHours()).padStart(2, "0");
+        const mm = String(d.getMinutes()).padStart(2, "0");
+        return sameYear ? `${day} ${hh}:${mm}` : `${d.getFullYear()}年${day} ${hh}:${mm}`;
+      }
+
+      function formatRelativeTime(str) {
+        if (!str) return "";
+        const d = new Date(str);
+        const diff = Date.now() - d.getTime();
+        const minute = 60 * 1000;
+        const hour = 60 * minute;
+        const day = 24 * hour;
+
+        if (diff < minute) return "刚刚更新";
+        if (diff < hour) return `${Math.max(1, Math.floor(diff / minute))} 分钟前更新`;
+        if (diff < day) return `${Math.floor(diff / hour)} 小时前更新`;
+        if (diff < day * 2) return "昨天更新";
+        if (diff < day * 7) return `${Math.floor(diff / day)} 天前更新`;
+        return `更新于 ${formatTime(str)}`;
+      }
+
+      function escapeHtml(text) {
+        if (!text) return "";
+        const div = document.createElement("div");
+        div.textContent = text;
+        return div.innerHTML.replace(/\n/g, "<br>");
+      }
+
+      function escapeAttribute(text) {
+        return escapeHtml(text).replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+      }

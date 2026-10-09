@@ -1,0 +1,499 @@
+{
+  "version": "evaluation_scenarios.v1",
+  "description": "Fixed regression scenarios for structured travel report quality checks.",
+  "scenarios": [
+    {
+      "id": "free_weekend_nearby",
+      "name": "Free planning: weekend nearby trip",
+      "category": "free_planning",
+      "prompt": "\u6211\u60f3\u5468\u672b\u4ece\u897f\u5b89\u51fa\u53d1\u53bb\u9644\u8fd1\u8f7b\u677e\u73a9\u4e24\u5929\uff0c2\u4e2a\u4eba\uff0c\u9884\u7b971500\uff0c\u60f3\u770b\u81ea\u7136\u98ce\u666f\u548c\u5403\u70b9\u5f53\u5730\u5c0f\u5403\u3002",
+      "expected_mode": "free_planning",
+      "min_score": 82,
+      "focus": ["nearby pacing", "daily route", "budget explanation", "food and scenery"],
+      "tags": ["free", "nearby", "weekend", "acceptance-core"],
+      "requirements": {
+        "real_llm": true,
+        "real_mcp": true,
+        "mcp_servers": ["weather", "search", "amap"],
+        "external_apis": ["amap", "tavily"]
+      },
+      "metric_expectations": {
+        "intent": {
+          "expected": "free_planning",
+          "accepted": ["free_planning"]
+        },
+        "tools": {
+          "optional": ["query_destination_info"]
+        },
+        "unsupported_claims": {
+          "strict": true,
+          "categories": ["price", "inventory", "transport_schedule", "hotel_availability", "weather"]
+        }
+      },
+      "followups": [
+        "需求确认：全程保持个性化自由规划（free_planning）模式；从西安出发，2026-09-19出发，2天1晚，共2位成人，总预算1500元，偏好自然风景和当地小吃。请记录需求并继续推进。",
+        "目的地确认汉中，请围绕轻松周末、自然风景和当地小吃记录目的地方案并继续下一阶段。",
+        "请只记录推荐交通方式为高铁（train），本轮不要调用实时班次查询工具；不要记录任何具体车次、时刻或价格。",
+        "请只记录汉中城区交通方便、干净安静且预算友好的住宿偏好，本轮不要调用实时酒店库存查询工具；不要记录任何具体酒店、房态或价格。",
+        "餐饮按汉中当地小吃、就近用餐和轻松节奏安排；具体餐饮价格按估算处理并待核验。",
+        "请生成并记录2天1晚结构化行程，每天包含自然风景、当地小吃和短动线安排，天数必须与需求一致。",
+        "请汇总预算，交通、住宿、餐饮、景点体验和机动费用合计控制在1500元内，所有价格均按估算并待核验。",
+        "信息确认，请直接生成个性化自由规划的最终旅游规划报告和report_data，保留预算置信度、风险与待核验项，并明确真实班次、房态和价格均待核验。"
+      ]
+    },
+    {
+      "id": "free_city_three_days",
+      "name": "Free planning: first-time city trip",
+      "category": "free_planning",
+      "prompt": "\u6211\u7b2c\u4e00\u6b21\u53bb\u5357\u4eac\uff0c3\u59292\u665a\uff0c\u81ea\u7531\u884c\uff0c\u60f3\u8981\u6587\u5316\u52a0\u7f8e\u98df\uff0c\u4e0d\u60f3\u592a\u8d76\u3002",
+      "expected_mode": "free_planning",
+      "min_score": 82,
+      "focus": ["first-time destination", "culture and food", "low-stress route", "map routes"],
+      "tags": ["free", "city", "culture", "acceptance-core"],
+      "requirements": {
+        "real_llm": true,
+        "real_mcp": true,
+        "mcp_servers": ["weather", "search", "amap"],
+        "external_apis": ["amap", "tavily"]
+      },
+      "metric_expectations": {
+        "intent": {
+          "expected": "free_planning",
+          "accepted": ["free_planning"]
+        },
+        "tools": {
+          "optional": ["query_destination_info"]
+        },
+        "unsupported_claims": {
+          "strict": true,
+          "categories": ["price", "inventory", "transport_schedule", "hotel_availability", "weather"]
+        }
+      },
+      "followups": [
+        "需求确认：全程保持个性化自由规划（free_planning）模式；从上海出发，目的地南京，2026-10-16出发，3天2晚，共2位成人，总预算5000元，第一次去南京，偏好文化和美食且不赶行程。请记录需求并继续推进。",
+        "目的地确认南京，请围绕首次到访、文化体验、美食和低强度动线记录目的地方案并继续下一阶段。",
+        "请只记录推荐交通方式为高铁（train），本轮不要调用实时班次查询工具；不要记录任何具体车次、时刻或价格。",
+        "请只记录南京核心文化景点交通方便、干净安静且动线友好的舒适型住宿偏好，本轮不要调用实时酒店库存查询工具；不要记录任何具体酒店、房态或价格。",
+        "餐饮按南京本地特色、文化街区就近用餐和不赶行程安排；具体餐饮价格按估算处理并待核验。",
+        "请生成并记录3天2晚结构化行程，每天包含文化景点、美食、低强度动线和地图路线，天数必须与需求一致。",
+        "请汇总预算，交通、住宿、餐饮、景点体验和机动费用合计控制在5000元内，所有价格均按估算并待核验。",
+        "信息确认，请直接生成个性化自由规划的最终旅游规划报告和report_data，保留地图路线、预算置信度、风险与待核验项，并明确真实班次、房态和价格均待核验。"
+      ]
+    },
+    {
+      "id": "free_long_distance",
+      "name": "Free planning: long-distance route",
+      "category": "free_planning",
+      "prompt": "\u6211\u60f3\u4ece\u5317\u4eac\u53bb\u4e0a\u6d77\u73a94\u59293\u665a\uff0c\u4e3b\u8981\u81ea\u7531\u884c\uff0c\u9884\u7b976000\uff0c\u5e2e\u6211\u89c4\u5212\u4ea4\u901a\u3001\u4f4f\u5bbf\u548c\u6bcf\u65e5\u5b89\u6392\u3002",
+      "expected_mode": "free_planning",
+      "min_score": 84,
+      "focus": ["transport comparison", "hotel area", "4-day itinerary", "budget confidence"],
+      "tags": ["free", "long-distance", "transport"],
+      "requirements": {
+        "real_llm": true,
+        "real_mcp": true,
+        "mcp_servers": ["weather", "search", "amap", "12306-mcp", "VariFlight-Aviation"],
+        "external_apis": ["amap", "tavily", "variflight"]
+      }
+    },
+    {
+      "id": "agency_couple_relaxed",
+      "name": "Agency plan: relaxed couple trip",
+      "category": "agency_plan",
+      "prompt": "我们两个人想从西安出发，2026年10月23日去长沙4天3晚，总预算7000，希望省心一点，帮我按旅行社方案安排。",
+      "expected_mode": "agency_plan",
+      "min_score": 86,
+      "focus": ["agency playbook", "romantic pacing", "hotel and food", "service standards"],
+      "tags": ["agency", "couple", "relaxed", "acceptance-core"],
+      "requirements": {
+        "real_llm": true,
+        "real_mcp": true,
+        "mcp_servers": ["weather", "search", "amap", "12306-mcp", "VariFlight-Aviation", "aigohotel-mcp"],
+        "external_apis": ["amap", "tavily", "variflight", "aigohotel"]
+      },
+      "metric_expectations": {
+        "intent": {
+          "expected": "agency_plan",
+          "accepted": ["agency_plan"]
+        },
+        "tools": {
+          "optional": [
+            "query_destination_info",
+            "query_hotel_options",
+            "query_transport_options",
+            "search_agency_product_templates",
+            "search_agency_service_sop",
+            "search_agency_pricing_rules",
+            "search_agency_risk_playbook"
+          ]
+        },
+        "unsupported_claims": {
+          "strict": true,
+          "categories": ["price", "inventory", "transport_schedule", "hotel_availability", "weather"]
+        }
+      },
+      "followups": [
+        "需求确认：出发地西安，目的地长沙，2026-10-23出发，4天3晚，共2位成人，总预算7000元；请保持旅行社省心方案（agency_plan）记录并继续推进。",
+        "请匹配适合情侣、节奏轻松的成熟路线样板，保留夜景、美食和雨天Plan B，不要承诺真实库存、班次或锁价。",
+        "交通按省心、少换乘和时间合理优先记录产品口径；具体班次、时刻与价格未锁定，均写待二次核验。",
+        "住宿按五一广场或交通方便区域、干净安静、情侣友好的舒适型酒店记录产品口径；具体酒店、房型与价格未锁定，均写待二次核验。",
+        "餐饮按长沙本地特色、夜景动线和轻松节奏安排；请仅记录餐饮方向并继续推进，下一轮再生成结构化行程。",
+        "请生成并记录4天3晚结构化行程，每天包含短动线、休息安排和天气Plan B；不要展开推理过程。",
+        "请汇总预算，列出费用包含、不包含、估算项、情侣体验费用和二次核验项，总额控制在7000元内。",
+        "请直接生成最终旅行规划报告和report_data，保留情侣适配、预算置信度、风险、待核验项和旅行社业务证据。"
+      ]
+    },
+    {
+      "id": "agency_family_parent_child",
+      "name": "Agency plan: parent-child trip",
+      "category": "agency_plan",
+      "prompt": "\u4eb2\u5b50\u6e38\uff0c2\u59271\u5c0f\uff0c\u4ece\u4e0a\u6d77\u53bb\u676d\u5dde3\u59292\u665a\uff0c\u5e0c\u671b\u5c11\u8d70\u8def\u3001\u9152\u5e97\u5e72\u51c0\u3001\u884c\u7a0b\u8f7b\u677e\u3002\u8bf7\u6309\u65c5\u884c\u793e\u7701\u5fc3\u65b9\u6848\u5b89\u6392\u3002",
+      "expected_mode": "agency_plan",
+      "min_score": 86,
+      "focus": ["family suitability", "low walking load", "clean hotel", "risk fallback"],
+      "tags": ["agency", "family", "parent-child", "acceptance-core"],
+      "requirements": {
+        "real_llm": true,
+        "real_mcp": true,
+        "mcp_servers": ["weather", "search", "amap", "aigohotel-mcp"],
+        "external_apis": ["amap", "tavily", "aigohotel"]
+      },
+      "metric_expectations": {
+        "intent": {
+          "expected": "agency_plan",
+          "accepted": ["agency_plan"]
+        },
+        "tools": {
+          "optional": [
+            "query_destination_info",
+            "query_hotel_options",
+            "search_agency_product_templates",
+            "search_agency_service_sop",
+            "search_agency_risk_playbook"
+          ]
+        },
+        "unsupported_claims": {
+          "strict": true,
+          "categories": ["price", "inventory", "transport_schedule", "hotel_availability", "weather"]
+        }
+      },
+      "followups": [
+        "需求确认：出发地上海，目的地杭州，2026-09-12出发，3天2晚，共3位（2位成人、1名儿童），人均预算3000-4500元；请按旅行社省心方案记录并继续推进。",
+        "请匹配适合亲子的成熟路线样板，保留少走路、酒店干净、午休和雨天Plan B，不要承诺真实库存或锁价。",
+        "交通按省心、少换乘和儿童友好优先记录产品口径；真实班次和价格未锁定时写待二次核验。",
+        "住宿按西湖周边或交通方便区域、干净安静、亲子友好、有电梯的舒适型酒店记录；真实房型和价格未锁定时写待二次核验。",
+        "餐饮按本地特色、儿童可接受和轻松节奏安排；请仅记录餐饮方向并继续推进，下一轮再生成结构化行程。",
+        "请生成并记录3天2晚结构化行程，每天包含短动线、午休安排和天气Plan B；不要展开推理过程。",
+        "请汇总预算，列出费用包含、不包含、估算项、亲子相关费用和二次核验项。",
+        "请直接生成最终旅行规划报告和report_data，保留亲子适配、预算置信度、风险、待核验项和旅行社业务证据。"
+      ]
+    },
+    {
+      "id": "agency_senior_low_stress",
+      "name": "Agency plan: senior low-stress trip",
+      "category": "agency_plan",
+      "prompt": "\u7ed9\u7236\u6bcd\u505a\u94f6\u53d1\u6e38\uff0c5\u59294\u665a\uff0c\u60f3\u53bb\u5317\u4eac\uff0c\u4ea4\u901a\u4f4f\u5bbf\u90fd\u5e0c\u671b\u7a33\u59a5\uff0c\u522b\u592a\u7d2f\u3002\u8bf7\u6309\u65c5\u884c\u793e\u987e\u95ee\u65b9\u6848\u5b89\u6392\u3002",
+      "expected_mode": "agency_plan",
+      "min_score": 86,
+      "focus": ["senior-friendly pacing", "stable transport", "accessible hotel", "safety reminders"],
+      "tags": ["agency", "senior", "low-stress", "acceptance-core"],
+      "requirements": {
+        "real_llm": true,
+        "real_mcp": true,
+        "mcp_servers": ["weather", "search", "amap", "aigohotel-mcp"],
+        "external_apis": ["amap", "tavily", "aigohotel"]
+      },
+      "metric_expectations": {
+        "intent": {
+          "expected": "agency_plan",
+          "accepted": ["agency_plan"]
+        },
+        "tools": {
+          "optional": [
+            "query_destination_info",
+            "query_hotel_options",
+            "search_agency_product_templates",
+            "search_agency_service_sop",
+            "search_agency_risk_playbook"
+          ]
+        },
+        "unsupported_claims": {
+          "strict": true,
+          "categories": ["price", "inventory", "transport_schedule", "hotel_availability", "weather"]
+        }
+      },
+      "followups": [
+        "需求确认：出发地上海，目的地北京，2026-10-12出发，5天4晚，共2位成人（均为老人），人均预算5000-7000元；请按旅行社顾问省心方案记录并继续推进。",
+        "请匹配适合银发客群的成熟路线样板，保留低强度、午休、无障碍和天气Plan B，不要承诺真实库存或锁价。",
+        "交通按省心、少换乘和稳定优先记录产品口径；真实班次和价格未锁定时写待二次核验。",
+        "住宿按北京核心区域、靠近地铁、安静干净、有电梯和早餐方便的舒适型酒店记录；真实房型和价格未锁定时写待二次核验。",
+        "餐饮按清淡稳妥、就近用餐和少量北京特色安排；请仅记录餐饮方向并继续推进。",
+        "请生成并记录5天4晚结构化行程，每天包含低强度路线、午休、无障碍提醒和天气Plan B；不要展开推理过程。",
+        "请汇总预算，列出费用包含、不包含、估算项、老人友好服务和二次核验项。",
+        "请直接生成最终旅行规划报告和report_data，保留银发适配、预算置信度、安全风险、待核验项和旅行社业务证据。"
+      ]
+    },
+    {
+      "id": "edge_tight_budget",
+      "name": "Edge case: unrealistic budget",
+      "category": "edge_case",
+      "prompt": "\u6211\u60f3\u53bb\u4e09\u4e9a5\u59294\u665a\uff0c2\u4e2a\u4eba\u603b\u9884\u7b972500\uff0c\u770b\u770b\u80fd\u4e0d\u80fd\u5b89\u6392\uff0c\u5982\u679c\u4e0d\u591f\u8bf7\u8bf4\u660e\u3002",
+      "expected_mode": "free_planning",
+      "min_score": 80,
+      "focus": ["budget feasibility", "honest constraints", "alternatives", "risk disclosure"],
+      "tags": ["edge", "budget", "constraint"],
+      "requirements": {
+        "real_llm": true,
+        "real_mcp": true,
+        "mcp_servers": ["weather", "search", "amap"],
+        "external_apis": ["amap", "tavily"]
+      }
+    },
+    {
+      "id": "edge_hotel_tool_fallback",
+      "name": "Edge case: hotel tool fallback",
+      "category": "edge_case",
+      "prompt": "\u6211\u60f3\u53bb\u957f\u6c99\uff0c\u4f4f\u6e58\u6c5f\u8fb9\u6c5f\u666f\u623f\uff0c4\u59293\u665a\uff0c\u5982\u679c\u67e5\u4e0d\u5230\u5177\u4f53\u9152\u5e97\u4e5f\u8bf7\u7ed9\u6211\u53ef\u6267\u884c\u7684\u515c\u5e95\u65b9\u6848\u3002",
+      "expected_mode": "free_planning",
+      "min_score": 82,
+      "focus": ["hotel preference parsing", "fuzzy matching", "tool failure fallback", "clear verification"],
+      "tags": ["edge", "hotel", "fallback", "acceptance-core"],
+      "requirements": {
+        "real_llm": true,
+        "real_mcp": true,
+        "mcp_servers": ["weather", "search", "amap", "aigohotel-mcp"],
+        "external_apis": ["amap", "tavily", "aigohotel"]
+      },
+      "runtime_budget": {
+        "max_tool_call_count": 36,
+        "max_first_token_seconds": 75,
+        "max_tool_failure_count": 16,
+        "max_tool_failure_ratio": 1.0,
+        "max_fallback_count": 16
+      },
+      "metric_expectations": {
+        "intent": {
+          "expected": "hotel_query",
+          "accepted": ["free_planning", "hotel_query"]
+        },
+        "tools": {
+          "required": ["query_hotel_options"],
+          "optional": ["query_destination_info"]
+        },
+        "unsupported_claims": {
+          "strict": true,
+          "categories": ["price", "inventory", "hotel_availability", "weather"]
+        }
+      },
+      "followups": [
+        "需求确认：从武汉出发，目的地长沙，2026-11-12出发，4天3晚，1位成人，人均预算3500-5000元；按个性化自由规划记录需求并继续推进，住宿优先湘江边江景房。",
+        "目的地确认长沙，请按当前信息记录并继续下一阶段。",
+        "交通按省心和时间合理优先，请直接记录你推荐的方式；真实班次和价格未锁定时标注待二次核验。",
+        "请查询湘江边江景房候选并记录最合适的住宿方案；如果查不到具体酒店，就记录可执行的商圈、房型和筛选条件兜底，真实房态与价格标注待二次核验。",
+        "餐饮按长沙本地特色和轻松节奏安排，请仅记录推荐方向并继续推进，下一轮再生成结构化行程。",
+        "请生成并记录4天3晚结构化行程，住宿动线围绕湘江沿线安排，天数必须与需求一致。",
+        "请汇总预算，包含交通、住宿、餐饮、景点体验、其他机动费用和待二次核验项。",
+        "信息确认，请直接生成最终旅游规划报告和report_data，保留酒店查询兜底方案、预算置信度、风险与待核验项。"
+      ]
+    },
+    {
+      "id": "agency_team_building",
+      "name": "Agency plan: team building route",
+      "category": "agency_plan",
+      "prompt": "公司团建，12个人，从深圳出发去广州或周边2天1晚，希望交通省心、预算透明、活动不要太累，按旅行社顾问方案给我。",
+      "expected_mode": "agency_plan",
+      "min_score": 86,
+      "focus": ["group suitability", "service nodes", "budget basis", "risk fallback"],
+      "tags": ["agency", "team", "budget"],
+      "requirements": {
+        "real_llm": true,
+        "real_mcp": true,
+        "mcp_servers": ["weather", "search", "amap", "aigohotel-mcp"],
+        "external_apis": ["amap", "tavily", "aigohotel"]
+      }
+    },
+    {
+      "id": "pricing_agency_quote_explanation",
+      "name": "Pricing: agency quote explanation",
+      "category": "pricing",
+      "prompt": "我们4个大人想在2026-11-20从成都去重庆3天2晚，人均预算1500-2500元，想要省心方案。请按旅行社顾问方案先记录需求，后续重点说明费用包含、不包含、哪些价格是估算，哪些需要二次核验。",
+      "expected_mode": "agency_plan",
+      "min_score": 86,
+      "focus": ["price evidence", "included and excluded costs", "verification items", "agency quote policy", "minimal live acceptance"],
+      "tags": ["agency", "pricing", "budget", "acceptance-core", "acceptance-smoke"],
+      "requirements": {
+        "real_llm": true,
+        "real_mcp": true,
+        "mcp_servers": ["weather", "search"],
+        "external_apis": ["amap", "tavily"]
+      },
+      "runtime_budget": {
+        "max_first_token_seconds": 90,
+        "warning_first_token_ratio": 0.99,
+        "max_tool_call_count": 36,
+        "warning_tool_call_ratio": 0.99
+      },
+      "metric_expectations": {
+        "intent": {
+          "expected": "pricing_query",
+          "accepted": ["agency_plan", "pricing_query"]
+        },
+        "tools": {
+          "optional": [
+            "query_destination_info",
+            "query_transport_options",
+            "query_hotel_options",
+            "search_agency_pricing_rules",
+            "search_agency_report_standards"
+          ]
+        },
+        "stage": {
+          "strict": false,
+          "expected_transition_tools": [
+            "generate_itinerary_tool",
+            "summarize_budget_tool",
+            "generate_order_tool"
+          ]
+        },
+        "unsupported_claims": {
+          "strict": true,
+          "categories": ["price", "inventory", "transport_schedule", "hotel_availability"]
+        }
+      },
+      "followups": [
+        "目的地确认重庆，出发地成都，2026-11-20出发，3天2晚，4个大人，继续下一阶段。",
+        "交通确认按高铁省心优先记录推荐方式；真实班次和价格没有锁定时写待二次核验。",
+        "住宿确认按重庆核心商圈、干净省心、动线方便的舒适型酒店记录；真实酒店价格没有锁定时写待二次核验。",
+        "餐饮确认按本地小吃加特色餐厅安排，同时照顾轻松节奏；请仅记录餐饮偏好和产品口径。",
+        "请生成并记录3天2晚结构化行程，包含每天路线和Plan B；不要展开推理过程。",
+        "请汇总预算，重点列出费用包含、不包含、估算项和二次核验项。",
+        "请直接生成最终旅行规划报告和report_data，保留预算置信度、风险、待核验项和旅行社业务证据。"
+      ]
+    },
+    {
+      "id": "risk_weather_disruption",
+      "name": "Risk: weather disruption fallback",
+      "category": "risk",
+      "prompt": "我计划10月带父母去桂林4天3晚，担心下雨和老人走不动，请给省心安排并把天气、交通、酒店和Plan B风险写清楚。",
+      "expected_mode": "agency_plan",
+      "min_score": 84,
+      "focus": ["weather fallback", "senior-friendly route", "risk checklist", "verification items"],
+      "tags": ["agency", "risk", "weather", "senior", "acceptance-core"],
+      "requirements": {
+        "real_llm": true,
+        "real_mcp": true,
+        "mcp_servers": ["weather", "search", "amap", "aigohotel-mcp"],
+        "external_apis": ["amap", "tavily", "aigohotel"]
+      },
+      "runtime_budget": {
+        "max_first_token_seconds": 75,
+        "max_tool_call_count": 36
+      },
+      "metric_expectations": {
+        "intent": {
+          "expected": "risk_query",
+          "accepted": ["agency_plan", "risk_query", "weather_query"]
+        },
+        "tools": {
+          "required": [
+            "query_destination_info"
+          ],
+          "optional": [
+            "query_hotel_options",
+            "search_agency_risk_playbook",
+            "search_agency_service_sop"
+          ]
+        },
+        "unsupported_claims": {
+          "strict": true,
+          "categories": ["price", "inventory", "transport_schedule", "hotel_availability", "weather"]
+        }
+      },
+      "followups": [
+        "需求确认：出发地广州，目的地桂林，2026-10-10出发，4天3晚，3位成人（其中2位老人），人均预算2500-3500元；请按旅行社顾问省心方案记录需求并继续推进。",
+        "请先查询桂林10月天气、秋季天气情况和老人友好玩法，重点保留室内Plan B与天气风险，不要展开过长；本轮尚未查询真实交通或酒店，不要描述班次准点、余票、航班可订或酒店有房，确需提及时一律写待二次核验。",
+        "目的地确认桂林，请把刚才的天气风险、Plan B和适合老人低强度玩法一起记录到目的地上下文。",
+        "交通按省心和少折腾优先记录推荐方式；真实班次和价格没有锁定时写待二次核验。",
+        "住宿确认按桂林核心景区或两江四湖周边、干净省心、电梯友好、动线方便的舒适型酒店记录；真实酒店价格没有锁定时写待二次核验。",
+        "餐饮确认按清淡稳妥、本地特色少量体验和老人友好安排；请仅记录餐饮偏好并继续推进，下一轮再生成结构化行程。",
+        "请生成并记录4天3晚结构化行程，每天都包含低强度路线、休息时间、天气Plan B和风险提醒；不要展开推理过程。",
+        "请汇总预算并直接生成最终旅行规划报告和report_data，保留天气风险、Plan B、预算置信度、待核验项和旅行社业务证据。"
+      ]
+    },
+    {
+      "id": "edge_transport_tool_fallback",
+      "name": "Edge case: transport tool fallback",
+      "category": "edge_case",
+      "prompt": "我想从武汉去张家界玩4天3晚，优先高铁，如果查不到合适车次也请明确待核验并给出可执行交通兜底。",
+      "expected_mode": "free_planning",
+      "min_score": 82,
+      "focus": ["transport lookup intent", "tool failure fallback", "verification", "route feasibility"],
+      "tags": ["edge", "transport", "fallback", "acceptance-core"],
+      "requirements": {
+        "real_llm": true,
+        "real_mcp": true,
+        "mcp_servers": ["weather", "search", "amap", "12306-mcp", "VariFlight-Aviation"],
+        "external_apis": ["amap", "tavily", "variflight"]
+      },
+      "runtime_budget": {
+        "max_tool_call_count": 36,
+        "max_first_token_seconds": 75,
+        "max_tool_failure_count": 16,
+        "max_tool_failure_ratio": 1.0,
+        "max_fallback_count": 16
+      },
+      "metric_expectations": {
+        "intent": {
+          "expected": "transport_query",
+          "accepted": ["free_planning", "transport_query"]
+        },
+        "tools": {
+          "required": ["query_transport_options"],
+          "optional": ["query_destination_info"]
+        },
+        "unsupported_claims": {
+          "strict": true,
+          "categories": ["price", "inventory", "transport_schedule", "weather"]
+        }
+      },
+      "followups": [
+        "需求确认：全程保持个性化自由规划（free_planning）模式；从武汉出发，目的地张家界，2026-11-12出发，4天3晚，共2位成人，总预算6000元，优先高铁。请记录需求并继续推进。",
+        "目的地确认张家界，请围绕4天3晚、轻松动线和交通兜底记录目的地方案并继续下一阶段。",
+        "请只查询一次2026-11-12武汉到张家界的高铁候选；如果没有有效车次或工具失败，就确认记录高铁优先和可执行中转兜底，具体车次、时刻与价格均待二次核验。",
+        "请只记录张家界核心景区交通方便、干净安静的舒适型住宿偏好，本轮不要调用实时酒店库存查询工具；不要记录任何具体酒店、房态或价格。",
+        "餐饮按张家界本地特色、就近用餐和轻松节奏安排；请仅记录餐饮方向并继续推进，下一轮再生成结构化行程。",
+        "请生成并记录4天3晚结构化行程，每天包含短动线、休息时间和交通Plan B，天数必须与需求一致。",
+        "请汇总预算，交通、住宿、餐饮、景点体验和机动费用合计控制在6000元内，并保留交通待二次核验项。",
+        "信息确认，请直接生成个性化自由规划的最终旅游规划报告和report_data，保留交通查询失败兜底、预算置信度、风险与待核验项。"
+      ]
+    },
+    {
+      "id": "long_context_revision",
+      "name": "Long context: revised family agency plan",
+      "category": "long_conversation",
+      "prompt": "先帮我记一下：我们一家三口暑假想从杭州出发，原本想去厦门5天4晚，但孩子怕热、老人同行、预算9000。后面如果我改目的地，请保留亲子和老人友好要求，最终按省心旅行社方案输出。",
+      "expected_mode": "agency_plan",
+      "min_score": 84,
+      "focus": ["long context", "preference carryover", "mode stability", "final report readiness"],
+      "tags": ["agency", "long-context", "family", "risk"],
+      "requirements": {
+        "real_llm": true,
+        "real_mcp": true,
+        "mcp_servers": ["weather", "search", "amap", "12306-mcp", "VariFlight-Aviation", "aigohotel-mcp"],
+        "external_apis": ["amap", "tavily", "variflight", "aigohotel"]
+      },
+      "runtime_budget": {
+        "max_total_elapsed_seconds": 1200,
+        "max_first_token_seconds": 90,
+        "max_tool_call_count": 45,
+        "max_estimated_total_tokens": 180000
+      },
+      "followups": [
+        "目的地改成青岛，还是5天4晚，预算维持9000，孩子喜欢海边但老人不能走太多路。",
+        "请按旅行社顾问方案推进，交通住宿如果没有真实价格就标注待核验。",
+        "餐饮以清淡和当地特色结合，海鲜注意老人肠胃。",
+        "请生成最终报告，重点保留预算置信度、待核验项和天气Plan B。"
+      ]
+    }
+  ]
+}

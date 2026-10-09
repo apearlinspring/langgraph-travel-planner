@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>知行 ZhiXing - 后台管理台</title>
+    <link
+      rel="stylesheet"
+      href="https://cdn.bootcdn.net/ajax/libs/font-awesome/6.4.0/css/all.min.css"
+    />
+    <link rel="stylesheet" href="./admin.css?v=20260604-approval-pagination" />
+  </head>
+  <body>
+    <div class="admin-shell">
+      <section class="admin-hero">
+        <article class="admin-card hero-main">
+          <div class="hero-kicker">知行后台管理台</div>
+          <h1 class="hero-title">把用户、会话与审批记录从旅行工作台里独立出来</h1>
+          <p class="hero-copy">
+            这个页面只服务审批员与管理员，用来查看整体用户趋势、最近会话和审批状态。它不负责真实支付、真实下单或导出敏感客户资料。
+          </p>
+          <div class="hero-actions">
+            <button class="admin-btn primary" id="refreshDashboardBtn" type="button">
+              <i class="fa-solid fa-rotate"></i> 刷新后台数据
+            </button>
+            <a class="admin-link-btn" href="./zhixing.html">
+              <i class="fa-solid fa-compass"></i> 返回旅行工作台
+            </a>
+          </div>
+        </article>
+        <aside class="admin-card hero-side">
+          <h2>当前登录状态</h2>
+          <div class="admin-state">
+            <strong id="adminUserLabel">正在检查会话…</strong>
+            <p class="state-note" id="adminStateNote">
+              需要审批员或管理员角色才能进入后台管理台。
+            </p>
+          </div>
+          <ul>
+            <li>审批员和管理员可查看整体审批记录。</li>
+            <li>普通用户进入时只会看到访问说明，不会显示后台数据。</li>
+            <li>本页只展示脱敏的内部管理信息。</li>
+          </ul>
+        </aside>
+      </section>
+
+      <section class="admin-grid" id="adminMetrics">
+        <article class="admin-card metric-card">
+          <div class="metric-label">总用户数</div>
+          <div class="metric-value" id="metricUsers">-</div>
+          <div class="metric-meta">最近注册与历史累计一起看</div>
+        </article>
+        <article class="admin-card metric-card">
+          <div class="metric-label">总会话数</div>
+          <div class="metric-value" id="metricConversations">-</div>
+          <div class="metric-meta">包含活跃与已归档会话</div>
+        </article>
+        <article class="admin-card metric-card">
+          <div class="metric-label">活跃会话</div>
+          <div class="metric-value" id="metricActiveConversations">-</div>
+          <div class="metric-meta">当前仍在推进的会话</div>
+        </article>
+        <article class="admin-card metric-card">
+          <div class="metric-label">待处理审批</div>
+          <div class="metric-value" id="metricPendingApprovals">-</div>
+          <div class="metric-meta">需要审批员或管理员继续处理</div>
+        </article>
+      </section>
+
+      <section class="panel-grid">
+        <div class="panel-stack">
+          <article class="admin-card panel-card">
+            <div class="panel-head">
+              <div>
+                <h3>最近用户</h3>
+                <p>快速确认最近注册用户和其会话活跃度。</p>
+              </div>
+            </div>
+            <div class="filter-row">
+              <input
+                class="filter-input"
+                id="adminUserSearch"
+                type="search"
+                placeholder="按用户名或邮箱搜索用户"
+              />
+              <select class="filter-select" id="adminUserRoleFilter">
+                <option value="all">全部角色</option>
+                <option value="user">普通用户</option>
+                <option value="approver">审批员</option>
+                <option value="admin">管理员</option>
+              </select>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>用户名</th>
+                    <th>邮箱</th>
+                    <th>角色</th>
+                    <th>会话数</th>
+                    <th>注册时间</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody id="adminUsersTable">
+                  <tr><td colspan="6" class="empty-state">正在加载用户数据…</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="list-pager" id="adminUsersPager"></div>
+            <div class="conversation-detail-card" id="adminUserDetail">
+              <div class="conversation-detail-head">
+                <div>
+                  <h4>用户详情</h4>
+                  <p id="adminUserDetailHint">
+                    点开任意用户后，这里会显示用户概况、最近会话和最近审批。
+                  </p>
+                </div>
+              </div>
+              <div class="conversation-detail-grid">
+                <div class="detail-section">
+                  <h5>用户概况</h5>
+                  <div class="detail-runtime" id="adminUserRuntime">
+                    <div class="empty-state">还没有选中用户。</div>
+                  </div>
+                </div>
+                <div class="detail-section">
+                  <h5>最近审批</h5>
+                  <div class="detail-approvals" id="adminUserApprovals">
+                    <div class="empty-state">选中用户后显示最近审批摘要。</div>
+                  </div>
+                </div>
+              </div>
+              <div class="detail-section">
+                <h5>最近会话</h5>
+                <div class="filter-row compact-filter-row">
+                  <input
+                    class="filter-input"
+                    id="adminUserConversationSearch"
+                    type="search"
+                    placeholder="在该用户最近会话里按标题筛选"
+                  />
+                  <select class="filter-select" id="adminUserConversationStatusFilter">
+                    <option value="all">全部状态</option>
+                    <option value="active">活跃会话</option>
+                    <option value="archived">已归档</option>
+                    <option value="deleted">已删除</option>
+                  </select>
+                </div>
+                <div class="detail-messages" id="adminUserConversations">
+                  <div class="empty-state">选中用户后显示最近会话摘要。</div>
+                </div>
+              </div>
+            </div>
+          </article>
+
+          <article class="admin-card panel-card">
+            <div class="panel-head">
+              <div>
+                <h3>最近会话</h3>
+                <p>优先看最近活跃的会话，方便排查和跟进。</p>
+              </div>
+            </div>
+            <div class="filter-row">
+              <input
+                class="filter-input"
+                id="adminConversationSearch"
+                type="search"
+                placeholder="按会话标题、用户名或邮箱搜索"
+              />
+              <select class="filter-select" id="adminConversationRoleFilter">
+                <option value="all">全部角色</option>
+                <option value="user">普通用户</option>
+                <option value="approver">审批员</option>
+                <option value="admin">管理员</option>
+              </select>
+              <select class="filter-select" id="adminConversationStatusFilter">
+                <option value="active">活跃会话</option>
+                <option value="all">全部状态</option>
+                <option value="archived">已归档</option>
+                <option value="deleted">已删除</option>
+              </select>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>会话标题</th>
+                    <th>用户</th>
+                    <th>角色</th>
+                    <th>状态</th>
+                    <th>消息数</th>
+                    <th>更新时间</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody id="adminConversationsTable">
+                  <tr><td colspan="7" class="empty-state">正在加载会话数据…</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="list-pager" id="adminConversationsPager"></div>
+            <div class="conversation-detail-card" id="adminConversationDetail">
+              <div class="conversation-detail-head">
+                <div>
+                  <h4>会话详情</h4>
+                  <p id="adminConversationDetailHint">
+                    点开任意会话后，这里会显示运行摘要、最近消息和关联审批。
+                  </p>
+                </div>
+                <button
+                  class="admin-btn detail-close-btn"
+                  id="closeConversationDetailBtn"
+                  type="button"
+                >
+                  收起详情
+                </button>
+              </div>
+              <div class="conversation-detail-grid">
+                <div class="detail-section">
+                  <h5>运行摘要</h5>
+                  <div class="detail-runtime" id="adminConversationRuntime">
+                    <div class="empty-state">还没有选中会话。</div>
+                  </div>
+                </div>
+                <div class="detail-section">
+                  <h5>关联审批</h5>
+                  <div class="detail-approvals" id="adminConversationApprovals">
+                    <div class="empty-state">选中会话后显示相关审批记录。</div>
+                  </div>
+                </div>
+              </div>
+              <div class="detail-section">
+                <h5>最近消息</h5>
+                <div class="detail-messages" id="adminConversationMessages">
+                  <div class="empty-state">选中会话后显示最近消息摘要。</div>
+                </div>
+              </div>
+            </div>
+          </article>
+        </div>
+
+        <article class="admin-card panel-card">
+          <div class="panel-head">
+            <div>
+              <h3>审批记录</h3>
+              <p>这里只展示全局审批记录摘要，不触发真实支付或下单。</p>
+            </div>
+          </div>
+          <div class="filter-row">
+            <input
+              class="filter-input"
+              id="adminApprovalSearch"
+              type="search"
+              placeholder="按动作、标题或原因筛选审批"
+            />
+            <select class="filter-select" id="adminApprovalStatusFilter">
+              <option value="all">全部状态</option>
+              <option value="pending">待处理</option>
+              <option value="approved">已批准</option>
+              <option value="rejected">已拒绝</option>
+              <option value="expired">已过期</option>
+              <option value="none">记录型</option>
+            </select>
+          </div>
+          <div class="quick-filter-row">
+            <button class="quick-filter-btn active" id="adminApprovalQuickAll" type="button">
+              全部审批
+            </button>
+            <button class="quick-filter-btn" id="adminApprovalQuickPending" type="button">
+              只看待处理
+            </button>
+          </div>
+          <div class="approval-list" id="adminApprovalsList">
+            <div class="empty-state">正在加载审批记录…</div>
+          </div>
+          <div class="list-pager" id="adminApprovalsPager"></div>
+          <div class="detail-section approval-events-section">
+            <h5>审批事件轨迹</h5>
+            <div class="detail-approvals" id="adminApprovalEvents">
+              <div class="empty-state">点开一条审批记录后，这里会显示状态变化轨迹。</div>
+            </div>
+          </div>
+        </article>
+      </section>
+    </div>
+
+    <script src="./session-api.js?v=20260603-auth-split"></script>
+    <script src="./governance-api.js?v=20260604-approval-pagination"></script>
+    <script src="./admin-api.js?v=20260604-approval-pagination"></script>
+    <script src="./admin.js?v=20260604-approval-pagination"></script>
+  </body>
+</html>

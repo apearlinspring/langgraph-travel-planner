@@ -1,0 +1,863 @@
+      
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>知行 ZhiXing - 旅行规划工作台</title>
+    <!-- 使用系统字体回退，避免国内网络环境下字体外链拖慢首屏 -->
+    <link
+      rel="preload"
+      as="image"
+      href="https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?auto=format&fit=crop&w=1600&q=72"
+      fetchpriority="high"
+    />
+    <!-- 引入 FontAwesome 图标库（国内镜像） -->
+    <link
+      rel="stylesheet"
+      href="https://cdn.bootcdn.net/ajax/libs/font-awesome/6.4.0/css/all.min.css"
+    />
+
+        <link rel="stylesheet" href="./styles.css?v=20260606-day-focus-map-layering" />
+        <link rel="stylesheet" href="./planner.css?v=20260607-planner-controls-split" />
+        <link rel="stylesheet" href="./chat.css?v=20260605-frontend-core-split" />
+        <link rel="stylesheet" href="./governance.css?v=20260604-main-css-split" />
+  </head>
+  <body>
+    <div
+      class="intro-overlay"
+      id="introOverlay"
+      role="button"
+      tabindex="0"
+      aria-label="点击进入知行登录页"
+    >
+      <div class="intro-slider">
+        <div class="intro-slide intro-slide-one"></div>
+        <div class="intro-slide intro-slide-two"></div>
+        <div class="intro-slide intro-slide-three"></div>
+      </div>
+      <div class="intro-overlay-shade"></div>
+      <div class="intro-copy">
+        <div class="intro-kicker">知行 ZhiXing</div>
+        <h1>把远方先变得直观，再慢慢长成一段真正能出发的旅程</h1>
+        <p>目的地、交通、住宿与提醒会一步步展开，最后整理成一份可继续调整的旅游规划。</p>
+        <div class="intro-enter-hint">
+          <span><i class="fa-regular fa-hand-pointer"></i> 点击任意位置进入</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 装饰背景 -->
+    <div class="bg-map-lines"></div>
+    <div class="plane-container">
+      <div class="plane-trail"></div>
+      <i class="fa-solid fa-plane plane-icon"></i>
+    </div>
+
+    <!-- 登录弹窗 -->
+    <div class="auth-overlay hidden" id="authOverlay">
+      <div class="auth-card glass-card">
+        <!-- 装饰性邮戳 -->
+        <div class="stamp-decoration">VISA</div>
+
+        <div class="auth-header">
+          <div class="auth-logo"><i class="fa-solid fa-compass"></i>知行</div>
+          <p class="auth-subtitle">
+            从一句“想出去走走”开始，慢慢长成一段真正能出发的旅程
+          </p>
+        </div>
+        <div class="public-review-note" aria-label="网站性质说明">
+          <i class="fa-solid fa-circle-info"></i>
+          <span>
+            本站为个人技术展示，用于展示 AI 旅行规划应用能力；不提供真实支付、订票、库存锁定或旅行社经营服务。
+          </span>
+        </div>
+        <div class="auth-hero-scene" aria-hidden="true">
+          <div class="auth-hero-slider">
+            <div class="auth-hero-slide auth-hero-slide-one"></div>
+            <div class="auth-hero-slide auth-hero-slide-two"></div>
+            <div class="auth-hero-slide auth-hero-slide-three"></div>
+          </div>
+          <div class="auth-hero-overlay"></div>
+          <div class="auth-hero-caption">
+            <span class="auth-hero-kicker">目的地 · 交通 · 住宿 · 报告</span>
+            <strong>可继续调整的旅游规划</strong>
+            <p>聊完需求后，我会把路线、交通、住宿和关键提醒整理成一份清晰的旅游规划报告。</p>
+          </div>
+        </div>
+        <div class="auth-highlights">
+          <div class="auth-highlight-item">
+            <i class="fa-solid fa-route"></i>
+            <strong>分步规划</strong>
+            <span>需求、目的地、交通与住宿逐步推进</span>
+          </div>
+          <div class="auth-highlight-item">
+            <i class="fa-solid fa-map-location-dot"></i>
+            <strong>会话保存</strong>
+            <span>每段旅程都会自动记录，方便继续补充</span>
+          </div>
+          <div class="auth-highlight-item">
+            <i class="fa-solid fa-satellite-dish"></i>
+            <strong>实时工具</strong>
+            <span>接入地图、车票与航旅能力辅助决策</span>
+          </div>
+          <div class="auth-highlight-item">
+            <i class="fa-solid fa-file-lines"></i>
+            <strong>报告成册</strong>
+            <span>完整走完后会整理成可查看的旅游规划报告</span>
+          </div>
+        </div>
+
+        <div class="auth-tabs">
+          <button
+            class="auth-tab active"
+            data-tab="login"
+            type="button"
+          >
+            登 录
+          </button>
+          <button
+            class="auth-tab"
+            data-tab="register"
+            type="button"
+          >
+            注 册
+          </button>
+        </div>
+
+        <form id="authForm" novalidate>
+          <div class="form-group">
+            <label for="username">用户名</label>
+            <input
+              type="text"
+              id="username"
+              placeholder="通行证 / 用户名"
+              autocomplete="username"
+              autocapitalize="off"
+              spellcheck="false"
+              aria-describedby="usernameError"
+              required
+            />
+            <div class="field-error" id="usernameError"></div>
+          </div>
+          <div class="form-group register-fields" id="emailField">
+            <label for="email">电子邮箱</label>
+            <input
+              type="email"
+              id="email"
+              placeholder="电子邮箱"
+              autocomplete="email"
+              autocapitalize="off"
+              spellcheck="false"
+              aria-describedby="emailError"
+            />
+            <div class="field-error" id="emailError"></div>
+          </div>
+          <div class="form-group">
+            <label for="password">密码</label>
+            <input
+              type="password"
+              id="password"
+              placeholder="密钥 / 密码"
+              autocomplete="current-password"
+              aria-describedby="passwordError"
+              required
+            />
+            <div class="field-error" id="passwordError"></div>
+          </div>
+          <button type="submit" class="auth-btn" id="authBtn">开启旅程</button>
+          <div class="auth-form-meta" id="authFormMeta">
+            登录后可以继续之前的行程记录，也可以新建一段旅程，最后我会帮你整理成专属旅游规划。
+          </div>
+          <div class="auth-feedback info" id="authFeedback">
+            建议先用常用用户名登录，后续更容易继续之前的会话。
+          </div>
+        </form>
+        <div class="auth-service-hint loading" id="authServiceHint">
+          正在检查服务状态，确认就绪后即可登录或注册。
+        </div>
+
+        <details class="api-config">
+          <summary>连接设置</summary>
+          <input type="text" id="apiBase" value="" placeholder="自动使用当前站点地址" />
+        </details>
+      </div>
+    </div>
+
+    <!-- 主界面 -->
+    <div class="app-container">
+      <!-- 侧边栏：像一本护照 -->
+      <aside class="sidebar glass-card">
+        <div class="sidebar-header">
+          <div class="sidebar-logo-text">
+            <i class="fa-solid fa-mountain-sun"></i> 知行
+          </div>
+          <div class="user-passport">
+            <div class="user-avatar-frame" id="userAvatar">User</div>
+            <div class="user-details">
+              <h4 id="userName">访客</h4>
+              <span>当前账号</span>
+            </div>
+          </div>
+        </div>
+
+        <button
+          class="new-chat-btn"
+          id="newChatBtn"
+          type="button"
+          aria-label="创建新的旅行会话"
+        >
+          <i class="fa-solid fa-route"></i> <span>规划新行程</span>
+        </button>
+
+        <div class="conversations-list">
+          <div class="section-label">行程记录</div>
+          <div class="conversations-summary">
+            <span class="summary-chip" id="conversationCountChip">
+              <i class="fa-regular fa-folder-open"></i> 0 个行程
+            </span>
+            <span class="summary-chip" id="activeConversationChip">
+              <i class="fa-regular fa-compass"></i> 未选择行程
+            </span>
+          </div>
+          <div id="conversationsList"></div>
+        </div>
+
+        <button class="logout-btn" id="logoutBtn" type="button">
+          <i class="fa-solid fa-power-off"></i> 结束本次旅程（登出账号）
+        </button>
+        <a
+          class="logout-btn"
+          id="adminPortalLink"
+          href="./admin.html"
+          target="_blank"
+          hidden
+          style="margin-top: 10px; text-decoration: none; justify-content: center;"
+        >
+          <i class="fa-solid fa-chart-column"></i> 打开后台管理台
+        </a>
+      </aside>
+
+      <!-- 聊天主窗口 -->
+      <main class="chat-main glass-card" role="main">
+        <!-- 水印 -->
+        <i class="fa-solid fa-earth-asia chat-watermark"></i>
+
+        <div class="chat-header">
+          <div class="chat-title-group">
+            <button
+              class="mobile-chat-back-btn"
+              id="mobileChatBackBtn"
+              type="button"
+              aria-label="返回行程列表"
+            >
+              <i class="fa-solid fa-chevron-left"></i>
+              <span>返回列表</span>
+            </button>
+            <div class="chat-icon-wrapper">
+              <i class="fa-solid fa-compass"></i>
+            </div>
+            <div class="chat-info">
+              <h2 id="chatTitle">旅行顾问</h2>
+              <p id="chatSubtitle">告诉我从哪里出发、什么时候走、几个人，我会慢慢整理成清晰的旅游规划。</p>
+              <div class="trip-overview" id="tripOverview">
+                <span class="overview-chip primary">
+                  <i class="fa-solid fa-route"></i> 未选择行程
+                </span>
+                <span class="overview-chip">
+                  <i class="fa-regular fa-pen-to-square"></i> 随时可以开始
+                </span>
+              </div>
+            </div>
+          </div>
+          <div class="chat-status-panel">
+            <div class="assistant-status" id="assistantStatus" role="status" aria-live="polite">等待登录</div>
+            <div class="endpoint-pill" id="endpointHint">
+              <i class="fa-solid fa-globe"></i> 正在检测服务地址
+            </div>
+          </div>
+        </div>
+        <div class="service-banner" id="serviceBanner" role="status" aria-live="polite">
+          <div class="service-banner-main">
+            <div class="service-banner-icon">
+              <i class="fa-solid fa-satellite-dish" id="serviceBannerIcon"></i>
+            </div>
+            <div class="service-banner-copy">
+              <div class="service-banner-title" id="serviceBannerTitle">
+                正在检查服务状态
+              </div>
+              <div class="service-banner-text" id="serviceBannerText">
+                页面正在确认后端和工具链是否就绪，请稍候。
+              </div>
+            </div>
+          </div>
+          <div class="service-banner-actions">
+            <div class="service-banner-meta" id="serviceBannerMeta">
+              启动检测中
+            </div>
+            <button
+              class="service-action-btn secondary"
+              id="retryHealthBtn"
+              aria-label="重新检查服务状态"
+              type="button"
+            >
+              重新检查
+            </button>
+          </div>
+        </div>
+
+          <div class="chat-messages" id="chatMessages" role="log" aria-live="polite" aria-relevant="additions text">
+            <div class="welcome-screen">
+              <div class="welcome-logo">
+                <i class="fa-solid fa-paper-plane"></i>
+              </div>
+              <h3 class="welcome-title">欢迎使用 知行</h3>
+              <p class="welcome-text">
+                直接告诉我你的出发地、时间、人数、预算和偏好，我会逐步帮你完成目的地、交通、住宿，并在最后整理成旅游报告。
+              </p>
+              <div class="welcome-suggestions">
+                <button
+                  class="suggestion-btn"
+                  type="button"
+                  data-suggestion-text="我想从北京出发，端午去成都玩 4 天，2 个人，预算 5000 元，喜欢美食和慢节奏。"
+                >周末城市小旅行</button>
+                <button
+                  class="suggestion-btn"
+                  type="button"
+                  data-suggestion-text="帮我规划一次去云南的 7 天亲子旅行，暑假出发，预算 12000 元。"
+                >亲子长线行程</button>
+                <button
+                  class="suggestion-btn"
+                  type="button"
+                  data-suggestion-text="我想先看看 3 个适合海边度假的目的地，预算 8000 元以内。"
+                >先做目的地推荐</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="chat-input-area">
+          <div class="planner-panel">
+            <div class="planner-panel-head">
+              <div class="planner-panel-head-copy">
+                <div class="planner-panel-title">
+                  <i class="fa-solid fa-list-check"></i> 行程摘要 / 待补信息
+                </div>
+                <div class="planner-panel-tip">
+                  先把已知信息放在这里，也可以直接聊天；我会把缺口收束成下一步确认。
+                </div>
+              </div>
+              <button
+                class="planner-toggle-btn"
+                id="plannerToggleBtn"
+                type="button"
+                aria-expanded="true"
+              >
+                收起辅助栏
+              </button>
+            </div>
+            <div class="planner-panel-body" id="plannerPanelBody">
+            <div class="planner-assist-strip" id="plannerAssistStrip" aria-live="polite">
+              <span class="planner-assist-chip missing">
+                <i class="fa-regular fa-circle"></i> 出发地
+              </span>
+              <span class="planner-assist-chip missing">
+                <i class="fa-regular fa-circle"></i> 目的地
+              </span>
+              <span class="planner-assist-chip missing">
+                <i class="fa-regular fa-circle"></i> 天数
+              </span>
+              <span class="planner-assist-chip optional">
+                <i class="fa-regular fa-circle"></i> 预算可选
+              </span>
+            </div>
+            <details class="guide-import-panel" id="guideImportPanel">
+              <summary>
+                <span><i class="fa-solid fa-file-import"></i> 攻略导入</span>
+                <small id="guideImportCount">粘贴文本</small>
+              </summary>
+              <div class="guide-import-body">
+                <div class="guide-import-url-row">
+                  <label for="guideImportUrl">网页链接</label>
+                  <div class="guide-import-url-control">
+                    <input
+                      id="guideImportUrl"
+                      type="url"
+                      inputmode="url"
+                      autocomplete="off"
+                      spellcheck="false"
+                      placeholder="粘贴公开攻略网页链接"
+                    />
+                    <button class="planner-btn primary outline guide-import-fetch-btn" id="guideImportFetchBtn" type="button">
+                      抓取网页
+                    </button>
+                  </div>
+                </div>
+                <textarea
+                  id="guideImportText"
+                  rows="4"
+                  autocomplete="off"
+                  spellcheck="false"
+                  placeholder="粘贴攻略文本，或先抓取公开网页正文。"
+                ></textarea>
+                <div class="guide-import-actions">
+                  <button class="planner-btn primary outline" id="guideImportComposeBtn" type="button">
+                    整理到输入框
+                  </button>
+                  <button class="planner-btn primary" id="guideImportSendBtn" type="button">
+                    导入并发送
+                  </button>
+                  <button class="planner-btn ghost" id="guideImportClearBtn" type="button">
+                    清空
+                  </button>
+                </div>
+                <div class="guide-import-status" id="guideImportStatus">
+                  粘贴攻略文本后，我会整理成一条规划请求。
+                </div>
+              </div>
+            </details>
+            <div class="planner-grid">
+              <div class="planner-field">
+                <label for="plannerOrigin">出发地</label>
+                <input
+                  id="plannerOrigin"
+                  data-planner-control="true"
+                  type="text"
+                  autocomplete="off"
+                  placeholder="例如：北京"
+                />
+              </div>
+              <div class="planner-field">
+                <label for="plannerDestination">目的地</label>
+                <input
+                  id="plannerDestination"
+                  data-planner-control="true"
+                  type="text"
+                  autocomplete="off"
+                  placeholder="例如：南京 / 云南"
+                />
+              </div>
+              <div class="planner-field">
+                <label for="plannerDate">出发时间</label>
+                <input
+                  id="plannerDate"
+                  data-planner-control="true"
+                  type="text"
+                  autocomplete="off"
+                  placeholder="例如：端午 / 7月中旬"
+                />
+              </div>
+              <div class="planner-field">
+                <label for="plannerDays">行程天数</label>
+                <input
+                  id="plannerDays"
+                  data-planner-control="true"
+                  type="text"
+                  autocomplete="off"
+                  placeholder="例如：4天3晚"
+                />
+              </div>
+              <div class="planner-field">
+                <label for="plannerTravelers">出行人数</label>
+                <input
+                  id="plannerTravelers"
+                  data-planner-control="true"
+                  type="text"
+                  autocomplete="off"
+                  placeholder="例如：2人 / 2大1小"
+                />
+              </div>
+              <div class="planner-field">
+                <label for="plannerBudget">预算范围</label>
+                <input
+                  id="plannerBudget"
+                  data-planner-control="true"
+                  type="text"
+                  inputmode="numeric"
+                  autocomplete="off"
+                  placeholder="例如：5000元以内"
+                />
+              </div>
+              <div class="planner-field">
+                <label for="plannerTransport">交通偏好</label>
+                <input
+                  id="plannerTransport"
+                  data-planner-control="true"
+                  type="text"
+                  autocomplete="off"
+                  placeholder="例如：高铁优先 / 可自驾"
+                />
+              </div>
+              <div class="planner-field">
+                <label for="plannerStay">住宿偏好</label>
+                <input
+                  id="plannerStay"
+                  data-planner-control="true"
+                  type="text"
+                  autocomplete="off"
+                  placeholder="例如：江景、亲子、交通方便"
+                />
+              </div>
+              <div class="planner-field">
+                <label for="plannerStyle">偏好关键词</label>
+                <input
+                  id="plannerStyle"
+                  data-planner-control="true"
+                  type="text"
+                  autocomplete="off"
+                  placeholder="例如：美食、慢节奏、亲子"
+                />
+              </div>
+            </div>
+            <div class="planner-chip-group">
+              <button
+                class="planner-chip"
+                type="button"
+                data-planner-control="true"
+                data-planner-style="海边度假"
+              >
+                海边度假
+              </button>
+              <button
+                class="planner-chip"
+                type="button"
+                data-planner-control="true"
+                data-planner-style="亲子出游"
+              >
+                亲子出游
+              </button>
+              <button
+                class="planner-chip"
+                type="button"
+                data-planner-control="true"
+                data-planner-style="美食慢游"
+              >
+                美食慢游
+              </button>
+              <button
+                class="planner-chip"
+                type="button"
+                data-planner-control="true"
+                data-planner-style="自然风景"
+              >
+                自然风景
+              </button>
+              <button
+                class="planner-chip"
+                type="button"
+                data-planner-control="true"
+                data-planner-style="情侣纪念日"
+              >
+                情侣纪念日
+              </button>
+              <button
+                class="planner-chip"
+                type="button"
+                data-planner-control="true"
+                data-planner-style="轻预算优先"
+              >
+                轻预算优先
+              </button>
+            </div>
+            <div class="planner-mode-note">
+              <div>
+                <strong>两种规划方式</strong>
+                <span>省心方案会优先匹配成熟路线，个性化旅游规划会按你的偏好逐步细化。</span>
+              </div>
+            </div>
+            <div class="planner-actions">
+              <div class="planner-actions-left">
+                <button
+                  class="planner-btn primary"
+                  type="button"
+                  data-planner-control="true"
+                  data-compose-planner-draft="agency"
+                >
+                  省心方案
+                </button>
+                <button
+                  class="planner-btn primary outline"
+                  type="button"
+                  data-planner-control="true"
+                  data-compose-planner-draft="personalized"
+                >
+                  个性化旅游规划
+                </button>
+                <button
+                  class="planner-btn secondary"
+                  type="button"
+                  data-planner-control="true"
+                  data-fill-planner-template="weekend"
+                >
+                  周末模板
+                </button>
+                <button
+                  class="planner-btn secondary"
+                  type="button"
+                  data-planner-control="true"
+                  data-fill-planner-template="family"
+                >
+                  亲子模板
+                </button>
+              </div>
+              <div class="planner-actions-right">
+                <button
+                  class="planner-btn ghost"
+                  id="resetPlannerDraftBtn"
+                  type="button"
+                  data-planner-control="true"
+                >
+                  清空摘要
+                </button>
+              </div>
+            </div>
+            <div class="planner-summary" id="plannerSummary">
+              可以先选一种规划方式；如果你只写旅行需求，我会先帮你确认要省心方案还是个性化旅游规划。
+            </div>
+            </div>
+          </div>
+          <div class="chat-input-wrapper">
+            <textarea
+              class="chat-input"
+              id="chatInput"
+              aria-label="旅行需求输入框"
+              placeholder="说说出发地、日期、人数和预算，也可以直接描述想要的旅行。"
+              rows="1"
+            ></textarea>
+            <button class="send-btn" id="sendBtn" type="button" aria-label="发送消息">
+              <i class="fa-regular fa-paper-plane"></i>
+            </button>
+          </div>
+          <div class="chat-meta">
+            <div><strong>Enter</strong> 发送，<strong>Shift + Enter</strong> 换行</div>
+            <div id="composerHint">部署环境将默认使用当前站点地址</div>
+          </div>
+        </div>
+      </main>
+
+      <aside
+        class="governance-console glass-card"
+        id="governanceConsole"
+        aria-label="知行行程进度台"
+      >
+        <div class="governance-console-head">
+          <div>
+            <div class="governance-console-kicker">行程进度台</div>
+            <h2>当前进展</h2>
+          </div>
+          <button
+            class="governance-icon-btn"
+            id="governanceRefreshBtn"
+            type="button"
+            aria-label="刷新进度台"
+            title="刷新进度台"
+          >
+            <i class="fa-solid fa-rotate-right"></i>
+          </button>
+        </div>
+
+        <section class="governance-section readiness" aria-labelledby="readinessTitle">
+          <div class="governance-section-head">
+            <div>
+              <span class="governance-section-label">规划进度</span>
+              <h3 id="readinessTitle">当前阶段：需求收集</h3>
+            </div>
+            <span class="governance-status-pill checking" id="readinessStatusPill">
+              检查中
+            </span>
+          </div>
+          <div class="readiness-summary" id="readinessSummary">
+            正在整理行程进度。
+          </div>
+          <div class="readiness-service-grid" id="readinessServiceGrid"></div>
+          <details class="governance-details tool-audit-public" id="toolAuditPanel" open>
+            <summary>
+              <span>已使用服务</span>
+              <span class="governance-count-pill" id="toolAuditCount">0</span>
+              <i class="fa-solid fa-chevron-down"></i>
+            </summary>
+            <div class="governance-section audit" aria-labelledby="toolAuditTitle">
+              <div class="governance-section-head">
+                <div>
+                  <span class="governance-section-label">本轮服务记录</span>
+                  <h3 id="toolAuditTitle">服务摘要</h3>
+                </div>
+              </div>
+              <p class="governance-section-note">
+                同时展示用户可理解的服务名和原始工具名，便于验收本轮调用链路。
+              </p>
+              <div class="tool-audit-list" id="toolAuditList">
+                <div class="governance-empty">本轮还没有可展示的工具摘要。</div>
+              </div>
+            </div>
+          </details>
+        </section>
+
+        <details class="governance-details" id="governanceDetails" hidden>
+          <summary>
+            <span>顾问/调试明细</span>
+            <i class="fa-solid fa-chevron-down"></i>
+          </summary>
+          <div class="governance-detail-body">
+            <section class="governance-section approvals" aria-labelledby="approvalTitle">
+              <div class="governance-section-head">
+                <div>
+                  <span class="governance-section-label">人工确认记录</span>
+                  <h3 id="approvalTitle">确认边界</h3>
+                </div>
+                <button
+                  class="governance-text-btn"
+                  id="createDemoApprovalBtn"
+                  type="button"
+                >
+                  演示记录
+                </button>
+              </div>
+              <p class="governance-section-note">
+                当前只说明边界，不会真实下单；未来接入真实支付、短信通知或客户资料导出时，才需要人工确认。
+              </p>
+              <div class="approval-filter-row" role="group" aria-label="人工确认记录筛选">
+                <button
+                  class="approval-filter-btn active"
+                  type="button"
+                  data-approval-filter="all"
+                >
+                  全部
+                </button>
+                <button
+                  class="approval-filter-btn"
+                  type="button"
+                  data-approval-filter="pending"
+                >
+                  待确认
+                </button>
+              </div>
+              <div class="approval-list" id="approvalList">
+                <div class="governance-empty">登录后展示人工确认记录。</div>
+              </div>
+              <div class="approval-events" id="approvalEvents">
+                <div class="approval-events-title">记录轨迹</div>
+                <div id="approvalEventsList" class="governance-empty">
+                  选择一条记录后展示后续状态变化。
+                </div>
+              </div>
+            </section>
+
+            <section class="governance-section observability" aria-labelledby="observabilityTitle">
+              <div class="governance-section-head">
+                <div>
+                  <span class="governance-section-label">运行摘要</span>
+                  <h3 id="observabilityTitle">本轮状态</h3>
+                </div>
+                <span class="governance-status-pill idle" id="turnStatusPill">待开始</span>
+              </div>
+              <p class="governance-section-note">
+                用来讲清本轮走到哪个规划阶段、处于哪种规划模式，以及工具调用有没有降级。
+              </p>
+              <div class="turn-observability-grid" id="turnObservabilityGrid">
+                <div class="governance-empty">
+                  完成一轮聊天后展示脱敏摘要，不展示个人敏感信息、密钥或完整工具输入输出。
+                </div>
+              </div>
+            </section>
+
+            <section class="governance-section boundary" aria-labelledby="boundaryTitle">
+              <div class="governance-section-head">
+                <div>
+                  <span class="governance-section-label">边界说明</span>
+                  <h3 id="boundaryTitle">不会替你下单</h3>
+                </div>
+              </div>
+              <p class="governance-section-note">
+                报告和订单号只用于方案交付演示，不代表真实支付、真实预订、锁价或履约成功。
+              </p>
+              <ul class="governance-boundary-list">
+                <li>不接真实支付，不生成支付链接。</li>
+                <li>不接真实预订、短信、客服或供应链下单。</li>
+                <li>不承诺真实库存、真实锁价或履约成功。</li>
+              </ul>
+            </section>
+          </div>
+        </details>
+      </aside>
+    </div>
+
+    <div class="journey-map-modal" id="journeyMapModal" aria-hidden="true">
+      <div class="journey-map-modal-dialog">
+        <div class="journey-map-modal-head">
+          <div>
+            <div class="journey-map-modal-kicker">路线大图</div>
+            <strong class="journey-map-modal-title">路线地图</strong>
+          </div>
+          <button
+            class="journey-map-modal-close"
+            type="button"
+            data-map-modal-close="true"
+            aria-label="关闭路线地图"
+          >
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+        <div class="journey-live-map-shell journey-live-map-shell--modal" id="journeyMapModalShell">
+          <div class="journey-map-modal-days" id="journeyMapModalDays"></div>
+          <div
+            class="journey-live-map journey-live-map-modal-canvas"
+            data-map-payload=""
+          >
+            <div class="journey-live-map-state loading">正在准备大图地图…</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="toast" id="toast" role="status" aria-live="polite" aria-atomic="true">
+      <i class="fa-solid fa-info-circle"></i> <span id="toastMsg"></span>
+    </div>
+
+    <footer class="site-icp-footer" aria-label="网站备案信息">
+      <a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener noreferrer">
+        陕ICP备2025078395号-1
+      </a>
+    </footer>
+
+        <script src="./session-api.js?v=20260603-auth-split"></script>
+        <script src="./conversation-api.js?v=20260603-conversation-split"></script>
+        <script src="./guide-import-api.js?v=20260605-guide-web-fetch"></script>
+        <script src="./journey-api.js?v=20260603-journey-split"></script>
+        <script src="./journey-editor.js?v=20260605-route-planning-pool"></script>
+        <script src="./journey-overlay.js?v=20260603-journey-overlay-split"></script>
+        <script src="./map-controls.js?v=20260603-map-controls-split"></script>
+        <script src="./journey-text-utils.js?v=20260604-journey-text-utils-split"></script>
+        <script src="./journey-map-data.js?v=20260604-journey-map-data-split"></script>
+        <script src="./journey-map-view.js?v=20260604-journey-map-view-split"></script>
+        <script src="./journey-map-focus.js?v=20260606-amap-day-focus-fit"></script>
+        <script src="./journey-map-shell.js?v=20260604-journey-map-shell-split"></script>
+        <script src="./journey-map-hydration.js?v=20260607-map-hydration-split"></script>
+        <script src="./journey-preview.js?v=20260607-journey-preview-split"></script>
+        <script src="./journey-poi-utils.js?v=20260605-route-planning-pool"></script>
+        <script src="./journey-poi-renderer.js?v=20260604-journey-poi-renderer-split"></script>
+        <script src="./visual-journey-editor.js?v=20260608-visual-journey-editor-split"></script>
+        <script src="./assistant-renderer.js?v=20260608-assistant-renderer-split"></script>
+        <script src="./report-data-view-model.js?v=20260607-report-data-view-model-split"></script>
+        <script src="./report-data-panels.js?v=20260607-report-data-panels-split"></script>
+        <script src="./report-data-itinerary.js?v=20260607-report-data-itinerary-split"></script>
+        <script src="./report-text-structured.js?v=20260607-report-text-structured-split"></script>
+        <script src="./report-budget.js?v=20260603-report-budget-split"></script>
+        <script src="./report-renderer.js?v=20260603-report-renderer-split"></script>
+        <script src="./report-export.js?v=20260603-report-export-split"></script>
+        <script src="./report-actions.js?v=20260603-report-actions-split"></script>
+        <script src="./governance-api.js?v=20260603-governance-split"></script>
+        <script src="./governance-tools.js?v=20260604-governance-tools-split"></script>
+        <script src="./governance-progress.js?v=20260604-governance-progress-split"></script>
+        <script src="./governance-renderer.js?v=20260604-governance-renderer-split"></script>
+        <script src="./draft-storage.js?v=20260605-frontend-core-split"></script>
+        <script src="./runtime-status.js?v=20260605-frontend-core-split"></script>
+        <script src="./chat-stream.js?v=20260605-frontend-core-split"></script>
+        <script src="./chat-runner.js?v=20260607-chat-runner-split"></script>
+        <script src="./chat-messages.js?v=20260607-chat-messages-split"></script>
+        <script src="./planner-controls.js?v=20260607-planner-controls-split"></script>
+        <script src="./guide-import.js?v=20260605-guide-web-fetch"></script>
+        <script src="./app.js?v=20260606-amap-day-focus-fit"></script>
+  </body>
+</html>
+
+    

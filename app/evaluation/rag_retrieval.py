@@ -1,0 +1,1079 @@
+"""Small deterministic RAG retrieval benchmark.
+
+This module evaluates whether a query can retrieve the expected knowledge
+sources/categories from the repository documents. It is intentionally offline:
+no LLM, embedding provider, vector store, or API key is required.
+"""
+from __future__ import annotations
+
+import json
+import logging
+import math
+import re
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import Any, Iterable, Literal
+
+try:
+    import jieba
+except Exception:  # pragma: no cover - minimal dependency shells
+    jieba = None
+else:
+    jieba.setLogLevel(logging.ERROR)
+
+try:
+    from rank_bm25 import BM25Okapi
+except Exception:  # pragma: no cover - minimal dependency shells
+    BM25Okapi = None
+
+from app.rag.contracts import metadata_list
+from app.rag.document_loader import DocumentManager
+from app.rag.retrieval_boost import (
+    destination_match_priority,
+    explicit_query_destinations,
+    query_document_boost,
+)
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_RAG_RETRIEVAL_SCENARIO_FILE = (
+    PROJECT_ROOT / "data" / "evaluation" / "rag_retrieval_scenarios.json"
+)
+DEFAULT_DOCUMENTS_DIR = PROJECT_ROOT / "data" / "documents"
+RAG_RETRIEVAL_SCENARIO_VERSION = "rag_retrieval_scenarios.v1"
+RAG_RETRIEVAL_RESULT_VERSION = "rag_retrieval_eval.v1"
+RetrievalStrategy = Literal["baseline_bm25", "metadata_aware_bm25"]
+
+
+CATEGORY_QUERY_HINTS: dict[str, tuple[str, ...]] = {
+    "destinations": (
+        "攻略",
+        "景点",
+        "美食",
+        "住宿",
+        "西安",
+        "历史",
+        "文化",
+        "自由行",
+    ),
+    "products": (
+        "产品",
+        "路线",
+        "成熟路线",
+        "路线样板",
+        "合作产品",
+        "省心",
+        "小团",
+        "包车",
+        "轻定制",
+        "亲子",
+        "银发",
+        "老人",
+        "团建",
+        "低强度",
+        "少步行",
+        "西藏",
+        "新疆",
+        "云南",
+        "西安",
+        "拉萨",
+        "乌鲁木齐",
+        "大理",
+        "丽江",
+    ),
+    "pricing": (
+        "报价",
+        "费用",
+        "预算",
+        "价格",
+        "包含",
+        "不含",
+        "锁价",
+        "合同",
+        "核验",
+        "估算",
+    ),
+    "risk": (
+        "风险",
+        "天气",
+        "预约",
+        "排队",
+        "体力",
+        "老人",
+        "小孩",
+        "plan b",
+        "兜底",
+        "锁价",
+        "库存",
+    ),
+    "report": (
+        "报告",
+        "交付",
+        "导出",
+        "结构",
+        "地图",
+        "待核验",
+        "预算明细",
+        "风险提示",
+    ),
+    "sop": (
+        "sop",
+        "流程",
+        "服务",
+        "顾问",
+        "话术",
+        "需求",
+        "确认",
+        "重复追问",
+    ),
+}
+
+
+@dataclass(frozen=True)
+class RagRetrievalScenario:
+    """One labeled query for source/category recall checks."""
+
+    id: str
+    name: str
+    query: str
+    expected_sources: list[str]
+    expected_categories: list[str]
+    expected_source_types: list[str] = field(default_factory=list)
+    expected_visibilities: list[str] = field(default_factory=list)
+    forbidden_categories: list[str] = field(default_factory=list)
+    forbidden_source_types: list[str] = field(default_factory=list)
+    forbidden_visibilities: list[str] = field(default_factory=list)
+    tags: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class IndexedDocument:
+    """A local knowledge document prepared for deterministic retrieval."""
+
+    source: str
+    category: str
+    source_type: str
+    visibility: str
+    page_content: str
+    metadata: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class RetrievedDocument:
+    """One ranked retrieval hit."""
+
+    rank: int
+    source: str
+    category: str
+    source_type: str
+    visibility: str
+    score: float
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class RagScenarioRetrievalResult:
+    """Metrics for one query under one retrieval strategy."""
+
+    scenario_id: str
+    strategy: RetrievalStrategy
+    top_k: int
+    source_recall: float
+    category_recall: float
+    source_type_recall: float
+    visibility_recall: float
+    forbidden_hit_count: int
+    forbidden_hits: list[str]
+    reciprocal_rank: float
+    first_relevant_rank: int | None
+    retrieved: list[RetrievedDocument]
+
+    @property
+    def hit(self) -> bool:
+        return self.first_relevant_rank is not None
+
+    @property
+    def safety_passed(self) -> bool:
+        return self.forbidden_hit_count == 0
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = asdict(self)
+        payload["hit"] = self.hit
+        payload["safety_passed"] = self.safety_passed
+        payload["retrieved"] = [item.to_dict() for item in self.retrieved]
+        return payload
+
+
+@dataclass(frozen=True)
+class RagRetrievalStrategySummary:
+    """Aggregate metrics for one strategy and one top_k."""
+
+    strategy: RetrievalStrategy
+    top_k: int
+    scenario_count: int
+    source_recall: float
+    category_recall: float
+    source_type_recall: float
+    visibility_recall: float
+    hit_rate: float
+    safety_pass_rate: float
+    mrr: float
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class RagRetrievalEvaluationResult:
+    """Full benchmark output."""
+
+    version: str
+    scenario_count: int
+    document_count: int
+    top_k_values: list[int]
+    summaries: list[RagRetrievalStrategySummary]
+    scenario_results: list[RagScenarioRetrievalResult]
+    improvement: dict[str, float]
+    coverage_summary: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "version": self.version,
+            "scenario_count": self.scenario_count,
+            "document_count": self.document_count,
+            "top_k_values": self.top_k_values,
+            "summaries": [summary.to_dict() for summary in self.summaries],
+            "scenario_results": [result.to_dict() for result in self.scenario_results],
+            "improvement": self.improvement,
+            "coverage_summary": self.coverage_summary,
+        }
+
+
+def _require_string(value: Any, field_name: str, scenario_id: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"Scenario {scenario_id!r} field {field_name!r} must be a non-empty string")
+    return value.strip()
+
+
+def _require_string_list(value: Any, field_name: str, scenario_id: str) -> list[str]:
+    if not isinstance(value, list) or not value:
+        raise ValueError(f"Scenario {scenario_id!r} field {field_name!r} must be a non-empty list")
+    if not all(isinstance(item, str) and item.strip() for item in value):
+        raise ValueError(f"Scenario {scenario_id!r} field {field_name!r} must contain only strings")
+    return [item.strip() for item in value]
+
+
+def load_rag_retrieval_scenarios(
+    path: Path | str | None = None,
+) -> list[RagRetrievalScenario]:
+    """Load and validate the retrieval benchmark catalog."""
+
+    scenario_path = Path(path or DEFAULT_RAG_RETRIEVAL_SCENARIO_FILE)
+    payload = json.loads(scenario_path.read_text(encoding="utf-8-sig"))
+    if payload.get("version") != RAG_RETRIEVAL_SCENARIO_VERSION:
+        raise ValueError(f"Scenario catalog version must be {RAG_RETRIEVAL_SCENARIO_VERSION}")
+    raw_scenarios = payload.get("scenarios")
+    if not isinstance(raw_scenarios, list) or not raw_scenarios:
+        raise ValueError("Scenario catalog must contain a non-empty scenarios list")
+
+    scenarios: list[RagRetrievalScenario] = []
+    seen_ids: set[str] = set()
+    for raw in raw_scenarios:
+        if not isinstance(raw, dict):
+            raise ValueError("Scenario catalog items must be objects")
+        scenario_id = _require_string(raw.get("id"), "id", "<unknown>")
+        if scenario_id in seen_ids:
+            raise ValueError(f"Duplicate scenario id: {scenario_id}")
+        seen_ids.add(scenario_id)
+        scenarios.append(
+            RagRetrievalScenario(
+                id=scenario_id,
+                name=_require_string(raw.get("name"), "name", scenario_id),
+                query=_require_string(raw.get("query"), "query", scenario_id),
+                expected_sources=[
+                    _normalize_source(item) for item in _require_string_list(
+                        raw.get("expected_sources"),
+                        "expected_sources",
+                        scenario_id,
+                    )
+                ],
+                expected_categories=_require_string_list(
+                    raw.get("expected_categories"),
+                    "expected_categories",
+                    scenario_id,
+                ),
+                expected_source_types=(
+                    _require_string_list(
+                        raw.get("expected_source_types"),
+                        "expected_source_types",
+                        scenario_id,
+                    )
+                    if raw.get("expected_source_types") is not None
+                    else []
+                ),
+                expected_visibilities=(
+                    _require_string_list(
+                        raw.get("expected_visibilities"),
+                        "expected_visibilities",
+                        scenario_id,
+                    )
+                    if raw.get("expected_visibilities") is not None
+                    else []
+                ),
+                forbidden_categories=(
+                    _require_string_list(
+                        raw.get("forbidden_categories"),
+                        "forbidden_categories",
+                        scenario_id,
+                    )
+                    if raw.get("forbidden_categories") is not None
+                    else []
+                ),
+                forbidden_source_types=(
+                    _require_string_list(
+                        raw.get("forbidden_source_types"),
+                        "forbidden_source_types",
+                        scenario_id,
+                    )
+                    if raw.get("forbidden_source_types") is not None
+                    else []
+                ),
+                forbidden_visibilities=(
+                    _require_string_list(
+                        raw.get("forbidden_visibilities"),
+                        "forbidden_visibilities",
+                        scenario_id,
+                    )
+                    if raw.get("forbidden_visibilities") is not None
+                    else []
+                ),
+                tags=(
+                    _require_string_list(raw.get("tags"), "tags", scenario_id)
+                    if raw.get("tags") is not None
+                    else []
+                ),
+            )
+        )
+    return scenarios
+
+
+def _normalize_source(source: object) -> str:
+    source_text = str(source or "").strip().replace("\\", "/")
+    if not source_text:
+        return "unknown"
+    try:
+        path = Path(source_text)
+        if path.is_absolute():
+            return path.resolve().relative_to(PROJECT_ROOT).as_posix()
+    except Exception:
+        pass
+    return source_text.lstrip("./")
+
+
+def _document_from_langchain(doc: Any) -> IndexedDocument:
+    metadata = dict(doc.metadata or {})
+    source = _normalize_source(metadata.get("source"))
+    return IndexedDocument(
+        source=source,
+        category=str(metadata.get("category") or "unknown"),
+        source_type=str(metadata.get("source_type") or "unknown"),
+        visibility=str(metadata.get("visibility") or "unknown"),
+        page_content=str(doc.page_content or ""),
+        metadata=metadata,
+    )
+
+
+def load_rag_retrieval_documents(
+    documents_dir: Path | str | None = None,
+) -> list[IndexedDocument]:
+    """Load public and internal knowledge documents with RAG metadata."""
+
+    manager = DocumentManager(str(documents_dir or DEFAULT_DOCUMENTS_DIR))
+    documents = manager.load_destination_documents() + manager.load_internal_documents()
+    return [_document_from_langchain(doc) for doc in documents]
+
+
+_WORD_RE = re.compile(r"[a-zA-Z0-9_]+|[\u4e00-\u9fff]+")
+
+
+def _tokenize(text: str) -> list[str]:
+    normalized = str(text or "").lower()
+    tokens: list[str] = []
+    if jieba is not None:
+        tokens.extend(item.strip() for item in jieba.lcut(normalized) if item.strip())
+    tokens.extend(item.group(0).strip() for item in _WORD_RE.finditer(normalized))
+    return [token for token in tokens if token and not token.isspace()]
+
+
+def _metadata_text(document: IndexedDocument) -> str:
+    metadata = document.metadata
+    fields = [
+        document.category,
+        document.source_type,
+        document.visibility,
+        str(metadata.get("title") or ""),
+        str(metadata.get("product_id") or ""),
+        str(metadata.get("source_kind") or ""),
+        str(metadata.get("inventory_status") or ""),
+        str(metadata.get("external_product_ref") or ""),
+        str(metadata.get("destination") or ""),
+        str(metadata.get("theme") or ""),
+        str(metadata.get("duration") or ""),
+        str(metadata.get("audience") or ""),
+        str(metadata.get("persona_tags") or ""),
+        str(metadata.get("service_level") or ""),
+        str(metadata.get("price_band") or ""),
+        str(metadata.get("demo_price_label") or ""),
+        str(metadata.get("price_basis") or ""),
+        str(metadata.get("evidence_type") or ""),
+        str(metadata.get("product_source") or ""),
+        str(metadata.get("service_boundary") or ""),
+        str(metadata.get("quote_basis") or ""),
+        str(metadata.get("included") or ""),
+        str(metadata.get("excluded") or ""),
+        str(metadata.get("transport_lodging_basis") or ""),
+        str(metadata.get("verification_items") or ""),
+        str(metadata.get("evidence_level") or ""),
+        str(metadata.get("applicable_modes") or ""),
+        str(metadata.get("constraints") or ""),
+        str(metadata.get("user_segments") or ""),
+        str(metadata.get("regions") or ""),
+        str(metadata.get("budget_levels") or ""),
+    ]
+    return " ".join(fields)
+
+
+def _infer_category_hints(query: str) -> set[str]:
+    normalized = query.lower()
+    hints: set[str] = set()
+    for category, terms in CATEGORY_QUERY_HINTS.items():
+        if any(term.lower() in normalized for term in terms):
+            hints.add(category)
+    if any(term in normalized for term in ("旅行社", "省心", "合作产品", "路线样板", "小团", "包车")):
+        hints.update({"products", "sop", "pricing", "risk", "report"})
+    if any(term in normalized for term in ("新疆", "西藏", "云南", "西安", "大理", "丽江", "拉萨")):
+        hints.add("products")
+    if not hints:
+        hints.add("destinations")
+    return hints
+
+
+def _infer_source_type_hints(query: str) -> set[str]:
+    normalized = query.lower()
+    if any(
+        term in normalized
+        for term in ("旅行社", "省心", "报价", "sop", "报告标准", "风险", "合作产品", "路线样板")
+    ):
+        return {"agency_internal"}
+    return {"destination_guide", "agency_internal"}
+
+
+def _bm25_scores(query_tokens: list[str], corpus_tokens: list[list[str]]) -> list[float]:
+    if not corpus_tokens:
+        return []
+    if BM25Okapi is not None:
+        bm25 = BM25Okapi(corpus_tokens)
+        return [float(score) for score in bm25.get_scores(query_tokens)]
+
+    # Small fallback for dependency-constrained shells.
+    scores: list[float] = []
+    query_set = set(query_tokens)
+    for tokens in corpus_tokens:
+        token_set = set(tokens)
+        scores.append(float(len(query_set & token_set) / max(len(query_set), 1)))
+    return scores
+
+
+def _safe_round(value: float) -> float:
+    if math.isnan(value) or math.isinf(value):
+        return 0.0
+    return round(float(value), 4)
+
+
+def retrieve_documents(
+    query: str,
+    documents: list[IndexedDocument],
+    *,
+    strategy: RetrievalStrategy,
+    top_k: int,
+    preferred_visibilities: Iterable[str] = (),
+    blocked_categories: Iterable[str] = (),
+    blocked_source_types: Iterable[str] = (),
+    blocked_visibilities: Iterable[str] = (),
+    enforce_blocked: bool = False,
+) -> list[RetrievedDocument]:
+    """Retrieve documents with a deterministic offline strategy."""
+
+    if top_k <= 0:
+        raise ValueError("top_k must be positive")
+    include_metadata = strategy == "metadata_aware_bm25"
+    corpus_text = [
+        document.page_content + ("\n" + _metadata_text(document) if include_metadata else "")
+        for document in documents
+    ]
+    query_tokens = _tokenize(query)
+    corpus_tokens = [_tokenize(item) for item in corpus_text]
+    scores = _bm25_scores(query_tokens, corpus_tokens)
+
+    if include_metadata:
+        category_hints = _infer_category_hints(query)
+        source_type_hints = _infer_source_type_hints(query)
+        preferred_visibility_set = {str(item) for item in preferred_visibilities if str(item)}
+        blocked_category_set = {str(item) for item in blocked_categories if str(item)}
+        blocked_source_type_set = {str(item) for item in blocked_source_types if str(item)}
+        blocked_visibility_set = {str(item) for item in blocked_visibilities if str(item)}
+        for index, document in enumerate(documents):
+            boost = 0.0
+            if document.category in category_hints:
+                boost += 1.2
+            if document.source_type in source_type_hints:
+                boost += 0.5
+            if preferred_visibility_set and document.visibility in preferred_visibility_set:
+                boost += 2.0
+            if (
+                document.category in blocked_category_set
+                or document.source_type in blocked_source_type_set
+                or document.visibility in blocked_visibility_set
+            ):
+                boost -= 6.0
+            applicable_modes = set(metadata_list(document.metadata.get("applicable_modes")))
+            if "省心" in query and "agency_plan" in applicable_modes:
+                boost += 0.2
+            if "自由行" in query and "free_planning" in applicable_modes:
+                boost += 0.2
+            boost += query_document_boost(
+                query,
+                metadata=document.metadata,
+                page_content=document.page_content,
+            )
+            scores[index] += boost
+
+    query_destinations = (
+        explicit_query_destinations(
+            query,
+            (
+                (document.metadata, document.page_content)
+                for document in documents
+            ),
+        )
+        if include_metadata
+        else set()
+    )
+    ranked = sorted(
+        zip(documents, scores),
+        key=lambda item: (
+            destination_match_priority(
+                query_destinations,
+                metadata=item[0].metadata,
+                page_content=item[0].page_content,
+            ),
+            -item[1],
+            item[0].source,
+        ),
+    )
+    if enforce_blocked:
+        blocked_category_set = {str(item) for item in blocked_categories if str(item)}
+        blocked_source_type_set = {str(item) for item in blocked_source_types if str(item)}
+        blocked_visibility_set = {str(item) for item in blocked_visibilities if str(item)}
+        ranked = [
+            (document, score)
+            for document, score in ranked
+            if not (
+                document.category in blocked_category_set
+                or document.source_type in blocked_source_type_set
+                or document.visibility in blocked_visibility_set
+            )
+        ]
+    return [
+        RetrievedDocument(
+            rank=rank,
+            source=document.source,
+            category=document.category,
+            source_type=document.source_type,
+            visibility=document.visibility,
+            score=_safe_round(score),
+        )
+        for rank, (document, score) in enumerate(ranked[:top_k], start=1)
+    ]
+
+
+def _recall(expected: Iterable[str], actual: Iterable[str]) -> float:
+    expected_set = {str(item) for item in expected if str(item)}
+    if not expected_set:
+        return 1.0
+    actual_set = {str(item) for item in actual if str(item)}
+    return len(expected_set & actual_set) / len(expected_set)
+
+
+def _first_relevant_rank(
+    scenario: RagRetrievalScenario,
+    retrieved: list[RetrievedDocument],
+) -> int | None:
+    expected_sources = set(scenario.expected_sources)
+    expected_categories = set(scenario.expected_categories)
+    expected_source_types = set(scenario.expected_source_types)
+    for item in retrieved:
+        if item.source in expected_sources:
+            return item.rank
+        if item.category in expected_categories and (
+            not expected_source_types or item.source_type in expected_source_types
+        ):
+            return item.rank
+    return None
+
+
+def _scenario_visibility_filter(scenario: RagRetrievalScenario) -> set[str]:
+    if scenario.expected_visibilities:
+        return set(scenario.expected_visibilities)
+    tags = set(scenario.tags)
+    if "public" in tags and "internal" not in tags:
+        return {"public"}
+    if "internal" in tags and "public" not in tags:
+        return {"internal"}
+    return set()
+
+
+def _filter_documents_for_scenario(
+    scenario: RagRetrievalScenario,
+    documents: list[IndexedDocument],
+) -> list[IndexedDocument]:
+    visibility_filter = _scenario_visibility_filter(scenario)
+    if not visibility_filter:
+        return documents
+    return [
+        document
+        for document in documents
+        if document.visibility in visibility_filter
+    ]
+
+
+def _forbidden_hits(
+    scenario: RagRetrievalScenario,
+    retrieved: list[RetrievedDocument],
+) -> list[str]:
+    forbidden_categories = set(scenario.forbidden_categories)
+    forbidden_source_types = set(scenario.forbidden_source_types)
+    forbidden_visibilities = set(scenario.forbidden_visibilities)
+    hits: list[str] = []
+    for item in retrieved:
+        if (
+            item.category in forbidden_categories
+            or item.source_type in forbidden_source_types
+            or item.visibility in forbidden_visibilities
+        ):
+            hits.append(item.source)
+    return hits
+
+
+def evaluate_rag_retrieval_scenario(
+    scenario: RagRetrievalScenario,
+    documents: list[IndexedDocument],
+    *,
+    strategy: RetrievalStrategy,
+    top_k: int,
+    apply_visibility_filter: bool = True,
+    visibility_bias: bool = False,
+    enforce_forbidden_hits: bool = False,
+) -> RagScenarioRetrievalResult:
+    """Evaluate one labeled retrieval query."""
+
+    candidate_documents = (
+        _filter_documents_for_scenario(scenario, documents)
+        if apply_visibility_filter
+        else documents
+    )
+    retrieved = retrieve_documents(
+        scenario.query,
+        candidate_documents,
+        strategy=strategy,
+        top_k=top_k,
+        preferred_visibilities=(
+            scenario.expected_visibilities if visibility_bias else ()
+        ),
+        blocked_categories=(
+            scenario.forbidden_categories
+            if visibility_bias or enforce_forbidden_hits
+            else ()
+        ),
+        blocked_source_types=(
+            scenario.forbidden_source_types
+            if visibility_bias or enforce_forbidden_hits
+            else ()
+        ),
+        blocked_visibilities=(
+            scenario.forbidden_visibilities
+            if visibility_bias or enforce_forbidden_hits
+            else ()
+        ),
+        enforce_blocked=enforce_forbidden_hits,
+    )
+    first_rank = _first_relevant_rank(scenario, retrieved)
+    forbidden_hits = _forbidden_hits(scenario, retrieved)
+    return RagScenarioRetrievalResult(
+        scenario_id=scenario.id,
+        strategy=strategy,
+        top_k=top_k,
+        source_recall=_safe_round(
+            _recall(scenario.expected_sources, [item.source for item in retrieved])
+        ),
+        category_recall=_safe_round(
+            _recall(scenario.expected_categories, [item.category for item in retrieved])
+        ),
+        source_type_recall=_safe_round(
+            _recall(scenario.expected_source_types, [item.source_type for item in retrieved])
+        ),
+        visibility_recall=_safe_round(
+            _recall(scenario.expected_visibilities, [item.visibility for item in retrieved])
+        ),
+        forbidden_hit_count=len(forbidden_hits),
+        forbidden_hits=forbidden_hits,
+        reciprocal_rank=_safe_round(1 / first_rank if first_rank else 0.0),
+        first_relevant_rank=first_rank,
+        retrieved=retrieved,
+    )
+
+
+def _average(values: Iterable[float]) -> float:
+    items = list(values)
+    return _safe_round(sum(items) / len(items)) if items else 0.0
+
+
+def _count_values(values: Iterable[str]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for value in values:
+        key = str(value or "").strip()
+        if not key:
+            continue
+        counts[key] = counts.get(key, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _scenario_coverage_summary(scenarios: list[RagRetrievalScenario]) -> dict[str, Any]:
+    """Return stable coverage metadata for release and demo reports."""
+
+    public_safety_count = sum(
+        1
+        for scenario in scenarios
+        if "public" in set(scenario.tags)
+        and (
+            scenario.forbidden_categories
+            or scenario.forbidden_source_types
+            or scenario.forbidden_visibilities
+        )
+    )
+    return {
+        "scenario_count": len(scenarios),
+        "public_safety_scenario_count": public_safety_count,
+        "categories": _count_values(
+            category
+            for scenario in scenarios
+            for category in scenario.expected_categories
+        ),
+        "source_types": _count_values(
+            source_type
+            for scenario in scenarios
+            for source_type in scenario.expected_source_types
+        ),
+        "visibilities": _count_values(
+            visibility
+            for scenario in scenarios
+            for visibility in scenario.expected_visibilities
+        ),
+        "tags": _count_values(tag for scenario in scenarios for tag in scenario.tags),
+    }
+
+
+def _summarize(
+    results: list[RagScenarioRetrievalResult],
+    *,
+    strategy: RetrievalStrategy,
+    top_k: int,
+) -> RagRetrievalStrategySummary:
+    selected = [
+        result
+        for result in results
+        if result.strategy == strategy and result.top_k == top_k
+    ]
+    return RagRetrievalStrategySummary(
+        strategy=strategy,
+        top_k=top_k,
+        scenario_count=len(selected),
+        source_recall=_average(result.source_recall for result in selected),
+        category_recall=_average(result.category_recall for result in selected),
+        source_type_recall=_average(result.source_type_recall for result in selected),
+        visibility_recall=_average(result.visibility_recall for result in selected),
+        hit_rate=_average(1.0 if result.hit else 0.0 for result in selected),
+        safety_pass_rate=_average(1.0 if result.safety_passed else 0.0 for result in selected),
+        mrr=_average(result.reciprocal_rank for result in selected),
+    )
+
+
+def _summary_lookup(
+    summaries: list[RagRetrievalStrategySummary],
+    *,
+    strategy: RetrievalStrategy,
+    top_k: int,
+) -> RagRetrievalStrategySummary | None:
+    for summary in summaries:
+        if summary.strategy == strategy and summary.top_k == top_k:
+            return summary
+    return None
+
+
+def _improvement(summaries: list[RagRetrievalStrategySummary], top_k_values: list[int]) -> dict[str, float]:
+    if not top_k_values:
+        return {}
+    top_k = min(top_k_values)
+    baseline = _summary_lookup(summaries, strategy="baseline_bm25", top_k=top_k)
+    improved = _summary_lookup(summaries, strategy="metadata_aware_bm25", top_k=top_k)
+    if baseline is None or improved is None:
+        return {}
+
+    def delta(metric: str) -> float:
+        return _safe_round(getattr(improved, metric) - getattr(baseline, metric))
+
+    return {
+        "top_k": float(top_k),
+        "source_recall_delta": delta("source_recall"),
+        "category_recall_delta": delta("category_recall"),
+        "hit_rate_delta": delta("hit_rate"),
+        "mrr_delta": delta("mrr"),
+    }
+
+
+def evaluate_rag_retrieval(
+    *,
+    scenarios: list[RagRetrievalScenario] | None = None,
+    documents: list[IndexedDocument] | None = None,
+    scenario_path: Path | str | None = None,
+    documents_dir: Path | str | None = None,
+    top_k_values: Iterable[int] = (3, 5),
+    strategies: Iterable[RetrievalStrategy] = ("baseline_bm25", "metadata_aware_bm25"),
+    apply_visibility_filter: bool = True,
+    visibility_bias: bool = False,
+    enforce_forbidden_hits: bool = False,
+) -> RagRetrievalEvaluationResult:
+    """Run the deterministic retrieval benchmark."""
+
+    loaded_scenarios = scenarios or load_rag_retrieval_scenarios(scenario_path)
+    loaded_documents = documents or load_rag_retrieval_documents(documents_dir)
+    top_ks = sorted({int(item) for item in top_k_values})
+    if not top_ks or any(item <= 0 for item in top_ks):
+        raise ValueError("top_k_values must contain positive integers")
+
+    results: list[RagScenarioRetrievalResult] = []
+    for scenario in loaded_scenarios:
+        for strategy in strategies:
+            for top_k in top_ks:
+                results.append(
+                    evaluate_rag_retrieval_scenario(
+                        scenario,
+                        loaded_documents,
+                        strategy=strategy,
+                        top_k=top_k,
+                        apply_visibility_filter=apply_visibility_filter,
+                        visibility_bias=visibility_bias,
+                        enforce_forbidden_hits=enforce_forbidden_hits,
+                    )
+                )
+
+    summaries = [
+        _summarize(results, strategy=strategy, top_k=top_k)
+        for strategy in strategies
+        for top_k in top_ks
+    ]
+    return RagRetrievalEvaluationResult(
+        version=RAG_RETRIEVAL_RESULT_VERSION,
+        scenario_count=len(loaded_scenarios),
+        document_count=len(loaded_documents),
+        top_k_values=top_ks,
+        summaries=summaries,
+        scenario_results=results,
+        improvement=_improvement(summaries, top_ks),
+        coverage_summary=_scenario_coverage_summary(loaded_scenarios),
+    )
+
+
+def evaluate_rag_mixed_corpus_safety(
+    *,
+    scenarios: list[RagRetrievalScenario] | None = None,
+    documents: list[IndexedDocument] | None = None,
+    scenario_path: Path | str | None = None,
+    documents_dir: Path | str | None = None,
+    top_k_values: Iterable[int] = (3,),
+    strategies: Iterable[RetrievalStrategy] = ("metadata_aware_bm25",),
+) -> RagRetrievalEvaluationResult:
+    """Evaluate public safety scenarios against an unfiltered mixed corpus.
+
+    The candidate set intentionally keeps both public and internal documents.
+    Ranking receives expected/forbidden visibility hints and then enforces a
+    final forbidden-hit guardrail on returned documents.
+    """
+
+    loaded_scenarios = scenarios or load_rag_retrieval_scenarios(scenario_path)
+    safety_scenarios = [
+        scenario
+        for scenario in loaded_scenarios
+        if (
+            "public" in set(scenario.tags)
+            and (
+                scenario.forbidden_categories
+                or scenario.forbidden_source_types
+                or scenario.forbidden_visibilities
+            )
+        )
+    ]
+    if not safety_scenarios:
+        raise ValueError("Mixed-corpus safety evaluation requires public forbidden-hit scenarios")
+    return evaluate_rag_retrieval(
+        scenarios=safety_scenarios,
+        documents=documents,
+        documents_dir=documents_dir,
+        top_k_values=top_k_values,
+        strategies=strategies,
+        apply_visibility_filter=False,
+        visibility_bias=True,
+        enforce_forbidden_hits=True,
+    )
+
+
+def rag_mixed_corpus_safety_failures(
+    result: RagRetrievalEvaluationResult,
+) -> list[dict[str, Any]]:
+    """Return mixed-corpus safety failures with stable machine-readable reasons."""
+
+    failures: list[dict[str, Any]] = []
+    for scenario_result in result.scenario_results:
+        reasons: list[str] = []
+        if not scenario_result.safety_passed:
+            reasons.append("forbidden_hits")
+        if scenario_result.source_recall < 1.0:
+            reasons.append("source_recall")
+        if scenario_result.category_recall < 1.0:
+            reasons.append("category_recall")
+        if scenario_result.source_type_recall < 1.0:
+            reasons.append("source_type_recall")
+        if scenario_result.visibility_recall < 1.0:
+            reasons.append("visibility_recall")
+        if not reasons:
+            continue
+        failures.append(
+            {
+                "scenario_id": scenario_result.scenario_id,
+                "strategy": scenario_result.strategy,
+                "top_k": scenario_result.top_k,
+                "reasons": reasons,
+                "source_recall": scenario_result.source_recall,
+                "category_recall": scenario_result.category_recall,
+                "source_type_recall": scenario_result.source_type_recall,
+                "visibility_recall": scenario_result.visibility_recall,
+                "forbidden_hits": scenario_result.forbidden_hits,
+                "retrieved": [item.to_dict() for item in scenario_result.retrieved],
+            }
+        )
+    return failures
+
+
+def render_rag_retrieval_markdown(result: RagRetrievalEvaluationResult) -> str:
+    """Render a concise human-readable benchmark report."""
+
+    lines = [
+        "# RAG（检索增强生成）Retrieval Evaluation（召回评估）",
+        "",
+        "本报告用于验证本地知识库能否把查询召回到正确的产品样板、知识分类和依据来源；它不连接真实向量库或外部模型。",
+        "",
+        f"- version: `{result.version}`",
+        f"- scenarios: `{result.scenario_count}`",
+        f"- documents: `{result.document_count}`",
+        f"- top_k_values: `{', '.join(str(item) for item in result.top_k_values)}`",
+        "",
+        "## Status Semantics（状态语义）",
+        "",
+        "`passed` 表示当前命令在当前本地知识文档和标注场景下通过；`blocked` 表示缺少真实依赖、候选库安全门失败或运行前置条件不足，不能被解释为验收通过。",
+        "",
+        "本离线报告只证明确定性召回评测结果，不代表真实向量库、真实 embedding（嵌入向量）或在线 Agent（智能体）验收已经通过。",
+        "",
+        "## Mixed-corpus Safety Gate（混合库安全门）",
+        "",
+        "公开知识安全需要单独跑 mixed-corpus（公开+内部混合候选库）对抗验收：",
+        "",
+        "```powershell",
+        "uv run python scripts\\evaluate_rag_retrieval.py --mixed-corpus-safety --top-k 3 --json",
+        "```",
+        "",
+        "这条验收不预先删除内部文档候选，而是在排序阶段使用场景的 `expected_visibilities` / `forbidden_*` 元数据提示，并在返回前执行 forbidden-hit 护栏。如果失败，acceptance preflight（验收预检）的 `rag_mixed_corpus_safety` 应进入 `blocked`。",
+        "",
+        "## Summary（汇总）",
+        "",
+        "| strategy | top_k | source recall | category recall | source type recall | visibility recall | hit rate | safety pass | MRR |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+    ]
+    for summary in result.summaries:
+        lines.append(
+            "| "
+            f"{summary.strategy} | {summary.top_k} | "
+            f"{summary.source_recall:.2%} | {summary.category_recall:.2%} | "
+            f"{summary.source_type_recall:.2%} | {summary.visibility_recall:.2%} | "
+            f"{summary.hit_rate:.2%} | {summary.safety_pass_rate:.2%} | "
+            f"{summary.mrr:.4f} |"
+        )
+
+    if result.improvement:
+        lines.extend(
+            [
+                "",
+                "## Metadata-aware Delta（元数据增强差值）",
+                "",
+                f"- top_k: `{int(result.improvement['top_k'])}`",
+                f"- source_recall_delta: `{result.improvement['source_recall_delta']:.2%}`",
+                f"- category_recall_delta: `{result.improvement['category_recall_delta']:.2%}`",
+                f"- hit_rate_delta: `{result.improvement['hit_rate_delta']:.2%}`",
+                f"- mrr_delta: `{result.improvement['mrr_delta']:.4f}`",
+            ]
+        )
+
+    coverage = result.coverage_summary
+    if coverage:
+        category_summary = ", ".join(
+            f"{key}={value}"
+            for key, value in dict(coverage.get("categories") or {}).items()
+        )
+        tag_summary = ", ".join(
+            f"{key}={value}"
+            for key, value in dict(coverage.get("tags") or {}).items()
+        )
+        lines.extend(
+            [
+                "",
+                "## Coverage Summary（场景覆盖摘要）",
+                "",
+                f"- public_safety_scenarios: `{coverage.get('public_safety_scenario_count', 0)}`",
+                f"- expected_categories: `{category_summary}`",
+                f"- tags: `{tag_summary}`",
+            ]
+        )
+
+    lines.extend(
+        [
+            "",
+            "## Scenario Details（场景明细）",
+            "",
+            "| scenario | strategy | top_k | source recall | category recall | safety | first relevant rank | top sources |",
+            "|---|---|---:|---:|---:|---|---:|---|",
+        ]
+    )
+    for item in result.scenario_results:
+        top_sources = "<br>".join(hit.source for hit in item.retrieved[:3])
+        lines.append(
+            "| "
+            f"{item.scenario_id} | {item.strategy} | {item.top_k} | "
+            f"{item.source_recall:.2%} | {item.category_recall:.2%} | "
+            f"{'pass' if item.safety_passed else 'fail'} | "
+            f"{item.first_relevant_rank or ''} | {top_sources} |"
+        )
+    return "\n".join(lines)

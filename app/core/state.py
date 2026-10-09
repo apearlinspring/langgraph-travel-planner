@@ -1,0 +1,379 @@
+"""
+Core travel-planning state schema.
+"""
+from typing import Annotated, Any, Literal, Optional
+
+from langchain.agents import AgentState
+from typing_extensions import NotRequired, TypedDict
+
+from app.agency.models import AgencyProductData, QuotePolicyData
+from app.core.permissions import ApprovalAction, ApprovalStatus
+from app.core.workflow import INITIAL_AGENCY_STEP, INITIAL_PLANNING_STEP, AgencyStep, PlanningStep
+
+TravelStyle = Literal["relaxation", "culture", "adventure", "food"]
+BudgetLevel = Literal["economy", "comfort", "luxury"]
+TransportType = Literal["flight", "train", "driving"]
+AccommodationType = Literal["star_hotel", "economy_hotel", "hostel", "youth_hostel"]
+FoodType = Literal["specialty", "chain", "local"]
+PlanningMode = Literal["free_planning", "agency_plan"]
+ActiveWorkflow = PlanningMode
+
+
+def merge_tool_audit_events(
+    left: list[dict[str, Any]] | None,
+    right: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """Merge audit events emitted by parallel tool nodes without replaying history."""
+
+    merged: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str, str, str]] = set()
+    for event in [*(left or []), *(right or [])]:
+        if not isinstance(event, dict):
+            continue
+        key = (
+            str(event.get("name") or ""),
+            str(event.get("started_at") or ""),
+            str(event.get("status") or ""),
+            str(event.get("error_type") or ""),
+            str(event.get("loop_guard_key") or ""),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(event)
+    return merged
+
+
+def merge_tool_loop_guard(
+    left: dict[str, Any] | None,
+    right: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Merge per-turn tool loop guard state from parallel tool updates."""
+
+    if not isinstance(left, dict):
+        left = {}
+    if not isinstance(right, dict):
+        right = {}
+    if not left:
+        return dict(right)
+    if not right:
+        return dict(left)
+
+    left_turn = str(left.get("turn_id") or "")
+    right_turn = str(right.get("turn_id") or "")
+    if left_turn and right_turn and left_turn != right_turn:
+        return dict(right)
+
+    merged = {**left, **right, "turn_id": right_turn or left_turn}
+    calls_by_key: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    for call in [*(left.get("calls") or []), *(right.get("calls") or [])]:
+        if not isinstance(call, dict):
+            continue
+        key = str(call.get("key") or "")
+        if not key:
+            continue
+        if key not in calls_by_key:
+            order.append(key)
+        calls_by_key[key] = call
+    merged["calls"] = [calls_by_key[key] for key in order][-40:]
+    return merged
+
+
+class UserRequirement(TypedDict):
+    departure_city: str
+    destination: Optional[str]
+    departure_date: str
+    departure_date_confirmed: NotRequired[bool]
+    travel_days: int
+    adult_count: int
+    children_count: int
+    budget_min: Optional[float]
+    budget_max: Optional[float]
+    budget_level: BudgetLevel
+    travel_styles: list[TravelStyle]
+    special_needs: Optional[str]
+    planning_mode: NotRequired[PlanningMode]
+    planning_mode_reason: NotRequired[str]
+    planning_mode_confirmed: NotRequired[bool]
+
+
+class DestinationInfo(TypedDict):
+    name: str
+    description: str
+    weather_info: Optional[str]
+    attractions: list[str]
+    attraction_pois: NotRequired[list["POIInfo"]]
+    estimated_cost: Optional[float]
+
+
+class POIInfo(TypedDict):
+    name: str
+    area: NotRequired[str]
+    best_time: NotRequired[str]
+    duration_hours: NotRequired[float]
+    reservation_required: NotRequired[bool]
+    indoor: NotRequired[bool]
+    estimated_cost: NotRequired[float]
+    tags: NotRequired[list[str]]
+
+
+class TransportInfo(TypedDict):
+    transport_type: TransportType
+    details: str
+    departure_time: NotRequired[str]
+    arrival_time: NotRequired[str]
+    duration: NotRequired[str]
+    price: NotRequired[float]
+    source: NotRequired[str]
+
+
+class AccommodationInfo(TypedDict):
+    hotel_id: NotRequired[int]
+    name: str
+    type: AccommodationType
+    location: str
+    price_per_night: float
+    rating: Optional[float]
+    amenities: list[str]
+    booking_url: NotRequired[str]
+    source: NotRequired[str]
+
+
+class FoodInfo(TypedDict):
+    type: FoodType
+    recommendations: list[str]
+    estimated_daily_cost: float
+    food_pois: NotRequired[list["FoodPOIInfo"]]
+
+
+class FoodPOIInfo(TypedDict):
+    name: str
+    type: FoodType
+    area: NotRequired[str]
+    meal_time: NotRequired[str]
+    average_cost: NotRequired[float]
+    reservation_required: NotRequired[bool]
+    queue_risk: NotRequired[str]
+    suitable_for: NotRequired[list[str]]
+    tags: NotRequired[list[str]]
+
+
+class ItineraryDay(TypedDict):
+    day_number: int
+    theme: NotRequired[str]
+    activities: list[str]
+    time_blocks: NotRequired[list[str]]
+    meals: list[str]
+    accommodation: str
+    transport_note: NotRequired[str]
+    plan_b: NotRequired[str]
+    route_note: NotRequired[str]
+    route_points: NotRequired[list[str]]
+    route_summary: NotRequired[str]
+    map_route: NotRequired[str]
+    risk_notes: NotRequired[list[str]]
+
+
+class BudgetLineItem(TypedDict):
+    key: str
+    label: str
+    amount: float
+    per_person: float
+    basis: str
+    confidence: str
+
+
+class BudgetBreakdown(TypedDict):
+    transport: float
+    accommodation: float
+    food: float
+    attractions: float
+    misc: float
+    total: float
+    per_person: NotRequired[float]
+    currency: NotRequired[str]
+    total_people: NotRequired[int]
+    travel_days: NotRequired[int]
+    nights: NotRequired[int]
+    line_items: NotRequired[list[BudgetLineItem]]
+    assumptions: NotRequired[list[str]]
+    confidence_level: NotRequired[str]
+    confirmed_items: NotRequired[list[str]]
+    estimated_items: NotRequired[list[str]]
+    verification_items: NotRequired[list[str]]
+    budget_confidence: NotRequired["BudgetConfidenceData"]
+    quote_policy: NotRequired[QuotePolicyData]
+
+
+class BudgetConfidenceData(TypedDict):
+    level: str
+    confirmed_items: list[str]
+    estimated_items: list[str]
+    verification_items: list[str]
+
+
+class ReportData(TypedDict, total=False):
+    version: str
+    title: str
+    subtitle: str
+    overview: dict
+    transport: dict
+    accommodation: dict
+    food_preferences: dict
+    itinerary: list[dict]
+    map_routes: list[dict]
+    agency_context: dict
+    agency_product: AgencyProductData
+    budget: dict
+    budget_confidence: BudgetConfidenceData
+    quote_policy: QuotePolicyData
+    risks: list[str]
+    adjustment_options: list[str]
+    evidence_bundle: dict
+    tool_audit_summary: dict
+    sections: list[dict]
+    customer_sections: list[str]
+    advisor_sections: list[str]
+
+
+class JourneyPlanData(TypedDict, total=False):
+    version: str
+    overview: dict
+    days: list[dict]
+    pois: list[dict]
+    segments: list[dict]
+    weather: list[dict]
+    route_strategy: dict
+    pending_checks: list[str]
+    source_summary: dict
+
+
+class ConfirmationHistoryEntry(TypedDict, total=False):
+    key: str
+    value: Any
+    label: str
+    confirmed_at: float
+    source: str
+
+
+class ConfirmedFacts(TypedDict, total=False):
+    departure_city: str
+    destination: str
+    departure_date: str
+    travel_days: int
+    return_date: str
+    check_in_date: str
+    check_out_date: str
+    adult_count: int
+    children_count: int
+    budget_min: float
+    budget_max: float
+    active_workflow: ActiveWorkflow
+
+
+class TravelState(AgentState):
+    current_step: NotRequired[PlanningStep]
+    agency_step: NotRequired[AgencyStep]
+    planning_mode: NotRequired[PlanningMode]
+    active_workflow: NotRequired[ActiveWorkflow]
+    planning_mode_reason: NotRequired[str]
+    planning_mode_confirmed: NotRequired[bool]
+    confirmed_facts: NotRequired[ConfirmedFacts]
+    confirmation_history: NotRequired[list[ConfirmationHistoryEntry]]
+    matched_product: NotRequired[dict[str, Any]]
+    scenic_price_evidence: NotRequired[dict[str, Any]]
+    evidence_bundle: NotRequired[dict]
+    tool_audit_events: NotRequired[Annotated[list[dict], merge_tool_audit_events]]
+    tool_loop_guard: NotRequired[Annotated[dict, merge_tool_loop_guard]]
+    conversation_summary: NotRequired[str]
+    key_history_turns: NotRequired[list[dict]]
+    context_last_step: NotRequired[str]
+    context_pack_metadata: NotRequired[dict]
+    context_layer_boundaries: NotRequired[dict]
+    context_summary_updated_at: NotRequired[float]
+    pending_initial_request_text: NotRequired[str]
+    pending_initial_planning_mode: NotRequired[PlanningMode]
+    pending_initial_planning_mode_reason: NotRequired[str]
+    turn_id: NotRequired[str]
+    observability_context: NotRequired[dict]
+    long_term_preferences_snapshot: NotRequired[list[str]]
+    departure_date_confirmed: NotRequired[bool]
+
+    user_requirement: NotRequired[UserRequirement]
+
+    selected_destination: NotRequired[str]
+    selected_transport: NotRequired[TransportType]
+    selected_transport_option: NotRequired[TransportInfo]
+    selected_accommodation_types: NotRequired[list[AccommodationType]]
+    selected_accommodation_option: NotRequired[AccommodationInfo]
+    selected_food_types: NotRequired[list[FoodType]]
+    selected_food_pois: NotRequired[list[FoodPOIInfo]]
+
+    destination_options: NotRequired[list[DestinationInfo]]
+    transport_options: NotRequired[list[TransportInfo]]
+    accommodation_options: NotRequired[list[AccommodationInfo]]
+    food_options: NotRequired[list[FoodInfo]]
+
+    itinerary: NotRequired[list[ItineraryDay]]
+    budget: NotRequired[BudgetBreakdown]
+    report: NotRequired[str]
+    report_data: NotRequired[ReportData]
+    journey_plan: NotRequired[JourneyPlanData]
+    route_segment_preferences: NotRequired[list[dict[str, Any]]]
+    planning_trace: NotRequired[list[dict[str, Any]]]
+    order_id: NotRequired[str]
+
+    approval_pending: NotRequired[bool]
+    approval_reason: NotRequired[str]
+    approval_action: NotRequired[ApprovalAction | str]
+    approval_expires_at: NotRequired[float | None]
+    approval_status: NotRequired[ApprovalStatus]
+    approval_record_id: NotRequired[str]
+    approval_required: NotRequired[bool]
+    approval_governance: NotRequired[dict]
+
+    user_id: NotRequired[str]
+    session_id: NotRequired[str]
+    created_at: NotRequired[float]
+    updated_at: NotRequired[float]
+
+
+def create_initial_state(user_id: str, session_id: str) -> TravelState:
+    import time
+
+    return TravelState(
+        messages=[],
+        current_step=INITIAL_PLANNING_STEP,
+        agency_step=INITIAL_AGENCY_STEP,
+        destination_options=[],
+        transport_options=[],
+        accommodation_options=[],
+        food_options=[],
+        approval_pending=False,
+        approval_reason="",
+        approval_action="",
+        approval_expires_at=None,
+        approval_status="none",
+        approval_required=False,
+        approval_governance={},
+        planning_mode_confirmed=False,
+        active_workflow="free_planning",
+        confirmed_facts={},
+        confirmation_history=[],
+        tool_audit_events=[],
+        tool_loop_guard={},
+        conversation_summary="",
+        key_history_turns=[],
+        context_last_step=INITIAL_PLANNING_STEP,
+        context_pack_metadata={},
+        context_layer_boundaries={},
+        turn_id="",
+        observability_context={},
+        long_term_preferences_snapshot=[],
+        route_segment_preferences=[],
+        user_id=user_id,
+        session_id=session_id,
+        created_at=time.time(),
+        updated_at=time.time(),
+    )

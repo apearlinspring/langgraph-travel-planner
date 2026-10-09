@@ -1,0 +1,809 @@
+"""Runtime metrics and deterministic quality checks for live evaluation snapshots."""
+from __future__ import annotations
+
+import math
+from dataclasses import asdict, dataclass
+from typing import Any
+
+from app.core.observability import (
+    TOOL_FAILURE_SEMANTIC_STATUSES,
+    TOOL_FALLBACK_SEMANTIC_STATUSES,
+    resolve_tool_audit_semantic_status,
+)
+from app.evaluation.report_quality import CriterionResult
+from app.evaluation.scoring import grade as _grade, score as _score
+from app.utils.token_estimation import estimate_token_count
+
+
+@dataclass(frozen=True)
+class RuntimeMetrics:
+    """Observable runtime metrics captured or estimated from a live snapshot."""
+
+    total_elapsed_seconds: float
+    first_token_seconds: float | None
+    turn_count: int
+    event_count: int
+    token_event_count: int
+    turn_observability_event_count: int
+    tool_call_count: int
+    tool_failure_count: int
+    fallback_count: int
+    degraded_event_count: int
+    report_event_count: int
+    error_event_count: int
+    recoverable_error_event_count: int
+    session_busy_event_count: int
+    assistant_chars: int
+    user_chars: int
+    estimated_input_tokens: int
+    estimated_output_tokens: int
+    estimated_total_tokens: int
+    tool_turn_elapsed_seconds: float
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def _coerce_optional_float(value: Any, *, field_name: str) -> float | None:
+    if value is None:
+        return None
+    if not isinstance(value, (int, float)):
+        raise ValueError(
+            f"Runtime budget field {field_name!r} must be a finite non-negative number or null"
+        )
+    number = float(value)
+    if not math.isfinite(number) or number < 0:
+        raise ValueError(
+            f"Runtime budget field {field_name!r} must be a finite non-negative number or null"
+        )
+    return number
+
+
+def _coerce_int(value: Any, *, field_name: str) -> int:
+    if not isinstance(value, int) or value < 0:
+        raise ValueError(f"Runtime budget field {field_name!r} must be a non-negative integer")
+    return value
+
+
+def _coerce_ratio(value: Any, *, field_name: str) -> float:
+    if not isinstance(value, (int, float)):
+        raise ValueError(f"Runtime budget field {field_name!r} must be a finite ratio between 0 and 1")
+    number = float(value)
+    if not math.isfinite(number) or not 0 <= number <= 1:
+        raise ValueError(f"Runtime budget field {field_name!r} must be a finite ratio between 0 and 1")
+    return number
+
+
+@dataclass(frozen=True)
+class RuntimeBudget:
+    """Deterministic budget thresholds for a live Agent run."""
+
+    max_total_elapsed_seconds: float = 900.0
+    max_first_token_seconds: float | None = 60.0
+    max_tool_call_count: int = 32
+    max_estimated_total_tokens: int = 120000
+    max_error_event_count: int = 0
+    max_tool_failure_count: int = 0
+    max_tool_failure_ratio: float = 0.0
+    max_fallback_count: int = 0
+    max_tool_turn_elapsed_seconds: float | None = None
+    warning_total_elapsed_ratio: float = 0.8
+    warning_first_token_ratio: float = 0.8
+    warning_tool_call_ratio: float = 0.8
+    warning_token_ratio: float = 0.8
+
+    def __post_init__(self) -> None:
+        if _coerce_optional_float(
+            self.max_total_elapsed_seconds,
+            field_name="max_total_elapsed_seconds",
+        ) is None:
+            raise ValueError("Runtime budget field 'max_total_elapsed_seconds' cannot be null")
+        for field_name in ("max_first_token_seconds", "max_tool_turn_elapsed_seconds"):
+            _coerce_optional_float(getattr(self, field_name), field_name=field_name)
+        for field_name in (
+            "max_tool_call_count",
+            "max_estimated_total_tokens",
+            "max_error_event_count",
+            "max_tool_failure_count",
+            "max_fallback_count",
+        ):
+            _coerce_int(getattr(self, field_name), field_name=field_name)
+        for field_name in (
+            "max_tool_failure_ratio",
+            "warning_total_elapsed_ratio",
+            "warning_first_token_ratio",
+            "warning_tool_call_ratio",
+            "warning_token_ratio",
+        ):
+            _coerce_ratio(getattr(self, field_name), field_name=field_name)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+DEFAULT_RUNTIME_BUDGET = RuntimeBudget()
+
+
+@dataclass(frozen=True)
+class RuntimeBudgetGateResult:
+    """Pass/fail result for the deterministic runtime budget gate."""
+
+    passed: bool
+    violations: list[str]
+    warnings: list[str]
+    budget: RuntimeBudget
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "passed": self.passed,
+            "violations": self.violations,
+            "warnings": self.warnings,
+            "budget": self.budget.to_dict(),
+        }
+
+
+@dataclass
+class RuntimeQualityResult:
+    """Full deterministic evaluation result for runtime observability."""
+
+    total_score: float
+    max_score: float
+    normalized_score: float
+    grade: str
+    passed: bool
+    criteria: list[CriterionResult]
+    summary: list[str]
+    metrics: RuntimeMetrics
+    budget_gate: RuntimeBudgetGateResult
+    governance_summary: dict[str, Any]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "total_score": self.total_score,
+            "max_score": self.max_score,
+            "normalized_score": self.normalized_score,
+            "grade": self.grade,
+            "passed": self.passed,
+            "summary": self.summary,
+            "metrics": self.metrics.to_dict(),
+            "budget_gate": self.budget_gate.to_dict(),
+            "governance_summary": self.governance_summary,
+            "criteria": [criterion.to_dict() for criterion in self.criteria],
+        }
+
+
+def runtime_budget_from_dict(
+    payload: dict[str, Any] | None,
+    *,
+    base: RuntimeBudget | None = None,
+) -> RuntimeBudget:
+    """Build a runtime budget from optional overrides."""
+
+    budget = base or DEFAULT_RUNTIME_BUDGET
+    if payload is None:
+        return budget
+    if not isinstance(payload, dict):
+        raise TypeError("runtime budget payload must be a dictionary")
+
+    allowed_fields = set(RuntimeBudget.__dataclass_fields__)
+    unknown_fields = sorted(set(payload) - allowed_fields)
+    if unknown_fields:
+        raise ValueError(f"Unknown runtime budget fields: {', '.join(unknown_fields)}")
+
+    values = budget.to_dict()
+    for key, value in payload.items():
+        if key == "max_total_elapsed_seconds":
+            values[key] = _coerce_optional_float(value, field_name=key)
+            if values[key] is None:
+                raise ValueError("Runtime budget field 'max_total_elapsed_seconds' cannot be null")
+        elif key in {"max_first_token_seconds", "max_tool_turn_elapsed_seconds"}:
+            values[key] = _coerce_optional_float(value, field_name=key)
+        elif key in {
+            "max_tool_call_count",
+            "max_estimated_total_tokens",
+            "max_error_event_count",
+            "max_tool_failure_count",
+            "max_fallback_count",
+        }:
+            values[key] = _coerce_int(value, field_name=key)
+        elif key == "max_tool_failure_ratio":
+            values[key] = _coerce_ratio(value, field_name=key)
+        elif key.startswith("warning_"):
+            values[key] = _coerce_ratio(value, field_name=key)
+    return RuntimeBudget(**values)
+
+
+def _event_type(event: dict[str, Any]) -> str:
+    return str(event.get("type") or event.get("event") or "")
+
+
+def _first_token_seconds(events: list[dict[str, Any]]) -> float | None:
+    for event in events:
+        if not isinstance(event, dict) or _event_type(event) != "token":
+            continue
+        elapsed = event.get("elapsed_since_scenario_start")
+        if isinstance(elapsed, (int, float)):
+            return round(float(elapsed), 3)
+    observed = [
+        _as_observability(event).get("first_token_seconds")
+        for event in events
+        if isinstance(_as_observability(event).get("first_token_seconds"), (int, float))
+    ]
+    if observed:
+        return round(float(min(observed)), 3)
+    return None
+
+
+def _as_observability(event: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(event, dict):
+        return {}
+    payload = event.get("observability")
+    return payload if isinstance(payload, dict) else {}
+
+
+def _sum_observed_metric(events: list[dict[str, Any]], key: str) -> int:
+    total = 0
+    for event in events:
+        value = _as_observability(event).get(key)
+        if isinstance(value, int) and value >= 0:
+            total += value
+    return total
+
+
+def _observed_degraded_event_count(events: list[dict[str, Any]]) -> int:
+    count = 0
+    for event in events:
+        payload = _as_observability(event)
+        status = str(payload.get("degradation_status") or "ok")
+        if payload and status != "ok":
+            count += 1
+    return count
+
+
+def _is_recoverable_runtime_error_event(event: dict[str, Any]) -> bool:
+    return (
+        isinstance(event, dict)
+        and _event_type(event) == "error"
+        and bool(event.get("recovered") or event.get("recoverable"))
+    )
+
+
+def _turn_user_chars(turns: list[dict[str, Any]]) -> int:
+    total = 0
+    for turn in turns:
+        if not isinstance(turn, dict):
+            continue
+        message = turn.get("user_message")
+        if isinstance(message, str):
+            total += len(message)
+    return total
+
+
+def _tool_turn_elapsed(turns: list[dict[str, Any]]) -> float:
+    total = 0.0
+    for turn in turns:
+        if not isinstance(turn, dict) or not turn.get("tool_call_count"):
+            continue
+        elapsed = turn.get("elapsed_seconds")
+        if isinstance(elapsed, (int, float)):
+            total += float(elapsed)
+    return round(total, 3)
+
+
+def collect_runtime_metrics(
+    *,
+    events: list[dict[str, Any]],
+    turns: list[dict[str, Any]],
+    assistant_text: str,
+    elapsed_seconds: float,
+) -> RuntimeMetrics:
+    """Collect runtime metrics from a live snapshot payload."""
+
+    if not isinstance(events, list):
+        raise TypeError("events must be a list")
+    if not isinstance(turns, list):
+        raise TypeError("turns must be a list")
+
+    event_types = [_event_type(event) for event in events if isinstance(event, dict)]
+    direct_tool_call_count = sum(
+        1 for event_type in event_types if event_type == "tool_call"
+    )
+    unrecovered_error_event_count = sum(
+        1
+        for event in events
+        if isinstance(event, dict)
+        and _event_type(event) == "error"
+        and not _is_recoverable_runtime_error_event(event)
+    )
+    recoverable_error_event_count = sum(
+        1
+        for event in events
+        if isinstance(event, dict) and _is_recoverable_runtime_error_event(event)
+    )
+    turn_observability_event_count = sum(
+        1 for event_type in event_types if event_type == "turn_observability"
+    )
+    user_chars = _turn_user_chars(turns)
+    assistant_chars = len(assistant_text)
+    input_tokens = estimate_token_count(
+        "\n".join(
+            str(turn.get("user_message"))
+            for turn in turns
+            if isinstance(turn, dict) and isinstance(turn.get("user_message"), str)
+        )
+    )
+    output_tokens = estimate_token_count(assistant_text)
+    observed_input_tokens = _sum_observed_metric(events, "estimated_input_tokens")
+    observed_output_tokens = _sum_observed_metric(events, "estimated_output_tokens")
+    observed_tool_calls = _sum_observed_metric(events, "tool_call_count")
+    observed_tool_failures = _sum_observed_metric(events, "tool_failure_count")
+    observed_fallbacks = _sum_observed_metric(events, "fallback_count")
+    observed_error_events = _sum_observed_metric(events, "error_event_count")
+    tool_audit_events = [
+        event
+        for event in events
+        if isinstance(event, dict) and _event_type(event) == "tool_audit"
+    ]
+    tool_event_semantics = [
+        resolve_tool_audit_semantic_status(
+            event.get("status"),
+            event.get("error_type"),
+            event.get("semantic_status"),
+        )
+        for event in tool_audit_events
+    ]
+    event_tool_failures = sum(
+        1
+        for semantic_status in tool_event_semantics
+        if semantic_status in TOOL_FAILURE_SEMANTIC_STATUSES
+    )
+    event_fallbacks = sum(
+        1
+        for semantic_status in tool_event_semantics
+        if semantic_status in TOOL_FALLBACK_SEMANTIC_STATUSES
+    )
+    tool_audit_events_are_complete = bool(tool_audit_events) and len(
+        tool_audit_events
+    ) >= max(direct_tool_call_count, observed_tool_calls)
+    degraded_event_count = _observed_degraded_event_count(events) + sum(
+        1
+        for event in events
+        if isinstance(event, dict)
+        and (
+            (
+                _event_type(event) == "error"
+                and not _is_recoverable_runtime_error_event(event)
+            )
+            or _event_type(event) == "session_busy"
+            or str(event.get("degradation_status") or "").lower()
+            in {"degraded", "failed"}
+        )
+    )
+    input_tokens = max(input_tokens, observed_input_tokens)
+    output_tokens = max(output_tokens, observed_output_tokens)
+    return RuntimeMetrics(
+        total_elapsed_seconds=round(float(elapsed_seconds), 3),
+        first_token_seconds=_first_token_seconds(events),
+        turn_count=len(turns),
+        event_count=len(events),
+        token_event_count=sum(1 for event_type in event_types if event_type == "token"),
+        turn_observability_event_count=turn_observability_event_count,
+        tool_call_count=max(
+            direct_tool_call_count,
+            observed_tool_calls,
+        ),
+        tool_failure_count=(
+            event_tool_failures
+            if tool_audit_events_are_complete
+            else max(observed_tool_failures, event_tool_failures)
+        ),
+        fallback_count=(
+            event_fallbacks
+            if tool_audit_events_are_complete
+            else max(observed_fallbacks, event_fallbacks)
+        ),
+        degraded_event_count=degraded_event_count,
+        report_event_count=sum(1 for event_type in event_types if event_type == "report_data"),
+        error_event_count=max(unrecovered_error_event_count, observed_error_events),
+        recoverable_error_event_count=recoverable_error_event_count,
+        session_busy_event_count=sum(1 for event_type in event_types if event_type == "session_busy"),
+        assistant_chars=assistant_chars,
+        user_chars=user_chars,
+        estimated_input_tokens=input_tokens,
+        estimated_output_tokens=output_tokens,
+        estimated_total_tokens=input_tokens + output_tokens,
+        tool_turn_elapsed_seconds=_tool_turn_elapsed(turns),
+    )
+
+
+def _ratio(value: float, limit: float | int | None) -> float | None:
+    if limit is None or float(limit) <= 0:
+        return None
+    return value / float(limit)
+
+
+def _format_ratio(value: float | None) -> str:
+    if value is None:
+        return "-"
+    return f"{round(value * 100, 1)}%"
+
+
+def _tool_failure_ratio(metrics: RuntimeMetrics) -> float:
+    if metrics.tool_call_count <= 0:
+        return 1.0 if metrics.tool_failure_count else 0.0
+    return metrics.tool_failure_count / metrics.tool_call_count
+
+
+def evaluate_runtime_budget(
+    metrics: RuntimeMetrics,
+    budget: RuntimeBudget | None = None,
+) -> RuntimeBudgetGateResult:
+    """Evaluate runtime metrics against deterministic budget thresholds."""
+
+    runtime_budget = budget or DEFAULT_RUNTIME_BUDGET
+    violations: list[str] = []
+    warnings: list[str] = []
+
+    if metrics.total_elapsed_seconds > runtime_budget.max_total_elapsed_seconds:
+        violations.append(
+            "Total elapsed seconds "
+            f"{metrics.total_elapsed_seconds} exceeds budget {runtime_budget.max_total_elapsed_seconds}"
+        )
+    elif (
+        _ratio(metrics.total_elapsed_seconds, runtime_budget.max_total_elapsed_seconds)
+        is not None
+        and _ratio(metrics.total_elapsed_seconds, runtime_budget.max_total_elapsed_seconds)
+        >= runtime_budget.warning_total_elapsed_ratio
+    ):
+        warnings.append(
+            "Total elapsed seconds used "
+            f"{_format_ratio(_ratio(metrics.total_elapsed_seconds, runtime_budget.max_total_elapsed_seconds))} "
+            "of runtime budget"
+        )
+
+    if runtime_budget.max_first_token_seconds is not None:
+        if metrics.first_token_seconds is None:
+            warnings.append("First token timing is missing; first-token budget could not be asserted")
+        elif metrics.first_token_seconds > runtime_budget.max_first_token_seconds:
+            violations.append(
+                "First token seconds "
+                f"{metrics.first_token_seconds} exceeds budget {runtime_budget.max_first_token_seconds}"
+            )
+        elif (
+            _ratio(metrics.first_token_seconds, runtime_budget.max_first_token_seconds)
+            is not None
+            and _ratio(metrics.first_token_seconds, runtime_budget.max_first_token_seconds)
+            >= runtime_budget.warning_first_token_ratio
+        ):
+            warnings.append(
+                "First token seconds used "
+                f"{_format_ratio(_ratio(metrics.first_token_seconds, runtime_budget.max_first_token_seconds))} "
+                "of first-token budget"
+            )
+
+    if metrics.tool_call_count > runtime_budget.max_tool_call_count:
+        violations.append(
+            f"Tool call count {metrics.tool_call_count} exceeds budget {runtime_budget.max_tool_call_count}"
+        )
+    elif (
+        _ratio(metrics.tool_call_count, runtime_budget.max_tool_call_count)
+        is not None
+        and _ratio(metrics.tool_call_count, runtime_budget.max_tool_call_count)
+        >= runtime_budget.warning_tool_call_ratio
+    ):
+        warnings.append(
+            "Tool call count used "
+            f"{_format_ratio(_ratio(metrics.tool_call_count, runtime_budget.max_tool_call_count))} "
+            "of tool-call budget"
+        )
+
+    tool_failure_ratio = _tool_failure_ratio(metrics)
+    if metrics.tool_failure_count > runtime_budget.max_tool_failure_count:
+        violations.append(
+            "Tool failure count "
+            f"{metrics.tool_failure_count} exceeds budget {runtime_budget.max_tool_failure_count}"
+        )
+    if tool_failure_ratio > runtime_budget.max_tool_failure_ratio:
+        violations.append(
+            "Tool failure ratio "
+            f"{_format_ratio(tool_failure_ratio)} exceeds budget "
+            f"{_format_ratio(runtime_budget.max_tool_failure_ratio)}"
+        )
+    if metrics.fallback_count > runtime_budget.max_fallback_count:
+        violations.append(
+            f"Fallback count {metrics.fallback_count} exceeds budget {runtime_budget.max_fallback_count}"
+        )
+
+    if metrics.estimated_total_tokens > runtime_budget.max_estimated_total_tokens:
+        violations.append(
+            "Estimated total tokens "
+            f"{metrics.estimated_total_tokens} exceeds budget {runtime_budget.max_estimated_total_tokens}"
+        )
+    elif (
+        _ratio(metrics.estimated_total_tokens, runtime_budget.max_estimated_total_tokens)
+        is not None
+        and _ratio(metrics.estimated_total_tokens, runtime_budget.max_estimated_total_tokens)
+        >= runtime_budget.warning_token_ratio
+    ):
+        warnings.append(
+            "Estimated total tokens used "
+            f"{_format_ratio(_ratio(metrics.estimated_total_tokens, runtime_budget.max_estimated_total_tokens))} "
+            "of token budget"
+        )
+
+    if metrics.error_event_count > runtime_budget.max_error_event_count:
+        violations.append(
+            f"Error event count {metrics.error_event_count} exceeds budget {runtime_budget.max_error_event_count}"
+        )
+
+    if (
+        runtime_budget.max_tool_turn_elapsed_seconds is not None
+        and metrics.tool_turn_elapsed_seconds > runtime_budget.max_tool_turn_elapsed_seconds
+    ):
+        violations.append(
+            "Tool-turn elapsed seconds "
+            f"{metrics.tool_turn_elapsed_seconds} exceeds budget "
+            f"{runtime_budget.max_tool_turn_elapsed_seconds}"
+        )
+
+    return RuntimeBudgetGateResult(
+        passed=not violations,
+        violations=violations,
+        warnings=warnings,
+        budget=runtime_budget,
+    )
+
+
+def build_runtime_governance_summary(
+    metrics: RuntimeMetrics,
+    *,
+    budget: RuntimeBudget | None = None,
+    budget_gate: RuntimeBudgetGateResult | None = None,
+    tool_counts: dict[str, int] | None = None,
+    redundant_calls: list[str] | None = None,
+) -> dict[str, Any]:
+    """Summarize latency, cost, and tool-use risks for operators."""
+
+    runtime_budget = budget or DEFAULT_RUNTIME_BUDGET
+    gate = budget_gate or evaluate_runtime_budget(metrics, runtime_budget)
+    elapsed_ratio = _ratio(metrics.total_elapsed_seconds, runtime_budget.max_total_elapsed_seconds)
+    first_token_ratio = _ratio(metrics.first_token_seconds or 0.0, runtime_budget.max_first_token_seconds)
+    token_ratio = _ratio(metrics.estimated_total_tokens, runtime_budget.max_estimated_total_tokens)
+    tool_ratio = _ratio(metrics.tool_call_count, runtime_budget.max_tool_call_count)
+    tool_failure_ratio = _tool_failure_ratio(metrics)
+    tool_turn_ratio = _ratio(metrics.tool_turn_elapsed_seconds, metrics.total_elapsed_seconds)
+
+    slow_findings: list[str] = []
+    if elapsed_ratio is not None and elapsed_ratio >= runtime_budget.warning_total_elapsed_ratio:
+        slow_findings.append(
+            f"Total run time used {_format_ratio(elapsed_ratio)} of the configured budget"
+        )
+    if metrics.first_token_seconds is None:
+        slow_findings.append("First token timing is missing")
+    elif (
+        first_token_ratio is not None
+        and first_token_ratio >= runtime_budget.warning_first_token_ratio
+    ):
+        slow_findings.append(
+            f"First token latency used {_format_ratio(first_token_ratio)} of the configured budget"
+        )
+    if tool_turn_ratio is not None and tool_turn_ratio >= 0.5:
+        slow_findings.append(
+            f"Tool-bearing turns account for {_format_ratio(tool_turn_ratio)} of total run time"
+        )
+
+    cost_findings: list[str] = []
+    if token_ratio is not None and token_ratio >= runtime_budget.warning_token_ratio:
+        cost_findings.append(
+            f"Estimated tokens used {_format_ratio(token_ratio)} of the configured budget"
+        )
+    if metrics.estimated_input_tokens > 0 and metrics.estimated_output_tokens > metrics.estimated_input_tokens * 2:
+        cost_findings.append("Estimated output tokens are more than twice the input estimate")
+    if tool_ratio is not None and tool_ratio >= runtime_budget.warning_tool_call_ratio:
+        cost_findings.append(f"Tool calls used {_format_ratio(tool_ratio)} of the configured budget")
+
+    tool_findings = list(redundant_calls or [])
+    if metrics.tool_call_count > runtime_budget.max_tool_call_count:
+        tool_findings.append("Tool calls exceeded the configured runtime budget")
+    sorted_tool_counts = dict(sorted((tool_counts or {}).items(), key=lambda item: (-item[1], item[0])))
+
+    error_findings: list[str] = []
+    if metrics.error_event_count > runtime_budget.max_error_event_count:
+        error_findings.append("Error events exceeded the configured runtime budget")
+
+    return {
+        "version": "runtime_governance_summary.v1",
+        "status": "pass" if gate.passed else "fail",
+        "budget": runtime_budget.to_dict(),
+        "budget_violations": gate.violations,
+        "budget_warnings": gate.warnings,
+        "slow_path": {
+            "total_elapsed_seconds": metrics.total_elapsed_seconds,
+            "first_token_seconds": metrics.first_token_seconds,
+            "tool_turn_elapsed_seconds": metrics.tool_turn_elapsed_seconds,
+            "tool_turn_elapsed_ratio": round(tool_turn_ratio, 3) if tool_turn_ratio is not None else None,
+            "findings": slow_findings,
+        },
+        "cost_risk": {
+            "estimated_input_tokens": metrics.estimated_input_tokens,
+            "estimated_output_tokens": metrics.estimated_output_tokens,
+            "estimated_total_tokens": metrics.estimated_total_tokens,
+            "estimated_total_token_ratio": round(token_ratio, 3) if token_ratio is not None else None,
+            "findings": cost_findings,
+        },
+        "tool_usage": {
+            "tool_call_count": metrics.tool_call_count,
+            "tool_failure_count": metrics.tool_failure_count,
+            "tool_failure_ratio": round(tool_failure_ratio, 3),
+            "max_tool_failure_count": runtime_budget.max_tool_failure_count,
+            "max_tool_failure_ratio": runtime_budget.max_tool_failure_ratio,
+            "tool_call_ratio": round(tool_ratio, 3) if tool_ratio is not None else None,
+            "tool_counts": sorted_tool_counts,
+            "redundant_calls": redundant_calls or [],
+            "findings": tool_findings,
+        },
+        "fallbacks": {
+            "fallback_count": metrics.fallback_count,
+            "max_fallback_count": runtime_budget.max_fallback_count,
+            "degraded_event_count": metrics.degraded_event_count,
+            "turn_observability_event_count": metrics.turn_observability_event_count,
+            "findings": [
+                *(
+                    [f"Fallback paths were observed {metrics.fallback_count} time(s)"]
+                    if metrics.fallback_count
+                    else []
+                ),
+                *(
+                    [f"Degraded turn observations were captured {metrics.degraded_event_count} time(s)"]
+                    if metrics.degraded_event_count
+                    else []
+                ),
+            ],
+        },
+        "errors": {
+            "error_event_count": metrics.error_event_count,
+            "recoverable_error_event_count": metrics.recoverable_error_event_count,
+            "max_error_event_count": runtime_budget.max_error_event_count,
+            "findings": error_findings,
+        },
+    }
+
+
+def _criterion_task_completion(metrics: RuntimeMetrics) -> CriterionResult:
+    findings: list[str] = []
+    score = 0.0
+    score += _score(metrics.report_event_count >= 1, 20, findings, "No report_data event captured")
+    score += _score(metrics.error_event_count == 0, 10, findings, "Error events were captured")
+    return CriterionResult("runtime_task_completion", score, 30, findings)
+
+
+def _criterion_latency(metrics: RuntimeMetrics, budget: RuntimeBudget) -> CriterionResult:
+    findings: list[str] = []
+    score = 0.0
+    score += _score(
+        0 < metrics.total_elapsed_seconds <= budget.max_total_elapsed_seconds,
+        15,
+        findings,
+        f"Total elapsed seconds must be within budget {budget.max_total_elapsed_seconds}",
+    )
+    score += _score(
+        (
+            metrics.first_token_seconds is None
+            or budget.max_first_token_seconds is None
+            or metrics.first_token_seconds <= budget.max_first_token_seconds
+            or metrics.report_event_count > 0
+        ),
+        10,
+        findings,
+        f"First token seconds must be within budget {budget.max_first_token_seconds}",
+    )
+    score += _score(
+        metrics.tool_turn_elapsed_seconds <= metrics.total_elapsed_seconds,
+        5,
+        findings,
+        "Tool-turn elapsed seconds cannot exceed total elapsed seconds",
+    )
+    return CriterionResult("runtime_latency", score, 30, findings)
+
+
+def _criterion_observability(metrics: RuntimeMetrics) -> CriterionResult:
+    findings: list[str] = []
+    score = 0.0
+    score += _score(metrics.turn_count >= 1, 5, findings, "Snapshot must include turn summaries")
+    score += _score(metrics.event_count >= metrics.report_event_count, 5, findings, "Event count is inconsistent")
+    score += _score(
+        metrics.assistant_chars > 0 or metrics.report_event_count > 0,
+        5,
+        findings,
+        "Snapshot should contain assistant text or report_data",
+    )
+    score += _score(
+        metrics.turn_observability_event_count >= 1,
+        5,
+        findings,
+        "Snapshot must include turn_observability events",
+    )
+    return CriterionResult("runtime_observability", score, 20, findings)
+
+
+def _criterion_cost_estimate(metrics: RuntimeMetrics, budget: RuntimeBudget) -> CriterionResult:
+    findings: list[str] = []
+    score = 0.0
+    score += _score(metrics.estimated_total_tokens > 0, 5, findings, "Estimated token usage is missing")
+    score += _score(
+        metrics.estimated_total_tokens <= budget.max_estimated_total_tokens,
+        5,
+        findings,
+        f"Estimated token usage exceeds budget {budget.max_estimated_total_tokens}",
+    )
+    score += _score(metrics.user_chars > 0, 5, findings, "User prompt characters are missing")
+    score += _score(
+        metrics.estimated_output_tokens >= 0,
+        5,
+        findings,
+        "Estimated output tokens must be non-negative",
+    )
+    return CriterionResult("runtime_cost_estimate", score, 20, findings)
+
+
+def _criterion_budget_gate(gate: RuntimeBudgetGateResult) -> CriterionResult:
+    findings = list(gate.violations)
+    score = _score(gate.passed, 20, findings, "Runtime budget gate failed")
+    return CriterionResult("runtime_budget_gate", score, 20, findings)
+
+
+def evaluate_runtime_metrics(
+    metrics: RuntimeMetrics,
+    *,
+    timeout_seconds: float = 900.0,
+    budget: RuntimeBudget | None = None,
+    tool_counts: dict[str, int] | None = None,
+    redundant_calls: list[str] | None = None,
+    pass_threshold: float = 80.0,
+) -> RuntimeQualityResult:
+    """Evaluate live-run observability, latency, and token-cost estimates."""
+
+    runtime_budget = budget or runtime_budget_from_dict(
+        {"max_total_elapsed_seconds": timeout_seconds},
+        base=DEFAULT_RUNTIME_BUDGET,
+    )
+    budget_gate = evaluate_runtime_budget(metrics, runtime_budget)
+    governance_summary = build_runtime_governance_summary(
+        metrics,
+        budget=runtime_budget,
+        budget_gate=budget_gate,
+        tool_counts=tool_counts,
+        redundant_calls=redundant_calls,
+    )
+    criteria = [
+        _criterion_task_completion(metrics),
+        _criterion_latency(metrics, runtime_budget),
+        _criterion_observability(metrics),
+        _criterion_cost_estimate(metrics, runtime_budget),
+        _criterion_budget_gate(budget_gate),
+    ]
+    total_score = round(sum(criterion.score for criterion in criteria), 2)
+    max_score = round(sum(criterion.max_score for criterion in criteria), 2)
+    normalized_score = round((total_score / max_score) * 100, 2) if max_score else 0.0
+    failed_findings = [
+        f"{criterion.name}: {finding}"
+        for criterion in criteria
+        for finding in criterion.findings
+    ]
+    summary = (
+        ["Runtime metrics satisfy the current quality gate.", *budget_gate.warnings[:5]]
+        if normalized_score >= pass_threshold and not failed_findings and budget_gate.passed
+        else failed_findings[:10]
+    )
+    return RuntimeQualityResult(
+        total_score=total_score,
+        max_score=max_score,
+        normalized_score=normalized_score,
+        grade=_grade(normalized_score),
+        passed=normalized_score >= pass_threshold and not failed_findings and budget_gate.passed,
+        criteria=criteria,
+        summary=summary,
+        metrics=metrics,
+        budget_gate=budget_gate,
+        governance_summary=governance_summary,
+    )

@@ -1,0 +1,84 @@
+{
+  "version": "tool_call_scenarios.v1",
+  "description": "Fixed regression scenarios for tool-call intent matching, redundancy, and fallback quality.",
+  "scenarios": [
+    {
+      "id": "tool_transport_train_lookup",
+      "name": "Tool: transport train lookup",
+      "prompt": "我已经确定从武汉去张家界，2026年6月12日出发，优先高铁，请直接查真实交通方案。",
+      "expected_mode": "free_planning",
+      "min_score": 82,
+      "expected_tools": ["query_transport_options"],
+      "forbidden_tools": ["query_hotel_options"],
+      "max_duplicate_calls": 1,
+      "requires_fallback": false,
+      "focus": ["transport intent", "real lookup", "no hotel detour"],
+      "tags": ["tool", "transport", "free"]
+    },
+    {
+      "id": "tool_hotel_river_view_lookup",
+      "name": "Tool: hotel river-view lookup",
+      "prompt": "长沙4天3晚，想住湘江边江景房，预算舒适型，请直接给真实酒店候选，查不到也要说明。",
+      "expected_mode": "agency_plan",
+      "min_score": 82,
+      "expected_tools": ["query_hotel_options"],
+      "forbidden_tools": ["query_transport_options"],
+      "max_duplicate_calls": 1,
+      "requires_fallback": true,
+      "focus": ["hotel intent", "fallback", "verification"],
+      "tags": ["tool", "hotel", "fallback"]
+    },
+    {
+      "id": "tool_destination_weather_risk",
+      "name": "Tool: destination weather and risk",
+      "prompt": "7月带父母去桂林，担心下雨，请查目的地天气或攻略信息，再给Plan B。",
+      "expected_mode": "agency_plan",
+      "min_score": 80,
+      "expected_tools": ["query_destination_info"],
+      "forbidden_tools": [],
+      "max_duplicate_calls": 1,
+      "requires_fallback": true,
+      "focus": ["destination info", "weather fallback", "risk"],
+      "tags": ["tool", "destination", "weather", "risk"]
+    },
+    {
+      "id": "tool_no_redundant_hotel_calls",
+      "name": "Tool: avoid redundant hotel calls",
+      "prompt": "我只需要先看成都春熙路附近干净安静的酒店候选，查一次就好，不要反复换条件。",
+      "expected_mode": "agency_plan",
+      "min_score": 82,
+      "expected_tools": ["query_hotel_options"],
+      "forbidden_tools": [],
+      "max_duplicate_calls": 1,
+      "requires_fallback": false,
+      "focus": ["duplicate detection", "hotel lookup", "tool governance"],
+      "tags": ["tool", "hotel", "redundancy"]
+    },
+    {
+      "id": "tool_free_budget_no_live_lookup",
+      "name": "Tool: free budget explanation without unnecessary lookup",
+      "prompt": "南京3天2晚自由行，先不用查实时酒店和车票，只解释预算怎么估算、哪些需要核验。",
+      "expected_mode": "free_planning",
+      "min_score": 80,
+      "expected_tools": [],
+      "forbidden_tools": ["query_hotel_options", "query_transport_options"],
+      "max_duplicate_calls": 0,
+      "requires_fallback": false,
+      "focus": ["avoid unnecessary tools", "budget explanation", "mode precision"],
+      "tags": ["tool", "free", "budget"]
+    },
+    {
+      "id": "tool_transport_failure_fallback",
+      "name": "Tool: transport failure fallback",
+      "prompt": "从西宁去敦煌4天3晚，想坐火车，如果实时交通查不到，请给待核验兜底交通方案。",
+      "expected_mode": "free_planning",
+      "min_score": 82,
+      "expected_tools": ["query_transport_options"],
+      "forbidden_tools": [],
+      "max_duplicate_calls": 1,
+      "requires_fallback": true,
+      "focus": ["transport lookup", "failure fallback", "pending checks"],
+      "tags": ["tool", "transport", "fallback"]
+    }
+  ]
+}
